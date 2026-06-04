@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -29,13 +31,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--db-path",
-        default="~/.mnemos/memory.db",
+        default=None,
         help="Path to the SQLite database (default: ~/.mnemos/memory.db)",
     )
     parser.add_argument(
         "--agent-id",
-        default="default",
-        help="Agent identifier (default: 'default')",
+        default=None,
+        help="Agent identifier (default: env/config/default)",
     )
 
     sub = parser.add_subparsers(dest="command", help="Available commands")
@@ -44,7 +46,17 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("init", help="Initialize a new memory database")
 
     # ── serve ──
-    sub.add_parser("serve", help="Start MCP server (stdio mode)")
+    p_serve = sub.add_parser("serve", help="Start MCP server (stdio mode)")
+    p_serve.add_argument(
+        "--mode",
+        choices=("simple", "advanced"),
+        default=os.environ.get("MNEMOS_MODE", "simple"),
+        help="MCP tool surface to expose (default: simple)",
+    )
+    p_serve.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
+    p_serve.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_serve.add_argument("--person-id", default=None, help="Person/user scope")
+    p_serve.add_argument("--project-scope", default=None, help="Project/workspace scope")
 
     # ── inspect ──
     p_inspect = sub.add_parser("inspect", help="Inspect a specific engram")
@@ -97,6 +109,32 @@ def main(argv: list[str] | None = None) -> int:
     p_br_remember.add_argument("content", help="Memory content")
     p_br_remember.add_argument("--impact", default="", help="What it meant")
 
+    # ── doctor ──
+    p_doctor = sub.add_parser("doctor", help="Check Mnemos simple-mode readiness")
+    p_doctor.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
+    p_doctor.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_doctor.add_argument("--person-id", default=None, help="Person/user scope")
+    p_doctor.add_argument("--project-scope", default=None, help="Project/workspace scope")
+
+    # ── mcp ──
+    p_mcp = sub.add_parser("mcp", help="MCP client helpers")
+    mcp_sub = p_mcp.add_subparsers(dest="mcp_command")
+    p_mcp_install = mcp_sub.add_parser("install", help="Print or write MCP client config")
+    p_mcp_install.add_argument(
+        "client",
+        choices=("claude", "cursor", "codex", "generic"),
+        help="Client config style",
+    )
+    p_mcp_install.add_argument("--name", default="mnemos", help="MCP server name")
+    p_mcp_install.add_argument("--mode", choices=("simple", "advanced"), default="simple")
+    p_mcp_install.add_argument("--agent-id", default=None, help="Optional agent identity")
+    p_mcp_install.add_argument("--db-path", default=None, help="Optional database path")
+    p_mcp_install.add_argument(
+        "--write",
+        action="store_true",
+        help="Write config where safely supported instead of printing a snippet",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -116,6 +154,8 @@ def main(argv: list[str] | None = None) -> int:
         "substrate-tick": _cmd_substrate_tick,
         "index": _cmd_index,
         "bridge": _cmd_bridge,
+        "doctor": _cmd_doctor,
+        "mcp": _cmd_mcp,
     }
 
     handler = handlers.get(args.command)
@@ -125,15 +165,33 @@ def main(argv: list[str] | None = None) -> int:
     return 1
 
 
+def _resolve_db_path(args: argparse.Namespace) -> str:
+    """Resolve CLI DB path with backwards-compatible default."""
+    return (
+        getattr(args, "db_path", None)
+        or os.environ.get("MNEMOS_DB_PATH")
+        or "~/.mnemos/memory.db"
+    )
+
+
+def _resolve_agent_id(args: argparse.Namespace) -> str:
+    """Resolve CLI agent identity with backwards-compatible default."""
+    return (
+        getattr(args, "agent_id", None)
+        or os.environ.get("MNEMOS_AGENT_ID")
+        or "default"
+    )
+
+
 def _get_store(args: argparse.Namespace):
     """Create or open the engram store."""
     from .store.sqlite_store import EngramStore
-    return EngramStore(args.db_path)
+    return EngramStore(_resolve_db_path(args))
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
     """Initialize a new memory database."""
-    db_path = Path(args.db_path).expanduser()
+    db_path = Path(_resolve_db_path(args)).expanduser()
     if db_path.exists():
         print(f"Database already exists: {db_path}")
         print("Mnemos is ready.")
@@ -149,8 +207,24 @@ def _cmd_init(args: argparse.Namespace) -> int:
 def _cmd_serve(args: argparse.Namespace) -> int:
     """Start MCP server."""
     try:
-        from .mcp_server import run_server
-        run_server(db_path=args.db_path)
+        if getattr(args, "mode", "simple") == "advanced":
+            from .mcp_server import run_server
+
+            run_server(
+                db_path=_resolve_db_path(args),
+                agent_id=_resolve_agent_id(args),
+                person_id=getattr(args, "person_id", None),
+                project_scope=getattr(args, "project_scope", None),
+            )
+        else:
+            from .simple_mcp import run_simple_server
+
+            run_simple_server(
+                db_path=getattr(args, "db_path", None),
+                agent_id=getattr(args, "agent_id", None),
+                person_id=getattr(args, "person_id", None),
+                project_scope=getattr(args, "project_scope", None),
+            )
         return 0
     except ImportError:
         print("MCP server requires the 'mcp' package: pip install mcp", file=sys.stderr)
@@ -196,9 +270,10 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
 def _cmd_stats(args: argparse.Namespace) -> int:
     """Show memory statistics."""
     store = _get_store(args)
-    stats = store.get_stats(args.agent_id)
+    agent_id = _resolve_agent_id(args)
+    stats = store.get_stats(agent_id)
 
-    print(f"Mnemos Stats (agent: {args.agent_id})")
+    print(f"Mnemos Stats (agent: {agent_id})")
     print(f"{'─' * 40}")
     print(f"Active engrams:      {stats.get('engrams_active', 0)}")
     print(f"Dormant engrams:     {stats.get('engrams_dormant', 0)}")
@@ -223,7 +298,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
     retriever = ReactiveRetriever(store)
     results = retriever.retrieve(
         cue=args.query,
-        agent_id=args.agent_id,
+        agent_id=_resolve_agent_id(args),
         max_results=args.max_results,
     )
 
@@ -254,7 +329,7 @@ def _cmd_consolidate(args: argparse.Namespace) -> int:
     label = "deep" if args.deep else "shallow"
     print(f"Running {label} consolidation...")
 
-    stats = daemon.run_cycle(deep=args.deep, agent_id=args.agent_id)
+    stats = daemon.run_cycle(deep=args.deep, agent_id=_resolve_agent_id(args))
 
     print(f"Passes: {', '.join(stats.get('passes_run', []))}")
     if "decay" in stats:
@@ -288,7 +363,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     from .interface.openclaw_export import OpenClawExporter
 
     exporter = OpenClawExporter(store, args.workspace)
-    result = exporter.export_all(args.agent_id)
+    result = exporter.export_all(_resolve_agent_id(args))
 
     for path, size in result.items():
         print(f"  Wrote {path} ({size} bytes)")
@@ -326,11 +401,11 @@ def _cmd_substrate_tick(args: argparse.Namespace) -> int:
         from .substrate.config import SubstrateConfig
 
         config = SubstrateConfig(
-            agent_id=args.agent_id,
-            db_path=args.db_path,
+            agent_id=_resolve_agent_id(args),
+            db_path=_resolve_db_path(args),
         )
         substrate = Substrate(config)
-        print(f"Running substrate tick (agent: {args.agent_id})...")
+        print(f"Running substrate tick (agent: {_resolve_agent_id(args)})...")
         result = substrate.tick()
         print(f"Tick complete: {json.dumps(result, indent=2, default=str)}")
         return 0
@@ -348,8 +423,8 @@ def _cmd_index(args: argparse.Namespace) -> int:
         from .indexer.session_indexer import SessionIndexer
 
         indexer = SessionIndexer(
-            agent_id=args.agent_id,
-            db_path=args.db_path,
+            agent_id=_resolve_agent_id(args),
+            db_path=_resolve_db_path(args),
         )
         if args.backfill:
             print("Running backfill (last 24h)...")
@@ -387,7 +462,7 @@ def _cmd_bridge(args: argparse.Namespace) -> int:
     """Direct memory operations via bridge."""
     from .bridge import MnemosBridge
 
-    bridge = MnemosBridge(agent_id=args.agent_id, db_path=args.db_path)
+    bridge = MnemosBridge(agent_id=_resolve_agent_id(args), db_path=_resolve_db_path(args))
 
     if args.bridge_command == "status":
         print(bridge.status())
@@ -399,6 +474,130 @@ def _cmd_bridge(args: argparse.Namespace) -> int:
         print("Usage: mnemos bridge {status|recall|remember}", file=sys.stderr)
         return 1
     return 0
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """Check simple-mode readiness."""
+    from .simple_runtime import MnemosRuntime, SIMPLE_TOOL_NAMES
+
+    runtime = MnemosRuntime(
+        db_path=getattr(args, "db_path", None),
+        agent_id=getattr(args, "agent_id", None),
+        person_id=getattr(args, "person_id", None),
+        project_scope=getattr(args, "project_scope", None),
+    )
+    try:
+        packet = runtime.context()
+        print("Mnemos Doctor")
+        print("-" * 40)
+        print(f"Agent:       {runtime.scope.agent_id}")
+        print(f"Person:      {runtime.scope.person_id}")
+        print(f"Project:     {runtime.scope.project_scope}")
+        print(f"Database:    {runtime.db_path}")
+        print(f"DB exists:    {'yes' if runtime.db_path.exists() else 'no'}")
+        print(f"MCP SDK:      {'yes' if _mcp_available() else 'no'}")
+        print(f"Model:        {'dedicated provider configured' if runtime.has_dedicated_model else 'local baseline only'}")
+        print(f"Simple tools: {', '.join(SIMPLE_TOOL_NAMES)}")
+        print()
+        print(packet)
+        return 0
+    finally:
+        runtime.close()
+
+
+def _cmd_mcp(args: argparse.Namespace) -> int:
+    """MCP client helper commands."""
+    if args.mcp_command != "install":
+        print("Usage: mnemos mcp install {claude|cursor|codex|generic}", file=sys.stderr)
+        return 1
+
+    snippet = _mcp_server_snippet(
+        name=args.name,
+        mode=args.mode,
+        agent_id=args.agent_id,
+        db_path=args.db_path,
+    )
+
+    if args.write and args.client == "claude":
+        path = _claude_desktop_config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            with open(path) as f:
+                config = json.load(f)
+        else:
+            config = {}
+        servers = config.setdefault("mcpServers", {})
+        servers.update(snippet)
+        with open(path, "w") as f:
+            json.dump(config, f, indent=2)
+        print(f"Installed Mnemos MCP config at {path}")
+        print("Restart Claude Desktop to expose the new tools.")
+        return 0
+
+    if args.write:
+        print(
+            f"--write is currently supported for Claude Desktop only. Printing {args.client} config instead.",
+            file=sys.stderr,
+        )
+
+    if args.client == "codex":
+        command = _mnemos_command()
+        parts = ["codex", "mcp", "add", args.name, "--", command, "serve", "--mode", args.mode]
+        if args.agent_id:
+            parts.extend(["--agent-id", args.agent_id])
+        if args.db_path:
+            parts.extend(["--db-path", args.db_path])
+        print(" ".join(parts))
+        return 0
+
+    print(json.dumps({"mcpServers": snippet}, indent=2))
+    if args.client == "claude":
+        print()
+        print(f"Claude Desktop config path: {_claude_desktop_config_path()}")
+        print("Re-run with --write to merge this server into that file.")
+    return 0
+
+
+def _mcp_available() -> bool:
+    try:
+        import mcp  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def _mnemos_command() -> str:
+    return shutil.which("mnemos") or "mnemos"
+
+
+def _mcp_server_snippet(
+    *,
+    name: str,
+    mode: str,
+    agent_id: str | None = None,
+    db_path: str | None = None,
+) -> dict:
+    args = ["serve", "--mode", mode]
+    env = {}
+    if agent_id:
+        env["MNEMOS_AGENT_ID"] = agent_id
+    if db_path:
+        env["MNEMOS_DB_PATH"] = db_path
+    server = {
+        "command": _mnemos_command(),
+        "args": args,
+    }
+    if env:
+        server["env"] = env
+    return {name: server}
+
+
+def _claude_desktop_config_path() -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+    if sys.platform.startswith("win"):
+        return Path(os.environ.get("APPDATA", str(Path.home()))) / "Claude" / "claude_desktop_config.json"
+    return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
 
 
 if __name__ == "__main__":

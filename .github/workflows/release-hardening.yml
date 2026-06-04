@@ -1,0 +1,65 @@
+name: Release hardening
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run tests with MCP surface
+        run: uv run --extra dev --extra mcp pytest -q
+
+      - name: Compile release entrypoints
+        run: |
+          uv run --extra mcp python -m py_compile \
+            mnemos/simple_runtime.py \
+            mnemos/simple_mcp.py \
+            mnemos/mcp_server.py \
+            mnemos/cli.py
+
+      - name: Build package
+        run: uv build
+
+      - name: Check wheel contents
+        run: |
+          uv run python - <<'PY'
+          import zipfile
+          from pathlib import Path
+
+          wheel = next(Path("dist").glob("mnemos_memory-*.whl"))
+          required = {
+              "mnemos/simple_runtime.py",
+              "mnemos/simple_mcp.py",
+              "templates/SOUL.md",
+              "templates/IDENTITY.md",
+          }
+          with zipfile.ZipFile(wheel) as archive:
+              names = set(archive.namelist())
+          missing = sorted(required - names)
+          if missing:
+              raise SystemExit(f"Missing from wheel: {missing}")
+          print(f"Wheel OK: {wheel}")
+          PY
+
+      - name: Check package metadata
+        run: uvx twine check dist/*

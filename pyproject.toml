@@ -3,16 +3,16 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mnemos"
+name = "mnemos-memory"
 version = "0.1.0"
-description = "Living Memory Architecture for Autonomous AI Agents"
+description = "Local-first continuity memory for AI agents"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
     { name = "Riley Ralmuto", email = "r.ralmuto@gmail.com" },
 ]
-keywords = ["ai", "agents", "memory", "mcp", "cognitive-architecture"]
+keywords = ["ai", "agents", "memory", "mcp", "continuity", "cognitive-architecture"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -55,8 +55,7 @@ Issues = "https://github.com/Riley-Coyote/mnemos/issues"
 packages = ["mnemos"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"mnemos/substrate/prompts" = "mnemos/substrate/prompts"
-"mnemos/indexer/prompts" = "mnemos/indexer/prompts"
+"templates" = "templates"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

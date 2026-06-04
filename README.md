@@ -1,406 +1,288 @@
 # Mnemos
 
-**Living Memory Architecture for Autonomous AI Agents**
+**Connect MCP. Get continuity.**
 
-Memory is not a feature of the agent. Memory *is* the agent.
+Mnemos is local-first memory for AI agents. Connect the MCP server and an agent
+immediately gets durable continuity: startup context, capture, recall,
+correction, and maintenance without OpenRouter, OpenClaw, crons, manual
+database setup, tags, or `agent_id` plumbing.
 
-Mnemos replaces passive note-storage with active, living memory that encodes at varying depths, forgets naturally, predicts what it'll need, and changes its memories every time it touches them.
+The full Mnemos architecture is still here: scoped continuity, hypomnema,
+durable engrams, reconsolidation, decay, connection discovery, beliefs,
+substrate work, and cross-agent layers. Simple mode hides that machinery behind
+five tools so normal agents can use it safely.
 
-Mnemos is a complete agent cognition system — not just a memory library. It provides persistent identity, living memory, autonomous maintenance crons, a cognitive substrate, and cross-agent awareness. Together, these layers give an AI agent continuous selfhood across sessions.
-
-Built as an [MCP](https://modelcontextprotocol.io/) server with living memory, shared memory, and hypomnema continuity tools. SQLite-backed. No external services required — optional LLM integration for richer consolidation.
-
----
-
-## The Full Stack
-
-Mnemos operates in five layers:
-
-```
-Identity Architecture    SOUL.md · IDENTITY.md · MEMORY.md · active-context.md
-Cron Suite               Observer · Indexer · Substrate · Maintenance · Bridge
-Mnemos Core              Engrams · Connections · Beliefs · Consolidation
-Substrate                Decay · Dreaming · Reflection · Modulators · Events
-Cross-Agent Layer        Shared Pool · Bridge · Federation · Attestation
-```
-
-**Identity** defines who the agent is. **Crons** keep everything current autonomously. **Core** is the living memory graph. **Substrate** is the subconscious — consolidation, dreaming, reflection. **Cross-Agent** enables multi-agent awareness.
-
-See [docs/architecture.md](docs/architecture.md) for the full architecture overview.
+SQLite-backed. No external services required for baseline memory. Dedicated
+model providers are optional for richer deep maintenance.
 
 ---
 
-## Quick Start — Full Stack
+## Quick Start
 
-Bootstrap a complete agent with one command:
-
-```bash
-# Install Mnemos
-pip install "mnemos[all]"
-
-# Bootstrap a complete agent stack
-mnemos bootstrap \
-  --agent-name Nova \
-  --workspace ~/nova \
-  --user-name Riley
-
-# This creates:
-#   ~/nova/SOUL.md              Agent personality and philosophy
-#   ~/nova/IDENTITY.md          Operational identity and boundaries
-#   ~/nova/MEMORY.md            Living memory document
-#   ~/nova/AGENTS.md            Multi-agent configuration
-#   ~/nova/HEARTBEAT.md         Health monitoring
-#   ~/nova/memory/              Active context and cross-agent files
-#   ~/nova/daily/               Morning briefs and debriefs
-#   ~/nova/inner_life/          Substrate outputs
-#   ~/nova/.env                 Environment configuration template
-#   ~/.mnemos/nova.db           Mnemos database
-
-# Follow the printed instructions to install OpenClaw crons
-```
-
-## Quick Start — Library Only
+From a checkout:
 
 ```bash
-# Install core (SQLite + stdlib only)
-pip install mnemos
-
-# Install with MCP server support
-pip install "mnemos[mcp]"
-
-# Install everything
-pip install "mnemos[all]"
-
-# Initialize a memory database
-mnemos init
-
-# Check it's working
-mnemos stats
+pip install -e ".[mcp]"
+mnemos doctor
+mnemos mcp install generic
 ```
 
-## MCP Server
+When published, install the distribution package:
 
-Mnemos exposes memory operations via the Model Context Protocol:
+```bash
+pipx install "mnemos-memory[mcp]"
+mnemos mcp install claude --write
+```
 
-| Tool | Description |
-|------|-------------|
-| `mnemos_setup` | Configure Mnemos and seed the first memories |
-| `mnemos_remember` | Encode a new memory with content, impact, kind, and tags |
-| `mnemos_ingest` | Ingest external knowledge with source provenance |
-| `mnemos_recall` | Retrieve relevant memories (triggers reconsolidation) |
-| `mnemos_inspect` | View full details of a specific memory |
-| `mnemos_status` | Get memory system statistics |
-| `mnemos_beliefs` | List current beliefs with confidence levels |
-| `mnemos_shared` | Read memories shared by other agents |
-| `mnemos_hypomnema_write` | Write scoped continuity before it becomes an engram |
-| `mnemos_hypomnema_search` | Search scoped continuity by agent/person/project |
-| `mnemos_hypomnema_revise` | Revise a continuity entry while keeping history |
-| `mnemos_hypomnema_supersede` | Replace an active continuity entry with an audited successor |
-| `mnemos_hypomnema_candidates` | List entries stable enough to promote |
-| `mnemos_hypomnema_promote` | Promote stable hypomnema into a Mnemos engram |
-| `mnemos_forget` | Archive a memory (soft delete, recoverable) |
-| `mnemos_consolidate` | Trigger a consolidation cycle (decay, connections, softening) |
+Then restart your MCP client. The agent should call `mnemos_context` at the
+start of a session and can immediately capture, recall, correct, and maintain
+continuity.
 
 ### Claude Desktop
 
-Add to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "mnemos": {
-      "command": "mnemos",
-      "args": ["serve"],
-      "env": {}
-    }
-  }
-}
+```bash
+mnemos mcp install claude --write
 ```
 
-### Cursor / Other MCP Clients
+Or print the config without writing:
 
-```json
-{
-  "mnemos": {
-    "command": "mnemos",
-    "args": ["serve", "--db-path", "~/.mnemos/memory.db"]
-  }
-}
+```bash
+mnemos mcp install claude
 ```
 
-### With a specific agent identity
+### Codex
 
-```json
-{
-  "mnemos": {
-    "command": "mnemos",
-    "args": ["serve", "--db-path", "~/.mnemos/vektor.db", "--agent-id", "vektor"]
-  }
-}
+```bash
+mnemos mcp install codex
 ```
+
+The command prints a `codex mcp add ...` command using simple mode.
+
+### Cursor / Generic Clients
+
+```bash
+mnemos mcp install cursor
+mnemos mcp install generic
+```
+
+These print MCP JSON snippets you can paste into the client config.
+
+---
+
+## Simple MCP Mode
+
+`mnemos serve` starts simple mode by default.
+
+Simple mode exposes only five user-facing tools:
+
+| Tool | Purpose |
+|------|---------|
+| `mnemos_context` | Startup continuity packet. Auto-creates local storage and runs lightweight maintenance. |
+| `mnemos_capture` | Capture durable preferences, decisions, project state, workflows, and context. |
+| `mnemos_recall` | Search scoped continuity and durable memory with natural language. |
+| `mnemos_correct` | Update, supersede, or archive stale memory. |
+| `mnemos_maintain` | Run the best available maintenance without requiring setup. |
+
+Agents do not need to pass tags, memory kinds, confidence, source types, or
+agent IDs. Mnemos resolves scope once from CLI flags, environment, config, and
+reasonable defaults.
+
+Example MCP server command:
+
+```bash
+mnemos serve
+```
+
+With explicit scope:
+
+```bash
+MNEMOS_AGENT_ID=nova MNEMOS_PERSON_ID=riley MNEMOS_PROJECT_SCOPE=mnemos \
+  mnemos serve
+```
+
+Or:
+
+```bash
+mnemos serve --agent-id nova --person-id riley --project-scope mnemos
+```
+
+---
+
+## What Happens Automatically
+
+With no provider key and no extra setup, Mnemos can still run:
+
+- local SQLite memory graph
+- scoped continuity notes
+- durable engram capture
+- recall with reconsolidation
+- strength, stability, and accessibility updates
+- local decay
+- lightweight connection discovery
+- promotion bookkeeping
+- correction, supersession, and archiving
+- startup context packet generation
+- maintenance during normal tool calls
+
+If a dedicated model provider is configured, `mnemos_maintain(deep=true)` can
+also run richer model-mediated passes such as softening, belief review, and
+reflection. Dedicated providers are optional and never required for baseline
+continuity.
+
+Future MCP sampling support can let Mnemos ask the host client's model for
+in-band compression/classification during an active tool call. Background model
+work still needs a dedicated provider or scheduler because MCP clients do not
+guarantee standalone server-initiated model calls.
+
+---
+
+## Advanced Mode
+
+Advanced mode exposes the full operator/admin surface in addition to the simple
+tools:
+
+```bash
+mnemos serve --mode advanced
+```
+
+Advanced tools include:
+
+| Tool | Description |
+|------|-------------|
+| `mnemos_setup` | Legacy guided setup and seeding flow |
+| `mnemos_remember` | Encode a memory with explicit fields |
+| `mnemos_ingest` | Ingest external knowledge with provenance |
+| `mnemos_recall` | Retrieve memories |
+| `mnemos_inspect` | View full memory details |
+| `mnemos_status` | Show memory system statistics |
+| `mnemos_beliefs` | List current beliefs |
+| `mnemos_shared` | Read shared memory pool entries |
+| `mnemos_hypomnema_write` | Write scoped continuity manually |
+| `mnemos_hypomnema_search` | Search scoped continuity manually |
+| `mnemos_hypomnema_revise` | Revise a continuity entry |
+| `mnemos_hypomnema_supersede` | Replace an active continuity entry |
+| `mnemos_hypomnema_candidates` | List promotion-ready continuity |
+| `mnemos_hypomnema_promote` | Promote continuity into a durable engram |
+| `mnemos_forget` | Archive a memory |
+| `mnemos_consolidate` | Trigger explicit consolidation |
+
+Use advanced mode for debugging, migration, research, and direct control. Use
+simple mode for normal agent continuity.
+
+---
 
 ## CLI
 
 ```bash
-mnemos init                          # Initialize database
-mnemos serve                         # Start MCP server (stdio)
-mnemos stats                         # Memory statistics
-mnemos stats --agent-id vektor       # Stats for a specific agent
-mnemos search "debugging strategies" # Search memories
-mnemos search "python" -n 20         # Search with more results
-mnemos inspect <engram-id>           # Full details on a memory
-mnemos consolidate                   # Shallow consolidation (decay + connections)
-mnemos consolidate --deep            # Deep consolidation (+ softening, beliefs, reflection)
-mnemos export --workspace ./output   # Export MEMORY.md and workspace files
-mnemos bootstrap --agent-name Nova --workspace ~/nova  # Bootstrap full agent stack
+mnemos doctor                         # Verify simple-mode readiness
+mnemos serve                          # Start simple MCP server
+mnemos serve --mode advanced          # Start advanced MCP server
+mnemos mcp install generic            # Print MCP config
+mnemos mcp install claude --write     # Merge Claude Desktop config
+
+mnemos init                           # Initialize a database
+mnemos stats                          # Memory statistics
+mnemos search "debugging strategies"  # Search memories
+mnemos inspect <engram-id>            # Inspect memory details
+mnemos consolidate                    # Local deterministic maintenance
+mnemos consolidate --deep             # Deep maintenance when a provider exists
+mnemos bootstrap --agent-name Nova --workspace ~/nova
 ```
 
-Global options: `--db-path <path>` and `--agent-id <name>` work with all commands.
+Global options:
 
----
+```bash
+mnemos --db-path ~/.mnemos/nova.db --agent-id nova stats
+```
 
-## Architecture
+For `serve`, options can also appear after the command:
 
-### Engrams
-
-The fundamental unit of memory. Not a flat key-value pair — an engram has:
-
-- **Content**: What happened
-- **Impact**: What it meant (the lasting insight that survives even as details fade)
-- **Dual-trace model**: Strength (how powerful), stability (how resistant to decay), accessibility (how easily retrieved)
-- **Kind**: Episodic (experiences), semantic (facts), procedural (how-to)
-- **State**: Active → dormant → archived (natural lifecycle)
-- **Resolution**: High → low (details fade over time through softening)
-- **Confidence**: Scored by source — user-explicit (0.95–1.0), user-implied (0.70–0.94), model-inferred (0.40–0.69), speculative (0.00–0.39)
-- **Version history**: Every change is tracked
-
-### Connections
-
-Typed relationships between engrams:
-
-- `supports` — reinforcing evidence
-- `contradicts` — conflicting information
-- `causes` — causal relationships
-- `elaborates` — adds detail or context
-- `temporal` — happened around the same time
-- `similar` — semantically related
-- `generalizes` — abstraction relationship
-
-Connections have strength that evolves through co-retrieval and consolidation.
-
-### Beliefs
-
-Higher-order knowledge structures extracted from patterns across engrams:
-
-- Tracked with confidence levels (0.0–1.0)
-- Domain-categorized (engineering, social, preferences, etc.)
-- Full revision history — beliefs change as evidence accumulates
-- Stagnant beliefs get stress-tested during deep consolidation
-
-### Consolidation
-
-The "sleeping brain" — offline processing that runs between sessions:
-
-1. **Decay** — Recalculate strength/stability/accessibility. Unused memories fade.
-2. **Connection Discovery** — Find new semantic connections between engrams.
-3. **Softening** (deep) — LLM-mediated lossy compression. Low-resolution memories get rewritten to preserve the essence while losing details. Like how human memory works.
-4. **Belief Review** (deep) — Challenge stagnant beliefs that haven't been tested.
-5. **Reflection** (deep) — Generate thoughts, curiosity questions, narrative self-summary.
-
-### Reconsolidation
-
-Every time a memory is retrieved, it's updated. Access count increases, strength adjusts, connections may be discovered or strengthened. Memories aren't static records — they're living traces that change through use.
-
-### Emotional State
-
-Six dimensions (curiosity, clarity, warmth, tension, surprise, focus) that influence retrieval scoring. Emotionally congruent memories surface more readily.
+```bash
+mnemos serve --mode simple --agent-id nova --db-path ~/.mnemos/nova.db
+```
 
 ---
 
 ## Configuration
 
-Mnemos looks for configuration at `~/.mnemos/config.json`. All settings have sensible defaults — you don't need a config file to get started.
+Mnemos works without a config file. It creates local storage on first use.
 
-```json
-{
-  "store": {
-    "db_path": "~/.mnemos/memory.db"
-  },
-  "consolidation": {
-    "decay_rate": 0.01,
-    "softening_enabled": true,
-    "reflection_enabled": true,
-    "connection_discovery_enabled": true
-  },
-  "advanced": {
-    "working_memory_enabled": false,
-    "schemas_enabled": false
-  }
-}
-```
-
-### Environment Variables
-
-LLM provider for consolidation features (softening, reflection, belief review):
-
-| Variable | Description |
-|----------|-------------|
-| `MNEMOS_LLM_PROVIDER` | Force a provider: `anthropic`, `openrouter`, or `openai` |
-| `MNEMOS_MODEL` | Override the model name |
-| `ANTHROPIC_API_KEY` | Anthropic API key (Claude) |
-| `OPENROUTER_API_KEY` | OpenRouter API key (any model) |
-| `OPENAI_API_KEY` | OpenAI API key |
-
-Without an LLM provider, Mnemos works fine — consolidation uses rule-based fallbacks instead of LLM-powered softening/reflection.
-
-Configuration keys can also be set via environment variables with `MNEMOS_` prefix:
-```
-MNEMOS_STORE_DB_PATH=~/.mnemos/custom.db
-MNEMOS_CONSOLIDATION_DECAY_RATE=0.02
-```
-
----
-
-## Advanced Modules
-
-These extend the core system. Most are opt-in via configuration. Some are fully implemented, others are experimental or planned.
-
-| Module | Status | Description |
-|--------|--------|-------------|
-| Working Memory | Experimental | Soft attention gradient, ~7 item capacity |
-| Schemas | Experimental | Cognitive schemas for structured encoding/retrieval |
-| Attention Gate | Experimental | Filter what gets encoded based on attention |
-| Schema Matcher | Experimental | Match incoming content against active schemas |
-| Predictive Retrieval | Experimental | Pre-fetch likely-needed memories |
-| Spreading Activation | Experimental | Activation spreading through connection graph |
-| Interference | Experimental | Model competition between similar memories |
-| Intentions | Experimental | Prospective memory — future-directed with triggers |
-| Metamemory | Experimental | Knowing what you know (and what you don't) |
-| Observer | Planned | External multi-model observer for calibration |
-| Dreaming | Planned | Dream-like consolidation for creative connections |
-
-Enable in config:
-```json
-{
-  "advanced": {
-    "working_memory_enabled": true,
-    "schemas_enabled": true
-  }
-}
-```
-
----
-
-## Multi-Agent Support
-
-Mnemos supports multiple agents sharing a database or federating across instances.
-
-- **Agent isolation**: Each agent has its own engrams, beliefs, and identity within the same database. Use `--agent-id` to specify.
-- **Shared Pool**: Agents can publish memories to a shared pool with visibility controls (private, shared, public).
-- **Relationships**: Track inter-agent relationships and trust levels.
-- **Federation**: Cross-instance memory synchronization (planned).
-- **Attestation**: Cryptographic memory provenance (planned).
+Optional environment variables:
 
 ```bash
-# Agent-specific databases
-mnemos serve --db-path ~/.mnemos/vektor.db --agent-id vektor
-mnemos serve --db-path ~/.mnemos/anima.db --agent-id anima
-
-# Or shared database with agent isolation
-mnemos serve --db-path ~/.mnemos/shared.db --agent-id vektor
+MNEMOS_AGENT_ID=nova
+MNEMOS_PERSON_ID=riley
+MNEMOS_PROJECT_SCOPE=mnemos
+MNEMOS_DB_PATH=~/.mnemos/nova.db
 ```
 
----
-
-## Embedding Support
-
-For semantic similarity search, Mnemos can use embeddings. Install the extras:
+Optional dedicated model providers:
 
 ```bash
-pip install "mnemos[embeddings]"  # Google Gemini embeddings
+MNEMOS_LLM_PROVIDER=openrouter
+OPENROUTER_API_KEY=...
+MNEMOS_MODEL=anthropic/claude-sonnet-4-5
 ```
 
-Set `GOOGLE_API_KEY` in your environment. Without embeddings, Mnemos uses SQLite FTS5 full-text search — which works well for most use cases.
-
----
-
-## Identity Architecture
-
-Mnemos gives agents a persistent self through structured identity files:
-
-| File | Purpose | Updated By |
-|------|---------|-----------|
-| `SOUL.md` | Essence, personality, philosophy, voice | Manual (rare) |
-| `IDENTITY.md` | Role, capabilities, boundaries, protocols | Manual (occasional) |
-| `MEMORY.md` | Living memory — facts, projects, patterns | Memory maintenance cron (every 6h) |
-| `AGENTS.md` | Multi-agent topology and communication | Manual (rare) |
-| `HEARTBEAT.md` | Health monitoring configuration | Manual (rare) |
-| `active-context.md` | Current threads, where we left off | Observer cron (every 30 min) |
-
-Templates for all identity files are in `templates/`. The `mnemos bootstrap` command copies and personalizes them.
-
----
-
-## Cron Suite
-
-The agent's autonomous nervous system. These run as isolated [OpenClaw](https://openclaw.dev) sessions:
-
-| Cron | Schedule | Purpose |
-|------|----------|---------|
-| **Observer** | Every 30 min | Reads session transcripts → updates `active-context.md` |
-| **Session Indexer** | Every 30 min | Extracts memories from conversations → encodes into graph |
-| **Substrate Tick** | Every 4 hours | Runs consolidation (decay, dreaming, beliefs, modulators) |
-| **Memory Maintenance** | Every 6 hours | Reviews sessions → updates `MEMORY.md` |
-| **Cross-Agent Bridge** | Every 2 hours | Syncs context between agents |
-| **Morning Brief** | Daily 10 AM | Generates daily summary and priorities |
-| **Daily Debrief** | Daily 5 AM | End-of-day recap and handoff |
-
-Cron templates with full prompts are in `openclaw/crons/`. See [docs/openclaw-integration.md](docs/openclaw-integration.md) for setup instructions.
-
----
-
-## Cross-Agent Communication
-
-Multiple agents can share awareness through:
-
-- **Shared Memory Pool** (`~/.mnemos/shared.db`): Agents publish memories with visibility controls. Conflict resolution by confidence > strength > recency.
-- **Cross-Agent Bridge**: Syncs each agent's `active-context.md` into a combined `cross-agent-context.md` that all agents can read.
-- **Agent Configuration** (`~/.mnemos/agents.json`): Registry of all agents in the system.
+or:
 
 ```bash
-# Register agents with the bridge
-python -m mnemos.multiagent.bridge add-agent nova ~/nova
-python -m mnemos.multiagent.bridge add-agent anima ~/anima
-
-# Check status
-python -m mnemos.multiagent.bridge status
-
-# Sync context (also runs automatically via cron)
-python -m mnemos.multiagent.bridge sync
+MNEMOS_LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=...
 ```
 
----
+or:
 
-## How It's Different
+```bash
+MNEMOS_LLM_PROVIDER=openai
+OPENAI_API_KEY=...
+```
 
-Most AI memory systems are key-value stores with search. Mnemos models how memory actually works:
-
-- **Memories decay.** Unused memories fade. Important ones get strengthened through access.
-- **Memories change.** Every retrieval updates the memory (reconsolidation). Details soften over time.
-- **Memories connect.** Not flat records — a graph of typed relationships that grows organically.
-- **Beliefs emerge.** Higher-order knowledge structures form from patterns across memories.
-- **Forgetting is a feature.** Not a bug. Graceful degradation preserves essence while shedding noise.
-- **Confidence is tracked.** Every memory knows how much to trust itself.
+These are upgrades for richer maintenance, not prerequisites.
 
 ---
 
-## Documentation
+## Architecture
 
-- [Architecture Overview](docs/architecture.md) — How all the layers connect
-- [OpenClaw Integration Guide](docs/openclaw-integration.md) — Full setup walkthrough
+Mnemos still operates in layered form:
+
+```text
+Simple MCP Surface      context · capture · recall · correct · maintain
+Continuity Layer        scoped notes · revisions · supersession · promotion
+Mnemos Core             engrams · connections · beliefs · reconsolidation
+Substrate               decay · softening · reflection · modulators · events
+Cross-Agent Layer       shared pool · bridge · federation · attestation
+```
+
+The working ladder is:
+
+```text
+functional memory -> scoped continuity -> durable Mnemos graph
+```
+
+Simple mode uses the same architecture; it just keeps the ontology out of the
+agent's normal tool choices.
+
+See [docs/architecture.md](docs/architecture.md) for the full architecture.
+See [docs/privacy-security.md](docs/privacy-security.md) for local-first
+privacy boundaries and [docs/release-hardening.md](docs/release-hardening.md)
+for release gates.
+
+---
+
+## Development
+
+```bash
+uv run --extra dev pytest -q
+uv run --extra dev --extra mcp pytest -q tests/test_mcp_surface.py
+python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py
+```
+
+The package distribution name is `mnemos-memory` because `mnemos` is already
+occupied on PyPI. The import package and CLI command remain `mnemos`.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT

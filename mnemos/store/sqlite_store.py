@@ -972,6 +972,53 @@ class EngramStore:
         conn.commit()
         return new_id
 
+    def archive_hypomnema_entry(
+        self,
+        entry_id: str,
+        *,
+        reason: str,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> str:
+        """Deactivate a scoped hypomnema entry while preserving its revision trail."""
+        if not reason.strip():
+            raise ValueError("Archive reason cannot be empty")
+
+        row = self.get_hypomnema_entry(
+            entry_id,
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope=project_scope,
+            active_only=True,
+        )
+        if row is None:
+            raise KeyError(f"Active hypomnema entry not found for scope: {entry_id}")
+
+        now = _utc_now()
+        revisions = list(row["revisions"])
+        revisions.append(
+            {
+                "at": now,
+                "prior_content": row["content"],
+                "reason": f"archived: {reason.strip()}",
+            }
+        )
+        conn = self._get_conn()
+        conn.execute(
+            """
+            UPDATE hypomnema_entries
+            SET active = 0,
+                revision_count = revision_count + 1,
+                revisions_json = ?,
+                last_revised_at = ?
+            WHERE id = ?
+            """,
+            (_encode_json(revisions), now, entry_id),
+        )
+        conn.commit()
+        return entry_id
+
     def mark_hypomnema_promoted(self, entry_id: str, engram_id: str) -> None:
         """Record that a hypomnema entry graduated into a Mnemos engram."""
         conn = self._get_conn()

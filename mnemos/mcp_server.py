@@ -27,6 +27,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -41,6 +42,7 @@ from .retrieval.reactive import ReactiveRetriever
 from .consolidation.daemon import ConsolidationDaemon
 from .interface.openclaw_export import OpenClawExporter
 from .config.loader import load_config, save_config
+from .simple_mcp import configure_runtime, register_simple_tools
 
 logger = logging.getLogger("mnemos.mcp")
 
@@ -52,8 +54,10 @@ _embedding_index: EmbeddingIndex | None = None
 _shared_pool = None
 _llm_client = None
 _config: dict | None = None
+_default_agent_id = "default"
 
 mcp = FastMCP("mnemos")
+register_simple_tools(mcp, include_recall=False)
 
 
 # ═══════════════════════════════════════════════════
@@ -131,6 +135,15 @@ def _setup_gate() -> str | None:
     if not _is_setup_complete():
         return "Mnemos isn't configured yet — call mnemos_setup to get started."
     return None
+
+
+def _effective_agent_id(agent_id: str = "default") -> str:
+    """Resolve advanced tools to the configured server identity by default."""
+    if agent_id and agent_id != "default":
+        return agent_id
+    config = _get_config()
+    configured = config.get("agent_id") or os.environ.get("MNEMOS_AGENT_ID")
+    return str(configured or _default_agent_id or "default")
 
 
 def _init_store(db_path: str = "~/.mnemos/memory.db") -> None:
@@ -459,6 +472,7 @@ def mnemos_remember(
     if gate:
         return gate
     _ensure_store()
+    agent_id = _effective_agent_id(agent_id)
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
     engram = _encoder.encode(  # type: ignore
@@ -519,6 +533,7 @@ def mnemos_ingest(
     if gate:
         return gate
     _ensure_store()
+    agent_id = _effective_agent_id(agent_id)
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
     skip = skip_surprise or (encoding_depth == "shallow")
@@ -573,6 +588,7 @@ def mnemos_recall(
     if gate:
         return gate
     _ensure_store()
+    agent_id = _effective_agent_id(agent_id)
     emotional_state = _store.get_latest_emotional_state(agent_id)  # type: ignore
 
     results = _retriever.retrieve(  # type: ignore
@@ -643,6 +659,7 @@ def mnemos_hypomnema_write(
     if gate:
         return gate
     _ensure_store()
+    agent_id = _effective_agent_id(agent_id)
     try:
         entry_id = _store.write_hypomnema_entry(  # type: ignore
             content,
@@ -695,6 +712,7 @@ def mnemos_hypomnema_search(
     if gate:
         return gate
     _ensure_store()
+    agent_id = _effective_agent_id(agent_id)
     entries = _store.search_hypomnema(  # type: ignore
         query,
         agent_id=agent_id,
@@ -732,6 +750,7 @@ def mnemos_hypomnema_revise(
     if gate:
         return gate
     _ensure_store()
+    agent_id = _effective_agent_id(agent_id)
     try:
         _store.revise_hypomnema_entry(  # type: ignore
             entry_id,
@@ -767,6 +786,7 @@ def mnemos_hypomnema_supersede(
     if gate:
         return gate
     _ensure_store()
+    agent_id = _effective_agent_id(agent_id)
     try:
         new_id = _store.supersede_hypomnema_entry(  # type: ignore
             entry_id,
@@ -800,6 +820,7 @@ def mnemos_hypomnema_promote(
     if gate:
         return gate
     _ensure_store()
+    agent_id = _effective_agent_id(agent_id)
     entry = _store.get_hypomnema_entry(  # type: ignore
         entry_id,
         agent_id=agent_id,
@@ -847,6 +868,7 @@ def mnemos_hypomnema_candidates(
     if gate:
         return gate
     _ensure_store()
+    agent_id = _effective_agent_id(agent_id)
     entries = _store.get_hypomnema_promotion_candidates(  # type: ignore
         agent_id=agent_id,
         person_id=person_id,
@@ -920,6 +942,7 @@ def mnemos_status(agent_id: str = "default") -> str:
     if gate:
         return gate
     _ensure_store()
+    agent_id = _effective_agent_id(agent_id)
     stats = _store.get_stats(agent_id)  # type: ignore
 
     # Count long-term (stability >= 0.8) engrams
@@ -967,6 +990,7 @@ def mnemos_beliefs(agent_id: str = "default", domain: str = "") -> str:
     if gate:
         return gate
     _ensure_store()
+    agent_id = _effective_agent_id(agent_id)
     beliefs = _store.get_beliefs(  # type: ignore
         agent_id=agent_id,
         domain=domain or None,
@@ -1005,6 +1029,7 @@ def mnemos_shared(
     if gate:
         return gate
     _ensure_store()
+    agent_id = _effective_agent_id(agent_id)
     if not _shared_pool:
         return "Shared memory pool not initialized."
 
@@ -1068,6 +1093,7 @@ def mnemos_consolidate(deep: bool = False, agent_id: str = "default") -> str:
     if gate:
         return gate
     _ensure_store()
+    agent_id = _effective_agent_id(agent_id)
     daemon = ConsolidationDaemon(store=_store, config={}, llm_client=_llm_client, embedding_index=_embedding_index)  # type: ignore
     stats = daemon.run_cycle(deep=deep, agent_id=agent_id)
 
@@ -1095,8 +1121,25 @@ def mnemos_consolidate(deep: bool = False, agent_id: str = "default") -> str:
     return "\n".join(lines)
 
 
-def run_server(db_path: str = "~/.mnemos/memory.db") -> None:
+def run_server(
+    db_path: str = "~/.mnemos/memory.db",
+    *,
+    agent_id: str | None = None,
+    person_id: str | None = None,
+    project_scope: str | None = None,
+) -> None:
     """Start the MCP server in stdio mode."""
+    global _default_agent_id
+    if agent_id:
+        _default_agent_id = agent_id
+        os.environ["MNEMOS_AGENT_ID"] = agent_id
+    configure_runtime(
+        db_path=db_path,
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+    )
+
     def _shutdown(signum, frame):
         logger.info("Shutting down MCP server...")
         if _store:

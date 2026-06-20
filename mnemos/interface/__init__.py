@@ -13,4 +13,6 @@ Key components:
 from .session import MnemosSession
 from .prompt_builder import PromptBuilder
 from .memory_inspector import MemoryInspector
+from .context_packet import build_context_packet, format_context_packet
+from .visual_snapshot import build_memory_visual_snapshot
 from .export import export_memory, import_memory

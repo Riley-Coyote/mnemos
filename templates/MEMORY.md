@@ -80,6 +80,16 @@ over time.
 
 _No patterns yet._
 
+## Hypomnema
+
+<!--
+Scoped continuity that should survive sessions but remain revisable. Use this
+for relationship context, project continuity, recurring preferences, and long
+arc threads before promoting them into durable Mnemos engrams.
+-->
+
+_No hypomnema summaries exported yet._
+
 ## Evolution Markers
 
 <!--
@@ -92,12 +102,21 @@ _Just getting started._
 ## Working Memory
 
 <!--
-Short-term items that need to persist across sessions but aren't permanent.
-This section gets cleaned up regularly by memory-maintenance.
-Think of it as a scratchpad.
+Functional memory is short-term working context: task state, open questions,
+corrections, commitments, and things that need confirmation. It should be
+cleaned up or compressed into hypomnema when sessions close.
 -->
 
 _Empty._
+
+## Review Queue
+
+<!--
+Items the human should confirm, correct, or approve for promotion. The agent
+should check this before assuming inferred continuity is settled.
+-->
+
+_Clear._
 
 ## Session Log
 

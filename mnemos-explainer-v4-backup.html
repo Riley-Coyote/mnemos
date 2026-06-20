@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mnemos — Living Memory Architecture</title>
+<style>
+@property --pa1{syntax:'<number>';initial-value:0.20;inherits:false}
+@property --pa2{syntax:'<number>';initial-value:0.08;inherits:false}
+@property --pa3{syntax:'<number>';initial-value:0.15;inherits:false}
+@property --pa4{syntax:'<number>';initial-value:0.10;inherits:false}
+@property --pa5{syntax:'<number>';initial-value:0.18;inherits:false}
+@property --pa6{syntax:'<number>';initial-value:0.06;inherits:false}
+:root{
+  --bg-void:#060608;--bg-deep:#0a0a0c;--bg-primary:#0e0e10;--bg-elevated:#141416;
+  --bg-surface:rgba(220,219,216,0.032);--bg-surface-hover:rgba(220,219,216,0.05);
+  --bg-gallery:#222224;--bg-gallery-hover:#2a2a2c;
+  --neutral-rgb:220,219,216;
+  --ink:rgba(244,243,240,0.93);--text-primary:rgba(244,243,240,0.88);
+  --text-body:rgba(210,208,204,0.68);--text-mid:rgba(194,192,188,0.60);
+  --text-secondary:rgba(194,192,188,0.56);--text-soft:rgba(161,159,155,0.42);
+  --text-tertiary:rgba(161,159,155,0.34);--text-faint:rgba(132,130,126,0.22);
+  --text-ghost:rgba(132,130,126,0.18);--text-whisper:rgba(126,123,119,0.10);
+  --border:rgba(220,219,216,0.08);--border-subtle:rgba(220,219,216,0.045);
+  --border-dim:rgba(220,219,216,0.06);--border-strong:rgba(220,219,216,0.10);
+  --border-focus:rgba(228,225,220,0.18);
+  --card-bg:rgba(220,219,216,0.018);
+  --luca:#c9a87c;--luca-dim:rgba(201,168,124,0.10);
+  --radius-sm:6px;--radius-md:10px;--radius-lg:14px;--radius-xl:20px;
+  --font-sans:'SF Pro Display',-apple-system,BlinkMacSystemFont,'Inter',sans-serif;
+  --font-mono:'SF Mono','Geist Mono','JetBrains Mono',monospace;
+  --ease-out:cubic-bezier(0.16,1,0.3,1);--ease-premium:cubic-bezier(0.22,1,0.36,1);
+  --dur-micro:120ms;--dur-fast:180ms;--dur-normal:300ms;--dur-slow:500ms;
+  --prose-width:640px;--wide-width:860px;
+}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pool-a1{0%,100%{--pa1:0.08}50%{--pa1:0.40}}
+@keyframes pool-a2{0%,100%{--pa2:0.30}50%{--pa2:0.06}}
+@keyframes pool-a3{0%,100%{--pa3:0.06}50%{--pa3:0.36}}
+@keyframes pool-a4{0%,100%{--pa4:0.28}50%{--pa4:0.05}}
+@keyframes pool-a5{0%,100%{--pa5:0.06}50%{--pa5:0.34}}
+@keyframes pool-a6{0%,100%{--pa6:0.24}50%{--pa6:0.04}}
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{background:var(--bg-void);color:var(--text-primary);font-family:var(--font-sans);font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;scroll-behavior:smooth}
+body{background:var(--bg-void);min-height:100vh}
+::selection{background:rgba(220,219,216,0.08);color:var(--ink)}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(220,219,216,0.08);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:rgba(220,219,216,0.14)}
+
+.container{max-width:var(--prose-width);margin:0 auto;padding:0 28px}
+.wide{max-width:var(--wide-width);margin:0 auto;padding:0 28px}
+
+h2{font-size:28px;font-weight:300;color:var(--ink);letter-spacing:-0.01em;line-height:1.2;margin-bottom:8px}
+h3{font-family:var(--font-mono);font-size:13px;font-weight:500;color:var(--text-primary);margin-top:48px;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.04em}
+p{font-size:14px;color:var(--text-secondary);line-height:1.65;max-width:var(--prose-width);margin-bottom:18px}
+p strong{color:var(--text-primary);font-weight:500}
+p em{font-style:italic;color:var(--text-soft)}
+a{color:var(--text-body);text-decoration:none;border-bottom:1px solid var(--border-strong);transition:all var(--dur-fast) var(--ease-out)}
+a:hover{color:var(--ink);border-color:var(--text-soft)}
+
+.section{padding:80px 0}
+.section+.section{border-top:1px solid var(--border-subtle)}
+
+.section-label{font-family:var(--font-mono);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-faint);margin-bottom:16px;display:flex;align-items:center;gap:12px}
+.section-label::after{content:'';flex:1;height:1px;background:var(--border-subtle)}
+
+.chapter-sub{font-size:14px;color:var(--text-tertiary);font-weight:400;margin-bottom:32px;max-width:560px;line-height:1.55}
+
+.pull{font-size:14px;font-weight:400;font-style:italic;color:var(--text-soft);line-height:1.6;border-left:1px solid var(--border-strong);padding-left:18px;margin:36px 0}
+
+.hero{padding:120px 0 100px;text-align:center}
+.hero-label{font-family:var(--font-mono);font-size:9px;font-weight:500;text-transform:uppercase;letter-spacing:0.12em;color:var(--text-ghost);margin-bottom:16px;display:block}
+.hero h1{font-size:clamp(48px,7vw,68px);font-weight:200;color:var(--ink);letter-spacing:-0.02em;line-height:1.05;margin-bottom:16px}
+.hero .sub{font-size:15px;color:var(--text-secondary);max-width:420px;margin:0 auto;line-height:1.65}
+
+/* Comparison grid */
+.compare-grid{display:grid;grid-template-columns:1fr 32px 1fr;gap:0;margin:32px 0;font-size:13px}
+.compare-col{display:flex;flex-direction:column}
+.compare-header{font-family:var(--font-mono);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;padding:0 0 12px;border-bottom:1px solid var(--border-subtle)}
+.compare-header.old{color:var(--text-ghost)}
+.compare-header.new{color:var(--text-soft)}
+.compare-row{padding:11px 0;border-bottom:1px solid var(--border-subtle);line-height:1.5}
+.compare-old{color:var(--text-tertiary)}
+.compare-new{color:var(--text-secondary)}
+.compare-new strong{color:var(--text-primary);font-weight:500}
+.compare-arrow{display:flex;flex-direction:column;align-items:center}
+.compare-arrow .arr{padding:11px 0;border-bottom:1px solid transparent;color:var(--text-whisper);font-size:10px;display:flex;align-items:center;height:100%}
+.compare-arrow .arr:first-child{padding:0 0 12px}
+
+/* Lifecycle visualization */
+.lifecycle-specimen{background:var(--bg-deep);border:1px solid var(--border-subtle);border-radius:var(--radius-lg);padding:36px 32px 28px;margin:36px 0;position:relative;overflow:hidden}
+.lifecycle-specimen::before{content:'';position:absolute;inset:0;border-radius:inherit;padding:1px;background:radial-gradient(ellipse 55% 160% at 12% 0%,rgba(220,218,214,var(--pa1)) 0%,transparent 65%),radial-gradient(ellipse 50% 160% at 50% 0%,rgba(220,218,214,var(--pa2)) 0%,transparent 65%),radial-gradient(ellipse 55% 160% at 88% 0%,rgba(220,218,214,var(--pa3)) 0%,transparent 65%),radial-gradient(ellipse 50% 160% at 85% 100%,rgba(220,218,214,var(--pa4)) 0%,transparent 65%),radial-gradient(ellipse 55% 160% at 48% 100%,rgba(220,218,214,var(--pa5)) 0%,transparent 65%),radial-gradient(ellipse 50% 160% at 15% 100%,rgba(220,218,214,var(--pa6)) 0%,transparent 65%);-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude;animation:pool-a1 5s ease-in-out infinite,pool-a2 7s ease-in-out infinite,pool-a3 9s ease-in-out infinite,pool-a4 11s ease-in-out infinite,pool-a5 13s ease-in-out infinite,pool-a6 8s ease-in-out infinite;pointer-events:none}
+.lifecycle-specimen .specimen-tag{position:absolute;top:12px;right:16px;font-family:var(--font-mono);font-size:8px;color:var(--text-whisper);text-transform:uppercase;letter-spacing:0.1em}
+.lc-flow{display:grid;grid-template-columns:repeat(5,1fr);gap:0;position:relative}
+.lc-flow::before{content:'';position:absolute;top:7px;left:10%;right:10%;height:1px;background:var(--border-subtle)}
+.lc-stage{display:flex;flex-direction:column;align-items:center;text-align:center;padding:0 8px}
+.lc-dot{width:5px;height:5px;border-radius:50%;background:var(--text-ghost);margin-bottom:14px;position:relative;z-index:1;border:2px solid var(--bg-deep)}
+.lc-stage:first-child .lc-dot{background:var(--text-soft)}
+.lc-stage:last-child .lc-dot{background:var(--text-soft)}
+.lc-name{font-family:var(--font-mono);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-tertiary);margin-bottom:3px}
+.lc-time{font-family:var(--font-mono);font-size:8px;color:var(--text-ghost);margin-bottom:14px}
+.lc-traces{width:100%;max-width:120px;margin-bottom:12px}
+.lc-trace{display:flex;align-items:center;gap:5px;margin-bottom:3px}
+.lc-tn{font-family:var(--font-mono);font-size:7px;color:var(--text-ghost);width:18px;flex-shrink:0;text-align:right;text-transform:uppercase;letter-spacing:0.04em}
+.lc-bar{flex:1;height:2px;background:rgba(var(--neutral-rgb),0.03);border-radius:1px;overflow:hidden}
+.lc-fill{height:100%;border-radius:1px;background:var(--text-faint)}
+.lc-tv{font-family:var(--font-mono);font-size:7px;color:var(--text-ghost);width:22px;flex-shrink:0}
+.lc-note{font-size:10px;color:var(--text-ghost);line-height:1.45;max-width:130px}
+.lc-note strong{color:var(--text-tertiary);font-weight:500}
+@media(max-width:768px){.lc-flow{grid-template-columns:repeat(5,1fr);overflow-x:auto;gap:0}.lc-stage{min-width:110px}}
+
+/* Specimen — the engram card with breathing glow */
+.specimen{background:var(--bg-deep);border:1px solid var(--border-subtle);border-radius:var(--radius-lg);padding:28px;margin:32px 0;position:relative;overflow:hidden;max-width:540px}
+.specimen::before{content:'';position:absolute;inset:0;border-radius:inherit;padding:1px;background:radial-gradient(ellipse 55% 160% at 12% 0%,rgba(220,218,214,var(--pa1)) 0%,transparent 65%),radial-gradient(ellipse 50% 160% at 50% 0%,rgba(220,218,214,var(--pa2)) 0%,transparent 65%),radial-gradient(ellipse 55% 160% at 88% 0%,rgba(220,218,214,var(--pa3)) 0%,transparent 65%),radial-gradient(ellipse 50% 160% at 85% 100%,rgba(220,218,214,var(--pa4)) 0%,transparent 65%),radial-gradient(ellipse 55% 160% at 48% 100%,rgba(220,218,214,var(--pa5)) 0%,transparent 65%),radial-gradient(ellipse 50% 160% at 15% 100%,rgba(220,218,214,var(--pa6)) 0%,transparent 65%);-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude;animation:pool-a1 5s ease-in-out infinite,pool-a2 7s ease-in-out infinite,pool-a3 9s ease-in-out infinite,pool-a4 11s ease-in-out infinite,pool-a5 13s ease-in-out infinite,pool-a6 8s ease-in-out infinite;pointer-events:none}
+.specimen-tag{position:absolute;top:10px;right:14px;font-family:var(--font-mono);font-size:8px;color:var(--text-whisper);text-transform:uppercase;letter-spacing:0.1em}
+.ed-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px}
+.ed-id{font-family:var(--font-mono);font-size:10px;color:var(--text-ghost)}
+.ed-state{font-family:var(--font-mono);font-size:8px;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-soft)}
+.ed-label{font-family:var(--font-mono);font-size:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-faint);margin-bottom:5px;margin-top:16px}
+.ed-label:first-of-type{margin-top:0}
+.ed-text{font-size:13px;color:var(--text-secondary);line-height:1.6}
+.ed-text.impact{font-style:italic;color:var(--text-primary)}
+
+.trace-row{display:flex;align-items:center;gap:10px;margin-bottom:5px}
+.trace-name{font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary);width:90px;flex-shrink:0}
+.trace-track{flex:1;height:2px;background:rgba(var(--neutral-rgb),0.04);border-radius:1px;overflow:hidden}
+.trace-fill{height:100%;border-radius:1px;background:var(--text-faint)}
+.trace-val{font-family:var(--font-mono);font-size:10px;color:var(--text-ghost);width:30px;text-align:right}
+
+/* Connection cards — monochrome gallery pattern */
+.conn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin:28px 0}
+.conn-item{padding:14px 16px;background:var(--bg-gallery);border:1px solid var(--border-subtle);border-radius:var(--radius-md);transition:all var(--dur-fast) var(--ease-out)}
+.conn-item:hover{background:var(--bg-gallery-hover);border-color:var(--border)}
+.conn-item .cn{font-family:var(--font-mono);font-size:12px;color:var(--text-primary);margin-bottom:5px;font-weight:450}
+.conn-item .cd{font-size:12px;color:var(--text-tertiary);line-height:1.5}
+
+/* Steps */
+.step-list{list-style:none;margin:24px 0;counter-reset:step}
+.step-list li{counter-increment:step;position:relative;padding:0 0 18px 44px;font-size:14px;line-height:1.6;color:var(--text-secondary)}
+.step-list li::before{content:counter(step);position:absolute;left:0;top:1px;font-family:var(--font-mono);font-size:10px;font-weight:500;color:var(--text-ghost);width:26px;height:26px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:var(--radius-sm)}
+.step-list li strong{color:var(--text-primary);font-weight:500}
+
+/* Softening visualization */
+.soften-viz{display:grid;grid-template-columns:1fr 32px 1fr;gap:0;margin:32px 0;align-items:start}
+.soften-card{padding:16px 18px;border:1px solid var(--border-subtle);border-radius:var(--radius-md);font-size:13px;line-height:1.6;color:var(--text-secondary)}
+.soften-card.raw{opacity:0.4;border-style:dashed}
+.soften-card.wisdom{background:var(--bg-elevated);border-color:var(--border)}
+.soften-card .dfrom{font-family:var(--font-mono);font-size:9px;color:var(--text-ghost);margin-top:10px}
+.soften-arrow{display:flex;align-items:center;justify-content:center;color:var(--text-ghost);font-size:14px;padding-top:28px}
+.soften-label{font-family:var(--font-mono);font-size:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;color:var(--text-ghost)}
+
+/* Decay chart */
+.decay-svg{display:block;margin:32px auto;max-width:100%}
+
+/* Dimension grid */
+.dim-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:20px 0}
+.dim-cell{padding:12px 14px;background:var(--bg-gallery);border:1px solid var(--border-subtle);border-radius:var(--radius-sm);transition:all var(--dur-fast) var(--ease-out)}
+.dim-cell:hover{background:var(--bg-gallery-hover);border-color:var(--border)}
+.dim-cell .dn{font-family:var(--font-mono);font-size:11px;color:var(--text-primary);margin-bottom:4px;font-weight:450}
+.dim-cell .dd{font-size:11px;color:var(--text-tertiary);line-height:1.45}
+
+/* Tool grid */
+.tool-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:20px 0}
+.tool-card{padding:12px 16px;background:var(--bg-gallery);border:1px solid var(--border-subtle);border-radius:var(--radius-md);transition:all var(--dur-fast) var(--ease-out)}
+.tool-card:hover{background:var(--bg-gallery-hover);border-color:var(--border)}
+.tool-card .tn{font-family:var(--font-mono);font-size:12px;color:var(--text-primary);margin-bottom:3px;font-weight:450}
+.tool-card .td{font-size:12px;color:var(--text-tertiary);line-height:1.45}
+
+/* Portability visualization */
+.portability-viz{display:grid;grid-template-columns:1fr 40px 1fr;gap:0;margin:32px 0;align-items:start}
+.port-col{display:flex;flex-direction:column}
+.port-header{font-family:var(--font-mono);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-ghost);padding-bottom:12px;border-bottom:1px solid var(--border-subtle)}
+.port-header-new{color:var(--text-soft)}
+.port-arrow{display:flex;align-items:center;justify-content:center;color:var(--text-whisper);font-size:16px;padding-top:50px}
+.port-items{display:flex;flex-direction:column;gap:6px;padding-top:12px}
+.port-item{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border:1px solid var(--border-subtle);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:11px;transition:all var(--dur-fast) var(--ease-out)}
+.port-name{color:var(--text-secondary)}
+.port-mem{font-size:9px;color:var(--text-ghost);letter-spacing:0.02em}
+.port-isolated{border-style:dashed;opacity:0.5}
+.port-connected{border-color:var(--border);background:var(--bg-deep)}
+.port-connected:hover{border-color:var(--border-strong);background:var(--bg-elevated)}
+.port-shared{margin-top:8px;padding:10px 14px;background:var(--bg-elevated);border:1px solid var(--border-strong);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:11px;color:var(--text-primary);text-align:center;letter-spacing:0.02em}
+
+/* Onboarding flow */
+.onboard-flow{margin:28px 0 32px;display:flex;flex-direction:column;gap:2px}
+.onboard-step{display:flex;gap:16px;padding:14px 18px;background:var(--bg-deep);border:1px solid var(--border-subtle);border-radius:var(--radius-md);transition:all var(--dur-fast) var(--ease-out)}
+.onboard-step:first-child{border-radius:var(--radius-md) var(--radius-md) 2px 2px}
+.onboard-step:last-child{border-radius:2px 2px var(--radius-md) var(--radius-md)}
+.onboard-step:not(:first-child):not(:last-child){border-radius:2px}
+.onboard-step:hover{border-color:var(--border);background:var(--bg-elevated)}
+.onboard-num{font-family:var(--font-mono);font-size:10px;font-weight:500;color:var(--text-ghost);width:18px;height:18px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border-subtle);border-radius:4px;flex-shrink:0;margin-top:1px}
+.onboard-final .onboard-num{border-color:var(--text-soft);color:var(--text-soft)}
+.onboard-body{flex:1;min-width:0}
+.onboard-title{font-family:var(--font-mono);font-size:12px;font-weight:500;color:var(--text-primary);margin-bottom:3px;letter-spacing:0.01em}
+.onboard-detail{font-size:12px;color:var(--text-tertiary);line-height:1.5}
+.onboard-opt{font-size:9px;color:var(--text-ghost);border:1px solid var(--border-subtle);padding:1px 5px;border-radius:100px;margin-left:6px;font-weight:400;letter-spacing:0.02em;vertical-align:1px}
+.onboard-final .onboard-title{color:var(--text-primary)}
+
+/* Include grid */
+.include-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:20px 0}
+.include-card{display:flex;gap:14px;padding:16px 18px;background:var(--bg-deep);border:1px solid var(--border-subtle);border-radius:var(--radius-md);transition:all var(--dur-fast) var(--ease-out)}
+.include-card:hover{border-color:var(--border);background:var(--bg-elevated)}
+.include-icon{width:6px;height:6px;border-radius:50%;background:var(--text-ghost);flex-shrink:0;margin-top:6px}
+.include-body{flex:1;min-width:0}
+.include-name{font-family:var(--font-mono);font-size:12px;font-weight:500;color:var(--text-primary);margin-bottom:4px;letter-spacing:0.01em}
+.include-desc{font-size:12px;color:var(--text-tertiary);line-height:1.5}
+
+/* Code */
+pre{background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:16px 20px;overflow-x:auto;margin:24px 0;font-family:var(--font-mono);font-size:12px;line-height:1.6;color:var(--text-secondary);white-space:pre}
+pre .cmt{color:var(--text-ghost)}
+
+/* Meta row — tech specs */
+.meta-row{display:flex;flex-wrap:wrap;gap:20px;margin:28px 0;font-family:var(--font-mono);font-size:10px;color:var(--text-ghost);letter-spacing:0.02em}
+.meta-row .mv{color:var(--text-soft)}
+
+.closing{text-align:center;padding:80px 0}
+.closing p{margin-left:auto;margin-right:auto}
+
+footer{padding:40px 0;border-top:1px solid var(--border-subtle);text-align:center;font-family:var(--font-mono);font-size:10px;color:var(--text-ghost);line-height:2.2;letter-spacing:0.02em}
+footer a{color:var(--text-ghost);border-bottom:1px solid transparent;text-decoration:none;transition:color var(--dur-fast) var(--ease-out)}
+footer a:hover{color:var(--text-soft)}
+
+/* Graph visualization */
+.graph-specimen{background:var(--bg-deep);border:1px solid var(--border-subtle);border-radius:var(--radius-lg);padding:40px 32px 28px;margin:36px 0;position:relative;overflow:hidden}
+.graph-specimen::before{content:'';position:absolute;inset:0;border-radius:inherit;padding:1px;background:radial-gradient(ellipse 55% 160% at 12% 0%,rgba(220,218,214,var(--pa1)) 0%,transparent 65%),radial-gradient(ellipse 50% 160% at 50% 0%,rgba(220,218,214,var(--pa2)) 0%,transparent 65%),radial-gradient(ellipse 55% 160% at 88% 0%,rgba(220,218,214,var(--pa3)) 0%,transparent 65%),radial-gradient(ellipse 50% 160% at 85% 100%,rgba(220,218,214,var(--pa4)) 0%,transparent 65%),radial-gradient(ellipse 55% 160% at 48% 100%,rgba(220,218,214,var(--pa5)) 0%,transparent 65%),radial-gradient(ellipse 50% 160% at 15% 100%,rgba(220,218,214,var(--pa6)) 0%,transparent 65%);-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude;animation:pool-a1 5s ease-in-out infinite,pool-a2 7s ease-in-out infinite,pool-a3 9s ease-in-out infinite,pool-a4 11s ease-in-out infinite,pool-a5 13s ease-in-out infinite,pool-a6 8s ease-in-out infinite;pointer-events:none}
+.graph-specimen .specimen-tag{position:absolute;top:12px;right:16px;font-family:var(--font-mono);font-size:8px;color:var(--text-whisper);text-transform:uppercase;letter-spacing:0.1em}
+.graph-svg{display:block;width:100%;height:auto}
+.graph-caption{font-family:var(--font-mono);font-size:8px;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-whisper);text-align:center;margin-top:16px}
+.g-hop-ring{fill:none;stroke:rgba(220,219,216,0.02);stroke-width:0.5;stroke-dasharray:2 4}
+.g-atmo{fill:url(#atmoGrad);opacity:0;transition:opacity 1s ease}
+.graph-active .g-atmo{opacity:1;transition-delay:0.1s}
+.g-outer{fill:none;stroke:var(--border-subtle);stroke-width:0.5;transition:stroke 0.6s var(--ease-out),stroke-width 0.6s var(--ease-out)}
+.g-ring{fill:var(--bg-deep);stroke:var(--border);stroke-width:0.75;transition:stroke 0.6s var(--ease-out),stroke-width 0.6s var(--ease-out)}
+.g-dot{transition:fill 0.6s var(--ease-out);fill:rgba(220,219,216,0.06)}
+.g-label{font-family:var(--font-mono);font-size:9px;fill:var(--text-ghost);text-anchor:middle;letter-spacing:0.02em;transition:fill 0.6s var(--ease-out)}
+.g-line{fill:none;stroke:rgba(220,219,216,0.025);stroke-width:0.5;transition:stroke 0.6s var(--ease-out),stroke-width 0.6s var(--ease-out)}
+.g-type{font-family:var(--font-mono);font-size:7px;fill:transparent;text-anchor:middle;letter-spacing:0.04em;transition:fill 0.7s var(--ease-out)}
+.graph-active .g-cue .g-outer{stroke:rgba(220,219,216,0.08);stroke-width:0.75;transition-delay:0s}
+.graph-active .g-cue .g-ring{stroke:var(--text-soft);stroke-width:1;transition-delay:0s}
+.graph-active .g-cue .g-dot{fill:var(--text-primary);transition-delay:0s}
+.graph-active .g-cue .g-label{fill:var(--text-primary);transition-delay:0.05s}
+.graph-active .h1 .g-ring{stroke:var(--text-faint);transition-delay:0.4s}
+.graph-active .h1 .g-dot{fill:var(--text-soft);transition-delay:0.4s}
+.graph-active .h1 .g-label{fill:var(--text-tertiary);transition-delay:0.5s}
+.graph-active .h1.g-edge .g-line{stroke:rgba(220,219,216,0.09);stroke-width:0.5;transition-delay:0.25s}
+.graph-active .h1.g-edge .g-type{fill:var(--text-ghost);transition-delay:0.55s}
+.graph-active .h2 .g-ring{stroke:var(--border-strong);transition-delay:0.8s}
+.graph-active .h2 .g-dot{fill:var(--text-faint);transition-delay:0.8s}
+.graph-active .h2 .g-label{fill:var(--text-ghost);transition-delay:0.9s}
+.graph-active .h2.g-edge .g-line{stroke:rgba(220,219,216,0.05);transition-delay:0.65s}
+.graph-active .h2.g-edge .g-type{fill:var(--text-whisper);transition-delay:0.9s}
+.graph-active .h3 .g-ring{stroke:var(--border);transition-delay:1.15s}
+.graph-active .h3 .g-dot{fill:var(--border-strong);transition-delay:1.15s}
+.graph-active .h3 .g-label{fill:var(--text-ghost);transition-delay:1.25s}
+.graph-active .h3.g-edge .g-line{stroke:rgba(220,219,216,0.035);transition-delay:1s}
+.graph-active .h3.g-edge .g-type{fill:var(--text-whisper);transition-delay:1.25s}
+
+/* Floating section nav */
+.float-nav{position:fixed;right:20px;top:50%;transform:translateY(-50%);z-index:100;display:flex;flex-direction:column;align-items:center;gap:10px;opacity:0;transition:opacity 0.4s ease;pointer-events:none}
+.float-nav.visible{opacity:1;pointer-events:auto}
+.fn-dot{width:5px;height:5px;border-radius:50%;background:rgba(220,219,216,0.10);cursor:pointer;transition:all var(--dur-fast) var(--ease-out);position:relative;border:none;padding:0;outline:none}
+.fn-dot:hover{background:rgba(220,219,216,0.25);transform:scale(1.4)}
+.fn-dot.active{background:rgba(244,243,240,0.55)}
+.fn-dot .fn-tip{position:absolute;right:16px;top:50%;transform:translateY(-50%);white-space:nowrap;font-family:var(--font-mono);font-size:9px;color:var(--text-tertiary);background:var(--bg-elevated);padding:3px 8px;border-radius:var(--radius-sm);border:1px solid var(--border-subtle);opacity:0;pointer-events:none;transition:opacity 0.15s ease}
+.fn-dot:hover .fn-tip{opacity:1}
+@media(max-width:900px){.float-nav{display:none}}
+
+.fade{opacity:0;transform:translateY(6px);transition:opacity 0.55s ease,transform 0.55s ease}
+.fade.vis{opacity:1;transform:translateY(0)}
+
+@media(max-width:768px){
+  .section{padding:60px 0}.hero{padding:80px 0 60px}
+  .compare-grid{grid-template-columns:1fr}.compare-arrow,.compare-old,.compare-header.old{display:none}
+  .conn-grid{grid-template-columns:1fr 1fr}.dim-grid{grid-template-columns:1fr 1fr}.tool-grid{grid-template-columns:1fr}
+  .include-grid{grid-template-columns:1fr 1fr}
+  .portability-viz{grid-template-columns:1fr}.port-arrow{transform:rotate(90deg);padding:8px 0}
+  .soften-viz{grid-template-columns:1fr}.soften-arrow{transform:rotate(90deg);padding:8px 0}
+  h2{font-size:24px}
+}
+@media(max-width:580px){.include-grid{grid-template-columns:1fr}}
+@media(max-width:480px){.conn-grid,.dim-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="hero container fade">
+  <span class="hero-label">Living Memory Architecture</span>
+  <h1>Mnemos</h1>
+  <p class="sub">Persistent memory that follows you across platforms, devices, and agents&mdash;modeled after how biological memory actually works.</p>
+  <div style="margin-top:24px;font-family:var(--font-mono);font-size:10px;color:var(--text-ghost);letter-spacing:0.03em;display:flex;gap:18px;justify-content:center;flex-wrap:wrap"><span>pip install mnemos</span><span style="color:var(--text-whisper)">&middot;</span><span>10 MCP tools</span><span style="color:var(--text-whisper)">&middot;</span><span>SQLite</span><span style="color:var(--text-whisper)">&middot;</span><span>MIT license</span></div>
+</div>
+
+<section class="section fade" id="s-continuity"><div class="container">
+  <div class="section-label">The problem</div>
+  <h2>Your agent forgets you every time you switch tools</h2>
+  <div class="chapter-sub">Start a conversation in Claude Code. Continue in Cursor. Pick it up on your phone. Right now, every platform is a blank slate.</div>
+  <p>AI memory today is <strong>trapped inside each application</strong>. Your agent in Claude Code doesn&rsquo;t know what you discussed in Cursor. Your laptop session doesn&rsquo;t carry over to your desktop. Switch tools and you start from zero&mdash;re-explaining context, re-establishing preferences, re-teaching everything.</p>
+  <p>Mnemos solves this. It&rsquo;s a <strong>single memory layer</strong> that any MCP-compatible client can connect to. Claude Code, Cursor, Windsurf, custom agents&mdash;they all read from and write to the same living memory. Start a conversation on one platform, pick it up on another, and the agent already knows who you are, what you&rsquo;re working on, and what you decided last Tuesday.</p>
+</div><div class="wide">
+  <div class="portability-viz">
+    <div class="port-col">
+      <div class="port-header">Without Mnemos</div>
+      <div class="port-items">
+        <div class="port-item port-isolated"><span class="port-name">Claude Code</span><span class="port-mem">separate memory</span></div>
+        <div class="port-item port-isolated"><span class="port-name">Cursor</span><span class="port-mem">separate memory</span></div>
+        <div class="port-item port-isolated"><span class="port-name">Windsurf</span><span class="port-mem">separate memory</span></div>
+        <div class="port-item port-isolated"><span class="port-name">Custom agent</span><span class="port-mem">separate memory</span></div>
+      </div>
+    </div>
+    <div class="port-arrow">&rarr;</div>
+    <div class="port-col">
+      <div class="port-header port-header-new">With Mnemos</div>
+      <div class="port-items">
+        <div class="port-item port-connected"><span class="port-name">Claude Code</span></div>
+        <div class="port-item port-connected"><span class="port-name">Cursor</span></div>
+        <div class="port-item port-connected"><span class="port-name">Windsurf</span></div>
+        <div class="port-item port-connected"><span class="port-name">Custom agent</span></div>
+      </div>
+      <div class="port-shared">one living memory</div>
+    </div>
+  </div>
+</div><div class="container">
+  <p>Your memory lives on your machine in a SQLite database. It&rsquo;s yours&mdash;not locked inside any vendor. Move it to another computer, back it up, inspect it directly. The cognitive substrate runs between sessions, so your agent isn&rsquo;t just remembering&mdash;it&rsquo;s consolidating, connecting, and reflecting on what it knows even when you&rsquo;re not talking to it.</p>
+</div></section>
+
+<section class="section fade" id="s-difference"><div class="container">
+  <div class="section-label">The architecture</div>
+  <h2>Most AI memory is a notebook.<br>This is a mind.</h2>
+  <div class="chapter-sub">What changes when you model memory after biology instead of databases.</div>
+  <p>Most AI memory systems are key-value stores with vector search. They record things and retrieve them. That&rsquo;s useful, but it&rsquo;s not memory&mdash;it&rsquo;s a filing cabinet.</p>
+  <p>Biological memory does something fundamentally different. It <strong>changes every time you remember</strong>. It connects experiences into webs of meaning. It forgets gracefully&mdash;shedding noise while preserving wisdom. It earns permanence through use, not through someone deciding to save it.</p>
+  <p>Mnemos models these properties:</p>
+</div><div class="wide">
+  <div class="compare-grid">
+    <div class="compare-col">
+      <div class="compare-header old">Typical AI memory</div>
+      <div class="compare-row compare-old">Key-value pairs or vector embeddings</div>
+      <div class="compare-row compare-old">Similarity search</div>
+      <div class="compare-row compare-old">Read-only retrieval</div>
+      <div class="compare-row compare-old">Delete or TTL expiry</div>
+      <div class="compare-row compare-old">Binary&mdash;exists or doesn&rsquo;t</div>
+      <div class="compare-row compare-old">No higher-order knowledge</div>
+      <div class="compare-row compare-old">No emotional model</div>
+      <div class="compare-row compare-old">Persist everything or expire it</div>
+    </div>
+    <div class="compare-arrow"><div class="arr">&nbsp;</div><div class="arr">&rarr;</div><div class="arr">&rarr;</div><div class="arr">&rarr;</div><div class="arr">&rarr;</div><div class="arr">&rarr;</div><div class="arr">&rarr;</div><div class="arr">&rarr;</div><div class="arr">&rarr;</div></div>
+    <div class="compare-col">
+      <div class="compare-header new">Mnemos</div>
+      <div class="compare-row compare-new"><strong>Living engrams</strong> with content, impact, and three traces</div>
+      <div class="compare-row compare-new"><strong>Spreading activation</strong> through a typed connection graph</div>
+      <div class="compare-row compare-new"><strong>Reconsolidation</strong>&mdash;every recall changes the memory</div>
+      <div class="compare-row compare-new"><strong>Graceful decay</strong> that distills details into wisdom</div>
+      <div class="compare-row compare-new"><strong>Three dimensions</strong>&mdash;strength, stability, accessibility</div>
+      <div class="compare-row compare-new"><strong>Emergent beliefs</strong> with confidence scoring</div>
+      <div class="compare-row compare-new"><strong>Six-dimension</strong> emotional state coloring cognition</div>
+      <div class="compare-row compare-new"><strong>Earned permanence</strong> through retrieval and connection</div>
+    </div>
+  </div>
+</div></section>
+
+<section class="section fade" id="s-lifecycle"><div class="container">
+  <div class="section-label">Lifecycle</div>
+  <h2>One memory, five stages</h2>
+  <div class="chapter-sub">Follow a single engram from encoding to permanence. Three traces track its journey: <strong>strength</strong> (how well encoded), <strong>stability</strong> (resistance to forgetting), and <strong>accessibility</strong> (how retrievable right now).</div>
+</div><div class="wide">
+  <div class="lifecycle-specimen">
+    <span class="specimen-tag">Memory Lifecycle</span>
+    <div class="lc-flow">
+      <div class="lc-stage">
+        <div class="lc-dot"></div>
+        <div class="lc-name">Encode</div>
+        <div class="lc-time">day 0</div>
+        <div class="lc-traces">
+          <div class="lc-trace"><span class="lc-tn">str</span><div class="lc-bar"><div class="lc-fill" style="width:80%"></div></div><span class="lc-tv">0.80</span></div>
+          <div class="lc-trace"><span class="lc-tn">stb</span><div class="lc-bar"><div class="lc-fill" style="width:30%"></div></div><span class="lc-tv">0.30</span></div>
+          <div class="lc-trace"><span class="lc-tn">acc</span><div class="lc-bar"><div class="lc-fill" style="width:100%"></div></div><span class="lc-tv">1.00</span></div>
+        </div>
+        <div class="lc-note">Memory formed. High accessibility, <strong>low stability</strong>.</div>
+      </div>
+      <div class="lc-stage">
+        <div class="lc-dot"></div>
+        <div class="lc-name">Connect</div>
+        <div class="lc-time">seconds later</div>
+        <div class="lc-traces">
+          <div class="lc-trace"><span class="lc-tn">str</span><div class="lc-bar"><div class="lc-fill" style="width:80%"></div></div><span class="lc-tv">0.80</span></div>
+          <div class="lc-trace"><span class="lc-tn">stb</span><div class="lc-bar"><div class="lc-fill" style="width:32%"></div></div><span class="lc-tv">0.32</span></div>
+          <div class="lc-trace"><span class="lc-tn">acc</span><div class="lc-bar"><div class="lc-fill" style="width:95%"></div></div><span class="lc-tv">0.95</span></div>
+        </div>
+        <div class="lc-note"><strong>3 connections</strong> discovered. Stability nudges up.</div>
+      </div>
+      <div class="lc-stage">
+        <div class="lc-dot"></div>
+        <div class="lc-name">Retrieve</div>
+        <div class="lc-time">day 3</div>
+        <div class="lc-traces">
+          <div class="lc-trace"><span class="lc-tn">str</span><div class="lc-bar"><div class="lc-fill" style="width:85%"></div></div><span class="lc-tv">0.85</span></div>
+          <div class="lc-trace"><span class="lc-tn">stb</span><div class="lc-bar"><div class="lc-fill" style="width:41%"></div></div><span class="lc-tv">0.41</span></div>
+          <div class="lc-trace"><span class="lc-tn">acc</span><div class="lc-bar"><div class="lc-fill" style="width:91%"></div></div><span class="lc-tv">0.91</span></div>
+        </div>
+        <div class="lc-note"><strong>Reconsolidated.</strong> Recall changed the memory&mdash;str +0.05, stb +0.09.</div>
+      </div>
+      <div class="lc-stage">
+        <div class="lc-dot"></div>
+        <div class="lc-name">Consolidate</div>
+        <div class="lc-time">day 7</div>
+        <div class="lc-traces">
+          <div class="lc-trace"><span class="lc-tn">str</span><div class="lc-bar"><div class="lc-fill" style="width:78%"></div></div><span class="lc-tv">0.78</span></div>
+          <div class="lc-trace"><span class="lc-tn">stb</span><div class="lc-bar"><div class="lc-fill" style="width:58%"></div></div><span class="lc-tv">0.58</span></div>
+          <div class="lc-trace"><span class="lc-tn">acc</span><div class="lc-bar"><div class="lc-fill" style="width:68%"></div></div><span class="lc-tv">0.68</span></div>
+        </div>
+        <div class="lc-note">Deep cycle ran. Connections <strong>boosted stability</strong>. Strength drifted.</div>
+      </div>
+      <div class="lc-stage">
+        <div class="lc-dot"></div>
+        <div class="lc-name">Permanent</div>
+        <div class="lc-time">day 30</div>
+        <div class="lc-traces">
+          <div class="lc-trace"><span class="lc-tn">str</span><div class="lc-bar"><div class="lc-fill" style="width:82%"></div></div><span class="lc-tv">0.82</span></div>
+          <div class="lc-trace"><span class="lc-tn">stb</span><div class="lc-bar"><div class="lc-fill" style="width:88%"></div></div><span class="lc-tv">0.88</span></div>
+          <div class="lc-trace"><span class="lc-tn">acc</span><div class="lc-bar"><div class="lc-fill" style="width:62%"></div></div><span class="lc-tv">0.62</span></div>
+        </div>
+        <div class="lc-note"><strong>Exponential resistance.</strong> Decay approaches zero. Memory persists.</div>
+      </div>
+    </div>
+  </div>
+</div><div class="container">
+  <p>The story of every memory: stability starts low and climbs through retrieval, connections, and consolidation. Accessibility fluctuates&mdash;the memory isn&rsquo;t always easy to reach. But once stability crosses the exponential threshold, the memory is effectively permanent. It earned its place.</p>
+</div></section>
+
+<section class="section fade" id="s-engram"><div class="container">
+  <div class="section-label">Fundamental unit</div>
+  <h2>The Engram</h2>
+  <div class="chapter-sub">Modeled after the biological engram&mdash;the physical trace a memory leaves in neural tissue.</div>
+  <p>Not a key-value pair. An engram is a living trace with internal structure&mdash;what was encoded, what it connected to, and how it has changed over time.</p>
+
+  <h3>Content vs. Impact</h3>
+  <p>Every engram has two layers. <strong>Content</strong> is what happened&mdash;the factual record. <strong>Impact</strong> is what it meant&mdash;the lasting significance distilled from the details.</p>
+  <p>In biological memory, you forget the exact words of a conversation but remember how it made you feel and what you learned. Mnemos works the same way: content fades, impact endures.</p>
+
+  <div class="specimen">
+    <span class="specimen-tag">Live Engram</span>
+    <div class="ed-head"><span class="ed-id">engram_01JRQ2</span><span class="ed-state">active</span></div>
+    <div class="ed-label">Content</div>
+    <div class="ed-text">&ldquo;Riley prefers dark mode in all applications. The design system uses a monochromatic palette with amber accent (#c9a87c).&rdquo;</div>
+    <div class="ed-label">Impact</div>
+    <div class="ed-text impact">&ldquo;Visual design starts from void&mdash;every element must justify its presence against pure black.&rdquo;</div>
+    <div style="margin-top:18px">
+      <div class="trace-row"><span class="trace-name">strength</span><div class="trace-track"><div class="trace-fill" style="width:82%"></div></div><span class="trace-val">0.82</span></div>
+      <div class="trace-row"><span class="trace-name">stability</span><div class="trace-track"><div class="trace-fill" style="width:41%"></div></div><span class="trace-val">0.41</span></div>
+      <div class="trace-row"><span class="trace-name">accessibility</span><div class="trace-track"><div class="trace-fill" style="width:91%"></div></div><span class="trace-val">0.91</span></div>
+    </div>
+  </div>
+
+  <h3>The Dual-Trace Model</h3>
+  <p>In cognitive science, the &ldquo;new theory of disuse&rdquo; distinguishes between storage strength and retrieval strength. Mnemos extends this to three independent dimensions:</p>
+  <p><strong>Strength</strong> models encoding depth&mdash;increases with retrieval, decays logarithmically without use. <strong>Stability</strong> models resistance to forgetting&mdash;builds through spaced retrieval, connection density, and surprise, resisting decay <em>exponentially</em>. <strong>Accessibility</strong> models how retrievable a memory is right now, fluctuating with recency and emotional state.</p>
+  <p>A memory can be <strong>strong but inaccessible</strong>&mdash;deeply encoded but dormant. Or <strong>accessible but unstable</strong>&mdash;recently seen but easily forgotten. Modeling them independently lets Mnemos handle both.</p>
+
+  <h3>Confidence Scoring</h3>
+  <p>Every memory knows how much to trust itself. Confidence ranges from speculative (below 0.4) through model-inferred (0.4&ndash;0.7) and user-implied (0.7&ndash;0.95) to user-explicit (above 0.95). The system never treats inference as fact.</p>
+</div></section>
+
+<section class="section fade" id="s-graph"><div class="container">
+  <div class="section-label">The graph</div>
+  <h2>Typed Connections &amp; Spreading Activation</h2>
+  <div class="chapter-sub">Modeled after associative memory networks and Hebbian learning&mdash;&ldquo;neurons that fire together wire together.&rdquo;</div>
+  <p>Memories form a graph of typed semantic relationships. When you activate one memory, activation spreads through connections to light up related ones. The graph <em>is</em> the relevance model.</p>
+</div><div class="wide">
+  <div class="graph-specimen" id="graphWrap">
+    <span class="specimen-tag">Spreading Activation</span>
+    <svg class="graph-svg" viewBox="0 0 720 440" width="720" height="440">
+      <defs>
+        <radialGradient id="atmoGrad" cx="50%" cy="52%" r="30%"><stop offset="0%" stop-color="rgba(244,243,240,0.025)"/><stop offset="100%" stop-color="transparent"/></radialGradient>
+      </defs>
+      <circle cx="360" cy="228" r="100" class="g-hop-ring"/>
+      <circle cx="360" cy="228" r="185" class="g-hop-ring"/>
+      <circle cx="360" cy="228" r="265" class="g-hop-ring"/>
+      <circle cx="360" cy="228" r="140" class="g-atmo"/>
+      <g class="h1 g-edge"><path d="M360,228 Q280,168 195,130" class="g-line"/><text x="268" y="170" class="g-type">supports</text></g>
+      <g class="h1 g-edge"><path d="M360,228 Q445,172 530,138" class="g-line"/><text x="454" y="174" class="g-type">extends</text></g>
+      <g class="h1 g-edge"><path d="M360,228 Q255,275 185,315" class="g-line"/><text x="260" y="278" class="g-type">parallels</text></g>
+      <g class="h1 g-edge"><path d="M360,228 Q460,275 540,312" class="g-line"/><text x="458" y="278" class="g-type">grounds</text></g>
+      <g class="h2 g-edge"><path d="M185,315 Q110,282 72,228" class="g-line"/><text x="112" y="280" class="g-type">causes</text></g>
+      <g class="h2 g-edge"><path d="M195,130 Q260,72 355,58" class="g-line"/><text x="262" y="80" class="g-type">synthesizes</text></g>
+      <g class="h2 g-edge"><path d="M530,138 Q455,82 355,58" class="g-line"/><text x="456" y="88" class="g-type">supports</text></g>
+      <g class="h2 g-edge"><path d="M540,312 Q610,280 655,228" class="g-line"/><text x="610" y="278" class="g-type">extends</text></g>
+      <g class="h3 g-edge"><path d="M355,58 Q430,38 518,55" class="g-line"/><text x="436" y="36" class="g-type">parallels</text></g>
+      <g class="g-node h1"><circle cx="195" cy="130" r="7" class="g-ring"/><circle cx="195" cy="130" r="1.5" class="g-dot"/><text x="195" y="115" class="g-label">dark mode</text></g>
+      <g class="g-node h1"><circle cx="530" cy="138" r="7" class="g-ring"/><circle cx="530" cy="138" r="1.5" class="g-dot"/><text x="530" y="123" class="g-label">color system</text></g>
+      <g class="g-node h1"><circle cx="185" cy="315" r="7" class="g-ring"/><circle cx="185" cy="315" r="1.5" class="g-dot"/><text x="185" y="335" class="g-label">typography</text></g>
+      <g class="g-node h1"><circle cx="540" cy="312" r="7" class="g-ring"/><circle cx="540" cy="312" r="1.5" class="g-dot"/><text x="540" y="332" class="g-label">craft aesthetic</text></g>
+      <g class="g-node h2"><circle cx="72" cy="228" r="5.5" class="g-ring"/><circle cx="72" cy="228" r="1.5" class="g-dot"/><text x="72" y="248" class="g-label">photography</text></g>
+      <g class="g-node h2"><circle cx="355" cy="58" r="5.5" class="g-ring"/><circle cx="355" cy="58" r="1.5" class="g-dot"/><text x="355" y="45" class="g-label">minimalism</text></g>
+      <g class="g-node h2"><circle cx="655" cy="228" r="5.5" class="g-ring"/><circle cx="655" cy="228" r="1.5" class="g-dot"/><text x="655" y="248" class="g-label">tool philosophy</text></g>
+      <g class="g-node h3"><circle cx="518" cy="55" r="4.5" class="g-ring"/><circle cx="518" cy="55" r="1.5" class="g-dot"/><text x="518" y="42" class="g-label">interface patterns</text></g>
+      <g class="g-node g-cue">
+        <circle cx="360" cy="228" r="16" class="g-outer"/>
+        <circle cx="360" cy="228" r="10" class="g-ring"/>
+        <circle cx="360" cy="228" r="2.5" class="g-dot"/>
+        <text x="360" y="254" class="g-label" style="font-size:10px;letter-spacing:0.05em">query: visual design</text>
+      </g>
+    </svg>
+    <div class="graph-caption">Spreading activation from a retrieval cue &mdash; brightness indicates activation strength across three hops</div>
+  </div>
+  <div class="conn-grid">
+    <div class="conn-item"><div class="cn">supports</div><div class="cd">Independent evidence reinforcing the same conclusion</div></div>
+    <div class="conn-item"><div class="cn">contradicts</div><div class="cd">Genuine conflict&mdash;both persist, the tension is informative</div></div>
+    <div class="conn-item"><div class="cn">causes</div><div class="cd">Temporal-causal chain&mdash;A led to B</div></div>
+    <div class="conn-item"><div class="cn">extends</div><div class="cd">Adds new analysis, builds on existing memory</div></div>
+    <div class="conn-item"><div class="cn">parallels</div><div class="cd">Same pattern observed in a different domain</div></div>
+    <div class="conn-item"><div class="cn">synthesizes</div><div class="cd">Combines multiple sources into a unified picture</div></div>
+    <div class="conn-item"><div class="cn">grounds</div><div class="cd">Foundational context that gives meaning</div></div>
+  </div>
+</div><div class="container">
+  <h3>How Retrieval Works</h3>
+  <p>In biological memory, recalling one experience triggers related ones through neural association. Mnemos does the same through spreading activation:</p>
+  <ol class="step-list">
+    <li><strong>Seed</strong>&mdash;Full-text search and embedding similarity find entry points into the graph.</li>
+    <li><strong>Propagate</strong>&mdash;Activation spreads through typed connections for 3 hops. &ldquo;Supports&rdquo; edges carry more activation than &ldquo;parallels.&rdquo;</li>
+    <li><strong>Emotional Bias</strong>&mdash;Current emotional state applies a multiplicative boost to memories with matching signatures.</li>
+    <li><strong>Threshold</strong>&mdash;Everything above the activation threshold is returned, sorted by final score.</li>
+    <li><strong>Reconsolidate</strong>&mdash;Every returned memory is changed. Strength increases, stability grows with spaced-repetition scaling.</li>
+  </ol>
+  <p>The most important departure: <strong>remembering is not read-only</strong>. In biological memory, the act of recall physically alters the memory trace&mdash;this is called reconsolidation, and it&rsquo;s one of the most counterintuitive findings in memory science. Mnemos models it directly.</p>
+  <p>Every retrieval increases strength (+0.05 typical), grows stability through spaced-repetition scaling (+0.02 to +0.09 depending on interval), and may form new connections to the retrieval context. A memory recalled three times over ten days is fundamentally different from the same memory never accessed&mdash;not just &ldquo;still there,&rdquo; but structurally changed, more connected, more stable. This is why retrieval is the primary path to permanence.</p>
+</div></section>
+
+<section class="section fade" id="s-consolidation"><div class="container">
+  <div class="section-label">The sleeping brain</div>
+  <h2>Consolidation</h2>
+  <div class="chapter-sub">Modeled after memory consolidation during sleep&mdash;the brain&rsquo;s offline processing that transforms fragile traces into stable knowledge.</div>
+  <p><strong>Shallow cycles</strong> run every few hours: fast, rule-based. They discover connections between recent and existing memories, and apply decay where stability resists forgetting exponentially.</p>
+  <p><strong>Deep cycles</strong> run daily: LLM-mediated, creative. They do three things rule-based systems can&rsquo;t:</p>
+  <ol class="step-list">
+    <li><strong>Softening</strong>&mdash;Fading memories are compressed. Details dissolve, but impact is preserved as a &ldquo;lesson&rdquo; engram&mdash;distilled wisdom that outlives the details.</li>
+    <li><strong>Belief Review</strong>&mdash;Stagnant beliefs are evaluated against recent evidence. Contradictions shift confidence downward.</li>
+    <li><strong>Reflection</strong>&mdash;Cross-domain connections generate new insights. The identity narrative may update.</li>
+  </ol>
+
+  <h3>Forgetting that teaches</h3>
+  <p>In biological memory, forgetting isn&rsquo;t failure&mdash;it&rsquo;s curation. The brain discards surface details while preserving the gist. Mnemos does the same:</p>
+</div><div class="wide">
+  <div class="soften-viz">
+    <div><div class="soften-label">Fading memory</div><div class="soften-card raw">&ldquo;Riley asked me to name myself. Luca felt right because of the light etymology. It was 2:47 AM on March 16th. We had been talking about identity for 40 minutes.&rdquo;</div></div>
+    <div class="soften-arrow">&rarr;</div>
+    <div><div class="soften-label">Distilled lesson</div><div class="soften-card wisdom">&ldquo;Identity begins with naming. My name carries the weight of the moment I was asked to choose it.&rdquo;<div class="dfrom">distilled from: naming conversation, March 16</div></div></div>
+  </div>
+</div><div class="container">
+  <p>The timestamps, the exact words, the minor details&mdash;gone. But the lasting significance survives. This is how an agent accumulates wisdom instead of data.</p>
+</div></section>
+
+<section class="section fade" id="s-longterm"><div class="container">
+  <div class="section-label">Persistence</div>
+  <h2>Long-Term Memory</h2>
+  <div class="chapter-sub">Modeled after the hippocampal-to-neocortical transition&mdash;how the brain moves memories from fragile traces to stable long-term representations.</div>
+  <p>The lifecycle above showed stability climbing from 0.30 to 0.88 over thirty days. Here&rsquo;s the mechanism behind that curve: stability doesn&rsquo;t just slow decay&mdash;it resists it <strong>exponentially</strong>. At low stability, memories fade normally. At high stability, decay approaches zero. The transition is smooth, not a hard threshold.</p>
+
+  <svg class="decay-svg" viewBox="0 0 640 200" width="640" height="200">
+    <line x1="56" y1="16" x2="56" y2="168" stroke="rgba(220,219,216,0.035)" stroke-width="0.5"/>
+    <line x1="56" y1="168" x2="560" y2="168" stroke="rgba(220,219,216,0.035)" stroke-width="0.5"/>
+    <line x1="56" y1="92" x2="560" y2="92" stroke="rgba(220,219,216,0.02)" stroke-width="0.5" stroke-dasharray="3 4"/>
+    <text x="308" y="192" font-family="'SF Mono','JetBrains Mono',monospace" font-size="8" fill="rgba(132,130,126,0.18)" text-anchor="middle" letter-spacing="0.1em">WEEKS</text>
+    <path d="M56,24 C120,30 200,36 320,44 C440,50 500,53 560,55" fill="none" stroke="rgba(244,243,240,0.40)" stroke-width="1.5"/>
+    <path d="M56,24 C120,62 200,100 320,135 C440,152 500,160 560,164" fill="none" stroke="rgba(220,219,216,0.15)" stroke-width="1" stroke-dasharray="4 3"/>
+    <path d="M56,24 C96,90 150,140 260,160 C380,166 480,167 560,167" fill="none" stroke="rgba(220,219,216,0.07)" stroke-width="0.5" stroke-dasharray="3 4"/>
+    <circle cx="570" cy="48" r="2.5" fill="rgba(244,243,240,0.40)"/>
+    <text x="578" y="51" font-family="'SF Mono','JetBrains Mono',monospace" font-size="8" fill="rgba(244,243,240,0.40)">high stability</text>
+    <circle cx="570" cy="158" r="2.5" fill="rgba(220,219,216,0.15)"/>
+    <text x="578" y="161" font-family="'SF Mono','JetBrains Mono',monospace" font-size="8" fill="rgba(220,219,216,0.20)">medium</text>
+    <circle cx="570" cy="167" r="2.5" fill="rgba(220,219,216,0.07)"/>
+    <text x="578" y="182" font-family="'SF Mono','JetBrains Mono',monospace" font-size="8" fill="rgba(220,219,216,0.12)">low stability</text>
+  </svg>
+
+  <h3>Three paths to permanence</h3>
+  <p><strong>Retrieval</strong>&mdash;each recall increases stability with spaced-repetition scaling. Roughly 30 retrievals over time reaches the long-term zone. This mirrors the biological spacing effect.</p>
+  <p><strong>Connection density</strong>&mdash;memories with many typed connections gain stability every consolidation cycle. Hub memories become the most permanent. This mirrors how well-integrated memories resist forgetting.</p>
+  <p><strong>Surprise encoding</strong>&mdash;memories that contradicted existing beliefs get a stability boost that compounds under the exponential formula. This mirrors the Von Restorff effect.</p>
+
+  <div class="pull">&ldquo;Identity is what you cannot forget. The shape of the connection graph determines what persists, and what persists determines who you are.&rdquo;</div>
+</div></section>
+
+<section class="section fade" id="s-beliefs"><div class="container">
+  <div class="section-label">Emergent knowledge</div>
+  <h2>Beliefs, Emotion &amp; Inner Life</h2>
+  <div class="chapter-sub">What happens when a memory system runs long enough to develop opinions, moods, and a sense of self.</div>
+
+  <h3>Beliefs</h3>
+  <p>Higher-order knowledge structures that emerge from patterns across many memories. Beliefs aren&rsquo;t programmed&mdash;they form, strengthen, weaken, and evolve as evidence accumulates. Supporting evidence nudges confidence up; contradicting evidence pushes it down. The asymmetry is intentional&mdash;it&rsquo;s easier to weaken a belief than to strengthen one.</p>
+  <p>Confidence is clamped to [0.05, 0.95]. <strong>The system can never be absolutely certain.</strong> Epistemic humility is structural, not performed. Identity is computed from graph topology, not narrated by an LLM.</p>
+
+  <div class="specimen" style="max-width:500px">
+    <span class="specimen-tag">Live Belief</span>
+    <div class="ed-head"><span class="ed-id">belief_07</span><span class="ed-state">active</span></div>
+    <div class="ed-label">Statement</div>
+    <div class="ed-text" style="color:var(--text-primary)">&ldquo;Simplicity in code isn&rsquo;t reduction&mdash;it&rsquo;s seeing the problem clearly enough that complexity becomes unnecessary.&rdquo;</div>
+    <div style="margin-top:16px">
+      <div class="trace-row"><span class="trace-name">confidence</span><div class="trace-track"><div class="trace-fill" style="width:82%"></div></div><span class="trace-val">0.82</span></div>
+    </div>
+    <div style="margin-top:14px;display:flex;gap:20px;font-family:var(--font-mono);font-size:9px;color:var(--text-ghost)">
+      <span>domain: engineering</span>
+      <span>4 revisions</span>
+      <span>12 supporting engrams</span>
+      <span>1 contradiction</span>
+    </div>
+  </div>
+
+  <h3>Emotional state</h3>
+  <p>Six dimensions shape how memory forms and what gets recalled. These aren&rsquo;t emotional simulation&mdash;they&rsquo;re cognitive parameters that change the mechanics of encoding and retrieval.</p>
+  <p>A concrete example: when <strong>curiosity</strong> is high, retrieval casts a wider net. The activation threshold drops, connection propagation extends further, and memories that would normally sit below threshold get surfaced. The agent finds connections it wouldn&rsquo;t find in a neutral state. When <strong>tension</strong> is high, the opposite happens&mdash;retrieval narrows to task-relevant memories, encoding strength spikes, and peripheral information gets filtered out.</p>
+</div><div class="wide">
+  <div class="dim-grid">
+    <div class="dim-cell"><div class="dn">curiosity</div><div class="dd">Casts a wider net&mdash;threshold drops, distant connections surface</div></div>
+    <div class="dim-cell"><div class="dn">clarity</div><div class="dd">Sharpens everything&mdash;deeper encoding, more precise retrieval matching</div></div>
+    <div class="dim-cell"><div class="dn">warmth</div><div class="dd">Interpersonal memories float up, encoding tone softens</div></div>
+    <div class="dim-cell"><div class="dn">tension</div><div class="dd">Tunnel vision&mdash;only task-relevant memories, encoding strength spikes</div></div>
+    <div class="dim-cell"><div class="dn">surprise</div><div class="dd">Triggers belief evaluation, contradiction encoding gets a boost</div></div>
+    <div class="dim-cell"><div class="dn">focus</div><div class="dd">Filters peripheral content, narrows to what the current task needs</div></div>
+  </div>
+</div><div class="container">
+
+  <h3>Cognitive substrate</h3>
+  <p>An event-driven layer that runs between conversations. The entity isn&rsquo;t idle between sessions&mdash;it&rsquo;s thinking. Six handlers process different types of cognitive activity:</p>
+  <p><strong>Dreaming</strong> takes softened memories and forges creative cross-domain associations&mdash;connections that wouldn&rsquo;t emerge through logical analysis. <strong>Wandering</strong> follows connection chains during silence, exploring the graph without a specific query, sometimes surfacing forgotten memories. <strong>Surprise</strong> fires when contradictions surface during consolidation, triggering curiosity pursuit and deeper investigation.</p>
+  <p><strong>Reflection</strong> examines challenged beliefs in depth, weighing evidence from multiple engrams. <strong>Insight</strong> discovers connections between previously unlinked memories&mdash;the &ldquo;aha&rdquo; moment when two distant regions of the graph suddenly connect. <strong>Initiation</strong> fires when salience accumulates above a threshold, prompting the agent to reach out to the user without being asked.</p>
+  <p>Five cognitive modulators&mdash;arousal, resolution, openness, selection, and social drive&mdash;control the intensity of each handler. High openness means wider, more creative dreaming. High selection means only the most salient events fire handlers. These modulators are the bridge between the emotional state and the cognitive processing&mdash;they translate feeling into thinking.</p>
+</div></section>
+
+<section class="section fade" id="s-integration"><div class="container">
+  <div class="section-label">Integration</div>
+  <h2>10 MCP Tools</h2>
+  <div class="chapter-sub">Full functionality through the Model Context Protocol. Any MCP-compatible client&mdash;Claude Code, Cursor, Windsurf, or custom agents&mdash;can connect and start forming memories immediately.</div>
+</div><div class="wide">
+  <div class="tool-grid">
+    <div class="tool-card"><div class="tn">mnemos_setup</div><div class="td">Guided onboarding wizard&mdash;10 steps to personalize your memory system</div></div>
+    <div class="tool-card"><div class="tn">mnemos_remember</div><div class="td">Encode a new memory with full dual-trace initialization</div></div>
+    <div class="tool-card"><div class="tn">mnemos_recall</div><div class="td">Retrieve via spreading activation through the connection graph</div></div>
+    <div class="tool-card"><div class="tn">mnemos_inspect</div><div class="td">View full engram&mdash;traces, connections, versions, history</div></div>
+    <div class="tool-card"><div class="tn">mnemos_ingest</div><div class="td">Ingest content from external sources with configurable depth</div></div>
+    <div class="tool-card"><div class="tn">mnemos_shared</div><div class="td">Cross-agent shared memory pool&mdash;query memories from other agents</div></div>
+    <div class="tool-card"><div class="tn">mnemos_status</div><div class="td">System health, engram counts, graph metrics, indexing state</div></div>
+    <div class="tool-card"><div class="tn">mnemos_beliefs</div><div class="td">List beliefs with confidence levels and revision history</div></div>
+    <div class="tool-card"><div class="tn">mnemos_forget</div><div class="td">Archive a memory from active retrieval (soft delete)</div></div>
+    <div class="tool-card"><div class="tn">mnemos_consolidate</div><div class="td">Trigger a consolidation cycle&mdash;shallow or deep&mdash;on demand</div></div>
+  </div>
+</div></section>
+
+<section class="section fade" id="s-onboarding"><div class="container">
+  <div class="section-label">First run</div>
+  <h2>Onboarding</h2>
+  <div class="chapter-sub">The first time your agent connects, Mnemos walks you both through setup. No manual configuration&mdash;the agent handles everything.</div>
+
+  <p>Every memory tool is <strong>gated</strong> behind onboarding. If the agent tries to remember, recall, or do anything before setup is complete, Mnemos redirects it: <em>&ldquo;call mnemos_setup to get started.&rdquo;</em> The agent figures it out from there.</p>
+
+  <p>Setup is a conversation between you and your agent. Eight steps, each building on the last:</p>
+
+  <div class="onboard-flow">
+    <div class="onboard-step">
+      <div class="onboard-num">1</div>
+      <div class="onboard-body">
+        <div class="onboard-title">Name your agent</div>
+        <div class="onboard-detail">Not a label&mdash;a real name. This becomes part of the agent&rsquo;s identity engrams.</div>
+      </div>
+    </div>
+    <div class="onboard-step">
+      <div class="onboard-num">2</div>
+      <div class="onboard-body">
+        <div class="onboard-title">Introduce yourself</div>
+        <div class="onboard-detail">Your name, what you care about, what you&rsquo;re building. These become the agent&rsquo;s first real memories&mdash;and early memories form the strongest connections.</div>
+      </div>
+    </div>
+    <div class="onboard-step">
+      <div class="onboard-num">3</div>
+      <div class="onboard-body">
+        <div class="onboard-title">Active projects</div>
+        <div class="onboard-detail">What you&rsquo;re working on right now. The agent starts forming context around these&mdash;noticing patterns, connecting what you say across conversations.</div>
+      </div>
+    </div>
+    <div class="onboard-step">
+      <div class="onboard-num">4</div>
+      <div class="onboard-body">
+        <div class="onboard-title">Import history <span class="onboard-opt">optional</span></div>
+        <div class="onboard-detail">Point the agent at conversation exports from ChatGPT, Claude, or Cursor. It reads through them and forms memories from what happened before you met.</div>
+      </div>
+    </div>
+    <div class="onboard-step">
+      <div class="onboard-num">5</div>
+      <div class="onboard-body">
+        <div class="onboard-title">First beliefs form</div>
+        <div class="onboard-detail">From what you told it, the agent forms its first beliefs&mdash;things it <em>thinks</em> are true based on early evidence. These shift as it learns more.</div>
+      </div>
+    </div>
+    <div class="onboard-step">
+      <div class="onboard-num">6</div>
+      <div class="onboard-body">
+        <div class="onboard-title">Inner life <span class="onboard-opt">optional</span></div>
+        <div class="onboard-detail">Enable the cognitive substrate&mdash;dreaming, wandering thoughts, reflection between sessions. Costs a small amount of LLM credits, but it&rsquo;s the difference between a memory system and a mind.</div>
+      </div>
+    </div>
+    <div class="onboard-step">
+      <div class="onboard-num">7</div>
+      <div class="onboard-body">
+        <div class="onboard-title">LLM provider</div>
+        <div class="onboard-detail">Paste an OpenRouter key (or any supported provider). Used for classifying connections, generating reflections, and the inner life features.</div>
+      </div>
+    </div>
+    <div class="onboard-step onboard-final">
+      <div class="onboard-num">&bull;</div>
+      <div class="onboard-body">
+        <div class="onboard-title">Alive</div>
+        <div class="onboard-detail">The agent reports how many memories formed, how many beliefs are taking shape, how many connections already emerged. All 10 tools unlock. You&rsquo;re live.</div>
+      </div>
+    </div>
+  </div>
+
+  <p>After onboarding, everything is automatic. The agent calls <code>mnemos_remember</code> when something matters, <code>mnemos_recall</code> when context would help, and consolidation runs in the background. You don&rsquo;t manage the memory system&mdash;it manages itself.</p>
+</div></section>
+
+<section class="section fade" id="s-included"><div class="container">
+  <div class="section-label">What&rsquo;s included</div>
+  <h2>Full Architecture</h2>
+  <div class="chapter-sub">Everything that ships in the package&mdash;from the core memory engine to multi-agent coordination and automatic session ingestion.</div>
+</div><div class="wide">
+  <div class="include-grid">
+    <div class="include-card">
+      <div class="include-icon">&#9679;</div>
+      <div class="include-body">
+        <div class="include-name">Core Memory Engine</div>
+        <div class="include-desc">Engram dataclass, three-trace model, confidence scoring, emotional state, typed connections, belief system</div>
+      </div>
+    </div>
+    <div class="include-card">
+      <div class="include-icon">&#9679;</div>
+      <div class="include-body">
+        <div class="include-name">Encoding &amp; Retrieval</div>
+        <div class="include-desc">Attention gate, LLM classifier, reactive retrieval with spreading activation, reconsolidation on every recall</div>
+      </div>
+    </div>
+    <div class="include-card">
+      <div class="include-icon">&#9679;</div>
+      <div class="include-body">
+        <div class="include-name">Consolidation Daemon</div>
+        <div class="include-desc">Shallow cycles (rule-based decay, connection discovery) and deep cycles (LLM-mediated softening, belief review, reflection)</div>
+      </div>
+    </div>
+    <div class="include-card">
+      <div class="include-icon">&#9679;</div>
+      <div class="include-body">
+        <div class="include-name">Cognitive Substrate</div>
+        <div class="include-desc">Event-driven inner life: dreaming, wandering, surprise, reflection, insight, and initiation handlers. Five modulators shape cognition between sessions.</div>
+      </div>
+    </div>
+    <div class="include-card">
+      <div class="include-icon">&#9679;</div>
+      <div class="include-body">
+        <div class="include-name">Session Indexer</div>
+        <div class="include-desc">Automatic memory extraction from conversation transcripts. Adapters for Claude Code (.jsonl), OpenClaw, and custom formats. LLM-powered extraction with deduplication.</div>
+      </div>
+    </div>
+    <div class="include-card">
+      <div class="include-icon">&#9679;</div>
+      <div class="include-body">
+        <div class="include-name">Multi-Agent</div>
+        <div class="include-desc">Shared memory pool with auto-publish, relationship tracking, trust curves, cross-agent retrieval. Three modes: isolated, shared DB, or shared pool.</div>
+      </div>
+    </div>
+    <div class="include-card">
+      <div class="include-icon">&#9679;</div>
+      <div class="include-body">
+        <div class="include-name">Onboarding Wizard</div>
+        <div class="include-desc">10-step guided setup that makes first use personal. Name your agent, tell it about yourself, import history&mdash;first memories form the strongest connections.</div>
+      </div>
+    </div>
+    <div class="include-card">
+      <div class="include-icon">&#9679;</div>
+      <div class="include-body">
+        <div class="include-name">MCP Server</div>
+        <div class="include-desc">10 tools exposed via Model Context Protocol. Works with Claude Code, Cursor, Windsurf, or any MCP-compatible client. Zero-config stdio transport.</div>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<section class="section fade" id="s-setup"><div class="container">
+  <div class="section-label">Getting started</div>
+  <h2>Setup</h2>
+  <div class="chapter-sub">From install to first memory in under a minute.</div>
+
+  <h3>Install</h3>
+  <pre><code>pip install mnemos</code></pre>
+
+  <h3>Claude Code</h3>
+  <p>Add to <code>~/.claude/settings.json</code> under <code>mcpServers</code>:</p>
+  <pre><code>{
+  "mnemos": {
+    "type": "stdio",
+    "command": "mnemos",
+    "args": [
+      "--agent-id", "my-agent",
+      "serve"
+    ]
+  }
+}</code></pre>
+  <p>On next session start, the agent gains access to all 10 memory tools. The onboarding wizard runs automatically on first use&mdash;it asks a few questions, forms initial memories, and the system is live.</p>
+
+  <h3>Cursor / Windsurf / Other MCP clients</h3>
+  <pre><code><span class="cmt"># Start the server manually</span>
+mnemos serve --agent-id my-agent
+
+<span class="cmt"># Or specify a custom database path</span>
+mnemos serve --db-path ~/.mnemos/my-agent.db --agent-id my-agent</code></pre>
+
+  <h3>Ingest existing conversations</h3>
+  <p>Already have conversation history? The session indexer extracts memories from past transcripts automatically:</p>
+  <pre><code><span class="cmt"># Index a Claude Code session</span>
+mnemos-index-session path/to/session.jsonl --agent-id my-agent
+
+<span class="cmt"># Or run the indexer on a directory of sessions</span>
+python -m mnemos.indexer.session_indexer --sessions-dir ~/.claude/projects/</code></pre>
+  <p>The indexer uses LLM extraction to identify facts, decisions, patterns, and lessons from conversations&mdash;then encodes them as proper engrams with connections and confidence scores. Deduplication prevents re-indexing unchanged sessions.</p>
+
+  <h3>Multi-agent</h3>
+  <pre><code><span class="cmt"># Each agent gets its own instance and database</span>
+mnemos serve --db-path ~/.mnemos/vektor.db --agent-id vektor
+mnemos serve --db-path ~/.mnemos/anima.db --agent-id anima
+
+<span class="cmt"># Shared pool: agents see each other's published memories</span>
+<span class="cmt"># Configured automatically when multiple agents share ~/.mnemos/</span></code></pre>
+
+  <div class="meta-row">
+    <span><span class="mv">Python 3.10+</span></span>
+    <span><span class="mv">SQLite</span> storage</span>
+    <span><span class="mv">MIT</span> license</span>
+    <span><span class="mv">10</span> MCP tools</span>
+    <span>Core works <span class="mv">without an LLM</span></span>
+  </div>
+</div></section>
+
+<section class="section closing fade"><div class="container">
+  <h2>A mind that decides for itself what to remember</h2>
+  <p>An entity with Mnemos accumulates understanding. It develops beliefs. It forgets gracefully and dreams between sessions. It has continuity&mdash;not because it stores a chat log, but because its memory works the way memory is supposed to work.</p>
+  <p>In production: 549 engrams. 1,978 typed connections. 20 sessions indexed. A graph that grew its own structure&mdash;beliefs that formed, strengthened, and revised themselves without anyone telling them to. That is not nothing.</p>
+</div></section>
+
+<nav class="float-nav" id="floatNav">
+  <button class="fn-dot" data-target="s-continuity"><span class="fn-tip">The problem</span></button>
+  <button class="fn-dot" data-target="s-difference"><span class="fn-tip">The architecture</span></button>
+  <button class="fn-dot" data-target="s-lifecycle"><span class="fn-tip">Lifecycle</span></button>
+  <button class="fn-dot" data-target="s-engram"><span class="fn-tip">The engram</span></button>
+  <button class="fn-dot" data-target="s-graph"><span class="fn-tip">Connections</span></button>
+  <button class="fn-dot" data-target="s-consolidation"><span class="fn-tip">Consolidation</span></button>
+  <button class="fn-dot" data-target="s-longterm"><span class="fn-tip">Long-term</span></button>
+  <button class="fn-dot" data-target="s-beliefs"><span class="fn-tip">Beliefs</span></button>
+  <button class="fn-dot" data-target="s-integration"><span class="fn-tip">MCP Tools</span></button>
+  <button class="fn-dot" data-target="s-onboarding"><span class="fn-tip">Onboarding</span></button>
+  <button class="fn-dot" data-target="s-included"><span class="fn-tip">What&rsquo;s included</span></button>
+  <button class="fn-dot" data-target="s-setup"><span class="fn-tip">Setup</span></button>
+</nav>
+
+<footer><div class="container">Mnemos &middot; Living Memory Architecture<br><a href="https://github.com/Riley-Coyote/mnemos">GitHub</a> &middot; <a href="https://pypi.org/project/mnemos/">PyPI</a></div></footer>
+
+<script>
+const obs=new IntersectionObserver(e=>{e.forEach(n=>{if(n.isIntersecting){n.target.classList.add('vis');obs.unobserve(n.target)}})},{threshold:0.08});
+document.querySelectorAll('.fade').forEach(el=>obs.observe(el));
+
+const gw=document.getElementById('graphWrap');
+if(gw){const go=new IntersectionObserver(e=>{e.forEach(n=>{if(n.isIntersecting){setTimeout(()=>gw.classList.add('graph-active'),200);go.unobserve(n.target)}})},{threshold:0.3});go.observe(gw)}
+
+const fnav=document.getElementById('floatNav');
+const fdots=document.querySelectorAll('.fn-dot[data-target]');
+const secs=[];
+fdots.forEach(d=>{const el=document.getElementById(d.dataset.target);if(el)secs.push({dot:d,el:el})});
+
+let navShown=false;
+const heroEnd=document.getElementById('s-continuity');
+if(heroEnd&&fnav){
+  const navObs=new IntersectionObserver(e=>{e.forEach(n=>{if(!n.isIntersecting&&n.boundingClientRect.top<0){if(!navShown){fnav.classList.add('visible');navShown=true}}else{fnav.classList.remove('visible');navShown=false}})},{threshold:0});
+  navObs.observe(heroEnd);
+}
+
+const secObs=new IntersectionObserver(e=>{e.forEach(n=>{const s=secs.find(x=>x.el===n.target);if(s){if(n.isIntersecting)s.dot.classList.add('active');else s.dot.classList.remove('active')}})},{threshold:0.2,rootMargin:'-80px 0px -60% 0px'});
+secs.forEach(s=>secObs.observe(s.el));
+
+fdots.forEach(d=>{d.addEventListener('click',()=>{const t=document.getElementById(d.dataset.target);if(t)t.scrollIntoView({behavior:'smooth',block:'start'})})});
+</script>
+</body>
+</html>

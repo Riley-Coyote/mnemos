@@ -1,0 +1,113 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - region "Notifications (F8)":
+      - list
+    - region "Notifications alt+T"
+    - generic [ref=e33]:
+      - generic [ref=e34]:
+        - button "Toggle sidebar" [ref=e35] [cursor=pointer]: P
+        - button "Expand panel" [ref=e36] [cursor=pointer]:
+          - img [ref=e37]
+        - button "Chat" [ref=e39] [cursor=pointer]:
+          - img [ref=e40]
+          - text: Chat
+        - button "Memory" [ref=e42] [cursor=pointer]:
+          - img [ref=e43]
+          - text: Memory
+        - button "Mind" [ref=e53] [cursor=pointer]:
+          - img [ref=e54]
+          - text: Mind
+        - button "Journal" [ref=e57] [cursor=pointer]:
+          - img [ref=e58]
+          - text: Journal
+        - button "Projects" [ref=e61] [cursor=pointer]:
+          - img [ref=e62]
+          - text: Projects
+        - button "Profile" [ref=e66] [cursor=pointer]:
+          - img [ref=e67]
+          - text: Profile
+        - button "Toggle panel" [ref=e70] [cursor=pointer]
+        - button "Activity" [ref=e71] [cursor=pointer]:
+          - img [ref=e72]
+          - text: Activity
+        - button "Settings" [ref=e74] [cursor=pointer]:
+          - img [ref=e75]
+          - text: Settings
+      - generic:
+        - generic:
+          - generic:
+            - generic: Threads
+            - generic: LIVE
+          - generic:
+            - button "New thread":
+              - img
+              - generic: New thread
+          - generic:
+            - textbox "Search threads":
+              - /placeholder: Search threads...
+          - generic:
+            - generic: No conversations yet.
+            - generic:
+              - button "Archived":
+                - img
+                - text: Archived
+      - generic [ref=e86]:
+        - generic [ref=e88]:
+          - generic [ref=e89]:
+            - generic [ref=e91]: New conversation
+            - generic [ref=e92]: luca · kimi-k2.6
+            - button "Open thread details" [ref=e93] [cursor=pointer]:
+              - img [ref=e94]
+          - generic [ref=e98]:
+            - generic [ref=e99]:
+              - generic [ref=e100]:
+                - generic [ref=e101]: 08:59
+                - generic [ref=e102]: You
+              - paragraph [ref=e105]: does the handoff stay in the thread now?
+            - generic [ref=e106]:
+              - generic [ref=e107]:
+                - generic [ref=e108]: 08:59
+                - generic [ref=e109]: Luca
+              - button "thinking…" [ref=e112] [cursor=pointer]:
+                - generic [ref=e123]: thinking…
+                - generic [ref=e124]: ›
+          - generic [ref=e130]:
+            - button "Attachment file picker"
+            - generic [ref=e132]:
+              - generic [ref=e133]:
+                - generic [ref=e135]: observer
+                - generic [ref=e137]: observing your conversation
+                - button "Close observer" [ref=e138] [cursor=pointer]:
+                  - img [ref=e139]
+              - generic [ref=e143]: observing your conversation. ask me anything about what you and Luca have been discussing.
+            - status [ref=e144]:
+              - generic [ref=e145]:
+                - button "Create account" [ref=e146] [cursor=pointer]
+                - button "Sign in" [ref=e147] [cursor=pointer]
+              - paragraph [ref=e148]: Guest Luca includes 20 messages today. Create an account to keep this thread and unlock 50 daily messages.
+            - textbox "Message Luca" [ref=e150]:
+              - /placeholder: Message Luca...
+            - generic [ref=e151]:
+              - generic [ref=e152]:
+                - button "Attach files" [ref=e153] [cursor=pointer]:
+                  - img [ref=e154]
+                - button "Talking to Luca" [ref=e155] [cursor=pointer]: luca
+                - button "observer" [ref=e156] [cursor=pointer]:
+                  - img [ref=e157]
+                  - generic [ref=e160]: observer
+              - generic [ref=e161]:
+                - combobox "Thinking effort" [ref=e162] [cursor=pointer]:
+                  - option "Light"
+                  - option "Medium" [selected]
+                  - option "Deep"
+                - button "Start dictation" [disabled] [ref=e163]:
+                  - img [ref=e164]
+                - button "Stop response" [ref=e167] [cursor=pointer]:
+                  - img [ref=e169]
+                  - img [ref=e173]
+          - generic:
+            - generic: Drop files to attach
+        - generic [ref=e175]:
+          - generic [ref=e176]: 8:5949
+          - generic [ref=e184]: session
+  - dialog "Drawer" [ref=e185]

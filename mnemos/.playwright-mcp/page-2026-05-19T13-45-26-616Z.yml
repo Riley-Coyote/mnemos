@@ -1,0 +1,31 @@
+- generic [ref=e2]:
+  - region "Notifications (F8)":
+    - list
+  - region "Notifications alt+T"
+  - generic [ref=e3]:
+    - banner [ref=e4]:
+      - button "Polyphonic" [ref=e5] [cursor=pointer]: POLYPHONIC
+      - button "Sign in" [ref=e6] [cursor=pointer]
+    - main [ref=e7]:
+      - generic [ref=e8]:
+        - heading "POLYPHONIC" [level=1] [ref=e9]
+        - paragraph [ref=e10]: where many minds meet
+      - generic [ref=e13]:
+        - textbox "Message Luca" [ref=e15]:
+          - /placeholder: Ask Luca anything…
+        - generic:
+          - generic:
+            - button "Attach files":
+              - img
+            - button "luca"
+          - generic:
+            - button "Send message" [disabled]:
+              - generic:
+                - img
+    - contentinfo [ref=e16]:
+      - generic [ref=e17]:
+        - link "Privacy" [ref=e18] [cursor=pointer]:
+          - /url: /privacy
+        - generic [ref=e19]: ·
+        - link "Terms" [ref=e20] [cursor=pointer]:
+          - /url: /terms

@@ -1,0 +1,1 @@
+[      51ms] [ERROR] Failed to load resource: the server responded with a status of 401 () @ http://127.0.0.1:5179/api/artifacts?kind=writing:0

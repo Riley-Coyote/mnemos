@@ -3,362 +3,610 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hypomnema in Mnemos</title>
+  <title>Hypomnema · Mnemos</title>
   <link rel="icon" href="data:," />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=Inter+Tight:wght@200;300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root {
       color-scheme: dark;
-      --bg: #090a0a;
-      --panel: #101111;
-      --panel-2: #151514;
-      --line: rgba(255, 255, 255, 0.12);
-      --line-strong: rgba(255, 255, 255, 0.22);
-      --text: #f1eee7;
-      --muted: rgba(241, 238, 231, 0.66);
-      --soft: rgba(241, 238, 231, 0.44);
-      --warm: #c9a87c;
-      --warm-soft: rgba(201, 168, 124, 0.16);
-      --cyan: #86b8c2;
-      --cyan-soft: rgba(134, 184, 194, 0.14);
-      --green: #9fb78c;
-      --green-soft: rgba(159, 183, 140, 0.14);
-      --violet: #a996c9;
-      --violet-soft: rgba(169, 150, 201, 0.14);
-      --mono: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
-      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --serif: "Cormorant Garamond", Georgia, serif;
+
+      /* surfaces */
+      --floor:     #06070a;
+      --deep:      #09090b;
+      --panel:     #101013;
+      --panel-2:   #151518;
+
+      /* text */
+      --ink:   rgba(248, 248, 246, 0.96);
+      --body:  rgba(228, 226, 222, 0.84);
+      --soft:  rgba(208, 206, 202, 0.70);
+      --quiet: rgba(186, 184, 180, 0.56);
+      --ghost: rgba(160, 158, 154, 0.30);
+
+      /* borders */
+      --rule:        rgba(225, 225, 225, 0.12);
+      --rule-soft:   rgba(225, 225, 225, 0.07);
+      --rule-strong: rgba(225, 225, 225, 0.18);
+
+      /* single accent — sanctuary green */
+      --state:         #82b484;
+      --state-soft:    rgba(130, 180, 132, 0.62);
+      --state-dim:     rgba(130, 180, 132, 0.16);
+      --state-whisper: rgba(130, 180, 132, 0.05);
+
+      /* type */
+      --display:   'Inter Tight', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      --body-font: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      --mono:      'JetBrains Mono', 'SF Mono', monospace;
+
+      /* fluid scale */
+      --t-hero:      clamp(44px, 2.7rem + 1.4vw, 64px);
+      --t-section-h: clamp(28px, 1.75rem + 0.8vw, 34px);
+      --t-body-lg:   clamp(17px, 1.06rem + 0.3vw, 19px);
+      --t-body:      clamp(15px, 0.94rem + 0.2vw, 17px);
+      --t-meta:      clamp(13px, 0.81rem + 0.1vw, 14px);
+      --t-eyebrow:   clamp(11px, 0.69rem + 0.05vw, 12px);
+
+      /* weights */
+      --w-extralight: 200;
+      --w-light:      300;
+      --w-regular:    400;
+      --w-medium:     500;
+
+      /* spacing — 4px base, locked progression */
+      --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px;
+      --s-5: 24px; --s-6: 32px; --s-7: 48px;
+      --s-8: 64px; --s-9: 96px; --s-10: 128px;
+
+      /* motion */
+      --ease: cubic-bezier(0.22, 1, 0.36, 1);
     }
 
     * { box-sizing: border-box; }
 
     html {
       scroll-behavior: smooth;
-      background: var(--bg);
+      background: var(--floor);
     }
 
     body {
       margin: 0;
       min-height: 100vh;
-      background:
-        linear-gradient(180deg, rgba(201, 168, 124, 0.06), transparent 28rem),
-        radial-gradient(circle at 18% 18%, rgba(134, 184, 194, 0.10), transparent 22rem),
-        #090a0a;
-      color: var(--text);
-      font-family: var(--sans);
+      background: var(--floor);
+      color: var(--body);
+      font-family: var(--body-font);
+      font-weight: var(--w-regular);
+      font-size: var(--t-body-lg);
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
       letter-spacing: 0;
     }
 
-    a { color: inherit; }
+    /* grain overlay */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 1;
+      opacity: 0.015;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+      mix-blend-mode: overlay;
+    }
 
-    .shell {
-      width: min(1180px, calc(100vw - 32px));
+    /* corner vignette */
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 2;
+      background: radial-gradient(ellipse 70% 60% at center, transparent 38%, rgba(4, 5, 8, 0.72) 110%);
+    }
+
+    main, header, footer, nav { position: relative; z-index: 3; }
+
+    a { color: inherit; text-decoration: none; }
+
+    .page {
+      width: min(1080px, calc(100% - 48px));
       margin: 0 auto;
     }
+    @media (max-width: 900px) {
+      .page { width: min(100% - 36px, 720px); }
+    }
+
+    em {
+      font-style: italic;
+      color: var(--ink);
+    }
+
+    /* ───────────── eyebrow + brand-dot ─────────────  */
+
+    /* presence eyebrow — used in nav + hero only (live/presence) */
+    .eyebrow-pres {
+      font-family: var(--mono);
+      font-size: var(--t-eyebrow);
+      font-weight: var(--w-regular);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--quiet);
+      display: inline-flex;
+      align-items: center;
+      gap: var(--s-2);
+    }
+
+    /* section eyebrow — sanctuary canonical pattern (horizontal line + state-soft) */
+    .eyebrow {
+      font-family: var(--mono);
+      font-size: var(--t-eyebrow);
+      font-weight: var(--w-regular);
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--state-soft);
+      display: inline-flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: var(--s-5);
+    }
+
+    .eyebrow::before {
+      content: "";
+      flex: 0 0 32px;
+      width: 32px;
+      height: 1px;
+      background: var(--state-dim);
+    }
+
+    .glyph {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--state);
+      animation: breathe 5.2s var(--ease) infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes breathe {
+      0%, 100% { opacity: 0.42; box-shadow: 0 0 0 0 rgba(130, 180, 132, 0); }
+      50%      { opacity: 0.9;  box-shadow: 0 0 0 5px rgba(130, 180, 132, 0.06); }
+    }
+
+    /* ───────────── nav ─────────────  */
+
+    nav.public-nav {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      background: linear-gradient(180deg, rgba(6, 7, 10, 0.92), rgba(6, 7, 10, 0.62));
+      border-bottom: 1px solid var(--rule-soft);
+    }
+
+    nav.public-nav .page {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--s-4) 0;
+    }
+
+    nav.public-nav .brand,
+    nav.public-nav .trail {
+      font-family: var(--mono);
+      font-size: var(--t-eyebrow);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--soft);
+      display: inline-flex;
+      align-items: center;
+      gap: var(--s-2);
+    }
+
+    nav.public-nav .trail { color: var(--quiet); }
+    nav.public-nav .trail .sep { color: var(--ghost); margin: 0 var(--s-1); }
+
+    /* ───────────── header ─────────────  */
 
     header {
-      min-height: 86vh;
-      display: grid;
-      align-items: end;
-      padding: 68px 0 40px;
-      border-bottom: 1px solid var(--line);
+      padding: var(--s-10) 0 var(--s-9);
+      border-bottom: 1px solid var(--rule-soft);
     }
-
-    .eyebrow,
-    .kicker,
-    .chip,
-    .label,
-    .caption,
-    .metric-label {
-      font-family: var(--mono);
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      font-size: 11px;
-    }
-
-    .eyebrow {
-      color: var(--warm);
-      margin-bottom: 24px;
+    @media (max-width: 900px) {
+      header { padding: var(--s-9) 0 var(--s-8); }
     }
 
     h1 {
-      max-width: 900px;
-      margin: 0;
-      font-family: var(--serif);
-      font-size: clamp(54px, 8vw, 118px);
-      line-height: 0.86;
-      font-weight: 500;
+      max-width: 22ch;
+      margin: var(--s-5) 0 0;
+      font-family: var(--display);
+      font-size: var(--t-hero);
+      line-height: 1.04;
+      letter-spacing: -0.022em;
+      font-weight: var(--w-light);
+      color: var(--ink);
     }
 
     .lead {
-      max-width: 760px;
-      margin: 28px 0 0;
-      color: var(--muted);
-      font-size: clamp(18px, 2vw, 24px);
-      line-height: 1.45;
+      max-width: 62ch;
+      margin: var(--s-6) 0 0;
+      color: var(--body);
+      font-size: var(--t-body-lg);
+      line-height: 1.7;
     }
 
-    .hero-grid {
+    /* header stack — three peers across the foot of the hero */
+    .stack-strip {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 360px;
-      gap: 34px;
-      align-items: end;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1px;
+      background: var(--rule-soft);
+      border: 1px solid var(--rule-soft);
+      margin-top: var(--s-9);
     }
-
-    .hero-card {
-      border: 1px solid var(--line);
-      background: rgba(15, 16, 15, 0.74);
-      padding: 22px;
-      border-radius: 8px;
-      min-height: 270px;
-    }
-
-    .stack-preview {
-      display: grid;
-      gap: 12px;
-      margin-top: 20px;
+    @media (max-width: 900px) {
+      .stack-strip {
+        grid-template-columns: 1fr;
+        margin-top: var(--s-7);
+      }
     }
 
     .stack-row {
-      display: grid;
-      grid-template-columns: 108px 1fr;
-      gap: 12px;
-      padding: 14px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.03);
+      background: var(--panel);
+      padding: var(--s-5) var(--s-5);
+      display: flex;
+      flex-direction: column;
+      gap: var(--s-2);
+      position: relative;
+    }
+
+    .stack-row .stack-tag {
+      font-family: var(--mono);
+      font-size: var(--t-eyebrow);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ghost);
     }
 
     .stack-row strong {
-      font-size: 13px;
-      color: var(--text);
+      font-family: var(--display);
+      font-weight: var(--w-light);
+      font-size: 22px;
+      letter-spacing: -0.012em;
+      color: var(--ink);
     }
 
     .stack-row span {
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.35;
+      color: var(--soft);
+      font-size: var(--t-body);
+      line-height: 1.55;
     }
 
+    .stack-row.is-focus {
+      background:
+        linear-gradient(180deg, rgba(130, 180, 132, 0.04), transparent 65%),
+        var(--panel-2);
+    }
+    .stack-row.is-focus::before {
+      content: "";
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 2px;
+      background: var(--state);
+    }
+    .stack-row.is-focus .stack-tag {
+      color: var(--state-soft);
+    }
+    .stack-row.is-focus .stack-tag::after {
+      content: " · you are here";
+      color: var(--quiet);
+      letter-spacing: 0.16em;
+    }
+
+    /* ───────────── section scaffolding ─────────────  */
+
     section {
-      padding: 76px 0;
-      border-bottom: 1px solid var(--line);
+      padding: var(--s-9) 0;
+      border-bottom: 1px solid var(--rule-soft);
     }
 
     .section-head {
-      display: grid;
-      grid-template-columns: 260px minmax(0, 1fr);
-      gap: 40px;
-      margin-bottom: 34px;
+      margin-bottom: var(--s-7);
     }
 
     h2 {
       margin: 0;
-      font-family: var(--serif);
-      font-size: clamp(36px, 5vw, 64px);
-      line-height: 0.95;
-      font-weight: 500;
+      font-family: var(--display);
+      font-size: clamp(28px, 1.4rem + 1.2vw, 44px);
+      line-height: 1.1;
+      letter-spacing: -0.02em;
+      font-weight: var(--w-light);
+      color: var(--ink);
+      max-width: 28ch;
     }
 
     .section-copy {
-      margin: 0;
-      max-width: 740px;
-      color: var(--muted);
-      font-size: 18px;
-      line-height: 1.62;
+      margin: var(--s-5) 0 var(--s-7);
+      max-width: 60ch;
+      color: var(--body);
+      font-size: var(--t-body-lg);
+      line-height: 1.72;
     }
+
+    /* ───────────── pipeline (3 layers) ─────────────  */
 
     .pipeline {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 14px;
+      gap: 1px;
+      background: var(--rule-soft);
+      border: 1px solid var(--rule-soft);
+    }
+    @media (max-width: 900px) {
+      .pipeline { grid-template-columns: 1fr; }
     }
 
     .layer {
-      min-height: 310px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 22px;
       background: var(--panel);
+      padding: var(--s-6);
+      min-height: 296px;
+      display: flex;
+      flex-direction: column;
       position: relative;
-      overflow: hidden;
     }
 
-    .layer:before {
+    .layer-tag {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--s-6);
+    }
+
+    .layer-tag .num {
+      font-family: var(--mono);
+      font-size: var(--t-eyebrow);
+      letter-spacing: 0.16em;
+      color: var(--ghost);
+    }
+
+    .layer-tag .pill {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--quiet);
+    }
+
+    .layer.focus {
+      background:
+        linear-gradient(180deg, rgba(130, 180, 132, 0.05), transparent 60%),
+        var(--panel-2);
+    }
+    .layer.focus::before {
       content: "";
       position: absolute;
-      inset: 0;
-      border-top: 2px solid var(--accent);
-      opacity: 0.9;
-      pointer-events: none;
+      left: 0; top: 0; bottom: 0;
+      width: 2px;
+      background: var(--state);
+    }
+    .layer.focus .layer-tag .pill {
+      color: var(--state-soft);
+    }
+    .layer.focus .layer-tag .num {
+      color: var(--state-soft);
     }
 
-    .layer.functional { --accent: var(--cyan); }
-    .layer.hypomnema { --accent: var(--warm); background: linear-gradient(180deg, var(--warm-soft), var(--panel) 46%); }
-    .layer.mnemos { --accent: var(--green); }
-
     .layer h3 {
-      margin: 10px 0 12px;
-      font-size: 21px;
-      font-weight: 600;
+      margin: 0 0 var(--s-3);
+      font-family: var(--display);
+      font-weight: var(--w-light);
+      font-size: 24px;
+      letter-spacing: -0.014em;
+      color: var(--ink);
     }
 
     .layer p {
       margin: 0;
-      color: var(--muted);
-      line-height: 1.5;
+      color: var(--soft);
+      font-size: var(--t-body);
+      line-height: 1.6;
     }
 
     .layer ul {
       padding: 0;
-      margin: 28px 0 0;
+      margin: var(--s-5) 0 0;
       list-style: none;
       display: grid;
-      gap: 10px;
+      gap: var(--s-3);
     }
 
     .layer li {
       display: grid;
-      grid-template-columns: 9px 1fr;
-      gap: 10px;
-      color: var(--muted);
-      font-size: 14px;
-      line-height: 1.42;
+      grid-template-columns: 10px 1fr;
+      gap: var(--s-3);
+      color: var(--soft);
+      font-size: var(--t-body);
+      line-height: 1.55;
     }
 
-    .layer li:before {
+    .layer li::before {
       content: "";
-      width: 7px;
-      height: 7px;
-      margin-top: 6px;
-      border-radius: 99px;
-      background: var(--accent);
+      width: 4px;
+      height: 4px;
+      margin-top: 9px;
+      border-radius: 50%;
+      background: var(--ghost);
     }
+    .layer.focus li::before { background: var(--state-soft); }
+
+    /* ───────────── flow board (interactive) ─────────────  */
 
     .flow-board {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
-      padding: 20px;
-      overflow: hidden;
+      border: 1px solid var(--rule-soft);
+      background: var(--panel);
     }
 
     .controls {
       display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-bottom: 18px;
+      gap: 1px;
+      background: var(--rule-soft);
+      border-bottom: 1px solid var(--rule-soft);
     }
 
-    button {
-      border: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.04);
-      color: var(--muted);
-      padding: 10px 12px;
-      border-radius: 8px;
+    .controls button {
+      flex: 1;
+      border: 0;
+      background: var(--panel);
+      color: var(--quiet);
+      padding: var(--s-4) var(--s-4);
       font-family: var(--mono);
-      font-size: 11px;
-      letter-spacing: 0.08em;
+      font-size: var(--t-eyebrow);
+      letter-spacing: 0.14em;
       text-transform: uppercase;
       cursor: pointer;
+      transition: color 260ms var(--ease), background 260ms var(--ease);
+      position: relative;
     }
 
-    button[aria-pressed="true"] {
-      color: var(--text);
-      border-color: rgba(201, 168, 124, 0.72);
-      background: var(--warm-soft);
+    .controls button:hover { color: var(--soft); }
+
+    .controls button[aria-pressed="true"] {
+      color: var(--ink);
+      background: var(--state-whisper);
+    }
+
+    .controls button[aria-pressed="true"]::after {
+      content: "";
+      position: absolute;
+      left: 0; right: 0; bottom: 0;
+      height: 2px;
+      background: var(--state);
     }
 
     .flow-stage {
       display: grid;
-      grid-template-columns: 280px minmax(0, 1fr);
-      gap: 18px;
-      min-height: 420px;
+      grid-template-columns: 340px minmax(0, 1fr);
+      min-height: 460px;
+    }
+    @media (max-width: 900px) {
+      .flow-stage { grid-template-columns: 1fr; min-height: 0; }
     }
 
     .stage-note {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 18px;
-      background: rgba(0, 0, 0, 0.18);
+      padding: var(--s-6);
+      border-right: 1px solid var(--rule-soft);
+      display: flex;
+      flex-direction: column;
+      gap: var(--s-4);
+    }
+    @media (max-width: 900px) {
+      .stage-note { border-right: 0; border-bottom: 1px solid var(--rule-soft); }
     }
 
+    .stage-note .eyebrow {
+      color: var(--quiet);
+      margin-bottom: 0;
+    }
+    .stage-note .eyebrow::before { background: var(--rule); }
+
     .stage-note h3 {
-      margin: 0 0 12px;
-      font-size: 24px;
+      margin: 0;
+      font-family: var(--display);
+      font-weight: var(--w-light);
+      font-size: 28px;
+      letter-spacing: -0.014em;
+      color: var(--ink);
     }
 
     .stage-note p {
-      margin: 0 0 18px;
-      color: var(--muted);
-      line-height: 1.52;
+      margin: 0;
+      color: var(--soft);
+      font-size: var(--t-body);
+      line-height: 1.65;
     }
 
     .stage-note code {
       display: block;
       white-space: pre-wrap;
-      color: var(--warm);
+      color: var(--state-soft);
       font-family: var(--mono);
-      font-size: 12px;
-      line-height: 1.5;
-      background: rgba(201, 168, 124, 0.07);
-      border: 1px solid rgba(201, 168, 124, 0.18);
-      border-radius: 8px;
-      padding: 12px;
+      font-size: var(--t-meta);
+      line-height: 1.6;
+      background: var(--deep);
+      border: 1px solid var(--rule-soft);
+      padding: var(--s-4);
+      margin-top: auto;
     }
 
+    /* diagram */
     .diagram {
       position: relative;
-      min-height: 420px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
+      min-height: 460px;
       background:
-        linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px),
-        rgba(8, 9, 9, 0.62);
-      background-size: 34px 34px;
+        linear-gradient(rgba(225, 225, 225, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(225, 225, 225, 0.045) 1px, transparent 1px),
+        var(--deep);
+      background-size: 32px 32px;
       overflow: hidden;
+    }
+    @media (max-width: 900px) {
+      .diagram { min-height: 620px; }
     }
 
     .node {
       position: absolute;
       width: 168px;
-      min-height: 86px;
-      border: 1px solid var(--line-strong);
-      border-radius: 8px;
-      padding: 12px;
-      background: rgba(16, 17, 17, 0.92);
-      transition: transform 260ms ease, border-color 260ms ease, background 260ms ease;
+      min-height: 92px;
+      border: 1px solid var(--rule);
+      padding: var(--s-3) var(--s-4);
+      background: var(--panel);
+      transition:
+        border-color 320ms var(--ease),
+        background 320ms var(--ease),
+        transform 320ms var(--ease);
     }
 
     .node .label {
-      color: var(--soft);
-      margin-bottom: 8px;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ghost);
+      margin-bottom: var(--s-2);
     }
 
     .node strong {
       display: block;
+      font-family: var(--display);
+      font-weight: var(--w-regular);
       font-size: 15px;
-      margin-bottom: 6px;
+      letter-spacing: -0.005em;
+      color: var(--ink);
+      margin-bottom: var(--s-1);
     }
 
     .node span {
       display: block;
-      color: var(--muted);
+      color: var(--soft);
       font-size: 12px;
-      line-height: 1.32;
+      line-height: 1.4;
     }
 
     .node.active {
       transform: translateY(-4px);
-      border-color: rgba(201, 168, 124, 0.8);
-      background: rgba(39, 32, 24, 0.94);
+      border-color: var(--state-soft);
+      background: var(--panel-2);
     }
+    .node.active .label { color: var(--state); }
 
-    .n-session { left: 7%; top: 38%; }
-    .n-scope { left: 31%; top: 13%; }
-    .n-hypo { left: 42%; top: 44%; width: 210px; min-height: 104px; }
-    .n-audit { left: 68%; top: 16%; }
-    .n-mnemos { left: 70%; top: 55%; }
+    .n-session { left: 3%;  top: 42%; }
+    .n-scope   { left: 26%; top: 8%;  }
+    .n-hypo    { left: 36%; top: 42%; width: 216px; min-height: 108px; }
+    .n-audit   { left: 72%; top: 8%;  }
+    .n-mnemos  { left: 75%; top: 64%; }
 
     svg.wires {
       position: absolute;
@@ -370,187 +618,292 @@
 
     .wire {
       fill: none;
-      stroke: rgba(241, 238, 231, 0.20);
-      stroke-width: 1.5;
-      stroke-dasharray: 6 8;
+      stroke: var(--rule);
+      stroke-width: 1;
+      stroke-dasharray: 4 6;
+      transition: stroke 320ms var(--ease), stroke-width 320ms var(--ease);
     }
 
     .wire.hot {
-      stroke: var(--warm);
-      stroke-width: 2.4;
+      stroke: var(--state);
+      stroke-width: 1.6;
       stroke-dasharray: none;
-      filter: drop-shadow(0 0 12px rgba(201, 168, 124, 0.30));
+      filter: drop-shadow(0 0 8px rgba(130, 180, 132, 0.32));
     }
+
+    @media (max-width: 900px) {
+      .node { width: min(78vw, 280px); left: 50%; transform: translateX(-50%); }
+      .node.active { transform: translateX(-50%) translateY(-4px); }
+      .n-session { top: 4%; }
+      .n-scope   { top: 22%; }
+      .n-hypo    { top: 42%; width: min(80vw, 300px); }
+      .n-audit   { top: 64%; }
+      .n-mnemos  { top: 82%; }
+      svg.wires { opacity: 0.35; }
+    }
+
+    /* ───────────── matrix ─────────────  */
 
     .matrix {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 14px;
+      gap: 1px;
+      background: var(--rule-soft);
+      border: 1px solid var(--rule-soft);
+    }
+    @media (max-width: 900px) {
+      .matrix { grid-template-columns: 1fr; }
     }
 
-    .matrix-card,
-    .tool-card,
-    .schema-card {
-      border: 1px solid var(--line);
-      border-radius: 8px;
+    .matrix-card {
       background: var(--panel);
-      padding: 18px;
+      padding: var(--s-6);
     }
 
-    .matrix-card h3,
-    .tool-card h3,
-    .schema-card h3 {
-      margin: 0 0 10px;
-      font-size: 18px;
+    .matrix-card h3 {
+      margin: 0 0 var(--s-3);
+      font-family: var(--display);
+      font-weight: var(--w-light);
+      font-size: 21px;
+      letter-spacing: -0.012em;
+      color: var(--ink);
+      max-width: 34ch;
     }
 
-    .matrix-card p,
-    .tool-card p,
-    .schema-card p {
+    .matrix-card p {
       margin: 0;
-      color: var(--muted);
-      line-height: 1.5;
-      font-size: 14px;
+      color: var(--soft);
+      font-size: var(--t-body);
+      line-height: 1.65;
     }
+
+    /* ───────────── tools (6 cards) ─────────────  */
 
     .tools {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
+      gap: 1px;
+      background: var(--rule-soft);
+      border: 1px solid var(--rule-soft);
+    }
+    @media (max-width: 900px) {
+      .tools { grid-template-columns: 1fr; }
     }
 
     .tool-card {
-      min-height: 150px;
+      background: var(--panel);
+      padding: var(--s-5);
+      min-height: 178px;
+      display: flex;
+      flex-direction: column;
+      gap: var(--s-3);
     }
 
     .tool-card code {
       display: inline-block;
-      color: var(--warm);
+      color: var(--state-soft);
       font-family: var(--mono);
-      font-size: 12px;
-      margin-bottom: 12px;
+      font-size: var(--t-meta);
       overflow-wrap: anywhere;
+      letter-spacing: 0.01em;
     }
+
+    .tool-card h3 {
+      margin: 0;
+      font-family: var(--display);
+      font-weight: var(--w-regular);
+      font-size: 18px;
+      letter-spacing: -0.008em;
+      color: var(--ink);
+    }
+
+    .tool-card p {
+      margin: 0;
+      color: var(--soft);
+      font-size: var(--t-body);
+      line-height: 1.6;
+    }
+
+    /* ───────────── schema strip (6 cards) ─────────────  */
 
     .schema-strip {
       display: grid;
       grid-template-columns: repeat(6, minmax(0, 1fr));
-      gap: 10px;
+      gap: 1px;
+      background: var(--rule-soft);
+      border: 1px solid var(--rule-soft);
+    }
+    @media (max-width: 1024px) {
+      .schema-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 540px) {
+      .schema-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
     .schema-card {
-      min-height: 128px;
+      background: var(--panel);
+      padding: var(--s-4) var(--s-4) var(--s-5);
+      min-height: 124px;
     }
 
     .schema-card .metric-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--quiet);
+      margin-bottom: var(--s-3);
+    }
+
+    .schema-card p {
+      margin: 0;
       color: var(--soft);
-      margin-bottom: 8px;
+      font-size: var(--t-meta);
+      line-height: 1.6;
+      font-family: var(--mono);
       overflow-wrap: anywhere;
     }
 
+    /* ───────────── closing ─────────────  */
+
     .closing {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 18px;
+      grid-template-columns: 1.05fr 1fr;
+      gap: 1px;
+      background: var(--rule-soft);
+      border: 1px solid var(--rule-soft);
       align-items: stretch;
+    }
+    @media (max-width: 900px) {
+      .closing { grid-template-columns: 1fr; }
     }
 
     .closing blockquote {
       margin: 0;
-      border-left: 2px solid var(--warm);
-      padding: 24px;
-      background: var(--warm-soft);
-      border-radius: 8px;
-      font-family: var(--serif);
-      font-size: clamp(30px, 4vw, 54px);
-      line-height: 1.02;
+      padding: var(--s-7);
+      background: var(--state-whisper);
+      border-left: 2px solid var(--state-soft);
+      font-family: var(--display);
+      font-weight: var(--w-extralight);
+      font-size: clamp(26px, 2vw + 0.7rem, 38px);
+      line-height: 1.18;
+      letter-spacing: -0.018em;
+      color: var(--ink);
+      display: flex;
+      align-items: center;
     }
 
     .closing .summary {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 24px;
+      padding: var(--s-7);
       background: var(--panel);
-      color: var(--muted);
-      line-height: 1.62;
-      font-size: 17px;
+      color: var(--soft);
+      font-size: var(--t-body);
+      line-height: 1.7;
     }
+
+    .closing .summary .label {
+      display: block;
+      font-family: var(--mono);
+      font-size: var(--t-eyebrow);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ghost);
+      margin-bottom: var(--s-3);
+    }
+
+    /* ───────────── footer ─────────────  */
 
     footer {
-      padding: 30px 0 54px;
-      color: var(--soft);
-      font-family: var(--mono);
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
+      padding: var(--s-7) 0 var(--s-9);
+      border-top: 1px solid var(--rule-soft);
     }
 
-    @media (max-width: 920px) {
-      header { min-height: auto; }
-      .hero-grid,
-      .section-head,
-      .flow-stage,
-      .closing {
-        grid-template-columns: 1fr;
+    footer .page {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--s-4);
+      flex-wrap: wrap;
+    }
+
+    .footer-meta {
+      font-family: var(--mono);
+      font-size: var(--t-eyebrow);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ghost);
+    }
+
+    .footer-meta.dim { color: var(--quiet); }
+
+    /* focus rings */
+    :focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--state) 64%, transparent);
+      outline-offset: 3px;
+    }
+
+    /* reduced motion */
+    @media (prefers-reduced-motion: reduce) {
+      .glyph, nav.public-nav .glyph { animation: none; }
+      *, *::before, *::after {
+        transition-duration: 0.001s !important;
+        animation-duration: 0.001s !important;
       }
-      .pipeline,
-      .tools,
-      .matrix {
-        grid-template-columns: 1fr;
-      }
-      .schema-strip {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-      .diagram { min-height: 590px; }
-      .node { width: min(78vw, 260px); left: 50%; transform: translateX(-50%); }
-      .node.active { transform: translateX(-50%) translateY(-4px); }
-      .n-session { top: 5%; }
-      .n-scope { top: 23%; }
-      .n-hypo { top: 42%; width: min(78vw, 280px); }
-      .n-audit { top: 63%; }
-      .n-mnemos { top: 81%; }
-      svg.wires { opacity: 0.38; }
+      html { scroll-behavior: auto; }
     }
   </style>
 </head>
 <body>
+
+  <nav class="public-nav">
+    <div class="page">
+      <span class="brand"><span class="glyph"></span> Mnemos</span>
+      <span class="trail">explainer <span class="sep">·</span> hypomnema layer</span>
+    </div>
+  </nav>
+
   <header>
-    <div class="shell hero-grid">
-      <div>
-        <div class="eyebrow">Mnemos MCP / hypomnema layer</div>
-        <h1>Continuity before memory becomes doctrine.</h1>
-        <p class="lead">Hypomnema is the scoped notebook of the relationship: durable enough to survive sessions, humble enough to revise, and explicit enough to promote only when it has earned a place in Mnemos.</p>
-      </div>
-      <aside class="hero-card">
-        <div class="kicker">Where it sits</div>
-        <div class="stack-preview">
-          <div class="stack-row">
-            <strong>Functional</strong>
-            <span>Hot session facts, commitments, and working recall.</span>
-          </div>
-          <div class="stack-row">
-            <strong>Hypomnema</strong>
-            <span>Scoped continuity for an agent, person, and project.</span>
-          </div>
-          <div class="stack-row">
-            <strong>Mnemos</strong>
-            <span>Engrams, beliefs, connections, reconsolidation, and substrate.</span>
-          </div>
+    <div class="page">
+      <span class="eyebrow-pres"><span class="glyph"></span> hypomnema · attending</span>
+      <h1>Continuity before memory becomes doctrine.</h1>
+      <p class="lead">Hypomnema is the scoped notebook of the relationship — durable enough to survive sessions, humble enough to revise, and explicit enough to promote only when it has earned a place in Mnemos.</p>
+
+      <div class="stack-strip" aria-label="where it sits in the memory stack">
+        <div class="stack-row">
+          <span class="stack-tag">Layer 01</span>
+          <strong>Functional</strong>
+          <span>Hot session facts, commitments, working recall.</span>
         </div>
-      </aside>
+        <div class="stack-row is-focus">
+          <span class="stack-tag">Layer 02</span>
+          <strong>Hypomnema</strong>
+          <span>Scoped continuity for an agent, person, and project.</span>
+        </div>
+        <div class="stack-row">
+          <span class="stack-tag">Layer 03</span>
+          <strong>Mnemos</strong>
+          <span>Engrams, beliefs, connections, reconsolidation.</span>
+        </div>
+      </div>
     </div>
   </header>
 
   <main>
+
     <section>
-      <div class="shell">
+      <div class="page">
         <div class="section-head">
-          <div class="kicker">The distinction</div>
-          <p class="section-copy">Mnemos remembers by changing the graph. Hypomnema does something quieter first: it holds continuity in a scoped, revisable form. It is where an agent can keep track of what it is learning with a particular person or project without prematurely turning that material into a general memory, a belief, or a shared engram.</p>
+          <span class="eyebrow"> the distinction</span>
+          <h2>Mnemos remembers by changing the graph. Hypomnema holds continuity in a quieter, revisable form.</h2>
         </div>
+        <p class="section-copy">It is where an agent keeps track of what it is learning with a particular person or project — without prematurely turning that material into general memory, a settled belief, or a shared engram.</p>
+
         <div class="pipeline">
-          <article class="layer functional">
-            <div class="label">Layer 01</div>
+          <article class="layer">
+            <div class="layer-tag">
+              <span class="num">01</span>
+              <span class="pill">working surface</span>
+            </div>
             <h3>Functional memory</h3>
             <p>The short-lived working surface for the current session.</p>
             <ul>
@@ -559,8 +912,12 @@
               <li>Usually consolidated or cleared after the session.</li>
             </ul>
           </article>
-          <article class="layer hypomnema">
-            <div class="label">Layer 02</div>
+
+          <article class="layer focus">
+            <div class="layer-tag">
+              <span class="num">02</span>
+              <span class="pill">scoped continuity</span>
+            </div>
             <h3>Hypomnema</h3>
             <p>The relationship-scoped continuity layer.</p>
             <ul>
@@ -569,8 +926,12 @@
               <li>Can be revised or superseded before promotion.</li>
             </ul>
           </article>
-          <article class="layer mnemos">
-            <div class="label">Layer 03</div>
+
+          <article class="layer">
+            <div class="layer-tag">
+              <span class="num">03</span>
+              <span class="pill">living graph</span>
+            </div>
             <h3>Mnemos engrams</h3>
             <p>The living graph and substrate.</p>
             <ul>
@@ -584,37 +945,43 @@
     </section>
 
     <section>
-      <div class="shell">
+      <div class="page">
         <div class="section-head">
-          <div class="kicker">Interactive flow</div>
-          <p class="section-copy">A hypomnema entry moves through five states. The important thing is the pause: the system can carry continuity without pretending every note is already a settled memory.</p>
+          <span class="eyebrow"> interactive flow</span>
+          <h2>Five states. The important thing is the pause.</h2>
         </div>
+        <p class="section-copy">The system carries continuity without pretending every note is already a settled memory. Step through the lifecycle to see which surfaces light up at each stage.</p>
+
         <div class="flow-board">
           <div class="controls" role="group" aria-label="Hypomnema flow stages">
-            <button type="button" aria-pressed="true" data-stage="capture">Capture</button>
+            <button type="button" aria-pressed="true"  data-stage="capture">Capture</button>
             <button type="button" aria-pressed="false" data-stage="scope">Scope</button>
             <button type="button" aria-pressed="false" data-stage="revise">Revise</button>
             <button type="button" aria-pressed="false" data-stage="retrieve">Retrieve</button>
             <button type="button" aria-pressed="false" data-stage="promote">Promote</button>
           </div>
+
           <div class="flow-stage">
             <aside class="stage-note">
+              <span class="eyebrow">stage</span>
               <h3 id="stage-title">Capture</h3>
               <p id="stage-copy">A session produces something worth carrying forward, but not necessarily something ready to become a Mnemos engram.</p>
               <code id="stage-code">mnemos_hypomnema_write(
-  content="This project keeps functional memory, hypomnema, and Mnemos distinct.",
+  content="…",
   source="observed",
   domain="foundational"
 )</code>
             </aside>
+
             <div class="diagram" aria-label="Hypomnema integration diagram">
               <svg class="wires" viewBox="0 0 900 520" preserveAspectRatio="none" aria-hidden="true">
-                <path class="wire w-session-hypo hot" d="M150 250 C270 250 340 280 430 280" />
-                <path class="wire w-scope-hypo" d="M360 115 C420 165 440 210 470 265" />
-                <path class="wire w-hypo-audit" d="M560 265 C640 210 655 155 710 120" />
-                <path class="wire w-hypo-mnemos" d="M570 315 C650 360 690 375 755 360" />
-                <path class="wire w-mnemos-hypo" d="M755 420 C650 475 500 440 470 345" />
+                <path class="wire w-session-hypo hot" d="M180 270 C240 270 290 280 330 280" />
+                <path class="wire w-scope-hypo"      d="M318 130 C350 165 365 195 380 218" />
+                <path class="wire w-hypo-audit"      d="M540 232 C600 195 650 160 700 130" />
+                <path class="wire w-hypo-mnemos"     d="M540 295 C590 325 640 355 680 370" />
+                <path class="wire w-mnemos-hypo"     d="M700 430 C620 470 510 420 470 335" />
               </svg>
+
               <div class="node n-session active" data-node="capture">
                 <div class="label">Session</div>
                 <strong>Functional memory</strong>
@@ -622,13 +989,13 @@
               </div>
               <div class="node n-scope" data-node="scope">
                 <div class="label">Scope</div>
-                <strong>agent / person / project</strong>
-                <span>Continuity remains local to the relationship.</span>
+                <strong>agent · person · project</strong>
+                <span>Continuity stays local to the relationship.</span>
               </div>
               <div class="node n-hypo" data-node="retrieve">
                 <div class="label">Hypomnema</div>
                 <strong>What I am sitting with</strong>
-                <span>Durable continuity with source, confidence, salience, and domain.</span>
+                <span>Durable continuity with source, confidence, salience, domain.</span>
               </div>
               <div class="node n-audit" data-node="revise">
                 <div class="label">Audit</div>
@@ -647,23 +1014,25 @@
     </section>
 
     <section>
-      <div class="shell">
+      <div class="page">
         <div class="section-head">
-          <div class="kicker">When to use it</div>
-          <p class="section-copy">Hypomnema is not a replacement for Mnemos. It is a buffer against overconfident memory formation, and a way to make continuity legible without freezing it too early.</p>
+          <span class="eyebrow"> when to use it</span>
+          <h2>A buffer against overconfident memory formation.</h2>
         </div>
+        <p class="section-copy">Hypomnema is not a replacement for Mnemos. It is a way to make continuity legible without freezing it too early.</p>
+
         <div class="matrix">
           <article class="matrix-card">
             <h3>Use hypomnema when the knowledge is relational.</h3>
-            <p>Preferences, collaboration patterns, open threads, unresolved tensions, project-specific language, and continuity that matters only inside a particular relationship belong here first.</p>
+            <p>Preferences, collaboration patterns, open threads, unresolved tensions, project-specific language — continuity that matters only inside a particular relationship belongs here first.</p>
           </article>
           <article class="matrix-card">
             <h3>Use Mnemos when the knowledge has stabilized.</h3>
-            <p>After a hypomnema entry becomes high-confidence, high-salience, foundational or revised, it can graduate into a de-identified engram.</p>
+            <p>After a hypomnema entry becomes high-confidence, high-salience, foundational, or revised, it can graduate into a de-identified engram.</p>
           </article>
           <article class="matrix-card">
             <h3>Revise rather than overwrite.</h3>
-            <p>Continuity changes. The system keeps revision history so the agent can remember how its understanding shifted, not just the latest wording.</p>
+            <p>Continuity changes. The system keeps revision history so the agent can remember how its understanding shifted — not just the latest wording.</p>
           </article>
           <article class="matrix-card">
             <h3>Supersede when old continuity should stop steering.</h3>
@@ -674,11 +1043,13 @@
     </section>
 
     <section>
-      <div class="shell">
+      <div class="page">
         <div class="section-head">
-          <div class="kicker">MCP surface</div>
-          <p class="section-copy">The new Mnemos MCP tools expose the layer directly. Agents can write continuity, search it, improve it, replace it, inspect promotion candidates, and explicitly graduate stable entries into Mnemos.</p>
+          <span class="eyebrow"> mcp surface</span>
+          <h2>Six tools. The layer exposed directly to the agent.</h2>
         </div>
+        <p class="section-copy">Write continuity, search it, sharpen it, replace it, inspect promotion candidates, graduate stable entries into Mnemos.</p>
+
         <div class="tools">
           <article class="tool-card">
             <code>mnemos_hypomnema_write</code>
@@ -693,7 +1064,7 @@
           <article class="tool-card">
             <code>mnemos_hypomnema_revise</code>
             <h3>Sharpen without erasing</h3>
-            <p>Updates content while preserving the prior version and the reason for change.</p>
+            <p>Updates content while preserving the prior version and the reason for the change.</p>
           </article>
           <article class="tool-card">
             <code>mnemos_hypomnema_supersede</code>
@@ -715,52 +1086,61 @@
     </section>
 
     <section>
-      <div class="shell">
+      <div class="page">
         <div class="section-head">
-          <div class="kicker">Data shape</div>
-          <p class="section-copy">The schema is deliberately boring. That is the point. Hypomnema should be inspectable, easy to query, and clear enough that a future agent can tell whether it is reading active continuity, stale continuity, or promoted continuity.</p>
+          <span class="eyebrow"> data shape</span>
+          <h2>The schema is deliberately boring. That is the point.</h2>
         </div>
+        <p class="section-copy">Hypomnema should be inspectable, easy to query, and clear enough that a future agent can tell whether it is reading active continuity, stale continuity, or promoted continuity.</p>
+
         <div class="schema-strip">
           <article class="schema-card">
             <div class="metric-label">Scope</div>
-            <p>agent_id, person_id, project_scope</p>
+            <p>agent_id<br>person_id<br>project_scope</p>
           </article>
           <article class="schema-card">
             <div class="metric-label">Content</div>
-            <p>content, source, domain, tags</p>
+            <p>content<br>source<br>domain<br>tags</p>
           </article>
           <article class="schema-card">
             <div class="metric-label">Weight</div>
-            <p>confidence, salience, density, foundational</p>
+            <p>confidence<br>salience<br>density<br>foundational</p>
           </article>
           <article class="schema-card">
             <div class="metric-label">Lifecycle</div>
-            <p>active, superseded_by, graduated_to_engram_id</p>
+            <p>active<br>superseded_by<br>graduated_to_engram_id</p>
           </article>
           <article class="schema-card">
             <div class="metric-label">History</div>
-            <p>revision_count, revisions, last_revised_at</p>
+            <p>revision_count<br>revisions<br>last_revised_at</p>
           </article>
           <article class="schema-card">
             <div class="metric-label">Provenance</div>
-            <p>related_session_id, related_engram_id</p>
+            <p>related_session_id<br>related_engram_id</p>
           </article>
         </div>
       </div>
     </section>
 
     <section>
-      <div class="shell closing">
-        <blockquote>Hypomnema lets Mnemos stay alive without forcing every continuity note to become a belief.</blockquote>
-        <div class="summary">
-          In practice, the prompt packet can read: identity first, pending revisions next, hypomnema as "what I am sitting with," functional memory as "what I reliably remember right now," and Mnemos as "associations moving underneath." That ordering keeps scoped continuity near the surface while leaving the deeper graph free to remain slower, more durable, and more consequential.
+      <div class="page">
+        <div class="closing">
+          <blockquote>Hypomnema lets Mnemos stay alive without forcing every continuity note to become a belief.</blockquote>
+          <div class="summary">
+            <span class="label">in practice</span>
+            The prompt packet can read: identity first, pending revisions next, hypomnema as <em>what I am sitting with</em>, functional memory as <em>what I reliably remember right now</em>, and Mnemos as <em>associations moving underneath</em>. That ordering keeps scoped continuity near the surface while leaving the deeper graph free to remain slower, more durable, and more consequential.
+          </div>
         </div>
       </div>
     </section>
+
   </main>
 
   <footer>
-    <div class="shell">Mnemos / hypomnema explainer / standalone artifact</div>
+    <div class="page">
+      <span class="footer-meta">Mnemos · hypomnema explainer</span>
+      <span class="footer-meta dim">one continuous thread · mnemos beneath it</span>
+    </div>
   </footer>
 
   <script>
@@ -768,8 +1148,9 @@
       capture: {
         title: "Capture",
         copy: "A session produces something worth carrying forward, but not necessarily something ready to become a Mnemos engram.",
-        code: `mnemos_hypomnema_write(
-  content="This project keeps functional memory, hypomnema, and Mnemos distinct.",
+        code:
+`mnemos_hypomnema_write(
+  content="…",
   source="observed",
   domain="foundational"
 )`,
@@ -779,7 +1160,8 @@
       scope: {
         title: "Scope",
         copy: "The entry is bound to an agent, a person, and a project. That prevents private relationship context from becoming generic memory by accident.",
-        code: `agent_id="vektor"
+        code:
+`agent_id="vektor"
 person_id="riley"
 project_scope="codex-test"`,
         nodes: ["scope", "retrieve"],
@@ -787,9 +1169,10 @@ project_scope="codex-test"`,
       },
       revise: {
         title: "Revise",
-        copy: "If the understanding changes, the entry is revised with an audit trail. If it becomes stale, it can be superseded and removed from active recall.",
-        code: `mnemos_hypomnema_revise(
-  entry_id="...",
+        copy: "If understanding changes, the entry is revised with an audit trail. If it becomes stale, it can be superseded and removed from active recall.",
+        code:
+`mnemos_hypomnema_revise(
+  entry_id="…",
   content="sharper continuity",
   reason="better evidence"
 )`,
@@ -799,7 +1182,8 @@ project_scope="codex-test"`,
       retrieve: {
         title: "Retrieve",
         copy: "At prompt time, hypomnema returns the strongest scoped entries by relevance, confidence, salience, and foundational weight.",
-        code: `mnemos_hypomnema_search(
+        code:
+`mnemos_hypomnema_search(
   query="memory layers",
   agent_id="vektor",
   person_id="riley"
@@ -810,8 +1194,9 @@ project_scope="codex-test"`,
       promote: {
         title: "Promote",
         copy: "Only stable entries graduate upward. Promotion is explicit, dry-run by default, and writes a de-identified semantic engram into Mnemos.",
-        code: `mnemos_hypomnema_promote(
-  entry_id="...",
+        code:
+`mnemos_hypomnema_promote(
+  entry_id="…",
   dry_run=false
 )`,
         nodes: ["promote", "retrieve"],
@@ -819,18 +1204,19 @@ project_scope="codex-test"`,
       }
     };
 
-    const title = document.getElementById("stage-title");
-    const copy = document.getElementById("stage-copy");
-    const code = document.getElementById("stage-code");
+    const title   = document.getElementById("stage-title");
+    const copy    = document.getElementById("stage-copy");
+    const code    = document.getElementById("stage-code");
     const buttons = Array.from(document.querySelectorAll("[data-stage]"));
-    const nodes = Array.from(document.querySelectorAll("[data-node]"));
-    const wires = Array.from(document.querySelectorAll(".wire"));
+    const nodes   = Array.from(document.querySelectorAll("[data-node]"));
+    const wires   = Array.from(document.querySelectorAll(".wire"));
 
     function setStage(name) {
       const stage = stages[name];
+      if (!stage) return;
       title.textContent = stage.title;
-      copy.textContent = stage.copy;
-      code.textContent = stage.code;
+      copy.textContent  = stage.copy;
+      code.textContent  = stage.code;
       buttons.forEach((button) => {
         button.setAttribute("aria-pressed", String(button.dataset.stage === name));
       });

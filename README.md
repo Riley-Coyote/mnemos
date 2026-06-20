@@ -6,27 +6,29 @@ Memory is not a feature of the agent. Memory *is* the agent.
 
 Mnemos replaces passive note-storage with active, living memory that encodes at varying depths, forgets naturally, predicts what it'll need, and changes its memories every time it touches them.
 
-Mnemos is a complete agent cognition system — not just a memory library. It provides persistent identity, living memory, autonomous maintenance crons, a cognitive substrate, and cross-agent awareness. Together, these layers give an AI agent continuous selfhood across sessions.
+Mnemos is a complete single-agent cognition system — not just a memory library. It provides functional working memory, scoped hypomnema continuity, persistent identity, living memory, autonomous maintenance crons, a cognitive substrate, and inline visibility tools. Together, these layers give an AI agent continuous selfhood across sessions.
 
-Built as an [MCP](https://modelcontextprotocol.io/) server with living memory, shared memory, and hypomnema continuity tools. SQLite-backed. No external services required — optional LLM integration for richer consolidation.
+Built as an [MCP](https://modelcontextprotocol.io/) server with functional memory, hypomnema continuity, and living-memory graph tools. SQLite-backed. No external services required — optional LLM integration for richer consolidation.
 
 ---
 
 ## The Full Stack
 
-Mnemos operates in five layers:
+Mnemos operates in five single-agent layers:
 
 ```
-Identity Architecture    SOUL.md · IDENTITY.md · MEMORY.md · active-context.md
-Cron Suite               Observer · Indexer · Substrate · Maintenance · Bridge
-Mnemos Core              Engrams · Connections · Beliefs · Consolidation
+Functional Memory        Current task state · preferences · corrections · open questions
+Hypomnema                Scoped continuity · revisable notes · promotion candidates
+Mnemos Core              Engrams · Connections · Beliefs · Reconsolidation
 Substrate                Decay · Dreaming · Reflection · Modulators · Events
-Cross-Agent Layer        Shared Pool · Bridge · Federation · Attestation
+Onboarding + Visibility  Setup wizard · context packets · review queue · visual snapshots
 ```
 
-**Identity** defines who the agent is. **Crons** keep everything current autonomously. **Core** is the living memory graph. **Substrate** is the subconscious — consolidation, dreaming, reflection. **Cross-Agent** enables multi-agent awareness.
+**Functional memory** keeps the current work block coherent. **Hypomnema** carries relationship/project continuity forward without freezing it too early. **Core** is the living memory graph. **Substrate** is the subconscious — consolidation, dreaming, reflection. **Visibility** lets the agent show the human what the system is doing inline.
 
-See [docs/architecture.md](docs/architecture.md) for the full architecture overview.
+Multi-agent/shared-memory work is intentionally separate from this turnkey single-agent path.
+
+See [docs/turnkey-memory-system.md](docs/turnkey-memory-system.md) for the single-agent operating loop and [docs/architecture.md](docs/architecture.md) for the broader architecture overview.
 
 ---
 
@@ -48,9 +50,9 @@ mnemos bootstrap \
 #   ~/nova/SOUL.md              Agent personality and philosophy
 #   ~/nova/IDENTITY.md          Operational identity and boundaries
 #   ~/nova/MEMORY.md            Living memory document
-#   ~/nova/AGENTS.md            Multi-agent configuration
+#   ~/nova/AGENTS.md            Memory operating guide for the agent
 #   ~/nova/HEARTBEAT.md         Health monitoring
-#   ~/nova/memory/              Active context and cross-agent files
+#   ~/nova/memory/              Active context and exported memory files
 #   ~/nova/daily/               Morning briefs and debriefs
 #   ~/nova/inner_life/          Substrate outputs
 #   ~/nova/.env                 Environment configuration template
@@ -85,13 +87,19 @@ Mnemos exposes memory operations via the Model Context Protocol:
 | Tool | Description |
 |------|-------------|
 | `mnemos_setup` | Configure Mnemos and seed the first memories |
+| `mnemos_session_start` | Start or resume a functional-memory session |
+| `mnemos_functional_update` | Store live working context, corrections, commitments, and open questions |
+| `mnemos_functional_list` | List or search the live functional-memory layer |
+| `mnemos_session_close` | Close a session and compress functional memory into hypomnema |
+| `mnemos_context_packet` | Build the full prompt packet an agent should read before answering |
+| `mnemos_review_queue` | Show memory items that need confirmation or promotion decisions |
+| `mnemos_visual_snapshot` | Generate an inline Mermaid snapshot of the memory system |
 | `mnemos_remember` | Encode a new memory with content, impact, kind, and tags |
 | `mnemos_ingest` | Ingest external knowledge with source provenance |
 | `mnemos_recall` | Retrieve relevant memories (triggers reconsolidation) |
 | `mnemos_inspect` | View full details of a specific memory |
 | `mnemos_status` | Get memory system statistics |
 | `mnemos_beliefs` | List current beliefs with confidence levels |
-| `mnemos_shared` | Read memories shared by other agents |
 | `mnemos_hypomnema_write` | Write scoped continuity before it becomes an engram |
 | `mnemos_hypomnema_search` | Search scoped continuity by agent/person/project |
 | `mnemos_hypomnema_revise` | Revise a continuity entry while keeping history |
@@ -100,6 +108,8 @@ Mnemos exposes memory operations via the Model Context Protocol:
 | `mnemos_hypomnema_promote` | Promote stable hypomnema into a Mnemos engram |
 | `mnemos_forget` | Archive a memory (soft delete, recoverable) |
 | `mnemos_consolidate` | Trigger a consolidation cycle (decay, connections, softening) |
+
+`mnemos_shared` still exists as an experimental compatibility tool, but the turnkey path above does not require multi-agent memory.
 
 ### Claude Desktop
 
@@ -145,14 +155,15 @@ Add to your `claude_desktop_config.json`:
 mnemos init                          # Initialize database
 mnemos serve                         # Start MCP server (stdio)
 mnemos stats                         # Memory statistics
-mnemos stats --agent-id vektor       # Stats for a specific agent
+mnemos --agent-id vektor stats       # Stats for a specific agent
+mnemos snapshot                      # Inline Mermaid memory snapshot
 mnemos search "debugging strategies" # Search memories
 mnemos search "python" -n 20         # Search with more results
 mnemos inspect <engram-id>           # Full details on a memory
 mnemos consolidate                   # Shallow consolidation (decay + connections)
 mnemos consolidate --deep            # Deep consolidation (+ softening, beliefs, reflection)
 mnemos export --workspace ./output   # Export MEMORY.md and workspace files
-mnemos bootstrap --agent-name Nova --workspace ~/nova  # Bootstrap full agent stack
+mnemos bootstrap --agent-name Nova --workspace ~/nova  # Bootstrap turnkey memory stack
 ```
 
 Global options: `--db-path <path>` and `--agent-id <name>` work with all commands.
@@ -160,6 +171,26 @@ Global options: `--db-path <path>` and `--agent-id <name>` work with all command
 ---
 
 ## Architecture
+
+### Functional Memory
+
+The current working set. Use it for what the agent must keep in mind right now:
+
+- task state and next actions
+- user corrections and preferences that need confirmation
+- commitments, open questions, and active constraints
+- session-local context that should not immediately become long-term memory
+
+Functional memory can be closed into hypomnema at the end of a session.
+
+### Hypomnema
+
+Scoped continuity between a person, project, and agent. Hypomnema entries are durable enough to survive sessions but intentionally revisable before they become long-term engrams.
+
+- source: observed, synthesized, or co-formed
+- domain: foundational, identity, recurring, long-arc, topical, or situational
+- revision history and supersession links
+- explicit promotion into Mnemos when confidence and salience are high
 
 ### Engrams
 

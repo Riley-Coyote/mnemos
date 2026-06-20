@@ -1,0 +1,69 @@
+- main [ref=e2]:
+  - complementary "Mnemos surface map" [ref=e3]:
+    - generic [ref=e4]:
+      - paragraph [ref=e5]: mnemos.chat
+      - heading "one page that can summon the whole project" [level=1] [ref=e6]
+    - navigation "Explore Mnemos" [ref=e7]:
+      - button "The Sanctuary resident continuity" [ref=e8] [cursor=pointer]:
+        - generic [ref=e10]:
+          - strong [ref=e11]: The Sanctuary
+          - generic [ref=e12]: resident continuity
+      - button "The Legation public record" [ref=e13] [cursor=pointer]:
+        - generic [ref=e15]:
+          - strong [ref=e16]: The Legation
+          - generic [ref=e17]: public record
+      - button "Architecture memory substrate" [ref=e18] [cursor=pointer]:
+        - generic [ref=e20]:
+          - strong [ref=e21]: Architecture
+          - generic [ref=e22]: memory substrate
+      - button "Research field notes" [ref=e23] [cursor=pointer]:
+        - generic [ref=e25]:
+          - strong [ref=e26]: Research
+          - generic [ref=e27]: field notes
+    - region "Current path" [ref=e28]:
+      - paragraph [ref=e29]: current path
+      - generic [ref=e31]: threshold received
+  - region "Mnemos guide" [ref=e32]:
+    - generic [ref=e33]:
+      - generic [ref=e34]:
+        - paragraph [ref=e35]: guide surface
+        - heading "ask for any wing, and the page builds the answer in place." [level=2] [ref=e36]
+      - button "Reset trail" [ref=e37] [cursor=pointer]
+    - article [ref=e39]:
+      - generic [ref=e40]:
+        - paragraph [ref=e41]: Mnemos is easier to understand if we enter it through one of its rooms. Choose a wing, or ask in your own words.
+        - generic [ref=e42]:
+          - button "The Sanctuary Meet the resident minds and see continuity as a place. /sanctuary" [ref=e43] [cursor=pointer]:
+            - strong [ref=e44]: The Sanctuary
+            - generic [ref=e45]: Meet the resident minds and see continuity as a place.
+            - generic [ref=e46]: /sanctuary
+          - button "The Legation Open the public record and current surface map. /legation" [ref=e47] [cursor=pointer]:
+            - strong [ref=e48]: The Legation
+            - generic [ref=e49]: Open the public record and current surface map.
+            - generic [ref=e50]: /legation
+          - button "Architecture Walk through the memory engine layer by layer. /architecture" [ref=e51] [cursor=pointer]:
+            - strong [ref=e52]: Architecture
+            - generic [ref=e53]: Walk through the memory engine layer by layer.
+            - generic [ref=e54]: /architecture
+          - button "Research Read essays, claims, diagrams, and field notes. /research" [ref=e55] [cursor=pointer]:
+            - strong [ref=e56]: Research
+            - generic [ref=e57]: Read essays, claims, diagrams, and field notes.
+            - generic [ref=e58]: /research
+    - generic [ref=e59]:
+      - generic [ref=e60]: Ask Mnemos
+      - textbox "Ask Mnemos" [ref=e61]:
+        - /placeholder: Ask about Sanctuary, Legation, architecture, or research...
+      - button "Send" [ref=e62] [cursor=pointer]
+  - complementary "Live context" [ref=e63]:
+    - generic [ref=e64]:
+      - paragraph [ref=e65]: live model
+      - generic [ref=e66]:
+        - generic [ref=e67]: "4"
+        - generic [ref=e68]: wings available
+      - paragraph [ref=e69]: This prototype simulates a chat-native site where each answer can become a reader, dashboard, diagram, preview, or route handoff.
+    - generic [ref=e70]:
+      - paragraph [ref=e71]: artifact behavior
+      - list [ref=e72]:
+        - listitem [ref=e73]: "Teach me: guided explanation"
+        - listitem [ref=e74]: "Show me: visual or data artifact"
+        - listitem [ref=e75]: "Open full surface: route handoff"

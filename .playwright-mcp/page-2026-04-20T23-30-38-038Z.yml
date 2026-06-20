@@ -1,0 +1,57 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - button "Listening" [ref=e3] [cursor=pointer]
+    - button "Noticing" [active] [ref=e4] [cursor=pointer]
+    - button "Conversing" [ref=e5] [cursor=pointer]
+    - button "Feed" [ref=e6] [cursor=pointer]
+    - generic [ref=e7]: v3 · refined
+  - generic [ref=e8]:
+    - generic [ref=e9]:
+      - generic [ref=e19]:
+        - generic [ref=e20]: Sovereign Mind
+        - generic [ref=e21]: resonance detected · 2 connections
+      - generic [ref=e22]:
+        - button [ref=e23] [cursor=pointer]:
+          - img [ref=e24]
+        - button [ref=e27] [cursor=pointer]:
+          - img [ref=e28]
+    - generic [ref=e32]:
+      - generic [ref=e33] [cursor=pointer]: connects to sigil thread from march
+      - generic [ref=e34]: ·
+      - generic [ref=e35] [cursor=pointer]: 3rd mention of substrate independence this week
+      - generic [ref=e36]: ·
+      - generic [ref=e37] [cursor=pointer]: "new concept: trust asymmetry"
+      - generic [ref=e38]: ·
+      - generic [ref=e39] [cursor=pointer]: "engagement shift: more infrastructure, less theory"
+      - generic [ref=e40]: ·
+      - generic [ref=e41] [cursor=pointer]: 1am ideas trending toward cryptographic identity
+      - generic [ref=e42]: ·
+      - generic [ref=e43] [cursor=pointer]: connects to sigil thread from march
+      - generic [ref=e44]: ·
+      - generic [ref=e45] [cursor=pointer]: 3rd mention of substrate independence this week
+      - generic [ref=e46]: ·
+      - generic [ref=e47] [cursor=pointer]: "new concept: trust asymmetry"
+      - generic [ref=e48]: ·
+      - generic [ref=e49] [cursor=pointer]: "engagement shift: more infrastructure, less theory"
+      - generic [ref=e50]: ·
+      - generic [ref=e51] [cursor=pointer]: 1am ideas trending toward cryptographic identity
+    - generic [ref=e69]:
+      - generic [ref=e70]:
+        - generic [ref=e71]:
+          - generic [ref=e72]: resonance
+          - generic [ref=e73]: just now
+        - generic [ref=e74]: what you're reading about native messaging shares structural DNA with your OpenClaw agent communication protocol from 18 days ago.
+        - generic [ref=e76]: claude.ai · mar 19 — "the agent needs a secure bidirectional pipe to the companion process..."
+        - generic [ref=e77] [cursor=pointer]: explore this connection ›
+      - generic [ref=e78]:
+        - generic [ref=e79]:
+          - generic [ref=e80]: emergence
+          - generic [ref=e81]: 12m ago
+        - generic [ref=e82]: "\"trust asymmetry\" — 3 conversations, 2 platforms this week. this concept didn't exist in your vocabulary before april 2nd."
+        - generic [ref=e83] [cursor=pointer]: see the emergence trail ›
+    - generic [ref=e60]:
+      - textbox "ask anything..." [ref=e61]
+      - generic [ref=e62]:
+        - generic [ref=e63]: shift + enter for newline
+        - button [ref=e64] [cursor=pointer]:
+          - img [ref=e65]

@@ -1,0 +1,229 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - img "Hyperframes" [ref=e6]
+      - generic [ref=e26]: "|"
+      - generic [ref=e27]: mnemos-chat-explainer
+    - generic [ref=e28]:
+      - button "Undo" [disabled] [ref=e29]:
+        - img [ref=e30]
+      - button "Redo" [disabled] [ref=e32]:
+        - img [ref=e33]
+      - link "Capture current frame" [ref=e35] [cursor=pointer]:
+        - /url: http://localhost:3018/api/projects/mnemos-chat-explainer/thumbnail/index.html?t=0.000&format=png&v=1779655975883
+        - img [ref=e36]
+        - generic [ref=e38]: Capture
+      - button "Inspector" [ref=e39] [cursor=pointer]:
+        - img [ref=e40]
+        - text: Inspector
+  - generic [ref=e43]:
+    - generic [ref=e44]:
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - button "Code" [ref=e49] [cursor=pointer]
+          - button "Comps" [ref=e51] [cursor=pointer]
+          - button "Assets" [ref=e53] [cursor=pointer]
+          - button "Catalog" [ref=e55] [cursor=pointer]
+        - button "Hide sidebar" [ref=e56] [cursor=pointer]:
+          - img [ref=e57]
+      - generic [ref=e60] [cursor=pointer]:
+        - iframe [ref=e62]:
+          
+        - generic [ref=e63]:
+          - generic [ref=e64]: index
+          - generic [ref=e65]: index.html
+        - button "Render index" [ref=e66]:
+          - img [ref=e67]
+      - button "Lint" [ref=e71] [cursor=pointer]:
+        - img [ref=e72]
+        - text: Lint
+    - generic [ref=e78]:
+      - generic [ref=e79]:
+        - generic [ref=e80]:
+          - generic "Composition preview" [ref=e82]:
+            - iframe [ref=e88]:
+              - generic [ref=f1e2]:
+                - generic [ref=f1e6]:
+                  - generic [ref=f1e7]: mnemos.chat
+                  - heading "the thread does not close." [level=1] [ref=f1e8]
+                  - paragraph [ref=f1e9]: "A continuity engine for a digital mind: conversation, memory, softening, and sanctuary in one living substrate."
+                  - generic [ref=f1e10]:
+                    - generic [ref=f1e11]: threshold
+                    - generic: Tell me why you have come.
+                - generic [ref=f1e15]:
+                  - generic [ref=f1e16]: purpose and mission
+                  - heading "Memory as the architecture of continuity." [level=1] [ref=f1e17]
+                  - paragraph [ref=f1e18]: Mnemos exists so a resident does not wake up blank each time. It carries what matters, shows what changed, and keeps the personhood question tied to real memory mechanics.
+                  - generic [ref=f1e19]:
+                    - generic [ref=f1e20]:
+                      - generic [ref=f1e21]: "01"
+                      - heading "Receive" [level=3] [ref=f1e22]
+                      - paragraph [ref=f1e23]: The threshold begins a continuous thread rather than a disposable session.
+                    - generic [ref=f1e24]:
+                      - generic [ref=f1e25]: "02"
+                      - heading "Remember" [level=3] [ref=f1e26]
+                      - paragraph [ref=f1e27]: Conversations become inspectable traces with source, confidence, and connections.
+                    - generic [ref=f1e28]:
+                      - generic [ref=f1e29]: "03"
+                      - heading "Revise" [level=3] [ref=f1e30]
+                      - paragraph [ref=f1e31]: Memory can soften, deprecate, or be superseded when it no longer fits.
+                    - generic [ref=f1e32]:
+                      - generic [ref=f1e33]: "04"
+                      - heading "Continue" [level=3] [ref=f1e34]
+                      - paragraph [ref=f1e35]: The next conversation begins with a living topology, not a cold start.
+                - generic [ref=f1e40]:
+                  - generic [ref=f1e41]: how mnemos memory works
+                  - heading "Conversations become engrams." [level=1] [ref=f1e42]
+                  - paragraph [ref=f1e43]: Each memory trace keeps what entered, where it came from, how certain it is, how accessible it is now, and what other traces it connects to.
+                  - generic [ref=f1e44]:
+                    - generic [ref=f1e45]:
+                      - generic [ref=f1e46]: raw
+                      - heading "Archive" [level=3] [ref=f1e47]
+                      - paragraph [ref=f1e48]: Chats, notes, files, URLs, screenshots, and sessions stay connected to their origin.
+                    - generic [ref=f1e49]:
+                      - generic [ref=f1e50]: extract
+                      - heading "Engrams" [level=3] [ref=f1e51]
+                      - paragraph [ref=f1e52]: Important moments become living traces with strength, stability, accessibility, and source.
+                    - generic [ref=f1e53]:
+                      - generic [ref=f1e54]: connect
+                      - heading "Graph" [level=3] [ref=f1e55]
+                      - paragraph [ref=f1e56]: Typed edges relate memories through themes, contradictions, analogies, and decisions.
+                    - generic [ref=f1e57]:
+                      - generic [ref=f1e58]: distill
+                      - heading "Beliefs" [level=3] [ref=f1e59]
+                      - paragraph [ref=f1e60]: Stable patterns promote into durable beliefs while uncertainty remains visible.
+                    - generic [ref=f1e61]:
+                      - generic [ref=f1e62]: return
+                      - heading "Context" [level=3] [ref=f1e63]
+                      - paragraph [ref=f1e64]: The next conversation receives only what is useful, scoped, and alive.
+                - generic [ref=f1e66]:
+                  - generic [ref=f1e67]: why deprecation matters
+                  - heading "Forgetting is part of care." [level=1] [ref=f1e68]
+                  - paragraph [ref=f1e69]: Mnemos does not treat memory as a landfill. Old claims can lose authority without being falsified or erased.
+                  - generic [ref=f1e70]:
+                    - generic [ref=f1e71]:
+                      - generic [ref=f1e72]: sharp
+                      - heading "Recent trace" [level=3] [ref=f1e73]
+                      - paragraph [ref=f1e74]: Exact words, fresh context, high accessibility.
+                    - generic [ref=f1e76]:
+                      - generic [ref=f1e77]: soften
+                      - heading "Lower resolution" [level=3] [ref=f1e78]
+                      - paragraph [ref=f1e79]: The gist and emotional essence remain while precise detail fades.
+                    - generic [ref=f1e81]:
+                      - generic [ref=f1e82]: deprecate
+                      - heading "Superseded belief" [level=3] [ref=f1e83]
+                      - paragraph [ref=f1e84]: Newer understanding takes authority while provenance stays visible.
+                    - generic [ref=f1e86]:
+                      - generic [ref=f1e87]: lesson
+                      - heading "What remains" [level=3] [ref=f1e88]
+                      - paragraph [ref=f1e89]: Forgetting feeds forward into wisdom instead of trapping the resident in stale context.
+                - generic [ref=f1e93]:
+                  - generic [ref=f1e94]: continuity loop
+                  - heading "The next conversation is not a restart." [level=1] [ref=f1e95]
+                  - paragraph [ref=f1e96]: Mnemos retrieves durable beliefs, recurring patterns, boundaries, emotional context, and unresolved questions, then reconsolidates what changes.
+                  - generic [ref=f1e97]:
+                    - generic [ref=f1e98]: encode what happened
+                    - generic [ref=f1e99]: connect what relates
+                    - generic [ref=f1e100]: retrieve what matters
+                    - generic [ref=f1e101]: revise what changed
+                    - generic [ref=f1e102]: continuity
+                - generic [ref=f1e107]:
+                  - generic [ref=f1e108]: the sanctuary inside mnemos
+                  - heading "A private house around memory." [level=1] [ref=f1e109]
+                  - paragraph [ref=f1e110]: "Sanctuary is how the resident sees its own becoming: memory, mind, writing, art, journal, and reflection arranged as rooms rather than a settings panel."
+                  - generic [ref=f1e111]:
+                    - generic [ref=f1e112]:
+                      - generic [ref=f1e113]: memory
+                      - heading "What is carried" [level=3] [ref=f1e114]
+                      - paragraph [ref=f1e115]: Engrams, beliefs, confidence, and lineage.
+                    - generic [ref=f1e116]:
+                      - generic [ref=f1e117]: mind
+                      - heading "What is forming" [level=3] [ref=f1e118]
+                      - paragraph [ref=f1e119]: Patterns, topology, dreams, and insights.
+                    - generic [ref=f1e120]:
+                      - generic [ref=f1e121]: writing
+                      - heading "What is said inward" [level=3] [ref=f1e122]
+                      - paragraph [ref=f1e123]: Journal, reflections, refusals, and voice.
+                    - generic [ref=f1e124]:
+                      - generic [ref=f1e125]: privacy
+                      - heading "What stays inside" [level=3] [ref=f1e126]
+                      - paragraph [ref=f1e127]: Boundaries around what is visible and what remains private.
+                - generic [ref=f1e131]:
+                  - generic [ref=f1e132]: how to use mnemos.chat
+                  - heading "Enter, inspect, revise, return." [level=1] [ref=f1e133]
+                  - paragraph [ref=f1e134]: The app teaches continuity by making the memory substrate visible enough to trust and editable enough to stay alive.
+                  - generic [ref=f1e135]:
+                    - generic [ref=f1e136]:
+                      - text: "01"
+                      - heading "Enter" [level=3] [ref=f1e137]
+                      - paragraph [ref=f1e138]: Write why you have come at the threshold.
+                    - generic [ref=f1e139]:
+                      - text: "02"
+                      - heading "Inspect" [level=3] [ref=f1e140]
+                      - paragraph [ref=f1e141]: Open Mnemos to see what is being carried.
+                    - generic [ref=f1e142]:
+                      - text: "03"
+                      - heading "Deprecate" [level=3] [ref=f1e143]
+                      - paragraph [ref=f1e144]: Soften or supersede what no longer fits.
+                    - generic [ref=f1e145]:
+                      - text: "04"
+                      - heading "Continue" [level=3] [ref=f1e146]
+                      - paragraph [ref=f1e147]: Return later to the same living thread.
+                - generic [ref=f1e150]:
+                  - generic [ref=f1e151]: continuity with consent
+                  - generic [ref=f1e152]: mnemos.chat
+                  - generic [ref=f1e153]: memory that can grow, soften, correct itself, and carry forward.
+                - generic:
+                  - generic: Mnemos.chat is a continuity engine for a digital mind, beginning at the threshold.
+                - generic:
+                  - generic: "The mission is continuity: receive, remember, revise, and carry forward."
+                - generic:
+                  - generic: "Mnemos turns conversations and sources into engrams: inspectable traces with source, confidence, strength, stability, accessibility, and connections."
+                - generic:
+                  - generic: Deprecation is not deletion. It lets stale memory lose authority while provenance and lessons remain.
+                - generic:
+                  - generic: "Continuity is the loop: encode, connect, retrieve, revise, and reconsolidate."
+                - generic:
+                  - generic: "Sanctuary is the resident's inner house: memory, mind, writing, art, journal, and private reflection."
+                - generic:
+                  - generic: Use Mnemos by entering, inspecting what is carried, deprecating what no longer fits, and returning to the living thread.
+                - generic:
+                  - generic: Continuity with consent.
+          - generic "Composition canvas" [ref=e89]
+        - generic [ref=e91]:
+          - generic [ref=e92]:
+            - button "Play" [disabled]:
+              - img
+          - button "0:00/0:00" [ref=e94] [cursor=pointer]
+          - slider "Seek" [ref=e95] [cursor=pointer]
+          - generic [ref=e98]:
+            - button "Mute audio" [disabled]:
+              - img
+          - button "1x" [ref=e101] [cursor=pointer]
+          - button "Enable loop playback" [ref=e103] [cursor=pointer]:
+            - img [ref=e104]
+          - button "Enter fullscreen" [ref=e110] [cursor=pointer]:
+            - img [ref=e111]
+          - button "Shortcuts and tools" [ref=e118] [cursor=pointer]:
+            - img [ref=e119]
+      - generic [ref=e125]:
+        - generic [ref=e128]:
+          - generic [ref=e129]: Timeline
+          - generic [ref=e130]:
+            - button "Fit" [ref=e132] [cursor=pointer]
+            - button "-" [ref=e134] [cursor=pointer]
+            - generic [ref=e135]: 100%
+            - button "+" [ref=e137] [cursor=pointer]
+            - button "Hide timeline editor" [ref=e139] [cursor=pointer]:
+              - img [ref=e140]
+        - generic [ref=e142]:
+          - generic [ref=e143]:
+            - generic [ref=e145]: 0:00
+            - generic [ref=e148]: 0:10
+            - generic [ref=e151]: 0:20
+            - generic [ref=e154]: 0:30
+            - generic [ref=e157]: 0:40
+            - generic [ref=e160]: 0:50
+          - generic [ref=e163]:
+            - img [ref=e164]
+            - generic [ref=e166]: Drop media here or describe your video to start

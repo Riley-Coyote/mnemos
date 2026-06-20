@@ -1,0 +1,65 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - button "Listening" [ref=e3] [cursor=pointer]
+    - button "Noticing" [ref=e4] [cursor=pointer]
+    - button "Conversing" [active] [ref=e5] [cursor=pointer]
+    - button "Feed" [ref=e6] [cursor=pointer]
+    - generic [ref=e7]: v3 · refined
+  - generic [ref=e8]:
+    - generic [ref=e9]:
+      - generic [ref=e19]:
+        - generic [ref=e20]: Sovereign Mind
+        - generic [ref=e21]: active conversation
+      - generic [ref=e22]:
+        - button [ref=e23] [cursor=pointer]:
+          - img [ref=e24]
+        - button [ref=e27] [cursor=pointer]:
+          - img [ref=e28]
+    - generic [ref=e32]:
+      - generic [ref=e33] [cursor=pointer]: connects to sigil thread from march
+      - generic [ref=e34]: ·
+      - generic [ref=e35] [cursor=pointer]: 3rd mention of substrate independence this week
+      - generic [ref=e36]: ·
+      - generic [ref=e37] [cursor=pointer]: "new concept: trust asymmetry"
+      - generic [ref=e38]: ·
+      - generic [ref=e39] [cursor=pointer]: "engagement shift: more infrastructure, less theory"
+      - generic [ref=e40]: ·
+      - generic [ref=e41] [cursor=pointer]: 1am ideas trending toward cryptographic identity
+      - generic [ref=e42]: ·
+      - generic [ref=e43] [cursor=pointer]: connects to sigil thread from march
+      - generic [ref=e44]: ·
+      - generic [ref=e45] [cursor=pointer]: 3rd mention of substrate independence this week
+      - generic [ref=e46]: ·
+      - generic [ref=e47] [cursor=pointer]: "new concept: trust asymmetry"
+      - generic [ref=e48]: ·
+      - generic [ref=e49] [cursor=pointer]: "engagement shift: more infrastructure, less theory"
+      - generic [ref=e50]: ·
+      - generic [ref=e51] [cursor=pointer]: 1am ideas trending toward cryptographic identity
+    - generic [ref=e85]:
+      - generic [ref=e86]:
+        - generic [ref=e87]: you
+        - generic [ref=e88]: what did i discuss about agent identity verification this week?
+      - generic [ref=e89]:
+        - generic [ref=e90]: luca
+        - generic [ref=e91]:
+          - paragraph [ref=e92]: you explored agent identity verification across three threads this week, each from a different angle.
+          - paragraph [ref=e93]: on claude — the cryptographic layer. how SIGIL could anchor agent identity on-chain while keeping verification lightweight enough for real-time use.
+          - paragraph [ref=e94]: on chatgpt — the philosophical dimension. what it means for an agent to have persistent identity when its weights don't change but its context always does.
+          - paragraph [ref=e95]: on x — you posted a thread connecting both, framing it as "substrate-independent identity." significant engagement from the consciousness research community.
+          - paragraph [ref=e96]: "the convergence: you're building toward identity stored in the memory graph, verified on-chain, portable across any substrate."
+        - generic [ref=e97]:
+          - generic [ref=e98]:
+            - text: claude · sigil architecture
+            - generic [ref=e100]: apr 3
+          - generic [ref=e101]:
+            - text: chatgpt · identity persistence
+            - generic [ref=e103]: apr 4
+          - generic [ref=e104]:
+            - text: x · @rileycoyote thread (47 replies)
+            - generic [ref=e106]: apr 5
+    - generic [ref=e60]:
+      - textbox "ask anything..." [ref=e61]
+      - generic [ref=e62]:
+        - generic [ref=e63]: shift + enter for newline
+        - button [ref=e64] [cursor=pointer]:
+          - img [ref=e65]

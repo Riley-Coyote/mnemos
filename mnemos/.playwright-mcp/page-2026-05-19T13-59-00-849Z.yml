@@ -1,0 +1,93 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - region "Notifications (F8)":
+      - list
+    - region "Notifications alt+T"
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - button "Toggle sidebar" [ref=e5] [cursor=pointer]: P
+        - button "Collapse panel" [ref=e6] [cursor=pointer]:
+          - img [ref=e7]
+        - button "Chat" [ref=e9] [cursor=pointer]:
+          - img [ref=e10]
+          - text: Chat
+        - button "Memory" [ref=e12] [cursor=pointer]:
+          - img [ref=e13]
+          - text: Memory
+        - button "Mind" [ref=e23] [cursor=pointer]:
+          - img [ref=e24]
+          - text: Mind
+        - button "Journal" [ref=e27] [cursor=pointer]:
+          - img [ref=e28]
+          - text: Journal
+        - button "Projects" [ref=e31] [cursor=pointer]:
+          - img [ref=e32]
+          - text: Projects
+        - button "Profile" [ref=e36] [cursor=pointer]:
+          - img [ref=e37]
+          - text: Profile
+        - button "Toggle panel" [ref=e40] [cursor=pointer]
+        - button "Activity" [ref=e41] [cursor=pointer]:
+          - img [ref=e42]
+          - text: Activity
+        - button "Settings" [ref=e44] [cursor=pointer]:
+          - img [ref=e45]
+          - text: Settings
+      - generic [ref=e57]:
+        - generic [ref=e58]:
+          - generic [ref=e59]: Threads
+          - generic [ref=e60]: LIVE
+        - button "New thread" [ref=e63] [cursor=pointer]:
+          - img [ref=e64]
+          - generic [ref=e65]: New thread
+        - textbox "Search threads" [ref=e67]:
+          - /placeholder: Search threads...
+        - generic [ref=e68]:
+          - generic [ref=e69]: No conversations yet.
+          - button "Archived" [ref=e71] [cursor=pointer]:
+            - img [ref=e72]
+            - text: Archived
+      - generic [ref=e77]:
+        - generic [ref=e78]:
+          - heading "polyphonic" [level=1] [ref=e82]
+          - generic [ref=e84]:
+            - button "Attachment file picker"
+            - generic [ref=e86]:
+              - generic [ref=e87]:
+                - generic [ref=e89]: observer
+                - generic [ref=e91]: observing your conversation
+                - button "Close observer" [ref=e92] [cursor=pointer]:
+                  - img [ref=e93]
+              - generic [ref=e97]: observing your conversation. ask me anything about what you and Luca have been discussing.
+            - textbox "Message Luca" [ref=e99]:
+              - /placeholder: Message Luca...
+            - generic [ref=e100]:
+              - generic [ref=e101]:
+                - button "Attach files" [ref=e102] [cursor=pointer]:
+                  - img [ref=e103]
+                - button "Talking to Luca" [ref=e104] [cursor=pointer]: luca
+                - button "observer" [ref=e105] [cursor=pointer]:
+                  - img [ref=e106]
+                  - generic [ref=e109]: observer
+              - generic [ref=e110]:
+                - combobox "Thinking effort" [ref=e111] [cursor=pointer]:
+                  - option "Light"
+                  - option "Medium" [selected]
+                  - option "Deep"
+                - button "Start dictation" [ref=e112] [cursor=pointer]:
+                  - img [ref=e113]
+                - button "Send message" [disabled] [ref=e116]:
+                  - img [ref=e118]
+          - generic [ref=e122]:
+            - generic [ref=e123]: May 19th, 2026
+            - generic [ref=e124]: ·
+            - generic [ref=e125]: 8:59 AM
+            - generic [ref=e126]: ·
+            - generic [ref=e127]:
+              - text: thunderstorms, warm
+              - generic [ref=e128]: 80°F
+            - generic [ref=e129]: ·
+            - generic [ref=e130]: Joshua
+        - generic:
+          - generic: Drop files to attach
+  - dialog "Drawer" [ref=e131]

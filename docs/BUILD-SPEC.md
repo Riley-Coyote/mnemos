@@ -1,4 +1,9 @@
 # Mnemos — Full Stack Build Spec
+> Legacy/OpenClaw-oriented spec. The current turnkey path is the single-agent
+> functional memory → hypomnema → Mnemos architecture in
+> [turnkey-memory-system.md](turnkey-memory-system.md). Multi-agent/shared-memory
+> work is intentionally deferred to a separate design pass.
+
 **For:** Claude Code (or any coding agent)  
 **Repo:** `github.com/Riley-Coyote/mnemos` (private, will go public)  
 **Local path:** `~/Documents/Repositories/polyphonic-v2/mnemos/`  

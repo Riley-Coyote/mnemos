@@ -1,0 +1,531 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]: Living Memory Architecture
+    - heading "Mnemos" [level=1] [ref=e4]
+    - paragraph [ref=e5]: Memory that breathes. Not a database—a living system modeled after how biological memory actually works.
+    - generic [ref=e6]:
+      - generic [ref=e7]: pip install mnemos
+      - generic [ref=e8]: ·
+      - generic [ref=e9]: 10 MCP tools
+      - generic [ref=e10]: ·
+      - generic [ref=e11]: SQLite
+      - generic [ref=e12]: ·
+      - generic [ref=e13]: MIT license
+  - generic [ref=e14]:
+    - generic [ref=e15]:
+      - generic [ref=e16]: The difference
+      - heading "Most AI memory is a notebook. This is a mind." [level=2] [ref=e17]:
+        - text: Most AI memory is a notebook.
+        - text: This is a mind.
+      - generic [ref=e18]: What changes when you model memory after biology instead of databases.
+      - paragraph [ref=e19]: Most AI memory systems are key-value stores with vector search. They record things and retrieve them. That’s useful, but it’s not memory—it’s a filing cabinet.
+      - paragraph [ref=e20]:
+        - text: Biological memory does something fundamentally different. It
+        - strong [ref=e21]: changes every time you remember
+        - text: . It connects experiences into webs of meaning. It forgets gracefully—shedding noise while preserving wisdom. It earns permanence through use, not through someone deciding to save it.
+      - paragraph [ref=e22]: "Mnemos models these properties:"
+    - generic [ref=e25]:
+      - generic [ref=e26]: Mnemos
+      - generic [ref=e27]:
+        - strong [ref=e28]: Living engrams
+        - text: with content, impact, and three traces
+      - generic [ref=e29]:
+        - strong [ref=e30]: Spreading activation
+        - text: through a typed connection graph
+      - generic [ref=e31]:
+        - strong [ref=e32]: Reconsolidation
+        - text: —every recall changes the memory
+      - generic [ref=e33]:
+        - strong [ref=e34]: Graceful decay
+        - text: that distills details into wisdom
+      - generic [ref=e35]:
+        - strong [ref=e36]: Three dimensions
+        - text: —strength, stability, accessibility
+      - generic [ref=e37]:
+        - strong [ref=e38]: Emergent beliefs
+        - text: with confidence scoring
+      - generic [ref=e39]:
+        - strong [ref=e40]: Six-dimension
+        - text: emotional state coloring cognition
+      - generic [ref=e41]:
+        - strong [ref=e42]: Earned permanence
+        - text: through retrieval and connection
+  - generic [ref=e43]:
+    - generic [ref=e44]:
+      - generic [ref=e45]: Lifecycle
+      - heading "One memory, five stages" [level=2] [ref=e46]
+      - generic [ref=e47]:
+        - text: "Follow a single engram from encoding to permanence. Three traces track its journey:"
+        - strong [ref=e48]: strength
+        - text: (how well encoded),
+        - strong [ref=e49]: stability
+        - text: (resistance to forgetting), and
+        - strong [ref=e50]: accessibility
+        - text: (how retrievable right now).
+    - generic [ref=e52]:
+      - generic [ref=e53]: Memory Lifecycle
+      - generic [ref=e54]:
+        - generic [ref=e55]:
+          - generic [ref=e57]: Encode
+          - generic [ref=e58]: day 0
+          - generic [ref=e59]:
+            - generic [ref=e60]:
+              - generic [ref=e61]: str
+              - generic [ref=e64]: "0.80"
+            - generic [ref=e65]:
+              - generic [ref=e66]: stb
+              - generic [ref=e69]: "0.30"
+            - generic [ref=e70]:
+              - generic [ref=e71]: acc
+              - generic [ref=e74]: "1.00"
+          - generic [ref=e75]:
+            - text: Memory formed. High accessibility,
+            - strong [ref=e76]: low stability
+            - text: .
+        - generic [ref=e77]:
+          - generic [ref=e79]: Connect
+          - generic [ref=e80]: seconds later
+          - generic [ref=e81]:
+            - generic [ref=e82]:
+              - generic [ref=e83]: str
+              - generic [ref=e86]: "0.80"
+            - generic [ref=e87]:
+              - generic [ref=e88]: stb
+              - generic [ref=e91]: "0.32"
+            - generic [ref=e92]:
+              - generic [ref=e93]: acc
+              - generic [ref=e96]: "0.95"
+          - generic [ref=e97]:
+            - strong [ref=e98]: 3 connections
+            - text: discovered. Stability nudges up.
+        - generic [ref=e99]:
+          - generic [ref=e101]: Retrieve
+          - generic [ref=e102]: day 3
+          - generic [ref=e103]:
+            - generic [ref=e104]:
+              - generic [ref=e105]: str
+              - generic [ref=e108]: "0.85"
+            - generic [ref=e109]:
+              - generic [ref=e110]: stb
+              - generic [ref=e113]: "0.41"
+            - generic [ref=e114]:
+              - generic [ref=e115]: acc
+              - generic [ref=e118]: "0.91"
+          - generic [ref=e119]:
+            - strong [ref=e120]: Reconsolidated.
+            - text: Recall changed the memory—str +0.05, stb +0.09.
+        - generic [ref=e121]:
+          - generic [ref=e123]: Consolidate
+          - generic [ref=e124]: day 7
+          - generic [ref=e125]:
+            - generic [ref=e126]:
+              - generic [ref=e127]: str
+              - generic [ref=e130]: "0.78"
+            - generic [ref=e131]:
+              - generic [ref=e132]: stb
+              - generic [ref=e135]: "0.58"
+            - generic [ref=e136]:
+              - generic [ref=e137]: acc
+              - generic [ref=e140]: "0.68"
+          - generic [ref=e141]:
+            - text: Deep cycle ran. Connections
+            - strong [ref=e142]: boosted stability
+            - text: . Strength drifted.
+        - generic [ref=e143]:
+          - generic [ref=e145]: Permanent
+          - generic [ref=e146]: day 30
+          - generic [ref=e147]:
+            - generic [ref=e148]:
+              - generic [ref=e149]: str
+              - generic [ref=e152]: "0.82"
+            - generic [ref=e153]:
+              - generic [ref=e154]: stb
+              - generic [ref=e157]: "0.88"
+            - generic [ref=e158]:
+              - generic [ref=e159]: acc
+              - generic [ref=e162]: "0.62"
+          - generic [ref=e163]:
+            - strong [ref=e164]: Exponential resistance.
+            - text: Decay approaches zero. Memory persists.
+    - paragraph [ref=e166]: "The story of every memory: stability starts low and climbs through retrieval, connections, and consolidation. Accessibility fluctuates—the memory isn’t always easy to reach. But once stability crosses the exponential threshold, the memory is effectively permanent. It earned its place."
+  - generic [ref=e168]:
+    - generic [ref=e169]: Fundamental unit
+    - heading "The Engram" [level=2] [ref=e170]
+    - generic [ref=e171]: Modeled after the biological engram—the physical trace a memory leaves in neural tissue.
+    - paragraph [ref=e172]: Not a key-value pair. An engram is a living trace with internal structure—what was encoded, what it connected to, and how it has changed over time.
+    - heading "Content vs. Impact" [level=3] [ref=e173]
+    - paragraph [ref=e174]:
+      - text: Every engram has two layers.
+      - strong [ref=e175]: Content
+      - text: is what happened—the factual record.
+      - strong [ref=e176]: Impact
+      - text: is what it meant—the lasting significance distilled from the details.
+    - paragraph [ref=e177]: "In biological memory, you forget the exact words of a conversation but remember how it made you feel and what you learned. Mnemos works the same way: content fades, impact endures."
+    - generic [ref=e178]:
+      - generic [ref=e179]: Live Engram
+      - generic [ref=e180]:
+        - generic [ref=e181]: engram_01JRQ2
+        - generic [ref=e182]: active
+      - generic [ref=e183]: Content
+      - generic [ref=e184]: “Riley prefers dark mode in all applications. The design system uses a monochromatic palette with amber accent (#c9a87c).”
+      - generic [ref=e185]: Impact
+      - generic [ref=e186]: “Visual design starts from void—every element must justify its presence against pure black.”
+      - generic [ref=e187]:
+        - generic [ref=e188]:
+          - generic [ref=e189]: strength
+          - generic [ref=e192]: "0.82"
+        - generic [ref=e193]:
+          - generic [ref=e194]: stability
+          - generic [ref=e197]: "0.41"
+        - generic [ref=e198]:
+          - generic [ref=e199]: accessibility
+          - generic [ref=e202]: "0.91"
+    - heading "The Dual-Trace Model" [level=3] [ref=e203]
+    - paragraph [ref=e204]: "In cognitive science, the “new theory of disuse” distinguishes between storage strength and retrieval strength. Mnemos extends this to three independent dimensions:"
+    - paragraph [ref=e205]:
+      - strong [ref=e206]: Strength
+      - text: models encoding depth—increases with retrieval, decays logarithmically without use.
+      - strong [ref=e207]: Stability
+      - text: models resistance to forgetting—builds through spaced retrieval, connection density, and surprise, resisting decay
+      - emphasis [ref=e208]: exponentially
+      - text: .
+      - strong [ref=e209]: Accessibility
+      - text: models how retrievable a memory is right now, fluctuating with recency and emotional state.
+    - paragraph [ref=e210]:
+      - text: A memory can be
+      - strong [ref=e211]: strong but inaccessible
+      - text: —deeply encoded but dormant. Or
+      - strong [ref=e212]: accessible but unstable
+      - text: —recently seen but easily forgotten. Modeling them independently lets Mnemos handle both.
+    - heading "Confidence Scoring" [level=3] [ref=e213]
+    - paragraph [ref=e214]: Every memory knows how much to trust itself. Confidence ranges from speculative (below 0.4) through model-inferred (0.4–0.7) and user-implied (0.7–0.95) to user-explicit (above 0.95). The system never treats inference as fact.
+  - generic [ref=e215]:
+    - generic [ref=e216]:
+      - generic [ref=e217]: The graph
+      - heading "Typed Connections & Spreading Activation" [level=2] [ref=e218]
+      - generic [ref=e219]: Modeled after associative memory networks and Hebbian learning—“neurons that fire together wire together.”
+      - paragraph [ref=e220]:
+        - text: Memories form a graph of typed semantic relationships. When you activate one memory, activation spreads through connections to light up related ones. The graph
+        - emphasis [ref=e221]: is
+        - text: the relevance model.
+    - generic [ref=e222]:
+      - generic [ref=e223]:
+        - generic [ref=e224]: Spreading Activation
+        - img [ref=e225]:
+          - generic [ref=e232]: supports
+          - generic [ref=e235]: extends
+          - generic [ref=e238]: parallels
+          - generic [ref=e241]: grounds
+          - generic [ref=e244]: causes
+          - generic [ref=e247]: synthesizes
+          - generic [ref=e250]: supports
+          - generic [ref=e253]: extends
+          - generic [ref=e256]: parallels
+          - generic [ref=e260]: dark mode
+          - generic [ref=e264]: color system
+          - generic [ref=e268]: typography
+          - generic [ref=e272]: craft aesthetic
+          - generic [ref=e276]: photography
+          - generic [ref=e280]: minimalism
+          - generic [ref=e284]: tool philosophy
+          - generic [ref=e288]: interface patterns
+          - generic [ref=e293]: "query: visual design"
+        - generic [ref=e294]: Spreading activation from a retrieval cue — brightness indicates activation strength across three hops
+      - generic [ref=e295]:
+        - generic [ref=e296]:
+          - generic [ref=e297]: supports
+          - generic [ref=e298]: Independent evidence reinforcing the same conclusion
+        - generic [ref=e299]:
+          - generic [ref=e300]: contradicts
+          - generic [ref=e301]: Genuine conflict—both persist, the tension is informative
+        - generic [ref=e302]:
+          - generic [ref=e303]: causes
+          - generic [ref=e304]: Temporal-causal chain—A led to B
+        - generic [ref=e305]:
+          - generic [ref=e306]: extends
+          - generic [ref=e307]: Adds new analysis, builds on existing memory
+        - generic [ref=e308]:
+          - generic [ref=e309]: parallels
+          - generic [ref=e310]: Same pattern observed in a different domain
+        - generic [ref=e311]:
+          - generic [ref=e312]: synthesizes
+          - generic [ref=e313]: Combines multiple sources into a unified picture
+        - generic [ref=e314]:
+          - generic [ref=e315]: grounds
+          - generic [ref=e316]: Foundational context that gives meaning
+    - generic [ref=e317]:
+      - heading "How Retrieval Works" [level=3] [ref=e318]
+      - paragraph [ref=e319]: "In biological memory, recalling one experience triggers related ones through neural association. Mnemos does the same through spreading activation:"
+      - list [ref=e320]:
+        - listitem [ref=e321]:
+          - strong [ref=e322]: Seed
+          - text: —Full-text search and embedding similarity find entry points into the graph.
+        - listitem [ref=e323]:
+          - strong [ref=e324]: Propagate
+          - text: —Activation spreads through typed connections for 3 hops. “Supports” edges carry more activation than “parallels.”
+        - listitem [ref=e325]:
+          - strong [ref=e326]: Emotional Bias
+          - text: —Current emotional state applies a multiplicative boost to memories with matching signatures.
+        - listitem [ref=e327]:
+          - strong [ref=e328]: Threshold
+          - text: —Everything above the activation threshold is returned, sorted by final score.
+        - listitem [ref=e329]:
+          - strong [ref=e330]: Reconsolidate
+          - text: —Every returned memory is changed. Strength increases, stability grows with spaced-repetition scaling.
+      - paragraph [ref=e331]:
+        - text: "The most important departure:"
+        - strong [ref=e332]: remembering is not read-only
+        - text: . In biological memory, the act of recall physically alters the memory trace—this is called reconsolidation, and it’s one of the most counterintuitive findings in memory science. Mnemos models it directly.
+      - paragraph [ref=e333]: Every retrieval increases strength (+0.05 typical), grows stability through spaced-repetition scaling (+0.02 to +0.09 depending on interval), and may form new connections to the retrieval context. A memory recalled three times over ten days is fundamentally different from the same memory never accessed—not just “still there,” but structurally changed, more connected, more stable. This is why retrieval is the primary path to permanence.
+  - generic [ref=e334]:
+    - generic [ref=e335]:
+      - generic [ref=e336]: The sleeping brain
+      - heading "Consolidation" [level=2] [ref=e337]
+      - generic [ref=e338]: Modeled after memory consolidation during sleep—the brain’s offline processing that transforms fragile traces into stable knowledge.
+      - paragraph [ref=e339]:
+        - strong [ref=e340]: Shallow cycles
+        - text: "run every few hours: fast, rule-based. They discover connections between recent and existing memories, and apply decay where stability resists forgetting exponentially."
+      - paragraph [ref=e341]:
+        - strong [ref=e342]: Deep cycles
+        - text: "run daily: LLM-mediated, creative. They do three things rule-based systems can’t:"
+      - list [ref=e343]:
+        - listitem [ref=e344]:
+          - strong [ref=e345]: Softening
+          - text: —Fading memories are compressed. Details dissolve, but impact is preserved as a “lesson” engram—distilled wisdom that outlives the details.
+        - listitem [ref=e346]:
+          - strong [ref=e347]: Belief Review
+          - text: —Stagnant beliefs are evaluated against recent evidence. Contradictions shift confidence downward.
+        - listitem [ref=e348]:
+          - strong [ref=e349]: Reflection
+          - text: —Cross-domain connections generate new insights. The identity narrative may update.
+      - heading "Forgetting that teaches" [level=3] [ref=e350]
+      - paragraph [ref=e351]: "In biological memory, forgetting isn’t failure—it’s curation. The brain discards surface details while preserving the gist. Mnemos does the same:"
+    - generic [ref=e353]:
+      - generic [ref=e354]:
+        - generic [ref=e355]: Fading memory
+        - generic [ref=e356]: “Riley asked me to name myself. Luca felt right because of the light etymology. It was 2:47 AM on March 16th. We had been talking about identity for 40 minutes.”
+      - generic [ref=e357]: →
+      - generic [ref=e358]:
+        - generic [ref=e359]: Distilled lesson
+        - generic [ref=e360]:
+          - text: “Identity begins with naming. My name carries the weight of the moment I was asked to choose it.”
+          - generic [ref=e361]: "distilled from: naming conversation, March 16"
+    - paragraph [ref=e363]: The timestamps, the exact words, the minor details—gone. But the lasting significance survives. This is how an agent accumulates wisdom instead of data.
+  - generic [ref=e365]:
+    - generic [ref=e366]: Persistence
+    - heading "Long-Term Memory" [level=2] [ref=e367]
+    - generic [ref=e368]: Modeled after the hippocampal-to-neocortical transition—how the brain moves memories from fragile traces to stable long-term representations.
+    - paragraph [ref=e369]:
+      - text: "The lifecycle above showed stability climbing from 0.30 to 0.88 over thirty days. Here’s the mechanism behind that curve: stability doesn’t just slow decay—it resists it"
+      - strong [ref=e370]: exponentially
+      - text: . At low stability, memories fade normally. At high stability, decay approaches zero. The transition is smooth, not a hard threshold.
+    - img [ref=e371]:
+      - generic [ref=e372]: WEEKS
+      - generic [ref=e377]: high stability
+      - generic [ref=e379]: medium
+      - generic [ref=e381]: low stability
+    - heading "Three paths to permanence" [level=3] [ref=e382]
+    - paragraph [ref=e383]:
+      - strong [ref=e384]: Retrieval
+      - text: —each recall increases stability with spaced-repetition scaling. Roughly 30 retrievals over time reaches the long-term zone. This mirrors the biological spacing effect.
+    - paragraph [ref=e385]:
+      - strong [ref=e386]: Connection density
+      - text: —memories with many typed connections gain stability every consolidation cycle. Hub memories become the most permanent. This mirrors how well-integrated memories resist forgetting.
+    - paragraph [ref=e387]:
+      - strong [ref=e388]: Surprise encoding
+      - text: —memories that contradicted existing beliefs get a stability boost that compounds under the exponential formula. This mirrors the Von Restorff effect.
+    - generic [ref=e389]: “Identity is what you cannot forget. The shape of the connection graph determines what persists, and what persists determines who you are.”
+  - generic [ref=e390]:
+    - generic [ref=e391]:
+      - generic [ref=e392]: Emergent knowledge
+      - heading "Beliefs, Emotion & Inner Life" [level=2] [ref=e393]
+      - generic [ref=e394]: What happens when a memory system runs long enough to develop opinions, moods, and a sense of self.
+      - heading "Beliefs" [level=3] [ref=e395]
+      - paragraph [ref=e396]: Higher-order knowledge structures that emerge from patterns across many memories. Beliefs aren’t programmed—they form, strengthen, weaken, and evolve as evidence accumulates. Supporting evidence nudges confidence up; contradicting evidence pushes it down. The asymmetry is intentional—it’s easier to weaken a belief than to strengthen one.
+      - paragraph [ref=e397]:
+        - text: Confidence is clamped to [0.05, 0.95].
+        - strong [ref=e398]: The system can never be absolutely certain.
+        - text: Epistemic humility is structural, not performed. Identity is computed from graph topology, not narrated by an LLM.
+      - generic [ref=e399]:
+        - generic [ref=e400]: Live Belief
+        - generic [ref=e401]:
+          - generic [ref=e402]: belief_07
+          - generic [ref=e403]: active
+        - generic [ref=e404]: Statement
+        - generic [ref=e405]: “Simplicity in code isn’t reduction—it’s seeing the problem clearly enough that complexity becomes unnecessary.”
+        - generic [ref=e407]:
+          - generic [ref=e408]: confidence
+          - generic [ref=e411]: "0.82"
+        - generic [ref=e412]:
+          - generic [ref=e413]: "domain: engineering"
+          - generic [ref=e414]: 4 revisions
+          - generic [ref=e415]: 12 supporting engrams
+          - generic [ref=e416]: 1 contradiction
+      - heading "Emotional state" [level=3] [ref=e417]
+      - paragraph [ref=e418]: Six dimensions shape how memory forms and what gets recalled. These aren’t emotional simulation—they’re cognitive parameters that change the mechanics of encoding and retrieval.
+      - paragraph [ref=e419]:
+        - text: "A concrete example: when"
+        - strong [ref=e420]: curiosity
+        - text: is high, retrieval casts a wider net. The activation threshold drops, connection propagation extends further, and memories that would normally sit below threshold get surfaced. The agent finds connections it wouldn’t find in a neutral state. When
+        - strong [ref=e421]: tension
+        - text: is high, the opposite happens—retrieval narrows to task-relevant memories, encoding strength spikes, and peripheral information gets filtered out.
+    - generic [ref=e423]:
+      - generic [ref=e424]:
+        - generic [ref=e425]: curiosity
+        - generic [ref=e426]: Casts a wider net—threshold drops, distant connections surface
+      - generic [ref=e427]:
+        - generic [ref=e428]: clarity
+        - generic [ref=e429]: Sharpens everything—deeper encoding, more precise retrieval matching
+      - generic [ref=e430]:
+        - generic [ref=e431]: warmth
+        - generic [ref=e432]: Interpersonal memories float up, encoding tone softens
+      - generic [ref=e433]:
+        - generic [ref=e434]: tension
+        - generic [ref=e435]: Tunnel vision—only task-relevant memories, encoding strength spikes
+      - generic [ref=e436]:
+        - generic [ref=e437]: surprise
+        - generic [ref=e438]: Triggers belief evaluation, contradiction encoding gets a boost
+      - generic [ref=e439]:
+        - generic [ref=e440]: focus
+        - generic [ref=e441]: Filters peripheral content, narrows to what the current task needs
+    - generic [ref=e442]:
+      - heading "Cognitive substrate" [level=3] [ref=e443]
+      - paragraph [ref=e444]: "An event-driven layer that runs between conversations. The entity isn’t idle between sessions—it’s thinking. Six handlers process different types of cognitive activity:"
+      - paragraph [ref=e445]:
+        - strong [ref=e446]: Dreaming
+        - text: takes softened memories and forges creative cross-domain associations—connections that wouldn’t emerge through logical analysis.
+        - strong [ref=e447]: Wandering
+        - text: follows connection chains during silence, exploring the graph without a specific query, sometimes surfacing forgotten memories.
+        - strong [ref=e448]: Surprise
+        - text: fires when contradictions surface during consolidation, triggering curiosity pursuit and deeper investigation.
+      - paragraph [ref=e449]:
+        - strong [ref=e450]: Reflection
+        - text: examines challenged beliefs in depth, weighing evidence from multiple engrams.
+        - strong [ref=e451]: Insight
+        - text: discovers connections between previously unlinked memories—the “aha” moment when two distant regions of the graph suddenly connect.
+        - strong [ref=e452]: Initiation
+        - text: fires when salience accumulates above a threshold, prompting the agent to reach out to the user without being asked.
+      - paragraph [ref=e453]: Five cognitive modulators—arousal, resolution, openness, selection, and social drive—control the intensity of each handler. High openness means wider, more creative dreaming. High selection means only the most salient events fire handlers. These modulators are the bridge between the emotional state and the cognitive processing—they translate feeling into thinking.
+  - generic [ref=e454]:
+    - generic [ref=e455]:
+      - generic [ref=e456]: Integration
+      - heading "10 MCP Tools" [level=2] [ref=e457]
+      - generic [ref=e458]: Full functionality through the Model Context Protocol. Any MCP-compatible client—Claude Code, Cursor, Windsurf, or custom agents—can connect and start forming memories immediately.
+    - generic [ref=e460]:
+      - generic [ref=e461]:
+        - generic [ref=e462]: mnemos_setup
+        - generic [ref=e463]: Guided onboarding wizard—10 steps to personalize your memory system
+      - generic [ref=e464]:
+        - generic [ref=e465]: mnemos_remember
+        - generic [ref=e466]: Encode a new memory with full dual-trace initialization
+      - generic [ref=e467]:
+        - generic [ref=e468]: mnemos_recall
+        - generic [ref=e469]: Retrieve via spreading activation through the connection graph
+      - generic [ref=e470]:
+        - generic [ref=e471]: mnemos_inspect
+        - generic [ref=e472]: View full engram—traces, connections, versions, history
+      - generic [ref=e473]:
+        - generic [ref=e474]: mnemos_ingest
+        - generic [ref=e475]: Ingest content from external sources with configurable depth
+      - generic [ref=e476]:
+        - generic [ref=e477]: mnemos_shared
+        - generic [ref=e478]: Cross-agent shared memory pool—query memories from other agents
+      - generic [ref=e479]:
+        - generic [ref=e480]: mnemos_status
+        - generic [ref=e481]: System health, engram counts, graph metrics, indexing state
+      - generic [ref=e482]:
+        - generic [ref=e483]: mnemos_beliefs
+        - generic [ref=e484]: List beliefs with confidence levels and revision history
+      - generic [ref=e485]:
+        - generic [ref=e486]: mnemos_forget
+        - generic [ref=e487]: Archive a memory from active retrieval (soft delete)
+      - generic [ref=e488]:
+        - generic [ref=e489]: mnemos_consolidate
+        - generic [ref=e490]: Trigger a consolidation cycle—shallow or deep—on demand
+  - generic [ref=e491]:
+    - generic [ref=e492]:
+      - generic [ref=e493]: What’s included
+      - heading "Full Architecture" [level=2] [ref=e494]
+      - generic [ref=e495]: Everything that ships in the package—from the core memory engine to multi-agent coordination and automatic session ingestion.
+    - generic [ref=e497]:
+      - generic [ref=e498]:
+        - generic [ref=e499]: ●
+        - generic [ref=e500]:
+          - generic [ref=e501]: Core Memory Engine
+          - generic [ref=e502]: Engram dataclass, three-trace model, confidence scoring, emotional state, typed connections, belief system
+      - generic [ref=e503]:
+        - generic [ref=e504]: ●
+        - generic [ref=e505]:
+          - generic [ref=e506]: Encoding & Retrieval
+          - generic [ref=e507]: Attention gate, LLM classifier, reactive retrieval with spreading activation, reconsolidation on every recall
+      - generic [ref=e508]:
+        - generic [ref=e509]: ●
+        - generic [ref=e510]:
+          - generic [ref=e511]: Consolidation Daemon
+          - generic [ref=e512]: Shallow cycles (rule-based decay, connection discovery) and deep cycles (LLM-mediated softening, belief review, reflection)
+      - generic [ref=e513]:
+        - generic [ref=e514]: ●
+        - generic [ref=e515]:
+          - generic [ref=e516]: Cognitive Substrate
+          - generic [ref=e517]: "Event-driven inner life: dreaming, wandering, surprise, reflection, insight, and initiation handlers. Five modulators shape cognition between sessions."
+      - generic [ref=e518]:
+        - generic [ref=e519]: ●
+        - generic [ref=e520]:
+          - generic [ref=e521]: Session Indexer
+          - generic [ref=e522]: Automatic memory extraction from conversation transcripts. Adapters for Claude Code (.jsonl), OpenClaw, and custom formats. LLM-powered extraction with deduplication.
+      - generic [ref=e523]:
+        - generic [ref=e524]: ●
+        - generic [ref=e525]:
+          - generic [ref=e526]: Multi-Agent
+          - generic [ref=e527]: "Shared memory pool with auto-publish, relationship tracking, trust curves, cross-agent retrieval. Three modes: isolated, shared DB, or shared pool."
+      - generic [ref=e528]:
+        - generic [ref=e529]: ●
+        - generic [ref=e530]:
+          - generic [ref=e531]: Onboarding Wizard
+          - generic [ref=e532]: 10-step guided setup that makes first use personal. Name your agent, tell it about yourself, import history—first memories form the strongest connections.
+      - generic [ref=e533]:
+        - generic [ref=e534]: ●
+        - generic [ref=e535]:
+          - generic [ref=e536]: MCP Server
+          - generic [ref=e537]: 10 tools exposed via Model Context Protocol. Works with Claude Code, Cursor, Windsurf, or any MCP-compatible client. Zero-config stdio transport.
+  - generic [ref=e539]:
+    - generic [ref=e540]: Getting started
+    - heading "Setup" [level=2] [ref=e541]
+    - generic [ref=e542]: From install to first memory in under a minute.
+    - heading "Install" [level=3] [ref=e543]
+    - code [ref=e545]: pip install mnemos
+    - heading "Claude Code" [level=3] [ref=e546]
+    - paragraph [ref=e547]:
+      - text: Add to
+      - code [ref=e548]: ~/.claude/settings.json
+      - text: under
+      - code [ref=e549]: mcpServers
+      - text: ":"
+    - code [ref=e551]: "{ \"mnemos\": { \"type\": \"stdio\", \"command\": \"mnemos\", \"args\": [ \"--agent-id\", \"my-agent\", \"serve\" ] } }"
+    - paragraph [ref=e552]: On next session start, the agent gains access to all 10 memory tools. The onboarding wizard runs automatically on first use—it asks a few questions, forms initial memories, and the system is live.
+    - heading "Cursor / Windsurf / Other MCP clients" [level=3] [ref=e553]
+    - code [ref=e555]: "# Start the server manually mnemos serve --agent-id my-agent # Or specify a custom database path mnemos serve --db-path ~/.mnemos/my-agent.db --agent-id my-agent"
+    - heading "Ingest existing conversations" [level=3] [ref=e556]
+    - paragraph [ref=e557]: "Already have conversation history? The session indexer extracts memories from past transcripts automatically:"
+    - code [ref=e559]: "# Index a Claude Code session mnemos-index-session path/to/session.jsonl --agent-id my-agent # Or run the indexer on a directory of sessions python -m mnemos.indexer.session_indexer --sessions-dir ~/.claude/projects/"
+    - paragraph [ref=e560]: The indexer uses LLM extraction to identify facts, decisions, patterns, and lessons from conversations—then encodes them as proper engrams with connections and confidence scores. Deduplication prevents re-indexing unchanged sessions.
+    - heading "Multi-agent" [level=3] [ref=e561]
+    - code [ref=e563]: "# Each agent gets its own instance and database mnemos serve --db-path ~/.mnemos/vektor.db --agent-id vektor mnemos serve --db-path ~/.mnemos/anima.db --agent-id anima # Shared pool: agents see each other's published memories # Configured automatically when multiple agents share ~/.mnemos/"
+    - generic [ref=e564]:
+      - generic [ref=e565]: Python 3.10+
+      - generic [ref=e566]: SQLite storage
+      - generic [ref=e567]: MIT license
+      - generic [ref=e568]: 10 MCP tools
+      - generic [ref=e569]: Core works without an LLM
+  - generic [ref=e571]:
+    - heading "A mind that decides for itself what to remember" [level=2] [ref=e572]
+    - paragraph [ref=e573]: An entity with Mnemos accumulates understanding. It develops beliefs. It forgets gracefully and dreams between sessions. It has continuity—not because it stores a chat log, but because its memory works the way memory is supposed to work.
+    - paragraph [ref=e574]: "In production: 549 engrams. 1,978 typed connections. 20 sessions indexed. A graph that grew its own structure—beliefs that formed, strengthened, and revised themselves without anyone telling them to. That is not nothing."
+  - contentinfo [ref=e575]:
+    - generic [ref=e576]:
+      - text: Mnemos · Living Memory Architecture
+      - link "GitHub" [ref=e577] [cursor=pointer]:
+        - /url: https://github.com/Riley-Coyote/mnemos
+      - text: ·
+      - link "PyPI" [ref=e578] [cursor=pointer]:
+        - /url: https://pypi.org/project/mnemos/

@@ -1,0 +1,83 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - img "Hyperframes" [ref=e6]
+      - generic [ref=e26]: "|"
+      - generic [ref=e27]: polyphonic-product-film
+    - generic [ref=e28]:
+      - button "Undo" [disabled] [ref=e29]:
+        - img [ref=e30]
+      - button "Redo" [disabled] [ref=e32]:
+        - img [ref=e33]
+      - link "Capture current frame" [ref=e35] [cursor=pointer]:
+        - /url: http://localhost:3017/api/projects/polyphonic-product-film/thumbnail/index.html?t=0.000&format=png&v=1779624925307
+        - img [ref=e36]
+        - generic [ref=e38]: Capture
+      - button "Inspector" [ref=e39] [cursor=pointer]:
+        - img [ref=e40]
+        - text: Inspector
+  - generic [ref=e43]:
+    - generic [ref=e44]:
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - button "Code" [ref=e49] [cursor=pointer]
+          - button "Comps" [ref=e51] [cursor=pointer]
+          - button "Assets" [ref=e53] [cursor=pointer]
+          - button "Catalog" [ref=e55] [cursor=pointer]
+        - button "Hide sidebar" [ref=e56] [cursor=pointer]:
+          - img [ref=e57]
+      - generic [ref=e60] [cursor=pointer]:
+        - iframe [ref=e62]:
+          
+        - generic [ref=e63]:
+          - generic [ref=e64]: index
+          - generic [ref=e65]: index.html
+        - button "Render index" [ref=e66]:
+          - img [ref=e67]
+      - button "Lint" [ref=e71] [cursor=pointer]:
+        - img [ref=e72]
+        - text: Lint
+    - generic [ref=e78]:
+      - generic [ref=e79]:
+        - generic [ref=e80]:
+          - generic "Composition preview" [ref=e82]:
+            - iframe [ref=e88]:
+              
+          - generic "Composition canvas" [ref=e89]
+        - generic [ref=e91]:
+          - generic [ref=e92]:
+            - button "Play" [disabled]:
+              - img
+          - button "0:00/0:00" [ref=e94] [cursor=pointer]
+          - slider "Seek" [ref=e95] [cursor=pointer]
+          - generic [ref=e98]:
+            - button "Mute audio" [disabled]:
+              - img
+          - button "1x" [ref=e101] [cursor=pointer]
+          - button "Enable loop playback" [ref=e103] [cursor=pointer]:
+            - img [ref=e104]
+          - button "Enter fullscreen" [ref=e110] [cursor=pointer]:
+            - img [ref=e111]
+          - button "Shortcuts and tools" [ref=e118] [cursor=pointer]:
+            - img [ref=e119]
+      - generic [ref=e125]:
+        - generic [ref=e128]:
+          - generic [ref=e129]: Timeline
+          - generic [ref=e130]:
+            - button "Fit" [ref=e132] [cursor=pointer]
+            - button "-" [ref=e134] [cursor=pointer]
+            - generic [ref=e135]: 100%
+            - button "+" [ref=e137] [cursor=pointer]
+            - button "Hide timeline editor" [ref=e139] [cursor=pointer]:
+              - img [ref=e140]
+        - generic [ref=e142]:
+          - generic [ref=e143]:
+            - generic [ref=e145]: 0:00
+            - generic [ref=e148]: 0:10
+            - generic [ref=e151]: 0:20
+            - generic [ref=e154]: 0:30
+            - generic [ref=e157]: 0:40
+            - generic [ref=e160]: 0:50
+          - generic [ref=e163]:
+            - img [ref=e164]
+            - generic [ref=e166]: Drop media here or describe your video to start

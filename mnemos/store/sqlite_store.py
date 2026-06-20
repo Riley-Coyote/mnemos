@@ -27,7 +27,21 @@ from ..core.identity import AgentIdentity
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+VALID_FUNCTIONAL_TYPES = {
+    "working",
+    "preference",
+    "fact",
+    "decision",
+    "commitment",
+    "open_question",
+    "correction",
+    "profile",
+    "project",
+}
+
+VALID_SESSION_STATUSES = {"active", "paused", "closed"}
 
 VALID_HYPO_SOURCES = {"observed", "synthesized", "co-formed"}
 VALID_HYPO_DOMAINS = {
@@ -151,6 +165,47 @@ CREATE TABLE IF NOT EXISTS hypomnema_entries (
     last_challenged_at TEXT
 );
 
+-- Functional memory sessions: the active conversational frame
+CREATE TABLE IF NOT EXISTS memory_sessions (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL DEFAULT 'default',
+    person_id TEXT NOT NULL DEFAULT 'user',
+    project_scope TEXT NOT NULL DEFAULT 'global',
+    title TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'mcp',
+    status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'paused', 'closed')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    closed_at TEXT
+);
+
+-- Functional memory: current working context before it becomes continuity
+CREATE TABLE IF NOT EXISTS functional_memories (
+    id TEXT PRIMARY KEY,
+    session_id TEXT REFERENCES memory_sessions(id) ON DELETE SET NULL,
+    agent_id TEXT NOT NULL DEFAULT 'default',
+    person_id TEXT NOT NULL DEFAULT 'user',
+    project_scope TEXT NOT NULL DEFAULT 'global',
+    content TEXT NOT NULL,
+    memory_type TEXT NOT NULL DEFAULT 'working'
+        CHECK (memory_type IN (
+            'working', 'preference', 'fact', 'decision', 'commitment',
+            'open_question', 'correction', 'profile', 'project'
+        )),
+    confidence REAL NOT NULL DEFAULT 0.5,
+    salience REAL NOT NULL DEFAULT 0.5,
+    needs_confirmation INTEGER NOT NULL DEFAULT 0,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'agent_observed',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT,
+    is_deleted INTEGER NOT NULL DEFAULT 0,
+    promoted_to_hypomnema_id TEXT REFERENCES hypomnema_entries(id) ON DELETE SET NULL
+);
+
 -- Emotional state history
 CREATE TABLE IF NOT EXISTS emotional_state_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -217,6 +272,17 @@ CREATE INDEX IF NOT EXISTS idx_hypomnema_scope_revised
 CREATE INDEX IF NOT EXISTS idx_hypomnema_promotion
     ON hypomnema_entries(agent_id, project_scope, created_at)
     WHERE active = 1 AND graduated_to_engram_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_memory_sessions_scope
+    ON memory_sessions(agent_id, person_id, project_scope, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_functional_scope
+    ON functional_memories(agent_id, person_id, project_scope, updated_at DESC)
+    WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_functional_session
+    ON functional_memories(session_id, updated_at DESC)
+    WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_functional_review
+    ON functional_memories(agent_id, person_id, project_scope, updated_at DESC)
+    WHERE is_deleted = 0 AND needs_confirmation = 1;
 CREATE INDEX IF NOT EXISTS idx_emotional_history_agent ON emotional_state_history(agent_id, timestamp);
 """
 
@@ -715,6 +781,410 @@ class EngramStore:
         rows = conn.execute(query, params).fetchall()
         return [Belief.from_dict(dict(r)) for r in rows]
 
+    # ── Functional Memory ──
+
+    def start_memory_session(
+        self,
+        *,
+        session_id: str | None = None,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        title: str = "",
+        source: str = "mcp",
+    ) -> dict[str, Any]:
+        """Start or reopen a functional memory session."""
+        now = _utc_now()
+        sid = (session_id or "").strip() or _new_id()
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO memory_sessions(
+                id, agent_id, person_id, project_scope, title, source,
+                status, created_at, updated_at, closed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL)
+            ON CONFLICT(id) DO UPDATE SET
+                agent_id = excluded.agent_id,
+                person_id = excluded.person_id,
+                project_scope = excluded.project_scope,
+                title = CASE
+                    WHEN excluded.title != '' THEN excluded.title
+                    ELSE memory_sessions.title
+                END,
+                source = excluded.source,
+                status = 'active',
+                updated_at = excluded.updated_at,
+                closed_at = NULL
+            """,
+            (
+                sid,
+                agent_id,
+                person_id,
+                project_scope,
+                title.strip(),
+                source.strip() or "mcp",
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        session = self.get_memory_session(sid)
+        if session is None:
+            raise RuntimeError(f"Failed to start memory session: {sid}")
+        return session
+
+    def get_memory_session(self, session_id: str) -> dict[str, Any] | None:
+        """Load a functional memory session by ID."""
+        row = self._get_conn().execute(
+            "SELECT * FROM memory_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def close_memory_session(
+        self,
+        session_id: str,
+        *,
+        status: str = "closed",
+    ) -> dict[str, Any] | None:
+        """Mark a functional memory session closed or paused."""
+        if status not in VALID_SESSION_STATUSES:
+            raise ValueError(f"Unsupported session status: {status}")
+        now = _utc_now()
+        closed_at = now if status == "closed" else None
+        conn = self._get_conn()
+        conn.execute(
+            """
+            UPDATE memory_sessions
+            SET status = ?, updated_at = ?, closed_at = ?
+            WHERE id = ?
+            """,
+            (status, now, closed_at, session_id),
+        )
+        conn.commit()
+        return self.get_memory_session(session_id)
+
+    def write_functional_memory(
+        self,
+        content: str,
+        *,
+        memory_id: str | None = None,
+        session_id: str | None = None,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        memory_type: str = "working",
+        confidence: float = 0.65,
+        salience: float = 0.5,
+        needs_confirmation: bool = False,
+        pinned: bool = False,
+        source: str = "agent_observed",
+        metadata: dict[str, Any] | None = None,
+        expires_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Write or update a functional memory entry.
+
+        Functional memory is the live, revisable working layer. It is useful
+        for current task state, open questions, corrections, commitments, and
+        preferences that have not yet earned hypomnema or engram status.
+        """
+        if memory_type not in VALID_FUNCTIONAL_TYPES:
+            raise ValueError(f"Unsupported functional memory type: {memory_type}")
+        if not content.strip():
+            raise ValueError("Functional memory content cannot be empty")
+
+        now = _utc_now()
+        fid = (memory_id or "").strip() or _new_id()
+        session = (session_id or "").strip() or None
+        conn = self._get_conn()
+        if session and self.get_memory_session(session) is None:
+            self.start_memory_session(
+                session_id=session,
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+                title="Recovered session",
+                source=source,
+            )
+
+        conn.execute(
+            """
+            INSERT INTO functional_memories(
+                id, session_id, agent_id, person_id, project_scope, content,
+                memory_type, confidence, salience, needs_confirmation, pinned,
+                source, metadata_json, created_at, updated_at, expires_at,
+                is_deleted
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            ON CONFLICT(id) DO UPDATE SET
+                session_id = excluded.session_id,
+                agent_id = excluded.agent_id,
+                person_id = excluded.person_id,
+                project_scope = excluded.project_scope,
+                content = excluded.content,
+                memory_type = excluded.memory_type,
+                confidence = excluded.confidence,
+                salience = excluded.salience,
+                needs_confirmation = excluded.needs_confirmation,
+                pinned = excluded.pinned,
+                source = excluded.source,
+                metadata_json = excluded.metadata_json,
+                updated_at = excluded.updated_at,
+                expires_at = excluded.expires_at,
+                is_deleted = 0
+            """,
+            (
+                fid,
+                session,
+                agent_id,
+                person_id,
+                project_scope,
+                content.strip(),
+                memory_type,
+                _clamp(confidence),
+                _clamp(salience),
+                int(needs_confirmation),
+                int(pinned),
+                source.strip() or "agent_observed",
+                _encode_json(metadata or {}),
+                now,
+                now,
+                expires_at,
+            ),
+        )
+        if session:
+            conn.execute(
+                "UPDATE memory_sessions SET updated_at = ? WHERE id = ?",
+                (now, session),
+            )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM functional_memories WHERE id = ?",
+            (fid,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(f"Failed to write functional memory: {fid}")
+        return self._hydrate_functional_row(dict(row))
+
+    def get_functional_memory(
+        self,
+        memory_id: str,
+        *,
+        include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        """Load a functional memory by ID."""
+        sql = "SELECT * FROM functional_memories WHERE id = ?"
+        if not include_deleted:
+            sql += " AND is_deleted = 0"
+        row = self._get_conn().execute(sql, (memory_id,)).fetchone()
+        if row is None:
+            return None
+        return self._hydrate_functional_row(dict(row))
+
+    def load_functional_memories(
+        self,
+        query: str = "",
+        *,
+        session_id: str | None = None,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        memory_type: str | None = None,
+        needs_confirmation_only: bool = False,
+        include_deleted: bool = False,
+        limit: int = 12,
+    ) -> list[dict[str, Any]]:
+        """Search functional memories for the current scope/session."""
+        if memory_type and memory_type not in VALID_FUNCTIONAL_TYPES:
+            raise ValueError(f"Unsupported functional memory type: {memory_type}")
+
+        sql = (
+            "SELECT * FROM functional_memories "
+            "WHERE agent_id = ? AND person_id = ? AND project_scope = ?"
+        )
+        params: list[Any] = [agent_id, person_id, project_scope]
+        if session_id:
+            sql += " AND session_id = ?"
+            params.append(session_id)
+        if memory_type:
+            sql += " AND memory_type = ?"
+            params.append(memory_type)
+        if needs_confirmation_only:
+            sql += " AND needs_confirmation = 1"
+        if not include_deleted:
+            sql += " AND is_deleted = 0"
+        sql += " ORDER BY pinned DESC, updated_at DESC LIMIT 200"
+
+        rows = self._get_conn().execute(sql, params).fetchall()
+        scored: list[dict[str, Any]] = []
+        for row in rows:
+            item = self._hydrate_functional_row(dict(row))
+            if query:
+                score = (
+                    _lexical_score(query, item["content"]) * 0.5
+                    + float(item["confidence"]) * 0.2
+                    + float(item["salience"]) * 0.25
+                    + (0.05 if item["pinned"] else 0.0)
+                )
+            else:
+                score = (
+                    float(item["confidence"]) * 0.35
+                    + float(item["salience"]) * 0.45
+                    + (0.15 if item["pinned"] else 0.0)
+                    + (0.05 if item["needs_confirmation"] else 0.0)
+                )
+            item["score"] = round(score, 4)
+            scored.append(item)
+
+        scored.sort(
+            key=lambda item: (item["score"], item["pinned"], item["updated_at"]),
+            reverse=True,
+        )
+        return scored[: max(1, limit)]
+
+    def close_session_to_hypomnema(
+        self,
+        session_id: str,
+        *,
+        synthesis: str = "",
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> dict[str, Any]:
+        """Close a session and compress active functional memories into hypomnema."""
+        session = self.get_memory_session(session_id)
+        if session is None:
+            raise KeyError(f"Functional memory session not found: {session_id}")
+
+        memories = self.load_functional_memories(
+            "",
+            session_id=session_id,
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope=project_scope,
+            limit=50,
+        )
+        if synthesis.strip():
+            content = synthesis.strip()
+        else:
+            chosen = memories[:8]
+            details = "; ".join(
+                f"{m['memory_type']}: {m['content']}" for m in chosen
+            )
+            title = session.get("title") or session_id
+            content = (
+                f"Session continuity from {title}: {details}"
+                if details
+                else f"Session {title} closed without durable functional memories."
+            )
+
+        confidence = (
+            sum(float(m["confidence"]) for m in memories) / len(memories)
+            if memories
+            else 0.55
+        )
+        salience = max((float(m["salience"]) for m in memories), default=0.45)
+        hypomnema_id = None
+        if memories or synthesis.strip():
+            hypomnema_id = self.write_hypomnema_entry(
+                content,
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+                source="synthesized",
+                density=0.72,
+                domain="situational",
+                tags=["session-close", "functional-memory", project_scope],
+                confidence=confidence,
+                salience=salience,
+                related_session_id=session_id,
+            )
+
+        now = _utc_now()
+        conn = self._get_conn()
+        if hypomnema_id:
+            conn.execute(
+                """
+                UPDATE functional_memories
+                SET is_deleted = 1,
+                    promoted_to_hypomnema_id = ?,
+                    updated_at = ?
+                WHERE session_id = ? AND is_deleted = 0
+                """,
+                (hypomnema_id, now, session_id),
+            )
+        conn.execute(
+            """
+            UPDATE memory_sessions
+            SET status = 'closed', updated_at = ?, closed_at = ?
+            WHERE id = ?
+            """,
+            (now, now, session_id),
+        )
+        conn.commit()
+        return {
+            "session": self.get_memory_session(session_id),
+            "hypomnema_id": hypomnema_id,
+            "functional_memories": len(memories),
+            "content": content,
+        }
+
+    def get_functional_stats(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str | None = None,
+        project_scope: str | None = None,
+    ) -> dict[str, int]:
+        """Count active functional memory and session state."""
+        where = ["agent_id = ?"]
+        params: list[Any] = [agent_id]
+        if person_id is not None:
+            where.append("person_id = ?")
+            params.append(person_id)
+        if project_scope is not None:
+            where.append("project_scope = ?")
+            params.append(project_scope)
+        where_sql = " AND ".join(where)
+        conn = self._get_conn()
+        row = conn.execute(
+            f"""
+            SELECT
+              COUNT(*) AS total,
+              SUM(CASE WHEN is_deleted = 0 THEN 1 ELSE 0 END) AS active,
+              SUM(CASE WHEN is_deleted = 0 AND pinned = 1 THEN 1 ELSE 0 END) AS pinned,
+              SUM(CASE WHEN is_deleted = 0 AND needs_confirmation = 1 THEN 1 ELSE 0 END) AS needs_confirmation
+            FROM functional_memories
+            WHERE {where_sql}
+            """,
+            params,
+        ).fetchone()
+        session_row = conn.execute(
+            f"""
+            SELECT
+              SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
+              SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) AS closed
+            FROM memory_sessions
+            WHERE {where_sql}
+            """,
+            params,
+        ).fetchone()
+        return {
+            "functional_total": int(row["total"] or 0),
+            "functional_active": int(row["active"] or 0),
+            "functional_pinned": int(row["pinned"] or 0),
+            "functional_needs_confirmation": int(row["needs_confirmation"] or 0),
+            "functional_sessions_active": int(session_row["active"] or 0),
+            "functional_sessions_closed": int(session_row["closed"] or 0),
+        }
+
+    @staticmethod
+    def _hydrate_functional_row(row: dict[str, Any]) -> dict[str, Any]:
+        row["metadata"] = _decode_json(row.pop("metadata_json", "{}"), {})
+        row["needs_confirmation"] = bool(row["needs_confirmation"])
+        row["pinned"] = bool(row["pinned"])
+        row["is_deleted"] = bool(row["is_deleted"])
+        return row
+
     # ── Hypomnema ──
 
     def write_hypomnema_entry(
@@ -1188,6 +1658,9 @@ class EngramStore:
 
         # Hypomnema counts use the default person/project scope for status.
         stats.update(self.get_hypomnema_stats(agent_id=agent_id))
+
+        # Functional memory counts cover active working context and review load.
+        stats.update(self.get_functional_stats(agent_id=agent_id))
 
         # Accessibility distribution
         rows = conn.execute(

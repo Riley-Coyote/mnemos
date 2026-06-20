@@ -1,0 +1,41 @@
+[     148ms] [INFO] %c[HyperFrames]%c Anonymous studio usage analytics enabled. Disable: localStorage.setItem('hyperframes-studio:telemetryDisabled','1') (then reload). color:#7c3aed;font-weight:bold color:inherit @ http://localhost:3018/assets/index-DmiO2Ufp.js:48
+[     547ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview/comp/index.html:0
+[     591ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview?__hf_shader_capture_scale=1&__hf_shader_loading=player:0
+[    1013ms] UnsupportedInputFormatError: Input has an unsupported or unrecognizable format.
+    at http://localhost:3018/assets/index-DSLrl2tB.js:281:2973
+    at async _s._getTrackBackings (http://localhost:3018/assets/index-DSLrl2tB.js:281:4696)
+    at async _s.getTracks (http://localhost:3018/assets/index-DSLrl2tB.js:281:3845)
+    at async _s.getDurationFromMetadata (http://localhost:3018/assets/index-DSLrl2tB.js:281:3628)
+    at async y$ (http://localhost:3018/assets/index-DmiO2Ufp.js:67:42985)
+[    1085ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:3018/api/projects/mnemos-chat-explainer/waveform/assets/threshold-room-desktop.png:0
+[    6338ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview?__hf_shader_capture_scale=1&__hf_shader_loading=player&_t=1779655977064:0
+[    7530ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview?__hf_shader_capture_scale=1&__hf_shader_loading=player&_t=1779655982197:0
+[    7563ms] UnsupportedInputFormatError: Input has an unsupported or unrecognizable format.
+    at http://localhost:3018/assets/index-DSLrl2tB.js:281:2973
+    at async _s._getTrackBackings (http://localhost:3018/assets/index-DSLrl2tB.js:281:4696)
+    at async _s.getTracks (http://localhost:3018/assets/index-DSLrl2tB.js:281:3845)
+    at async _s.getDurationFromMetadata (http://localhost:3018/assets/index-DSLrl2tB.js:281:3628)
+    at async y$ (http://localhost:3018/assets/index-DmiO2Ufp.js:67:42985)
+[    8667ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview?__hf_shader_capture_scale=1&__hf_shader_loading=player&_t=1779655983641:0
+[   10464ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview?__hf_shader_capture_scale=1&__hf_shader_loading=player&_t=1779655984547:0
+[   11537ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview?__hf_shader_capture_scale=1&__hf_shader_loading=player&_t=1779655986247:0
+[   12040ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview?__hf_shader_capture_scale=1&__hf_shader_loading=player&_t=1779655987315:0
+[   12872ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview?__hf_shader_capture_scale=1&__hf_shader_loading=player&_t=1779655987866:0
+[   14773ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview?__hf_shader_capture_scale=1&__hf_shader_loading=player&_t=1779655988791:0
+[   20412ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview?__hf_shader_capture_scale=1&__hf_shader_loading=player&_t=1779655995432:0
+[   20984ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview?__hf_shader_capture_scale=1&__hf_shader_loading=player&_t=1779655996128:0
+[   27801ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview?__hf_shader_capture_scale=1&__hf_shader_loading=player&_t=1779655999931:0
+[   28087ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview?__hf_shader_capture_scale=1&__hf_shader_loading=player&_t=1779656003612:0
+[   28169ms] UnsupportedInputFormatError: Input has an unsupported or unrecognizable format.
+    at http://localhost:3018/assets/index-DSLrl2tB.js:281:2973
+    at async _s._getTrackBackings (http://localhost:3018/assets/index-DSLrl2tB.js:281:4696)
+    at async _s.getTracks (http://localhost:3018/assets/index-DSLrl2tB.js:281:3845)
+    at async _s.getDurationFromMetadata (http://localhost:3018/assets/index-DSLrl2tB.js:281:3628)
+    at async y$ (http://localhost:3018/assets/index-DmiO2Ufp.js:67:42985)
+[   30865ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:3018/api/projects/mnemos-chat-explainer/preview?__hf_shader_capture_scale=1&__hf_shader_loading=player&_t=1779656005893:0
+[   31223ms] UnsupportedInputFormatError: Input has an unsupported or unrecognizable format.
+    at http://localhost:3018/assets/index-DSLrl2tB.js:281:2973
+    at async _s._getTrackBackings (http://localhost:3018/assets/index-DSLrl2tB.js:281:4696)
+    at async _s.getTracks (http://localhost:3018/assets/index-DSLrl2tB.js:281:3845)
+    at async _s.getDurationFromMetadata (http://localhost:3018/assets/index-DSLrl2tB.js:281:3628)
+    at async y$ (http://localhost:3018/assets/index-DmiO2Ufp.js:67:42985)

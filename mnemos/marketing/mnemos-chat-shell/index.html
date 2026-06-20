@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mnemos Chat Shell Prototype</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%230e0e11'/%3E%3Cpath d='M18 18h28v28H18z' fill='none' stroke='%23f4f3f0' stroke-opacity='.72' stroke-width='3'/%3E%3Cpath d='M25 32h14M32 25v14' stroke='%23f4f3f0' stroke-opacity='.72' stroke-width='3'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true">
+      <div class="grain"></div>
+      <div class="grid-field"></div>
+      <div class="signal-line signal-line-a"></div>
+      <div class="signal-line signal-line-b"></div>
+    </div>
+
+    <main class="shell" data-active-wing="origin">
+      <aside class="side-rail" aria-label="Mnemos surface map">
+        <div class="brand-block">
+          <p class="eyebrow">mnemos.chat</p>
+          <h1>one page that can summon the whole project</h1>
+        </div>
+
+        <nav class="wing-map" aria-label="Explore Mnemos">
+          <button class="map-node is-active" data-intent="sanctuary" type="button">
+            <span class="node-mark"></span>
+            <span>
+              <strong>The Sanctuary</strong>
+              <small>resident continuity</small>
+            </span>
+          </button>
+          <button class="map-node" data-intent="legation" type="button">
+            <span class="node-mark"></span>
+            <span>
+              <strong>The Legation</strong>
+              <small>public record</small>
+            </span>
+          </button>
+          <button class="map-node" data-intent="architecture" type="button">
+            <span class="node-mark"></span>
+            <span>
+              <strong>Architecture</strong>
+              <small>memory substrate</small>
+            </span>
+          </button>
+          <button class="map-node" data-intent="research" type="button">
+            <span class="node-mark"></span>
+            <span>
+              <strong>Research</strong>
+              <small>field notes</small>
+            </span>
+          </button>
+        </nav>
+
+        <section class="trace-panel" aria-label="Current path">
+          <p class="eyebrow">current path</p>
+          <div id="traceList" class="trace-list">
+            <span>threshold received</span>
+          </div>
+        </section>
+      </aside>
+
+      <section class="conversation-stage" aria-label="Mnemos guide">
+        <header class="stage-top">
+          <div>
+            <p class="eyebrow">guide surface</p>
+            <h2>ask for any wing, and the page builds the answer in place.</h2>
+          </div>
+          <button id="resetButton" class="quiet-button" type="button">Reset trail</button>
+        </header>
+
+        <div id="messages" class="messages" aria-live="polite"></div>
+
+        <form id="chatForm" class="composer" autocomplete="off">
+          <label class="sr-only" for="chatInput">Ask Mnemos</label>
+          <input
+            id="chatInput"
+            name="chatInput"
+            type="text"
+            placeholder="Ask about Sanctuary, Legation, architecture, or research..."
+          />
+          <button type="submit">Send</button>
+        </form>
+      </section>
+
+      <aside class="context-rail" aria-label="Live context">
+        <section class="context-module">
+          <p class="eyebrow">live model</p>
+          <div class="pulse-readout">
+            <span>4</span>
+            <small>wings available</small>
+          </div>
+          <p>
+            This prototype simulates a chat-native site where each answer can
+            become a reader, dashboard, diagram, preview, or route handoff.
+          </p>
+        </section>
+
+        <section class="context-module compact">
+          <p class="eyebrow">artifact behavior</p>
+          <ul class="micro-list">
+            <li>Teach me: guided explanation</li>
+            <li>Show me: visual or data artifact</li>
+            <li>Open full surface: route handoff</li>
+          </ul>
+        </section>
+      </aside>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

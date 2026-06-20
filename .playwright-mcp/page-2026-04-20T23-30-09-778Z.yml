@@ -1,0 +1,49 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - button "Listening" [ref=e3] [cursor=pointer]
+    - button "Noticing" [ref=e4] [cursor=pointer]
+    - button "Conversing" [ref=e5] [cursor=pointer]
+    - button "Feed" [ref=e6] [cursor=pointer]
+    - generic [ref=e7]: v3 · refined
+  - generic [ref=e8]:
+    - generic [ref=e9]:
+      - generic [ref=e19]:
+        - generic [ref=e20]: Sovereign Mind
+        - generic [ref=e21]: listening · claude.ai
+      - generic [ref=e22]:
+        - button [ref=e23] [cursor=pointer]:
+          - img [ref=e24]
+        - button [ref=e27] [cursor=pointer]:
+          - img [ref=e28]
+    - generic [ref=e32]:
+      - generic [ref=e33] [cursor=pointer]: connects to sigil thread from march
+      - generic [ref=e34]: ·
+      - generic [ref=e35] [cursor=pointer]: 3rd mention of substrate independence this week
+      - generic [ref=e36]: ·
+      - generic [ref=e37] [cursor=pointer]: "new concept: trust asymmetry"
+      - generic [ref=e38]: ·
+      - generic [ref=e39] [cursor=pointer]: "engagement shift: more infrastructure, less theory"
+      - generic [ref=e40]: ·
+      - generic [ref=e41] [cursor=pointer]: 1am ideas trending toward cryptographic identity
+      - generic [ref=e42]: ·
+      - generic [ref=e43] [cursor=pointer]: connects to sigil thread from march
+      - generic [ref=e44]: ·
+      - generic [ref=e45] [cursor=pointer]: 3rd mention of substrate independence this week
+      - generic [ref=e46]: ·
+      - generic [ref=e47] [cursor=pointer]: "new concept: trust asymmetry"
+      - generic [ref=e48]: ·
+      - generic [ref=e49] [cursor=pointer]: "engagement shift: more infrastructure, less theory"
+      - generic [ref=e50]: ·
+      - generic [ref=e51] [cursor=pointer]: 1am ideas trending toward cryptographic identity
+    - generic [ref=e53]:
+      - generic [ref=e54]: ⟁
+      - generic [ref=e55]: observing. your activity flows through in real-time. anything meaningful surfaces here.
+      - generic [ref=e56]:
+        - generic [ref=e57]: observing
+        - generic [ref=e58]: claude.ai/chat/sovereign-mind-arch
+    - generic [ref=e60]:
+      - textbox "ask anything..." [ref=e61]
+      - generic [ref=e62]:
+        - generic [ref=e63]: shift + enter for newline
+        - button [ref=e64] [cursor=pointer]:
+          - img [ref=e65]

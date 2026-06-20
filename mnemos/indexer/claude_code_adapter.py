@@ -124,6 +124,18 @@ def index_session(
             if key:
                 break
 
+    # Claude Code sessions are subscription-authed: route memory extraction
+    # through the local `claude` CLI (no API key) rather than the OpenRouter
+    # path, which fails with 401 when no live OpenRouter key is available.
+    llm_client = None
+    try:
+        from mnemos.llm import ClaudeCLIClient
+        llm_client = ClaudeCLIClient(
+            model=os.environ.get("MNEMOS_MODEL") or "claude-haiku-4-5-20251001"
+        )
+    except Exception:
+        llm_client = None
+
     indexer = SessionIndexer(
         agent_id=agent_id,
         db_path=db,
@@ -131,6 +143,7 @@ def index_session(
         user_name="Riley",
         agent_name="Claude",
         openrouter_api_key=key,
+        llm_client=llm_client,
         known_projects=["claude-field", "polyphonic", "sanctuary", "vektor", "anima", "mnemos"],
         active_projects=["claude-field"],
     )

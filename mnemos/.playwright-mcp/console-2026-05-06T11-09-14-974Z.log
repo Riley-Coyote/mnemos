@@ -1,0 +1,2 @@
+[     119ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000
+[     180ms] [WARNING] THREE.WebGLShadowMap: PCFSoftShadowMap has been deprecated. Using PCFShadowMap instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000

@@ -99,6 +99,64 @@ class AnthropicClient:
         return response.content[0].text
 
 
+class ClaudeCLIClient:
+    """LLM client that routes through the local ``claude`` CLI.
+
+    Uses Claude Code subscription auth (no API key, no per-token API billing).
+    Each call spawns a one-shot ``claude -p`` process, so it is slower than the
+    API and meant for background work (consolidation / reflection), not hot
+    paths. Select with ``MNEMOS_LLM_PROVIDER=claude-cli``.
+    """
+
+    def __init__(
+        self,
+        model: str = "claude-haiku-4-5-20251001",
+        claude_bin: str | None = None,
+        timeout: int = 120,
+    ) -> None:
+        import shutil
+
+        self._model = model
+        self._bin = (
+            claude_bin
+            or os.environ.get("CLAUDE_BIN")
+            or shutil.which("claude")
+            or os.path.expanduser("~/.local/bin/claude")
+        )
+        self._timeout = timeout
+
+    def _run(self, prompt: str) -> str:
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                [
+                    self._bin,
+                    "--model", self._model,
+                    "--dangerously-skip-permissions",
+                    "-p", prompt,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
+            )
+            return (result.stdout or "").strip()
+        except Exception:
+            return ""
+
+    def complete(self, prompt: str) -> str:
+        return self._run(prompt)
+
+    def structured_complete(
+        self,
+        system: str,
+        user: str,
+        temperature: float = 0.0,
+        max_tokens: int = 2000,
+    ) -> str:
+        return self._run(f"{system}\n\n{user}")
+
+
 class OpenRouterClient:
     """LLM client using the OpenRouter API (any model).
 
@@ -297,6 +355,9 @@ def create_client() -> "LLMClient | None":
     forced = os.environ.get("MNEMOS_LLM_PROVIDER", "").lower()
     if not forced:
         forced = _load_env_key("MNEMOS_LLM_PROVIDER").lower()
+
+    if forced in ("claude-cli", "claude_cli", "subscription"):
+        return ClaudeCLIClient(model=model_override or "claude-haiku-4-5-20251001")
 
     if forced == "openai":
         key = _load_env_key("OPENAI_API_KEY")

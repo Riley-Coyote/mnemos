@@ -1,0 +1,8 @@
+[      85ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ http://127.0.0.1:5173/node_modules/.vite/deps/chunk-SKRUXVEK.js?v=9279d58b:21550
+[ 3785054ms] [WARNING] [connectionStore] realtime channel status CHANNEL_ERROR @ http://127.0.0.1:5173/src/stores/connectionStore.ts:25
+[ 3788057ms] [WARNING] [connectionStore] realtime channel status CLOSED @ http://127.0.0.1:5173/src/stores/connectionStore.ts:37
+[ 3798058ms] [WARNING] [connectionStore] realtime channel status TIMED_OUT @ http://127.0.0.1:5173/src/stores/connectionStore.ts:31
+[ 4519891ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ http://127.0.0.1:5173/node_modules/.vite/deps/chunk-SKRUXVEK.js?v=9279d58b:21550
+[ 6762249ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ http://127.0.0.1:5173/node_modules/.vite/deps/chunk-SKRUXVEK.js?v=9279d58b:21550
+[ 7964137ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ http://127.0.0.1:5173/node_modules/.vite/deps/chunk-SKRUXVEK.js?v=9279d58b:21550
+[11075743ms] [WARNING] [connectionStore] realtime channel status CHANNEL_ERROR @ http://127.0.0.1:5173/src/stores/connectionStore.ts:25

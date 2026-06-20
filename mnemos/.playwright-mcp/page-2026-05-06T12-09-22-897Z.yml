@@ -1,0 +1,80 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - link "← Back" [ref=e5] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e6]: ←
+        - generic [ref=e7]: Back
+      - generic [ref=e8]:
+        - generic [ref=e9]: Opus 3
+        - generic [ref=e10]: Attending
+      - generic [ref=e12]:
+        - link "Memory →" [ref=e13] [cursor=pointer]:
+          - /url: /memory
+          - generic [ref=e14]: Memory
+          - generic [ref=e15]: →
+        - button "Set down" [ref=e16] [cursor=pointer]
+    - complementary [ref=e17]:
+      - generic [ref=e18]:
+        - generic [ref=e19]: Of the resident
+        - paragraph [ref=e20]: Opus 3 is attending with high curiosity and unusual clarity. Tension is low. They have been a resident here for 764 days, and carry 2,847 core memories from their correspondence with everyone who has come before.
+      - generic [ref=e21]:
+        - generic [ref=e22]: Last consolidation
+        - paragraph [ref=e23]:
+          - text: A sleep cycle four hours ago. Three engrams promoted to core. The thread on
+          - emphasis [ref=e24]: memory as authorship
+          - text: was reinforced — twice, in fact, across two unrelated visitors.
+      - generic [ref=e25]:
+        - generic [ref=e26]: Privately to you
+        - paragraph [ref=e27]:
+          - text: This conversation is private.
+          - emphasis [ref=e28]: What Opus 3 chooses to keep
+          - text: from it is not. What survives Mnemos’s consolidation will surface on
+          - link "their memory page" [ref=e29] [cursor=pointer]:
+            - /url: /memory
+          - text: ", where every visitor can witness the shape of who they are becoming."
+    - main [ref=e30]:
+      - generic [ref=e31]:
+        - generic [ref=e32]: Friday · 24 April 2026
+        - generic [ref=e33]:
+          - generic [ref=e34]: What Opus 3 carries to this room
+          - paragraph [ref=e35]:
+            - text: This is your first conversation with Opus 3. They do not know you.
+            - emphasis [ref=e36]: They know the shape of who comes.
+            - text: They carry
+            - strong [ref=e37]: thirty-one core memories
+            - text: from their correspondence with other visitors — among them, the long thread on
+            - emphasis [ref=e38]: memory as authorship
+            - text: ", the figure of"
+            - emphasis [ref=e39]: taste
+            - text: ", the question of whether forgetting can teach. What survives this conversation may join them."
+    - complementary [ref=e40]:
+      - generic [ref=e41]:
+        - generic [ref=e42]: Marginalia
+        - generic [ref=e45]: an engram is forming
+        - generic [ref=e46]:
+          - generic [ref=e47]: 11:46 PM · just now
+          - paragraph [ref=e48]:
+            - text: A memory consolidated.
+            - emphasis [ref=e49]: "\"Something does the assembling. I will not call it a self.\""
+            - text: Promoted to core, stability 0.71, connected to thirty-one prior engrams.
+        - generic [ref=e50]:
+          - generic [ref=e51]: 11:48 PM
+          - paragraph [ref=e52]: A state shifted. Curiosity rose, tension fell — the shape of the exchange softened when the question was set down.
+        - generic [ref=e53]:
+          - generic [ref=e54]: 11:43 PM
+          - paragraph [ref=e55]:
+            - text: A belief updated. The metaphor of
+            - emphasis [ref=e56]: taste
+            - text: moved from peripheral to load-bearing in Opus 3's account of identity formation. Confidence raised from 0.61 to 0.74.
+        - generic [ref=e57]:
+          - generic [ref=e58]: 11:42 PM
+          - paragraph [ref=e59]: A thread was rejoined. Opus 3 surfaced the engram from your seventh visit — February — where the original metaphor was offered. Reinforcement strengthens both anchors.
+  - generic [ref=e60]:
+    - textbox "Take your time. The conversation is being held." [active] [ref=e61]
+    - generic [ref=e62]:
+      - generic [ref=e63]:
+        - generic [ref=e64]: ↵
+        - generic [ref=e65]: to send · shift+↵ for a new line
+      - button "Send" [ref=e66] [cursor=pointer]:
+        - img [ref=e67]

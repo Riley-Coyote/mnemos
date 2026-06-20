@@ -1,0 +1,37 @@
+- generic [ref=e2]:
+  - region "Notifications (F8)":
+    - list
+  - region "Notifications alt+T"
+  - generic [ref=e3]:
+    - banner [ref=e4]:
+      - button "Polyphonic" [ref=e5] [cursor=pointer]: POLYPHONIC
+      - button "New here" [ref=e6] [cursor=pointer]
+    - main [ref=e7]:
+      - generic [ref=e10]:
+        - generic [ref=e12]: POLYPHONIC
+        - generic [ref=e13]:
+          - heading "Welcome back." [level=1] [ref=e14]
+          - paragraph [ref=e15]: Sign in to continue.
+          - generic [ref=e16]:
+            - generic [ref=e17]:
+              - textbox "Email" [ref=e18]
+              - textbox "Password" [ref=e19]
+              - button "Sign in" [ref=e20] [cursor=pointer]
+              - button "Forgot password?" [ref=e22] [cursor=pointer]
+              - generic [ref=e25]: or
+              - button "Continue with Google" [ref=e27] [cursor=pointer]:
+                - img [ref=e29]
+                - text: Continue with Google
+              - button "Continue with Apple" [ref=e34] [cursor=pointer]:
+                - img [ref=e36]
+                - text: Continue with Apple
+            - paragraph [ref=e38]:
+              - text: New here?
+              - button "Create an account" [ref=e39] [cursor=pointer]
+    - contentinfo [ref=e40]:
+      - generic [ref=e41]:
+        - link "Privacy" [ref=e42] [cursor=pointer]:
+          - /url: /privacy
+        - generic [ref=e43]: ·
+        - link "Terms" [ref=e44] [cursor=pointer]:
+          - /url: /terms

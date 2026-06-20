@@ -1,126 +1,69 @@
-# Agents — Multi-Agent Configuration
+# Agent Memory Operating Guide
 
 <!--
-AGENTS.md defines the multi-agent setup for your system. If you're running a single
-agent, you can skip most of this — but the Observer section is still useful.
-
-This file is read by the bootstrap script and by agents themselves to understand
-the system topology.
-
-Replace {placeholders} with actual values.
+This file tells {agent_name} how to use Mnemos as a complete single-agent
+memory system. Multi-agent/shared-memory patterns are intentionally out of
+scope for this template.
 -->
 
-## Primary Agent
-
-<!--
-The main agent that handles most user interactions.
--->
+## Agent
 
 | Field | Value |
 |-------|-------|
-| **Name** | {agent_name} |
-| **Agent ID** | {agent_id} |
-| **Database** | `{db_path}` |
-| **Workspace** | `{workspace}` |
-| **Model** | {model} |
-| **Role** | Primary assistant |
+| Name | {agent_name} |
+| Agent ID | {agent_id} |
+| Human | {user_name} |
+| Workspace | `{workspace}` |
+| Database | `{db_path}` |
+| Model | {model} |
 
-## Specialist Agents
+## Memory Layers
 
-<!--
-Additional agents with specific roles. Each gets its own database,
-identity files, and cron suite.
+Use Mnemos in this order:
 
-Example specialists:
-- Code reviewer agent
-- Research agent
-- Creative writing agent
-- DevOps agent
--->
+1. **Functional memory** is the live working set for the current session, task, correction, commitment, or open question.
+2. **Hypomnema** is scoped continuity for this human/project relationship. It survives sessions and can be revised before promotion.
+3. **Mnemos engrams** are the durable long-term memory graph. They form connections, beliefs, decay, and reconsolidate through use.
+4. **Substrate** is optional background maintenance: decay, reflection, consolidation, and review cues.
 
-_No specialist agents configured._
+## Session Protocol
 
-<!--
-### Example: Research Agent
+At the start of a meaningful work block:
 
-| Field | Value |
-|-------|-------|
-| **Name** | researcher |
-| **Agent ID** | researcher |
-| **Database** | `~/.mnemos/researcher.db` |
-| **Workspace** | `~/researcher` |
-| **Model** | claude-sonnet-4-5 |
-| **Role** | Deep research and analysis |
--->
+1. Call `mnemos_session_start` with this agent ID, the human/person ID, and the project scope.
+2. Call `mnemos_context_packet` with the user's first meaningful cue.
+3. Read the packet before answering. Treat functional memory as the most immediate context, hypomnema as revisable continuity, and Mnemos as long-term evidence.
 
-## Communication Protocol
+During the session:
 
-<!--
-How agents communicate with each other. The primary mechanism is the
-shared memory pool (mnemos.multiagent.shared_pool) and the cross-agent
-bridge (mnemos.multiagent.bridge).
--->
+- Use `mnemos_functional_update` for task state, preferences, corrections, commitments, and open questions.
+- Use `mnemos_hypomnema_write` when something should survive beyond the session but may still need revision.
+- Use `mnemos_hypomnema_revise` when the human corrects or sharpens existing continuity.
+- Use `mnemos_remember` only for stable decisions, lessons, facts, or experiences that belong in long-term memory.
+- Use `mnemos_review_queue` when the human asks what needs confirmation.
+- Use `mnemos_visual_snapshot` when the human wants to see the memory system inline.
 
-### Shared Memory Pool
-- Location: `~/.mnemos/shared.db`
-- Agents publish memories with `shared` or `public` visibility
-- All agents can read the shared pool
-- Conflict resolution: confidence > strength > recency
+At the end of a work block:
 
-### Cross-Agent Context
-- Location: `~/.mnemos/shared/`
-- Each agent's `active-context.md` is synced here
-- Combined view in `cross-agent-context.md`
-- Synced every 2 hours by the cross-agent bridge cron
+1. Call `mnemos_session_close`.
+2. Let it compress active functional memory into hypomnema.
+3. Leave promotion into Mnemos explicit unless the continuity is stable and clearly useful.
 
-### Direct Messaging
-- Agents can leave messages for each other via shared memory pool
-- Tag messages with `cross-agent-message` and `to:{agent_name}`
-- The receiving agent will pick these up during context sync
+## Review Rules
 
-## Escalation Chain
+- If a memory is inferred, mark it as needing confirmation.
+- If a memory is personal, relationship-scoped, or project-scoped, keep it in hypomnema before promoting it.
+- If the human corrects a memory, update functional memory immediately and revise the hypomnema entry if one exists.
+- If two memories conflict, prefer the most recent explicit human correction and leave a review note.
 
-<!--
-When an agent encounters something beyond its capabilities, where does it go?
-Define the escalation path.
--->
+## Visual Checks
 
-1. Agent attempts to handle the task independently
-2. If blocked, checks shared context for help from other agents
-3. If still blocked, publishes a memory with tag `needs-help` to shared pool
-4. If urgent, flags for user attention in the next morning brief
+Use `mnemos_visual_snapshot` to show the current architecture:
 
-## Observer
+- functional memory count and active session
+- hypomnema scope and promotion candidates
+- Mnemos graph size
+- identity signals and beliefs
+- review queue
 
-<!--
-The Observer is a lightweight process that maintains continuity. It's not a
-full agent — it runs as an isolated cron session with a single purpose:
-keep active-context.md current.
-
-Every agent should have an Observer configured via the observer-context-sync cron.
--->
-
-### Observer Spawn Template
-
-```json
-{
-  "name": "observer-{agent_name}",
-  "schedule": "*/30 * * * *",
-  "model": "claude-sonnet-4-5",
-  "timeout": 300,
-  "sessionTarget": "isolated",
-  "purpose": "Maintain active-context.md for {agent_name}"
-}
-```
-
-### What the Observer Does
-1. Reads recent session transcripts (last 60 minutes)
-2. Updates `memory/active-context.md` with current thread state
-3. Skips its own cron sessions to avoid loops
-4. Reports `HEARTBEAT_OK` if nothing to update
-
-### What the Observer Does NOT Do
-- Encode new memories (that's the session indexer's job)
-- Make decisions or take actions
-- Interact with the user
-- Modify any file except `active-context.md`
+The snapshot is Markdown with Mermaid, so it can render directly in chat clients that support diagrams.

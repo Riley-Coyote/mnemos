@@ -6,11 +6,12 @@ Commands:
     mnemos serve                 Start MCP server (stdio mode)
     mnemos inspect ID            Inspect a specific engram
     mnemos stats                 Show memory statistics
+    mnemos snapshot              Print an inline Mermaid memory snapshot
     mnemos search QUERY          Search memories
     mnemos consolidate [--deep]  Run a consolidation cycle
     mnemos export [--workspace]  Export workspace files (MEMORY.md, etc.)
     mnemos setup-openclaw        Register cron jobs for OpenClaw
-    mnemos bootstrap             Bootstrap a complete agent stack
+    mnemos bootstrap             Bootstrap a turnkey memory stack
 """
 
 from __future__ import annotations
@@ -53,6 +54,13 @@ def main(argv: list[str] | None = None) -> int:
     # ── stats ──
     sub.add_parser("stats", help="Show memory statistics")
 
+    # ── snapshot ──
+    p_snapshot = sub.add_parser("snapshot", help="Print an inline Mermaid memory snapshot")
+    p_snapshot.add_argument("--person-id", default="user", help="Person scope")
+    p_snapshot.add_argument("--project-scope", default="global", help="Project scope")
+    p_snapshot.add_argument("--session-id", default="", help="Optional functional-memory session")
+    p_snapshot.add_argument("-n", "--max-items", type=int, default=6)
+
     # ── search ──
     p_search = sub.add_parser("search", help="Search memories")
     p_search.add_argument("query", help="Search query")
@@ -81,11 +89,14 @@ def main(argv: list[str] | None = None) -> int:
     p_index.add_argument("--backfill", action="store_true", help="Index last 24h of sessions")
 
     # ── bootstrap ──
-    p_bootstrap = sub.add_parser("bootstrap", help="Bootstrap a complete agent stack")
+    p_bootstrap = sub.add_parser("bootstrap", help="Bootstrap a turnkey memory stack")
     p_bootstrap.add_argument("--agent-name", required=True, help="Agent name (e.g., Nova)")
     p_bootstrap.add_argument("--workspace", required=True, help="Workspace directory path")
     p_bootstrap.add_argument("--user-name", default="User", help="User name (default: User)")
     p_bootstrap.add_argument("--timezone", default="America/New_York", help="Timezone for crons")
+    p_bootstrap.add_argument("--api-key", default="", help="Optional LLM provider API key")
+    p_bootstrap.add_argument("--llm-provider", default="openrouter", help="LLM provider")
+    p_bootstrap.add_argument("--model", default="anthropic/claude-sonnet-4-5", help="Memory model")
 
     # ── bridge ──
     p_bridge = sub.add_parser("bridge", help="Direct memory operations")
@@ -108,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         "serve": _cmd_serve,
         "inspect": _cmd_inspect,
         "stats": _cmd_stats,
+        "snapshot": _cmd_snapshot,
         "search": _cmd_search,
         "consolidate": _cmd_consolidate,
         "export": _cmd_export,
@@ -205,12 +217,36 @@ def _cmd_stats(args: argparse.Namespace) -> int:
     print(f"Archived engrams:    {stats.get('archived', 0)}")
     print(f"Connections:         {stats.get('connections', 0)}")
     print(f"Active beliefs:      {stats.get('beliefs_active', 0)}")
+    print(f"Functional active:   {stats.get('functional_active', 0)}")
+    print(f"Functional pinned:   {stats.get('functional_pinned', 0)}")
+    print(f"Needs confirmation:  {stats.get('functional_needs_confirmation', 0)}")
+    print(f"Active sessions:     {stats.get('functional_sessions_active', 0)}")
+    print(f"Hypomnema active:    {stats.get('hypomnema_active', 0)}")
     print(f"Reconsolidations:    {stats.get('reconsolidation_events', 0)}")
     if "accessibility_avg" in stats:
         print(f"Avg accessibility:   {stats['accessibility_avg']:.3f}")
         print(f"Min accessibility:   {stats['accessibility_min']:.3f}")
         print(f"Max accessibility:   {stats['accessibility_max']:.3f}")
 
+    store.close()
+    return 0
+
+
+def _cmd_snapshot(args: argparse.Namespace) -> int:
+    """Print an inline visual snapshot."""
+    store = _get_store(args)
+    from .interface.visual_snapshot import build_memory_visual_snapshot
+
+    print(
+        build_memory_visual_snapshot(
+            store,
+            agent_id=args.agent_id,
+            person_id=args.person_id,
+            project_scope=args.project_scope,
+            session_id=args.session_id,
+            max_items=args.max_items,
+        )
+    )
     store.close()
     return 0
 
@@ -369,7 +405,7 @@ def _cmd_index(args: argparse.Namespace) -> int:
 
 
 def _cmd_bootstrap(args: argparse.Namespace) -> int:
-    """Bootstrap a complete agent stack."""
+    """Bootstrap a turnkey memory stack."""
     from .setup.bootstrap import bootstrap, print_result
 
     result = bootstrap(
@@ -377,6 +413,9 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
         workspace=args.workspace,
         user_name=args.user_name,
         timezone=args.timezone,
+        api_key=args.api_key,
+        llm_provider=args.llm_provider,
+        model=args.model,
     )
 
     print_result(result)

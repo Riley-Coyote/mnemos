@@ -102,6 +102,7 @@ class SessionIndexer:
         classification_model: str | None = None,
         fallback_model: str | None = None,
         openrouter_api_key: str | None = None,
+        llm_client=None,
         config: dict[str, Any] | None = None,
     ) -> None:
         cfg = config or {}
@@ -165,6 +166,9 @@ class SessionIndexer:
             or cfg.get("openrouter_api_key")
             or os.environ.get("OPENROUTER_API_KEY", "").strip()
         )
+        # Optional injected LLM client (e.g. subscription ClaudeCLIClient).
+        # When set, extraction routes through it instead of the OpenRouter API.
+        self._llm_client = llm_client or cfg.get("llm_client")
 
         # Tuning constants
         self.max_memories_per_session = cfg.get("max_memories_per_session", DEFAULT_MAX_MEMORIES_PER_SESSION)
@@ -442,6 +446,29 @@ class SessionIndexer:
     def _call_extraction_llm(self, prompt: str, system: str) -> Optional[str]:
         import urllib.request
 
+        # Prefer an injected client (e.g. subscription ClaudeCLIClient) so
+        # indexing does not depend on a live OpenRouter key. Falls through to
+        # the OpenRouter path below only when no client is configured.
+        if self._llm_client is not None:
+            for attempt in range(self.llm_retries + 1):
+                if attempt > 0:
+                    time.sleep(2 ** (attempt - 1))
+                try:
+                    out = self._llm_client.structured_complete(
+                        system, prompt, temperature=0.2, max_tokens=4000
+                    )
+                    if out and out.strip():
+                        return out.strip()
+                except Exception as e:
+                    logger.warning(
+                        "extraction client call failed (attempt %d): %s", attempt + 1, e
+                    )
+            logger.error(
+                "extraction client returned no output after %d attempts",
+                self.llm_retries + 1,
+            )
+            return None
+
         key = self._get_api_key()
         if not key:
             logger.warning("No OpenRouter API key found")
@@ -580,19 +607,25 @@ class SessionIndexer:
         except Exception:
             logger.debug("Embedding index not available, proceeding without it")
 
-        # Optional: LLM client for connection classification
+        # Optional: LLM client for connection classification.
+        # When extraction runs through an injected client (subscription CLI),
+        # skip LLM classification: per-connection CLI calls are too slow and the
+        # CLI's prose output does not satisfy the classifier's strict JSON parse,
+        # so connection inference falls back to embeddings. Only build the
+        # OpenRouter classifier when no client was injected and a key exists.
         llm_client = None
-        api_key = self._get_api_key()
-        if api_key:
-            try:
-                from mnemos.llm import OpenRouterClient
-                llm_client = OpenRouterClient(
-                    api_key=api_key,
-                    model=self.classification_model,
-                    max_tokens=2000,
-                )
-            except Exception:
-                logger.debug("LLM client not available for connection classification")
+        if self._llm_client is None:
+            api_key = self._get_api_key()
+            if api_key:
+                try:
+                    from mnemos.llm import OpenRouterClient
+                    llm_client = OpenRouterClient(
+                        api_key=api_key,
+                        model=self.classification_model,
+                        max_tokens=2000,
+                    )
+                except Exception:
+                    logger.debug("LLM client not available for connection classification")
 
         # Optional: shared pool
         shared_pool = None

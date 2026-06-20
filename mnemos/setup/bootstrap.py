@@ -1,4 +1,4 @@
-"""Bootstrap a complete Mnemos agent stack.
+"""Bootstrap a turnkey Mnemos memory stack.
 
 Creates the workspace directory structure, initializes the Mnemos database,
 copies and personalizes identity templates, and outputs instructions for
@@ -51,15 +51,13 @@ MNEMOS_DB_PATH={db_path}
 MNEMOS_WORKSPACE={workspace}
 # MNEMOS_SHARED_DB=~/.mnemos/shared.db
 
-# ── LLM Provider (pick one) ──
-# MNEMOS_LLM_PROVIDER=openrouter
-# OPENROUTER_API_KEY=your-key-here
-# MNEMOS_MODEL=anthropic/claude-sonnet-4-5
+# ── LLM Provider ──
+MNEMOS_LLM_PROVIDER={llm_provider}
+MNEMOS_MODEL={model}
+{provider_api_key_line}
 
-# MNEMOS_LLM_PROVIDER=anthropic
+# Alternative providers:
 # ANTHROPIC_API_KEY=your-key-here
-
-# MNEMOS_LLM_PROVIDER=openai
 # OPENAI_API_KEY=your-key-here
 
 # ── Embedding Support (optional) ──
@@ -111,8 +109,11 @@ def bootstrap(
     db_path: str | None = None,
     agent_id: str | None = None,
     timezone: str = "America/New_York",
+    api_key: str = "",
+    llm_provider: str = "openrouter",
+    model: str = "anthropic/claude-sonnet-4-5",
 ) -> dict:
-    """Bootstrap a complete agent stack.
+    """Bootstrap a turnkey memory stack.
 
     Args:
         agent_name: Human-readable name for the agent.
@@ -121,12 +122,16 @@ def bootstrap(
         db_path: Path to the Mnemos database. Defaults to ~/.mnemos/{agent_id}.db
         agent_id: Machine-readable agent ID. Defaults to lowercase agent_name.
         timezone: Timezone for cron scheduling.
+        api_key: Optional provider API key to place in the generated .env.
+        llm_provider: Provider name for the generated .env.
+        model: Default model for memory processing.
 
     Returns:
         Dict with paths created and status information.
     """
     workspace_path = Path(workspace).expanduser().resolve()
     agent_id = agent_id or agent_name.lower().replace(" ", "-")
+    person_id = user_name.lower().replace(" ", "-") or "user"
     db_path = db_path or f"~/.mnemos/{agent_id}.db"
     now = datetime.now(tz=_utc_tz.utc).strftime("%Y-%m-%d")
 
@@ -135,8 +140,10 @@ def bootstrap(
         "agent_name": agent_name,
         "agent_id": agent_id,
         "db_path": db_path,
+        "person_id": person_id,
         "dirs_created": [],
         "files_created": [],
+        "seeded": [],
         "errors": [],
     }
 
@@ -153,8 +160,43 @@ def bootstrap(
         real_db_path = Path(db_path).expanduser()
         real_db_path.parent.mkdir(parents=True, exist_ok=True)
         store = EngramStore(str(real_db_path))
+        session = store.start_memory_session(
+            session_id=f"{agent_id}-onboarding",
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope="global",
+            title="Bootstrap onboarding",
+            source="mnemos-bootstrap",
+        )
+        hypomnema_id = store.write_hypomnema_entry(
+            f"{agent_name} was bootstrapped as the primary memory-bearing agent for {user_name}.",
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope="global",
+            source="co-formed",
+            domain="foundational",
+            tags=["bootstrap", "identity", "relationship"],
+            confidence=0.85,
+            salience=0.8,
+            foundational=True,
+            related_session_id=session["id"],
+        )
+        functional = store.write_functional_memory(
+            "Run mnemos_context_packet at session start, keep task state in functional memory, revise hypomnema when continuity changes, and promote only stable entries into Mnemos.",
+            session_id=session["id"],
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope="global",
+            memory_type="working",
+            confidence=0.95,
+            salience=0.9,
+            pinned=True,
+            source="mnemos-bootstrap",
+        )
         store.close()
         result["db_initialized"] = True
+        result["seeded"].append(f"hypomnema:{hypomnema_id}")
+        result["seeded"].append(f"functional:{functional['id']}")
     except Exception as e:
         result["db_initialized"] = False
         result["errors"].append(f"Database init failed: {e}")
@@ -169,7 +211,7 @@ def bootstrap(
         "date": now,
         "timestamp": datetime.now(tz=_utc_tz.utc).isoformat(),
         "timezone": timezone,
-        "model": "default",
+        "model": model,
         "one-line description of role": f"Primary agent for {user_name}",
     }
 
@@ -202,11 +244,24 @@ def bootstrap(
     # ── Step 4: Create .env template ──
     env_path = workspace_path / ".env"
     if not env_path.exists():
+        provider_key_name = {
+            "openrouter": "OPENROUTER_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+        }.get(llm_provider.lower(), f"{llm_provider.upper()}_API_KEY")
+        provider_api_key_line = (
+            f"{provider_key_name}={api_key}"
+            if api_key
+            else f"# {provider_key_name}=your-key-here"
+        )
         env_content = _ENV_TEMPLATE.format(
             agent_id=agent_id,
             agent_name=agent_name,
             db_path=db_path,
             workspace=str(workspace_path),
+            llm_provider=llm_provider,
+            model=model,
+            provider_api_key_line=provider_api_key_line,
         )
         env_path.write_text(env_content)
         result["files_created"].append(str(env_path))
@@ -245,7 +300,7 @@ def _generate_cron_instructions(
 def print_result(result: dict) -> None:
     """Print bootstrap results in a human-friendly format."""
     print(f"\n{'='*60}")
-    print(f"  Mnemos Agent Stack — {result['agent_name']}")
+    print(f"  Mnemos Memory Stack — {result['agent_name']}")
     print(f"{'='*60}\n")
 
     print(f"  Agent ID:   {result['agent_id']}")
@@ -266,6 +321,12 @@ def print_result(result: dict) -> None:
             print(f"    + {f}")
         print()
 
+    if result.get("seeded"):
+        print("  Seeded Memory:")
+        for item in result["seeded"]:
+            print(f"    + {item}")
+        print()
+
     if result["errors"]:
         print("  Errors:")
         for e in result["errors"]:
@@ -281,10 +342,12 @@ def print_result(result: dict) -> None:
 
     print(f"{'='*60}")
     print("  Next steps:")
-    print("  1. Edit .env with your API keys")
-    print("  2. Review and customize SOUL.md and IDENTITY.md")
-    print("  3. Install the OpenClaw crons (commands above)")
-    print("  4. Run: mnemos stats --agent-id " + result["agent_id"])
+    print("  1. Add this MCP server to your agent client: mnemos serve")
+    print("  2. Start each work block with mnemos_context_packet")
+    print("  3. Use mnemos_functional_update for live task state")
+    print("  4. Review and customize SOUL.md, IDENTITY.md, and MEMORY.md")
+    print("  5. Optional: install the OpenClaw crons (commands above)")
+    print("  6. Run: mnemos --agent-id " + result["agent_id"] + " stats")
     print(f"{'='*60}\n")
 
 
@@ -292,7 +355,7 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point for bootstrap."""
     parser = argparse.ArgumentParser(
         prog="mnemos-bootstrap",
-        description="Bootstrap a complete Mnemos agent stack",
+        description="Bootstrap a turnkey Mnemos memory stack",
     )
     parser.add_argument(
         "--agent-name",
@@ -324,6 +387,21 @@ def main(argv: list[str] | None = None) -> int:
         default="America/New_York",
         help="Timezone for cron scheduling (default: America/New_York)",
     )
+    parser.add_argument(
+        "--api-key",
+        default="",
+        help="Optional LLM provider API key to write into .env",
+    )
+    parser.add_argument(
+        "--llm-provider",
+        default="openrouter",
+        help="LLM provider for memory processing (default: openrouter)",
+    )
+    parser.add_argument(
+        "--model",
+        default="anthropic/claude-sonnet-4-5",
+        help="Default model for memory processing",
+    )
 
     args = parser.parse_args(argv)
 
@@ -334,6 +412,9 @@ def main(argv: list[str] | None = None) -> int:
         db_path=args.db_path,
         agent_id=args.agent_id,
         timezone=args.timezone,
+        api_key=args.api_key,
+        llm_provider=args.llm_provider,
+        model=args.model,
     )
 
     print_result(result)

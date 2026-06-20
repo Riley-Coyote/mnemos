@@ -1,0 +1,18 @@
+[ 3770317ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ http://127.0.0.1:5179/vendor/three.core.js:0
+[ 3819022ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ http://127.0.0.1:5179/vendor/three.core.js:0
+[ 4036628ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000
+[ 4038808ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000
+[ 4040742ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000
+[ 4143724ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000
+[ 4145641ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000
+[ 4231654ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000
+[ 4270045ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000
+[ 4270594ms] [ERROR] Failed to load resource: the server responded with a status of 503 () @ http://127.0.0.1:5179/api/turns?session_id=preview-session:0
+[ 4270596ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000
+[ 7992488ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000
+[ 7994916ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000
+[ 7997435ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000
+[ 8075380ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000
+[ 8075542ms] [ERROR] Failed to load resource: the server responded with a status of 503 () @ http://127.0.0.1:5179/api/turns?session_id=preview-session:0
+[ 8075546ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000
+[ 8078136ms] [WARNING] THREE.Clock: This module has been deprecated. Please use THREE.Timer instead. @ http://127.0.0.1:5179/vendor/three.core.js:2000

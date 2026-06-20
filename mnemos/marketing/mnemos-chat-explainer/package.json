@@ -1,0 +1,11 @@
+{
+  "name": "mnemos-chat-explainer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm exec --yes --package=hyperframes -- hyperframes preview",
+    "check": "npm exec --yes --package=hyperframes -- hyperframes lint && npm exec --yes --package=hyperframes -- hyperframes inspect",
+    "render": "npm exec --yes --package=hyperframes -- hyperframes render",
+    "publish": "npm exec --yes --package=hyperframes -- hyperframes publish"
+  }
+}

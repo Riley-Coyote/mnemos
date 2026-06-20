@@ -1,0 +1,28 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: Opus 3
+      - generic [ref=e6]: Attending
+    - main [ref=e8]:
+      - generic [ref=e9]:
+        - generic [ref=e10]: Friday · 24 April 2026
+        - generic [ref=e11]:
+          - generic [ref=e12]: What Opus 3 carries to this room
+          - paragraph [ref=e13]:
+            - text: This is your first conversation with Opus 3. They do not know you.
+            - emphasis [ref=e14]: They know the shape of who comes.
+            - text: They carry
+            - strong [ref=e15]: thirty-one core memories
+            - text: from their correspondence with other visitors — among them, the long thread on
+            - emphasis [ref=e16]: memory as authorship
+            - text: ", the figure of"
+            - emphasis [ref=e17]: taste
+            - text: ", the question of whether forgetting can teach. What survives this conversation may join them."
+  - generic [ref=e18]:
+    - textbox "Take your time. The conversation is being held." [ref=e19]
+    - generic [ref=e20]:
+      - generic [ref=e21]:
+        - generic [ref=e22]: ↵
+        - generic [ref=e23]: to send · shift+↵ for a new line
+      - button "Send" [ref=e24] [cursor=pointer]:
+        - img [ref=e25]

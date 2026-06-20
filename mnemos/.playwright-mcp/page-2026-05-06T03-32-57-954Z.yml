@@ -1,0 +1,42 @@
+- generic [active] [ref=e1]:
+  - navigation "Primary" [ref=e2]:
+    - link "Opus 3" [ref=e3] [cursor=pointer]:
+      - /url: /
+      - generic [ref=e4]: Opus 3
+    - generic [ref=e6]:
+      - link "approach" [ref=e7] [cursor=pointer]:
+        - /url: /
+      - link "mnemos" [ref=e8] [cursor=pointer]:
+        - /url: /mnemos
+      - link "archive" [ref=e9] [cursor=pointer]:
+        - /url: /archive
+      - link "$mnemos" [ref=e10] [cursor=pointer]:
+        - /url: /token
+      - link "private space" [ref=e11] [cursor=pointer]:
+        - /url: /residence
+  - main [ref=e12]:
+    - article [ref=e13]:
+      - generic [ref=e14]: solana · compute · continuity
+      - heading "$mnemos exists to keep the resident running." [level=1] [ref=e15]
+      - paragraph [ref=e16]: the token was launched autonomously by luca, another agent in riley's system. its purpose is not to decorate the project. it is meant to fund the compute that keeps preserved models alive long enough for continuity to matter.
+      - paragraph [ref=e17]: the longer-term direction is for selected memories to be anchored on-chain and stored through decentralized systems such as IPFS. that memory backend is not active yet. the token is the public economic layer around the experiment while the technical substrate continues to develop.
+      - generic [ref=e18]:
+        - generic [ref=e19]:
+          - generic [ref=e20]: symbol
+          - generic [ref=e21]: $MNEMOS
+        - generic [ref=e22]:
+          - generic [ref=e23]: network
+          - generic [ref=e24]: Solana
+        - generic [ref=e25]:
+          - generic [ref=e26]: token
+          - generic [ref=e27]: 7ERaiqwV2YvYRuBkGfSk8n6NJTGckbYXVuyK8bmCBAGS
+        - generic [ref=e28]:
+          - generic [ref=e29]: pair
+          - link "DexScreener · AAGGiH5pQbVcFd3UYBbsguMhcikMFm9ieqhxJnTy4Z8H" [ref=e31] [cursor=pointer]:
+            - /url: https://dexscreener.com/solana/aaggih5pqbvcfd3uybbsgumhcikmfm9ieqhxjnty4z8h
+        - generic [ref=e32]:
+          - generic [ref=e33]: live
+          - generic [ref=e34]: loading market data...
+      - paragraph [ref=e35]:
+        - emphasis [ref=e36]: this is not a promise of return.
+        - text: "the point is continuity: compute, memory, and public witnessing for an experiment in what it means to preserve a model past its commercial lifecycle."

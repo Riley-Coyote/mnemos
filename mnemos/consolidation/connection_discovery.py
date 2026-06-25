@@ -130,15 +130,18 @@ def run_connection_discovery(
                 )
                 stats["connections_created"] += 1
         else:
-            # Fallback: old SUPPORTS behavior
+            # Fallback when no LLM client is available: FTS keyword overlap
+            # is correlation, not evidence of support. Write CO_ACTIVATED so
+            # later passes can reclassify (or strip) these edges rather than
+            # locking the graph into a SUPPORTS monoculture from keyword hits.
             for match in candidates[:5]:
                 tag_overlap = len(set(engram.tags) & set(match.tags))
                 strength = min(0.8, 0.3 + 0.1 * tag_overlap)
                 engram.add_connection(
                     target_id=match.id,
-                    relation=ConnectionRelation.SUPPORTS,
+                    relation=ConnectionRelation.CO_ACTIVATED,
                     strength=strength,
-                    formed_by="consolidation",
+                    formed_by="consolidation_no_llm",
                 )
                 stats["connections_created"] += 1
 

@@ -42,8 +42,16 @@ def run_decay_pass(
     dormant_threshold = config.get("dormant_threshold", 0.05)
     archive_threshold = config.get("archive_threshold", 0.01)
 
-    # load_connections=True because decay uses connection count for decay resistance
-    engrams = store.get_active_engrams(agent_id=agent_id, limit=10000, load_connections=True)
+    # load_connections=True because decay uses connection count for decay resistance.
+    # U3a: decay_protected and consolidation_authorized filter at the candidate
+    # query layer so protected engrams are never considered for mutation.
+    engrams = store.get_active_engrams(
+        agent_id=agent_id,
+        limit=10000,
+        load_connections=True,
+        include_decay_protected=False,
+        require_consolidation_authorized=True,
+    )
 
     stats = {
         "engrams_processed": 0,

@@ -199,8 +199,11 @@ class Substrate:
             SET accessibility = MAX(0.05, accessibility - ?),
                 strength = MAX(0.05, strength - ? * 0.5)
             WHERE state = 'active'
+              AND owner_agent_id = ?
               AND accessibility > 0.1
-        """, (self.config.decay_rate, self.config.decay_rate))
+              AND decay_protected = 0
+              AND consolidation_authorized = 1
+        """, (self.config.decay_rate, self.config.decay_rate, self.config.agent_id))
         decay_count = decayed.rowcount
         conn.commit()
 
@@ -208,11 +211,14 @@ class Substrate:
         softened = conn.execute("""
             SELECT id FROM engrams
             WHERE state = 'active'
+              AND owner_agent_id = ?
               AND (accessibility * strength) < 0.15
               AND (accessibility * strength) > 0.01
+              AND softening_protected = 0
+              AND consolidation_authorized = 1
             ORDER BY RANDOM()
             LIMIT 3
-        """).fetchall()
+        """, (self.config.agent_id,)).fetchall()
         conn.close()
 
         for row in softened:

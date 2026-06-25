@@ -887,7 +887,14 @@ class MnemosRuntime:
         )
 
     def maintain(self, deep: bool = False, auto: bool = False) -> str:
-        """Run the best available maintenance without requiring setup."""
+        """Run the best available maintenance without requiring setup.
+
+        When ``auto`` is True (the path taken by ``context()`` and
+        ``capture()``), the consolidation idle gate is honored — if the
+        last cycle completed within ``min_idle_minutes``, the cycle is
+        skipped and a brief status is returned. Manual invocations
+        (``auto=False``) always run the requested cycle.
+        """
 
         self._ensure_init()
         assert self._store is not None
@@ -901,6 +908,13 @@ class MnemosRuntime:
             embedding_index=self._embedding_index,
             agent_model_hint=self._agent_model_hint,
         )
+
+        # Respect the idle gate on auto-triggered maintenance so every
+        # context()/capture() call does not trigger a full consolidation
+        # cycle. Manual maintain() invocations always run.
+        if auto and not daemon._should_run():
+            return "Maintenance skipped: within idle window (auto)."
+
         stats = daemon.run_cycle(deep=can_run_deep, agent_id=self.scope.agent_id)
         promoted = self._promote_candidates(limit=3)
 

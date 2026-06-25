@@ -15,11 +15,25 @@ Migration strategy:
 from __future__ import annotations
 
 import sqlite3
+import time
+from pathlib import Path
 from typing import Callable
 
 
 # Migration registry: version -> (description, migration_function)
 _MIGRATIONS: dict[int, tuple[str, Callable[[sqlite3.Connection], None]]] = {}
+_PAI_IMPORT_TARGET_TABLES = {"engrams", "beliefs", "hypomnema_entries"}
+
+
+U3A_PHASE0_DECAY_FINDING = """
+U3a Phase 0 finding: Mnemos has two decay paths. The consolidation decay pass
+is time-based exponential forgetting, modulated by stability, connection count,
+tags, and recency; ordinary unretrieved engrams can decay toward archival
+thresholds. The substrate tick also performs a direct SQL time/tick decrement.
+`decay_protected` is therefore load-bearing, not merely defensive: both decay
+candidate paths must exclude protected engrams before mutating accessibility or
+strength.
+"""
 
 
 def register_migration(
@@ -55,7 +69,21 @@ def get_current_version(conn: sqlite3.Connection) -> int:
     Returns:
         Current schema version number. Returns 0 if meta table doesn't exist.
     """
-    raise NotImplementedError("Step 18: Version detection implementation")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    row = conn.execute(
+        "SELECT value FROM meta WHERE key = 'schema_version'"
+    ).fetchone()
+    if row is None:
+        return 0
+    try:
+        version = int(row[0])
+    except (TypeError, ValueError):
+        raise RuntimeError(f"Malformed schema_version: {row[0]!r}")
+    if version < 0:
+        raise RuntimeError(f"Malformed schema_version: {row[0]!r}")
+    return version
 
 
 def run_migrations(conn: sqlite3.Connection, target_version: int | None = None) -> list[int]:
@@ -71,7 +99,51 @@ def run_migrations(conn: sqlite3.Connection, target_version: int | None = None) 
     Raises:
         RuntimeError: If a migration fails (transaction is rolled back).
     """
-    raise NotImplementedError("Step 18: Migration runner implementation")
+    if target_version is None:
+        target_version = max(_MIGRATIONS.keys(), default=get_current_version(conn))
+
+    current = get_current_version(conn)
+    if current > target_version:
+        raise RuntimeError(
+            f"Database schema version {current} is newer than supported {target_version}"
+        )
+    if current == 0 and not _has_table(conn, "engrams"):
+        latest = max(_MIGRATIONS.keys(), default=target_version)
+        if target_version < latest:
+            raise RuntimeError(
+                "Cannot bootstrap an empty database to historical schema "
+                f"version {target_version}; latest schema is {latest}"
+            )
+        from .sqlite_store import SQL_CREATE_TABLES
+
+        conn.executescript(SQL_CREATE_TABLES)
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+            (str(target_version),),
+        )
+        conn.commit()
+        current = target_version
+
+    applied: list[int] = []
+
+    for version, (_, migrate) in sorted(_MIGRATIONS.items()):
+        if version <= current or version > target_version:
+            continue
+        try:
+            conn.execute("BEGIN")
+            migrate(conn)
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+                (str(version),),
+            )
+            conn.commit()
+            applied.append(version)
+            current = version
+        except Exception as exc:
+            conn.rollback()
+            raise RuntimeError(f"Migration {version} failed") from exc
+
+    return applied
 
 
 def list_migrations() -> list[dict[str, str | int]]:
@@ -84,3 +156,274 @@ def list_migrations() -> list[dict[str, str | int]]:
         {"version": v, "description": desc}
         for v, (desc, _) in sorted(_MIGRATIONS.items())
     ]
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(row[1] == column for row in rows)
+
+
+def _has_table(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _add_column_if_missing(
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    if not _has_column(conn, table, column):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _row_value(row: sqlite3.Row | tuple, name: str, index: int):
+    return row[name] if isinstance(row, sqlite3.Row) else row[index]
+
+
+def _clean_required(value: str, name: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError(f"{name} is required")
+    return cleaned
+
+
+def _clean_optional(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def apply_u3a_schema_migration(conn: sqlite3.Connection) -> None:
+    """Apply the PAI import readiness schema additions idempotently."""
+    for column, definition in (
+        (
+            "voice_exemplar_eligible",
+            "INTEGER NOT NULL DEFAULT 1 CHECK (voice_exemplar_eligible IN (0, 1))",
+        ),
+        (
+            "softening_protected",
+            "INTEGER NOT NULL DEFAULT 0 CHECK (softening_protected IN (0, 1))",
+        ),
+        ("original_substrate", "TEXT"),
+        ("original_timestamp", "INTEGER"),
+        (
+            "consolidation_authorized",
+            "INTEGER NOT NULL DEFAULT 1 CHECK (consolidation_authorized IN (0, 1))",
+        ),
+        (
+            "decay_protected",
+            "INTEGER NOT NULL DEFAULT 0 CHECK (decay_protected IN (0, 1))",
+        ),
+    ):
+        _add_column_if_missing(conn, "engrams", column, definition)
+
+    for column, definition in (
+        (
+            "tier",
+            "TEXT CHECK (tier IS NULL OR tier IN ('foundational', 'operational', 'tactical'))",
+        ),
+        (
+            "needs_review",
+            "INTEGER NOT NULL DEFAULT 0 CHECK (needs_review IN (0, 1))",
+        ),
+        (
+            "confidence_pending_review",
+            "INTEGER NOT NULL DEFAULT 0 CHECK (confidence_pending_review IN (0, 1))",
+        ),
+    ):
+        _add_column_if_missing(conn, "beliefs", column, definition)
+
+    # Parent plan section 6.3.11 requires imported hypomnema rows to
+    # preserve source time independently from created_at.
+    _add_column_if_missing(conn, "hypomnema_entries", "original_timestamp", "INTEGER")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pai_import_row_map (
+            job_id TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            source_anchor TEXT NOT NULL DEFAULT '',
+            target_table TEXT NOT NULL DEFAULT 'engrams'
+                CHECK (target_table IN ('engrams', 'beliefs', 'hypomnema_entries')),
+            target_id TEXT NOT NULL,
+            engram_id TEXT,
+            source_hash TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            imported_at INTEGER NOT NULL,
+            PRIMARY KEY (job_id, source_path, source_anchor, target_table)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pai_import_row_map_target "
+        "ON pai_import_row_map(target_table, target_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pai_import_row_map_job "
+        "ON pai_import_row_map(job_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_engrams_decay_eligible "
+        "ON engrams(owner_agent_id, state, decay_protected, consolidation_authorized)"
+    )
+
+
+@register_migration(4, "U3a PAI import schema readiness")
+def migrate_v4_u3a(conn: sqlite3.Connection) -> None:
+    apply_u3a_schema_migration(conn)
+
+
+def upsert_pai_import_row(
+    conn: sqlite3.Connection,
+    *,
+    job_id: str,
+    source_path: str,
+    target_id: str | None = None,
+    engram_id: str | None = None,
+    source_anchor: str = "",
+    target_table: str = "engrams",
+    source_hash: str = "",
+    timestamp: int | None = None,
+) -> dict[str, int | bool]:
+    """Idempotently record a PAI import source-to-row mapping.
+
+    Re-running the same job/source/hash is a no-op. Changed source content
+    advances updated_at while preserving the mapped target identifier unless
+    the caller explicitly supplies a new target_id.
+    """
+    job_id = _clean_required(job_id, "job_id")
+    source_path = _clean_required(source_path, "source_path")
+    source_anchor = _clean_optional(source_anchor) or ""
+    target_table = _clean_required(target_table, "target_table")
+    if target_table not in _PAI_IMPORT_TARGET_TABLES:
+        raise ValueError(f"Unsupported target_table: {target_table}")
+    source_hash = _clean_optional(source_hash) or ""
+    target_id = _clean_optional(target_id)
+    engram_id = _clean_optional(engram_id)
+    if target_table == "engrams":
+        target_id = target_id or engram_id
+        if not target_id:
+            raise ValueError("target_id or engram_id is required")
+        if engram_id is None:
+            engram_id = target_id
+    elif not target_id:
+        raise ValueError(f"target_id is required for {target_table}")
+
+    apply_u3a_schema_migration(conn)
+    now = int(timestamp if timestamp is not None else time.time())
+    existing = conn.execute(
+        """
+        SELECT target_id, engram_id, source_hash, created_at, updated_at
+        FROM pai_import_row_map
+        WHERE job_id = ? AND source_path = ? AND source_anchor = ? AND target_table = ?
+        """,
+        (job_id, source_path, source_anchor, target_table),
+    ).fetchone()
+
+    if existing is not None:
+        existing_target_id = _row_value(existing, "target_id", 0)
+        existing_engram_id = _row_value(existing, "engram_id", 1)
+        existing_source_hash = _row_value(existing, "source_hash", 2)
+        existing_created_at = _row_value(existing, "created_at", 3)
+        existing_updated_at = _row_value(existing, "updated_at", 4)
+        effective_engram_id = engram_id
+        if target_table != "engrams" and effective_engram_id is None:
+            effective_engram_id = existing_engram_id or None
+        same_target = existing_target_id == target_id
+        same_engram = (existing_engram_id or None) == effective_engram_id
+        same_hash = existing_source_hash == source_hash
+        if same_target and same_engram and same_hash:
+            return {
+                "inserted": False,
+                "updated": False,
+                "created_at": int(existing_created_at),
+                "updated_at": int(existing_updated_at),
+            }
+        conn.execute(
+            """
+            UPDATE pai_import_row_map
+            SET target_id = ?,
+                engram_id = ?,
+                source_hash = ?,
+                updated_at = ?
+            WHERE job_id = ? AND source_path = ? AND source_anchor = ? AND target_table = ?
+            """,
+            (
+                target_id,
+                effective_engram_id,
+                source_hash,
+                now,
+                job_id,
+                source_path,
+                source_anchor,
+                target_table,
+            ),
+        )
+        return {
+            "inserted": False,
+            "updated": True,
+            "created_at": int(existing_created_at),
+            "updated_at": now,
+        }
+
+    conn.execute(
+        """
+        INSERT INTO pai_import_row_map (
+            job_id, source_path, source_anchor, target_table, target_id,
+            engram_id, source_hash, created_at, updated_at, imported_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            job_id,
+            source_path,
+            source_anchor,
+            target_table,
+            target_id,
+            engram_id,
+            source_hash,
+            now,
+            now,
+            now,
+        ),
+    )
+    return {"inserted": True, "updated": False, "created_at": now, "updated_at": now}
+
+
+def backup_sqlite_db(source_db: str | Path, dest_db: str | Path) -> Path:
+    """Create an atomic SQLite backup without copying WAL/SHM companions."""
+    source = Path(source_db).expanduser()
+    dest = Path(dest_db).expanduser()
+    if not source.exists():
+        raise FileNotFoundError(source)
+    if source.resolve() == dest.resolve():
+        raise ValueError("SQLite backup destination must differ from source")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f"{dest.name}.tmp")
+    if tmp.exists():
+        tmp.unlink()
+
+    source_conn = sqlite3.connect(str(source))
+    dest_conn = sqlite3.connect(str(tmp))
+    committed = False
+    try:
+        source_conn.backup(dest_conn)
+        result = dest_conn.execute("PRAGMA integrity_check").fetchone()
+        if result is None or result[0] != "ok":
+            raise RuntimeError(f"SQLite backup integrity check failed: {result}")
+        dest_conn.commit()
+        committed = True
+    finally:
+        dest_conn.close()
+        source_conn.close()
+        if not committed and tmp.exists():
+            tmp.unlink()
+
+    tmp.replace(dest)
+    return dest

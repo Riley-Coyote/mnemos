@@ -24,10 +24,11 @@ from ..core.engram import Connection, Engram, VersionRef
 from ..core.belief import Belief
 from ..core.emotional_state import EmotionalState
 from ..core.identity import AgentIdentity
+from .migrations import apply_u3a_schema_migration, get_current_version, run_migrations
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -59,13 +60,15 @@ _ENGRAM_COLUMNS = frozenset({
     "schema_refs", "strength", "stability", "accessibility", "encoding_context",
     "source", "lineage", "owner_agent_id", "visibility", "state", "created_at",
     "last_accessed", "access_count", "reconsolidation_count",
+    "voice_exemplar_eligible", "softening_protected", "original_substrate",
+    "original_timestamp", "consolidation_authorized", "decay_protected",
 })
 
 # Allowed column names for beliefs table
 _BELIEF_COLUMNS = frozenset({
     "id", "agent_id", "content", "confidence", "domain", "created_at",
     "last_revised", "last_challenged", "revision_history", "superseded_by",
-    "supporting_engram_ids",
+    "supporting_engram_ids", "tier", "needs_review", "confidence_pending_review",
 })
 
 SQL_CREATE_TABLES = """
@@ -91,7 +94,17 @@ CREATE TABLE IF NOT EXISTS engrams (
     created_at TEXT NOT NULL,
     last_accessed TEXT NOT NULL,
     access_count INTEGER NOT NULL DEFAULT 0,
-    reconsolidation_count INTEGER NOT NULL DEFAULT 0
+    reconsolidation_count INTEGER NOT NULL DEFAULT 0,
+    voice_exemplar_eligible INTEGER NOT NULL DEFAULT 1
+        CHECK (voice_exemplar_eligible IN (0, 1)),
+    softening_protected INTEGER NOT NULL DEFAULT 0
+        CHECK (softening_protected IN (0, 1)),
+    original_substrate TEXT,
+    original_timestamp INTEGER,
+    consolidation_authorized INTEGER NOT NULL DEFAULT 1
+        CHECK (consolidation_authorized IN (0, 1)),
+    decay_protected INTEGER NOT NULL DEFAULT 0
+        CHECK (decay_protected IN (0, 1))
 );
 
 -- Full-text search on engram content
@@ -134,7 +147,11 @@ CREATE TABLE IF NOT EXISTS beliefs (
     last_challenged TEXT NOT NULL,
     revision_history TEXT NOT NULL DEFAULT '[]',
     superseded_by TEXT,
-    supporting_engram_ids TEXT NOT NULL DEFAULT '[]'
+    supporting_engram_ids TEXT NOT NULL DEFAULT '[]',
+    tier TEXT CHECK (tier IS NULL OR tier IN ('foundational', 'operational', 'tactical')),
+    needs_review INTEGER NOT NULL DEFAULT 0 CHECK (needs_review IN (0, 1)),
+    confidence_pending_review INTEGER NOT NULL DEFAULT 0
+        CHECK (confidence_pending_review IN (0, 1))
 );
 
 -- Hypomnema: scoped durable continuity that can revise before promotion
@@ -156,6 +173,7 @@ CREATE TABLE IF NOT EXISTS hypomnema_entries (
     foundational INTEGER NOT NULL DEFAULT 0,
     revision_count INTEGER NOT NULL DEFAULT 0,
     revisions_json TEXT NOT NULL DEFAULT '[]',
+    original_timestamp INTEGER,
     related_session_id TEXT,
     related_engram_id TEXT REFERENCES engrams(id) ON DELETE SET NULL,
     graduated_to_engram_id TEXT REFERENCES engrams(id) ON DELETE SET NULL,
@@ -251,6 +269,22 @@ CREATE TABLE IF NOT EXISTS consolidation_log (
     stats TEXT NOT NULL DEFAULT '{}'
 );
 
+-- PAI import source-to-row map for idempotent importer re-runs and repair
+CREATE TABLE IF NOT EXISTS pai_import_row_map (
+    job_id TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    source_anchor TEXT NOT NULL DEFAULT '',
+    target_table TEXT NOT NULL DEFAULT 'engrams'
+        CHECK (target_table IN ('engrams', 'beliefs', 'hypomnema_entries')),
+    target_id TEXT NOT NULL,
+    engram_id TEXT,
+    source_hash TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    imported_at INTEGER NOT NULL,
+    PRIMARY KEY (job_id, source_path, source_anchor, target_table)
+);
+
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -266,6 +300,10 @@ CREATE INDEX IF NOT EXISTS idx_engrams_last_accessed ON engrams(last_accessed);
 CREATE INDEX IF NOT EXISTS idx_connections_source ON connections(source_id);
 CREATE INDEX IF NOT EXISTS idx_connections_target ON connections(target_id);
 CREATE INDEX IF NOT EXISTS idx_beliefs_domain ON beliefs(agent_id, domain);
+CREATE INDEX IF NOT EXISTS idx_pai_import_row_map_target
+    ON pai_import_row_map(target_table, target_id);
+CREATE INDEX IF NOT EXISTS idx_pai_import_row_map_job
+    ON pai_import_row_map(job_id);
 CREATE INDEX IF NOT EXISTS idx_hypomnema_scope_revised
     ON hypomnema_entries(agent_id, person_id, project_scope, last_revised_at DESC)
     WHERE active = 1;
@@ -358,12 +396,21 @@ class EngramStore:
     def _init_db(self) -> None:
         """Initialize database with schema."""
         conn = self._get_conn()
+        current_version = get_current_version(conn)
+        if current_version > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Database schema version {current_version} is newer than supported "
+                f"{SCHEMA_VERSION}"
+            )
         conn.executescript(SQL_CREATE_TABLES)
         # Migrate: add impact column if missing (v0.1 → v0.2)
         try:
             conn.execute("ALTER TABLE engrams ADD COLUMN impact TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
             pass  # Column already exists
+        conn.commit()
+        run_migrations(conn, target_version=SCHEMA_VERSION)
+        apply_u3a_schema_migration(conn)
         # Set schema version
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
@@ -460,6 +507,8 @@ class EngramStore:
         agent_id: str | None = "default",
         limit: int = 1000,
         load_connections: bool = True,
+        include_decay_protected: bool = True,
+        require_consolidation_authorized: bool = False,
     ) -> list[Engram]:
         """Get all active engrams for an agent, sorted by accessibility.
 
@@ -469,19 +518,35 @@ class EngramStore:
             load_connections: If True, load connections for each engram.
                 Set to False for bulk operations where connections aren't needed
                 (e.g., decay pass only needs accessibility/strength fields).
+            include_decay_protected: If False, exclude engrams that the
+                decay pass must not mutate.
+            require_consolidation_authorized: If True, exclude read-only
+                imported engrams from consolidation mutation candidates.
         """
         conn = self._get_conn()
+        predicates = ["state = 'active'"]
+        params: list[Any] = []
+        if agent_id is not None:
+            predicates.append("owner_agent_id = ?")
+            params.append(agent_id)
+        if not include_decay_protected:
+            predicates.append("decay_protected = 0")
+        if require_consolidation_authorized:
+            predicates.append("consolidation_authorized = 1")
+        where = " AND ".join(predicates)
+        params.append(limit)
+
         if agent_id is None:
             rows = conn.execute(
-                "SELECT * FROM engrams WHERE state = 'active' "
+                f"SELECT * FROM engrams WHERE {where} "
                 "ORDER BY accessibility DESC LIMIT ?",
-                (limit,),
+                params,
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM engrams WHERE state = 'active' "
-                "AND owner_agent_id = ? ORDER BY accessibility DESC LIMIT ?",
-                (agent_id, limit),
+                f"SELECT * FROM engrams WHERE {where} "
+                "ORDER BY accessibility DESC LIMIT ?",
+                params,
             ).fetchall()
         engrams = [Engram.from_dict(dict(r)) for r in rows]
         if load_connections:
@@ -1201,6 +1266,7 @@ class EngramStore:
         confidence: float = 0.6,
         salience: float = 0.5,
         foundational: bool = False,
+        original_timestamp: int | None = None,
         related_session_id: str | None = None,
         related_engram_id: str | None = None,
     ) -> str:
@@ -1225,8 +1291,9 @@ class EngramStore:
                 id, agent_id, person_id, project_scope, content, source,
                 density, domain, tags_json, confidence, salience,
                 active, foundational, revision_count, revisions_json,
-                related_session_id, related_engram_id, created_at, last_revised_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, '[]', ?, ?, ?, ?)
+                original_timestamp, related_session_id, related_engram_id,
+                created_at, last_revised_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, '[]', ?, ?, ?, ?, ?)
             """,
             (
                 entry_id,
@@ -1241,6 +1308,7 @@ class EngramStore:
                 _clamp(confidence),
                 _clamp(salience),
                 int(foundational),
+                original_timestamp,
                 related_session_id,
                 related_engram_id,
                 now,
@@ -1440,6 +1508,7 @@ class EngramStore:
             confidence=row["confidence"],
             salience=row["salience"],
             foundational=row["foundational"],
+            original_timestamp=row["original_timestamp"],
             related_session_id=row["related_session_id"],
             related_engram_id=row["related_engram_id"],
         )

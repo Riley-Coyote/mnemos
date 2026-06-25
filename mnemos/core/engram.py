@@ -52,6 +52,24 @@ def _new_id() -> str:
     return f"engram_{_gen_ulid()}"
 
 
+def _bool_to_int(value: bool | int, field_name: str) -> int:
+    if value in (True, 1):
+        return 1
+    if value in (False, 0):
+        return 0
+    raise ValueError(f"{field_name} must be a boolean")
+
+
+def _bool_from_db(value: Any, field_name: str, default: bool) -> bool:
+    if value is None:
+        return default
+    if value in (True, 1):
+        return True
+    if value in (False, 0):
+        return False
+    raise ValueError(f"{field_name} must be stored as 0 or 1")
+
+
 @dataclass
 class EncodingContext:
     """What was happening when this engram was formed.
@@ -282,6 +300,14 @@ class Engram:
     access_count: int = 0
     reconsolidation_count: int = 0
 
+    # PAI import/consolidation controls
+    voice_exemplar_eligible: bool = True
+    softening_protected: bool = False
+    original_substrate: str | None = None
+    original_timestamp: int | None = None
+    consolidation_authorized: bool = True
+    decay_protected: bool = False
+
     # Typed connections
     connections: list[Connection] = field(default_factory=list)
 
@@ -364,6 +390,18 @@ class Engram:
             "last_accessed": self.last_accessed,
             "access_count": self.access_count,
             "reconsolidation_count": self.reconsolidation_count,
+            "voice_exemplar_eligible": _bool_to_int(
+                self.voice_exemplar_eligible, "voice_exemplar_eligible"
+            ),
+            "softening_protected": _bool_to_int(
+                self.softening_protected, "softening_protected"
+            ),
+            "original_substrate": self.original_substrate,
+            "original_timestamp": self.original_timestamp,
+            "consolidation_authorized": _bool_to_int(
+                self.consolidation_authorized, "consolidation_authorized"
+            ),
+            "decay_protected": _bool_to_int(self.decay_protected, "decay_protected"),
             "source": json.dumps(self.source.to_dict()),
             "lineage": json.dumps(self.lineage.to_dict()),
             "owner_agent_id": self.owner_agent_id,
@@ -412,6 +450,20 @@ class Engram:
             last_accessed=d.get("last_accessed", _now_iso()),
             access_count=d.get("access_count", 0),
             reconsolidation_count=d.get("reconsolidation_count", 0),
+            voice_exemplar_eligible=_bool_from_db(
+                d.get("voice_exemplar_eligible", 1), "voice_exemplar_eligible", True
+            ),
+            softening_protected=_bool_from_db(
+                d.get("softening_protected", 0), "softening_protected", False
+            ),
+            original_substrate=d.get("original_substrate"),
+            original_timestamp=d.get("original_timestamp"),
+            consolidation_authorized=_bool_from_db(
+                d.get("consolidation_authorized", 1), "consolidation_authorized", True
+            ),
+            decay_protected=_bool_from_db(
+                d.get("decay_protected", 0), "decay_protected", False
+            ),
             source=MemorySource.from_dict(source),
             lineage=Lineage.from_dict(lineage),
             owner_agent_id=d.get("owner_agent_id", "default"),

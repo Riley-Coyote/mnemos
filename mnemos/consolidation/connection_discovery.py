@@ -67,7 +67,11 @@ def run_connection_discovery(
         "fts_candidates": 0,
     }
 
-    all_active = store.get_active_engrams(agent_id=agent_id, limit=max_per_pass * 2)
+    all_active = store.get_active_engrams(
+        agent_id=agent_id,
+        limit=max_per_pass * 2,
+        require_consolidation_authorized=True,
+    )
 
     # ── Phase A: Discover new connections for underconnected engrams ──
     underconnected = []
@@ -89,7 +93,7 @@ def run_connection_discovery(
             for eid, score in emb_results:
                 if eid not in existing_target_ids and score > 0.3:
                     candidate = store.get_engram(eid)
-                    if candidate:
+                    if _same_mutable_scope(engram, candidate):
                         candidates.append(candidate)
                         stats["embedding_candidates"] += 1
 
@@ -100,7 +104,11 @@ def run_connection_discovery(
             try:
                 fts_results = store.search_fts(query, limit=10)
                 for match in fts_results:
-                    if match.id != engram.id and match.id not in existing_target_ids:
+                    if (
+                        match.id != engram.id
+                        and match.id not in existing_target_ids
+                        and _same_mutable_scope(engram, match)
+                    ):
                         # Don't duplicate embedding candidates
                         if not any(c.id == match.id for c in candidates):
                             candidates.append(match)
@@ -201,7 +209,7 @@ def _reclassify_old_connections(
         targets = []
         for conn in raw_connections:
             target = store.get_engram(conn.target_id)
-            if target:
+            if _same_mutable_scope(engram, target):
                 targets.append(target)
 
         if not targets:
@@ -232,3 +240,12 @@ def _reclassify_old_connections(
                     # It was sent to the LLM and came back NONE → remove
                     store.remove_connection(engram.id, conn.target_id)
                     stats["connections_removed"] += 1
+
+
+def _same_mutable_scope(source: Any, candidate: Any | None) -> bool:
+    if candidate is None:
+        return False
+    return (
+        bool(candidate.consolidation_authorized)
+        and candidate.owner_agent_id == source.owner_agent_id
+    )

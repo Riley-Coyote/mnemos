@@ -128,6 +128,9 @@ def run_softening_pass(
     dry_run_pairs: list[dict[str, Any]] = []
 
     for engram in all_engrams:
+        if engram.softening_protected or not engram.consolidation_authorized:
+            continue
+
         if engram.resolution <= minimum_resolution:
             continue  # Already at minimum resolution
 
@@ -274,7 +277,16 @@ def _select_voice_exemplars(all_engrams: list, k: int = 4) -> list:
     already agent-scoped by the caller — exemplars must come from the same
     agent whose memories are being rewritten.
     """
-    candidates = [e for e in all_engrams if e.content and len(e.content) >= 20]
+    candidates = [
+        e for e in all_engrams
+        if (
+            e.content
+            and len(e.content) >= 20
+            and e.voice_exemplar_eligible
+            and not e.softening_protected
+            and e.consolidation_authorized
+        )
+    ]
     candidates.sort(key=lambda e: (e.resolution, e.strength), reverse=True)
     return candidates[:k]
 

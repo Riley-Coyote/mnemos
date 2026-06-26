@@ -1114,6 +1114,28 @@ def test_u3b_identity_profile_from_imported_soul_is_semantic(tmp_path):
         store.save_identity(identity)
 
         engrams = store.get_active_engrams(agent_id="oliver", limit=100)
+        engram_content_joined = "\n".join(engram.content for engram in engrams)
+        engram_tags_flat = [tag for engram in engrams for tag in engram.tags]
+
+        assert engram_tags_flat.count("identity-kernel") >= 1, (
+            "identity_kernel engrams missing from store after import"
+        )
+        assert engram_tags_flat.count("david-context") >= 1, (
+            "david_context engrams missing from store after import"
+        )
+        assert engram_tags_flat.count("growth-substrate") >= 1, (
+            "growth_substrate engrams missing from store after import"
+        )
+        assert "Oliver" in engram_content_joined, (
+            "identity_kernel content not propagated to engrams"
+        )
+        assert "BSD" in engram_content_joined or "Burlington" in engram_content_joined, (
+            "david_context content not propagated to engrams"
+        )
+        assert "Plan Mode" in engram_content_joined or "Verify" in engram_content_joined, (
+            "growth_substrate content not propagated to engrams"
+        )
+
         profile = compute_identity_profile(store, engrams, identity)
 
         # 1. persistent_concerns is non-empty AND non-leaked
@@ -1332,7 +1354,8 @@ def test_u3b_infer_source_kind_raises_for_ambiguous_stale_engram(tmp_path):
     whose marker tags were hand-edited away AND no source_kind is recorded
     in the row-map, source_kind cannot be safely inferred. The prior silent
     default to identity_kernel produced profile-incoherent stale-row
-    construction. Now raises explicitly."""
+    construction. Preview now emits a row-level ACTION_ERROR instead of
+    crashing the batch."""
     store = EngramStore(tmp_path / "u3b.db")
     try:
         source = _source("david_context", "# David\nBSD school psych.")
@@ -1357,8 +1380,52 @@ def test_u3b_infer_source_kind_raises_for_ambiguous_stale_engram(tmp_path):
         # Now run an import that excludes the original source — _stale_mapped_rows
         # will try to infer source_kind for this target.
         other = replace(source, source_path="/pai/other.md", source_text="# Other\nelse")
-        with pytest.raises(ValueError, match="Cannot infer source_kind"):
-            preview_pai_import(store, [other])
+        preview = preview_pai_import(store, [other])
+        assert preview.counts == {ACTION_INSERT: 1, ACTION_ERROR: 1}
+        ambiguous = [row for row in preview.rows if "ambiguous stale row" in row.reason]
+        assert len(ambiguous) == 1
+        assert "Cannot infer source_kind" in ambiguous[0].reason
+    finally:
+        store.close()
+
+
+def test_u3b_ambiguous_stale_row_does_not_suppress_other_stale_rows(tmp_path):
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        current = _source("identity_kernel", "# Current\nkeep")
+        ambiguous_source = replace(
+            _source("david_context", "# David\nBSD school psych."),
+            source_path="/pai/david.md",
+        )
+        clean_stale_source = replace(
+            _source("growth_substrate", "# Verify\nClaimed done is not done."),
+            source_path="/pai/growth.md",
+        )
+        apply_pai_import(
+            store,
+            preview_pai_import(
+                store,
+                [current, ambiguous_source, clean_stale_source],
+            ),
+        )
+        ambiguous_target_id = preview_pai_import(store, [ambiguous_source]).rows[0].target_id
+
+        conn = store._get_conn()
+        conn.execute(
+            "UPDATE engrams SET tags = ? WHERE id = ?",
+            (json.dumps([]), ambiguous_target_id),
+        )
+        conn.execute(
+            "UPDATE pai_import_row_map SET source_kind = NULL WHERE target_id = ?",
+            (ambiguous_target_id,),
+        )
+        conn.commit()
+
+        preview = preview_pai_import(store, [current])
+        assert preview.counts == {ACTION_NOOP: 1, ACTION_ERROR: 2}
+        reasons = [row.reason for row in preview.rows if row.action == ACTION_ERROR]
+        assert any("ambiguous stale row" in reason for reason in reasons)
+        assert any("absent from current PAI import batch" in reason for reason in reasons)
     finally:
         store.close()
 

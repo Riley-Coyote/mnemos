@@ -1099,7 +1099,48 @@ def _stale_mapped_rows(
         key = (record["source_path"], record["source_anchor"], record["target_table"])
         if key in current_keys:
             continue
-        source_kind = _infer_source_kind_for_target(conn, record)
+        try:
+            source_kind = _infer_source_kind_for_target(conn, record)
+        except ValueError as exc:
+            # R-D6: one ambiguous stale row must not crash the whole preview.
+            # This row is ACTION_ERROR and cannot apply, so the fallback profile
+            # only supplies dataclass fields needed to surface the diagnostic.
+            profile = _PROFILES["identity_kernel"]
+            stale_rows.append(
+                PaiImportRow(
+                    job_id=record["job_id"],
+                    source_path=record["source_path"],
+                    source_anchor=record["source_anchor"],
+                    source_kind="identity_kernel",
+                    target_table=record["target_table"],
+                    target_id=record["target_id"],
+                    source_hash=record["source_hash"] or "",
+                    content=_target_content(
+                        conn, record["target_table"], record["target_id"]
+                    )
+                    or "",
+                    action=ACTION_ERROR,
+                    reason=(
+                        "ambiguous stale row: cannot infer source_kind "
+                        f"({exc}). Operator must reconcile pai_import_row_map "
+                        "before re-import."
+                    ),
+                    mapped_source_hash=record["source_hash"],
+                    target_projection_hash=_target_projection_hash_for_record(
+                        conn, record["target_table"], record["target_id"]
+                    ),
+                    tags=profile.tags,
+                    domain=profile.domain,
+                    tier=profile.tier,
+                    confidence=profile.confidence,
+                    voice_exemplar_eligible=profile.voice_exemplar_eligible,
+                    softening_protected=profile.softening_protected,
+                    decay_protected=profile.decay_protected,
+                    consolidation_authorized=profile.consolidation_authorized,
+                    foundational=profile.foundational,
+                )
+            )
+            continue
         profile = _PROFILES[source_kind]
         stale_row = PaiImportRow(
             job_id=record["job_id"],

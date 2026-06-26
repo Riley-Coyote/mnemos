@@ -20,6 +20,16 @@ from .pai import (
     split_identity_kernel,
     split_pai_source,
 )
+from .operator import (
+    ARTIFACT_SCHEMA,
+    MANIFEST_SCHEMA,
+    PaiManifest,
+    PaiOperatorRun,
+    apply_pai_manifest,
+    load_pai_manifest,
+    preview_pai_manifest,
+    write_pai_import_artifact,
+)
 
 __all__ = [
     "ACTION_ERROR",
@@ -28,11 +38,18 @@ __all__ = [
     "ACTION_PENDING",
     "ACTION_REPAIR",
     "ACTION_UPDATE",
+    "ARTIFACT_SCHEMA",
+    "MANIFEST_SCHEMA",
+    "PaiManifest",
     "PaiImportPreview",
     "PaiImportResult",
     "PaiImportRow",
     "PaiImportSource",
+    "PaiOperatorRun",
+    "apply_pai_manifest",
     "apply_pai_import",
+    "load_pai_manifest",
+    "preview_pai_manifest",
     "preview_pai_import",
     "split_beliefs",
     "split_david_context",
@@ -40,4 +57,5 @@ __all__ = [
     "split_hypomnema",
     "split_identity_kernel",
     "split_pai_source",
+    "write_pai_import_artifact",
 ]

@@ -14,6 +14,8 @@ Commands:
     mnemos bootstrap             Bootstrap a complete agent stack
     mnemos identity diff         Diff graph-derived identity against SOUL.md
     mnemos identity accept       Accept a divergence, open a new epoch
+    mnemos pai-import preview    Preview a PAI source manifest import
+    mnemos pai-import apply      Backup DB and apply a PAI source manifest
     mnemos remember CONTENT      Capture durable continuity from the CLI
     mnemos hermes install        Install Mnemos for Hermes Agent
     mnemos hermes quickstart     Safely install Mnemos for Hermes Agent
@@ -283,6 +285,29 @@ def main(argv: list[str] | None = None) -> int:
         help="Write config where safely supported instead of printing a snippet",
     )
 
+    # ── pai-import ──
+    p_pai = sub.add_parser("pai-import", help="Operator PAI import workflow")
+    pai_sub = p_pai.add_subparsers(dest="pai_import_command")
+    p_pai_preview = pai_sub.add_parser("preview", help="Preview a PAI source manifest")
+    p_pai_preview.add_argument("--manifest", required=True, help="PAI source manifest JSON")
+    p_pai_preview.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
+    p_pai_preview.add_argument("--artifact", default=None, help="Write preview artifact JSON")
+    p_pai_preview.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos/memory.db; intended only for a deliberate final import",
+    )
+    p_pai_apply = pai_sub.add_parser("apply", help="Backup DB and apply a PAI source manifest")
+    p_pai_apply.add_argument("--manifest", required=True, help="PAI source manifest JSON")
+    p_pai_apply.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
+    p_pai_apply.add_argument("--artifact", default=None, help="Write apply artifact JSON")
+    p_pai_apply.add_argument("--backup-dir", default=None, help="Directory for integrity-checked DB backup")
+    p_pai_apply.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos/memory.db; intended only for a deliberate final import",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -308,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
         "hermes": _cmd_hermes,
         "identity": _cmd_identity,
         "mcp": _cmd_mcp,
+        "pai-import": _cmd_pai_import,
     }
 
     handler = handlers.get(args.command)
@@ -717,6 +743,71 @@ def _cmd_identity(args: argparse.Namespace) -> int:
         return run_accept_command(args)
     print("Usage: mnemos identity {diff|accept}", file=sys.stderr)
     return 1
+
+
+def _cmd_pai_import(args: argparse.Namespace) -> int:
+    """Operator workflow for PAI source imports."""
+    command = getattr(args, "pai_import_command", None)
+    if command not in {"preview", "apply"}:
+        print("Usage: mnemos pai-import {preview|apply}", file=sys.stderr)
+        return 1
+
+    db_path = getattr(args, "db_path", None)
+    if not db_path:
+        print(
+            "mnemos pai-import requires --db-path; use a representative test DB",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        if command == "preview":
+            from .importer import ACTION_ERROR, preview_pai_manifest
+
+            run = preview_pai_manifest(
+                db_path=db_path,
+                manifest_path=args.manifest,
+                artifact_path=args.artifact,
+                allow_live_db=args.allow_live_db,
+            )
+            _print_pai_operator_run(run, db_path=db_path)
+            return 1 if run.preview.counts.get(ACTION_ERROR, 0) else 0
+
+        from .importer import apply_pai_manifest
+
+        run = apply_pai_manifest(
+            db_path=db_path,
+            manifest_path=args.manifest,
+            artifact_path=args.artifact,
+            backup_dir=args.backup_dir,
+            allow_live_db=args.allow_live_db,
+        )
+        _print_pai_operator_run(run, db_path=db_path)
+        return 0
+    except Exception as exc:
+        print(f"PAI import {command} failed: {exc}", file=sys.stderr)
+        return 1
+
+
+def _print_pai_operator_run(run, *, db_path: str) -> None:
+    title = "PAI import apply" if run.mode == "apply" else "PAI import preview"
+    print(title)
+    print("-" * len(title))
+    print(f"Job:      {run.manifest.job_id}")
+    print(f"DB:       {Path(db_path).expanduser()}")
+    print(f"Manifest: {run.manifest.path.expanduser()}")
+    if run.backup_path is not None:
+        print(f"Backup:   {run.backup_path}")
+    if run.artifact_path is not None:
+        print(f"Artifact: {run.artifact_path}")
+    print(f"Rows:     {len(run.result.rows if run.result is not None else run.preview.rows)}")
+    print(f"Counts:   {_format_counts(run.counts)}")
+
+
+def _format_counts(counts: dict[str, int]) -> str:
+    if not counts:
+        return "(none)"
+    return ", ".join(f"{name}={count}" for name, count in sorted(counts.items()))
 
 
 def _cmd_mcp(args: argparse.Namespace) -> int:

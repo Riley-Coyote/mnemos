@@ -37,6 +37,11 @@ def handle(
     engram = store.get_engram(engram_id)
     if not engram:
         return produced_events
+    if (
+        engram.owner_agent_id != config.agent_id
+        or not engram.consolidation_authorized
+    ):
+        return produced_events
 
     agent_name = config.agent_name
     prompt = f"""Something surprised you during memory formation.
@@ -87,6 +92,7 @@ Respond with:
         impact=f"Expectation violated: {expectation}. {reflection}",
         kind="emotional",
         tags=["surprise", "reflection"],
+        agent_id=config.agent_id,
         skip_surprise_detection=False,  # Surprise CAN chain — it's the original signal
     )
 

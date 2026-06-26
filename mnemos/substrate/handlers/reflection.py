@@ -70,7 +70,11 @@ def handle(
     trigger_impact = ""
     if trigger_engram_id:
         engram = store.get_engram(trigger_engram_id)
-        if engram:
+        if (
+            engram
+            and engram.owner_agent_id == config.agent_id
+            and engram.consolidation_authorized
+        ):
             trigger_content = engram.content
             trigger_impact = engram.impact or ""
 

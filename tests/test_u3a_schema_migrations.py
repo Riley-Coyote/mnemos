@@ -11,7 +11,7 @@ from mnemos.core.emotional_state import EmotionalState
 from mnemos.core.belief import Belief
 from mnemos.core.engram import Engram
 from mnemos.core.identity import AgentIdentity
-from mnemos.substrate.events import EventType
+from mnemos.substrate.events import EventType, SubstrateEvent
 from mnemos.store.migrations import (
     U3A_PHASE0_DECAY_FINDING,
     U3A_U3B_IMPORT_CONTRACT,
@@ -23,6 +23,8 @@ from mnemos.store.migrations import (
 )
 from mnemos.store.sqlite_store import EngramStore
 from mnemos.substrate.config import SubstrateConfig
+from mnemos.substrate.handlers import dreaming, initiation, wandering
+from mnemos.substrate.modulators import ModulatorState, compute_modulators
 from mnemos.substrate.tick import Substrate
 
 
@@ -103,6 +105,10 @@ class StubLLM:
 
     def complete(self, prompt: str) -> str:
         self.prompts.append(prompt)
+        return self.response
+
+    def structured_complete(self, system: str, user: str, temperature: float) -> str:
+        self.prompts.append(user)
         return self.response
 
 
@@ -1204,3 +1210,240 @@ def test_reflection_skips_unauthorized_imports_for_prompts_and_identity(tmp_path
         assert "unauthorized-theme" not in identity.epoch_state.self_summary
     finally:
         store.close()
+
+
+def test_substrate_dreaming_prompt_excludes_unauthorized_and_other_agent(tmp_path):
+    db_path = tmp_path / "dreaming-handler.db"
+    store = EngramStore(db_path)
+    softened = _old_engram(
+        "authorized fading dream seed",
+        accessibility=0.2,
+        strength=0.5,
+    )
+    unauthorized_vivid = _old_engram(
+        "UNAUTHORIZED-DREAM-PROMPT-LEAK",
+        accessibility=1.0,
+        strength=1.0,
+        consolidation_authorized=False,
+    )
+    other_agent_vivid = _old_engram(
+        "OTHER-AGENT-DREAM-PROMPT-LEAK",
+        accessibility=0.99,
+        strength=1.0,
+        owner_agent_id="claude",
+    )
+    authorized_vivid = _old_engram(
+        "AUTHORIZED-DREAM-PROMPT-SOURCE",
+        accessibility=0.9,
+        strength=0.9,
+    )
+    for engram in (softened, unauthorized_vivid, other_agent_vivid, authorized_vivid):
+        store.save_engram(engram)
+
+    stub = StubLLM('{"dream": "authorized synthesis", "significance": "set"}')
+    try:
+        dreaming.handle(
+            SubstrateEvent(
+                event_type=EventType.MEMORY_SOFTENED,
+                payload={"engram_id": softened.id},
+                source="test",
+            ),
+            SubstrateConfig(
+                agent_id="oliver",
+                db_path=str(db_path),
+                log_dir=str(tmp_path / "logs"),
+                dreaming_collision_threshold=0.1,
+            ),
+            ModulatorState(),
+            store,
+            stub,
+        )
+        prompt = stub.prompts[0]
+        assert "AUTHORIZED-DREAM-PROMPT-SOURCE" in prompt
+        assert "UNAUTHORIZED-DREAM-PROMPT-LEAK" not in prompt
+        assert "OTHER-AGENT-DREAM-PROMPT-LEAK" not in prompt
+        outputs = [
+            e.content
+            for e in store.get_active_engrams(agent_id="oliver", limit=20)
+        ]
+        assert "[dream] authorized synthesis" in outputs
+    finally:
+        store.close()
+
+
+def test_substrate_wandering_prompt_excludes_unauthorized_and_other_agent(tmp_path):
+    db_path = tmp_path / "wandering-handler.db"
+    store = EngramStore(db_path)
+    unauthorized = _old_engram(
+        "UNAUTHORIZED-WANDERING-PROMPT-LEAK",
+        consolidation_authorized=False,
+    )
+    unauthorized.created_at = "2999-01-01T00:00:00+00:00"
+    other_agent = _old_engram(
+        "OTHER-AGENT-WANDERING-PROMPT-LEAK",
+        owner_agent_id="claude",
+    )
+    other_agent.created_at = "2999-01-02T00:00:00+00:00"
+    authorized = _old_engram("AUTHORIZED-WANDERING-PROMPT-SOURCE")
+    authorized.created_at = "2026-01-01T00:00:00+00:00"
+    for engram in (unauthorized, other_agent, authorized):
+        store.save_engram(engram)
+
+    stub = StubLLM('{"thought": "authorized wandering", "origin": "authorized"}')
+    try:
+        wandering.handle(
+            SubstrateEvent(
+                event_type=EventType.SILENCE_EXTENDED,
+                payload={"silence_hours": 12},
+                source="test",
+            ),
+            SubstrateConfig(
+                agent_id="oliver",
+                db_path=str(db_path),
+                log_dir=str(tmp_path / "logs"),
+            ),
+            ModulatorState(),
+            store,
+            stub,
+        )
+        prompt = stub.prompts[0]
+        assert "AUTHORIZED-WANDERING-PROMPT-SOURCE" in prompt
+        assert "UNAUTHORIZED-WANDERING-PROMPT-LEAK" not in prompt
+        assert "OTHER-AGENT-WANDERING-PROMPT-LEAK" not in prompt
+        outputs = [
+            e.content
+            for e in store.get_active_engrams(agent_id="oliver", limit=20)
+        ]
+        assert "[wandering] authorized wandering" in outputs
+    finally:
+        store.close()
+
+
+def test_substrate_initiation_prompt_excludes_unauthorized_and_other_agent(tmp_path):
+    db_path = tmp_path / "initiation-handler.db"
+    store = EngramStore(db_path)
+    unauthorized = _old_engram(
+        "UNAUTHORIZED-INITIATION-PROMPT-LEAK",
+        accessibility=1.0,
+        strength=1.0,
+        consolidation_authorized=False,
+    )
+    other_agent = _old_engram(
+        "OTHER-AGENT-INITIATION-PROMPT-LEAK",
+        accessibility=0.99,
+        strength=1.0,
+        owner_agent_id="claude",
+    )
+    authorized_one = _old_engram(
+        "AUTHORIZED-INITIATION-PROMPT-SOURCE-ONE",
+        accessibility=0.8,
+        strength=0.8,
+    )
+    authorized_two = _old_engram(
+        "AUTHORIZED-INITIATION-PROMPT-SOURCE-TWO",
+        accessibility=0.7,
+        strength=0.8,
+    )
+    for engram in (unauthorized, other_agent, authorized_one, authorized_two):
+        store.save_engram(engram)
+
+    stub = StubLLM('{"pattern": "authorized pattern", "significance": "set"}')
+    try:
+        initiation.handle(
+            SubstrateEvent(
+                event_type=EventType.SALIENCE_ACCUMULATED,
+                payload={},
+                source="test",
+            ),
+            SubstrateConfig(
+                agent_id="oliver",
+                db_path=str(db_path),
+                log_dir=str(tmp_path / "logs"),
+            ),
+            ModulatorState(),
+            store,
+            stub,
+        )
+        prompt = stub.prompts[0]
+        assert "AUTHORIZED-INITIATION-PROMPT-SOURCE-ONE" in prompt
+        assert "AUTHORIZED-INITIATION-PROMPT-SOURCE-TWO" in prompt
+        assert "UNAUTHORIZED-INITIATION-PROMPT-LEAK" not in prompt
+        assert "OTHER-AGENT-INITIATION-PROMPT-LEAK" not in prompt
+        outputs = [
+            e.content
+            for e in store.get_active_engrams(agent_id="oliver", limit=20)
+        ]
+        assert "[initiation] authorized pattern" in outputs
+    finally:
+        store.close()
+
+
+def test_substrate_modulators_scope_to_authorized_agent_rows(tmp_path):
+    db_path = tmp_path / "modulators.db"
+    store = EngramStore(db_path)
+    authorized = _old_engram(
+        "authorized low vividness modulator row",
+        accessibility=0.2,
+        strength=0.2,
+    )
+    unauthorized = _old_engram(
+        "unauthorized high vividness modulator row",
+        accessibility=1.0,
+        strength=1.0,
+        consolidation_authorized=False,
+    )
+    other_agent = _old_engram(
+        "other agent high vividness modulator row",
+        accessibility=1.0,
+        strength=1.0,
+        owner_agent_id="claude",
+    )
+    for engram in (authorized, unauthorized, other_agent):
+        store.save_engram(engram)
+    store.close()
+
+    modulators = compute_modulators(
+        str(db_path),
+        agent_id="oliver",
+        require_consolidation_authorized=True,
+    )
+
+    assert modulators.resolution == pytest.approx(0.2)
+
+
+def test_substrate_temporal_event_ignores_unauthorized_and_other_agent_rows(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("MNEMOS_DISABLE_DOTENV", "1")
+    db_path = tmp_path / "temporal.db"
+    store = EngramStore(db_path)
+    authorized = _old_engram("authorized old temporal row")
+    authorized.created_at = "2026-01-01T00:00:00+00:00"
+    unauthorized = _old_engram(
+        "unauthorized future temporal row",
+        consolidation_authorized=False,
+    )
+    unauthorized.created_at = "2999-01-01T00:00:00+00:00"
+    other_agent = _old_engram(
+        "other agent future temporal row",
+        owner_agent_id="claude",
+    )
+    other_agent.created_at = "2999-01-02T00:00:00+00:00"
+    for engram in (authorized, unauthorized, other_agent):
+        store.save_engram(engram)
+    store.close()
+
+    substrate = Substrate(
+        SubstrateConfig(
+            agent_id="oliver",
+            db_path=str(db_path),
+            log_dir=str(tmp_path / "logs"),
+            silence_threshold_hours=1,
+        )
+    )
+    try:
+        events = substrate._check_temporal({})
+        assert [event.event_type for event in events] == [EventType.SILENCE_EXTENDED]
+    finally:
+        substrate.store.close()

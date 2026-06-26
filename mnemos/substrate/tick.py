@@ -119,6 +119,8 @@ class Substrate:
         modulators = compute_modulators(
             self.db_path,
             recent_window_hours=self.config.recent_window_hours,
+            agent_id=self.config.agent_id,
+            require_consolidation_authorized=True,
         )
         log.info(
             f"Modulators: arousal={modulators.arousal:.2f} openness={modulators.openness:.2f} "
@@ -236,9 +238,11 @@ class Substrate:
         recent = conn.execute("""
             SELECT id FROM engrams
             WHERE state = 'active'
+              AND owner_agent_id = ?
+              AND consolidation_authorized = 1
             ORDER BY created_at DESC
             LIMIT ?
-        """, (self.config.connection_discovery_limit,)).fetchall()
+        """, (self.config.agent_id, self.config.connection_discovery_limit)).fetchall()
         conn.close()
 
         new_connections = 0
@@ -250,6 +254,13 @@ class Substrate:
                 similar = self.embedding_index.search(engram.content, limit=3)
                 for match in similar:
                     if match["id"] != row[0]:
+                        matched_engram = self.store.get_engram(match["id"])
+                        if (
+                            not matched_engram
+                            or matched_engram.owner_agent_id != self.config.agent_id
+                            or not matched_engram.consolidation_authorized
+                        ):
+                            continue
                         existing = sqlite3.connect(self.db_path)
                         exists = existing.execute(
                             "SELECT COUNT(*) FROM connections WHERE (from_id=? AND to_id=?) OR (from_id=? AND to_id=?)",
@@ -301,9 +312,11 @@ class Substrate:
         last_memory = conn.execute("""
             SELECT created_at FROM engrams
             WHERE state = 'active'
+              AND owner_agent_id = ?
+              AND consolidation_authorized = 1
             ORDER BY created_at DESC
             LIMIT 1
-        """).fetchone()
+        """, (self.config.agent_id,)).fetchone()
         conn.close()
 
         if last_memory:
@@ -397,7 +410,11 @@ if __name__ == "__main__":
         print(f"Store: {substrate.store.count_engrams(agent_id=config.agent_id)} engrams")
         beliefs = substrate.store.get_beliefs(agent_id=config.agent_id)
         print(f"Beliefs: {len(beliefs)}")
-        mods = compute_modulators(substrate.db_path)
+        mods = compute_modulators(
+            substrate.db_path,
+            agent_id=config.agent_id,
+            require_consolidation_authorized=True,
+        )
         print(f"Modulators: arousal={mods.arousal} openness={mods.openness} resolution={mods.resolution}")
     else:
         summary = substrate.tick()

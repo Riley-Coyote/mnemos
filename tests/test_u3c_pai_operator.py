@@ -1,5 +1,6 @@
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 
 from mnemos.cli import main
@@ -86,6 +87,16 @@ def test_u3c_watch_apply_manifest_backs_up_and_tombstones_removed_source(tmp_pat
     assert run.backup_path is not None
     assert run.backup_path.exists()
     tombstone = next(row for row in run.result.rows if row.action == ACTION_TOMBSTONE)
+    backup_conn = sqlite3.connect(run.backup_path)
+    backup_conn.row_factory = sqlite3.Row
+    try:
+        backup_row = backup_conn.execute(
+            "SELECT state FROM engrams WHERE id = ?",
+            (tombstone.target_id,),
+        ).fetchone()
+        assert backup_row["state"] == "active"
+    finally:
+        backup_conn.close()
     store = EngramStore(db_path)
     try:
         row = store._get_conn().execute(
@@ -121,6 +132,11 @@ def test_u3c_cli_watch_preview_and_apply(tmp_path, capsys):
     assert result == 0
     assert "PAI watch preview" in out
     assert "tombstone=1" in out
+    assert preview_artifact.exists()
+    preview_payload = json.loads(preview_artifact.read_text(encoding="utf-8"))
+    assert preview_payload["schema"] == ARTIFACT_SCHEMA
+    assert preview_payload["mode"] == "watch-preview"
+    assert preview_payload["counts"] == {ACTION_NOOP: 1, ACTION_TOMBSTONE: 1}
 
     apply_artifact = tmp_path / "cli-watch-apply.json"
     result = main(
@@ -141,3 +157,9 @@ def test_u3c_cli_watch_preview_and_apply(tmp_path, capsys):
     assert result == 0
     assert "PAI watch apply" in out
     assert "Backup:" in out
+    assert apply_artifact.exists()
+    apply_payload = json.loads(apply_artifact.read_text(encoding="utf-8"))
+    assert apply_payload["schema"] == ARTIFACT_SCHEMA
+    assert apply_payload["mode"] == "watch-apply"
+    assert apply_payload["backup_path"] is not None
+    assert apply_payload["counts"] == {ACTION_NOOP: 1, ACTION_TOMBSTONE: 1}

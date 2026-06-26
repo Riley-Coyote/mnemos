@@ -5,7 +5,9 @@ import pytest
 
 from mnemos.importer import (
     ACTION_DEACTIVATE,
+    ACTION_ERROR,
     ACTION_NOOP,
+    ACTION_REPAIR,
     ACTION_REVIEW,
     ACTION_TOMBSTONE,
     PaiImportPreview,
@@ -63,12 +65,25 @@ def test_u3c_removed_engram_section_tombstones_target_idempotently(tmp_path):
             (removed_id,),
         ).fetchone()
         assert archive["archive_reason"] == "pai_import_tombstone:u3c-job"
+        row_map = store._get_conn().execute(
+            "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
+            (removed_id,),
+        ).fetchone()
+        assert row_map["tombstone_at"] is not None
         version = store._get_conn().execute(
             "SELECT content_snapshot, change_reason FROM versions WHERE engram_id = ?",
             (removed_id,),
         ).fetchone()
         assert version["content_snapshot"] == "# B\nbravo"
         assert version["change_reason"] == "pai_import_tombstone:u3c-job"
+        tombstone_events = store._get_conn().execute(
+            """
+            SELECT COUNT(*) FROM pai_import_events
+            WHERE target_id = ? AND action = ?
+            """,
+            (removed_id, ACTION_TOMBSTONE),
+        ).fetchone()[0]
+        assert tombstone_events == 1
 
         replay = preview_pai_watch_update(store, [removed])
         apply_pai_watch_update(store, replay)
@@ -77,6 +92,146 @@ def test_u3c_removed_engram_section_tombstones_target_idempotently(tmp_path):
             (removed_id,),
         ).fetchone()[0]
         assert version_count == 1
+        replayed_tombstone_events = store._get_conn().execute(
+            """
+            SELECT COUNT(*) FROM pai_import_events
+            WHERE target_id = ? AND action = ?
+            """,
+            (removed_id, ACTION_TOMBSTONE),
+        ).fetchone()[0]
+        assert replayed_tombstone_events == 1
+    finally:
+        store.close()
+
+
+def test_u3c_returned_pai_tombstoned_engram_reactivates(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha\n\n# B\nbravo")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        removed_id = next(row for row in first.rows if row.source_anchor == "h:b:001").target_id
+
+        removed = replace(source, source_text="# A\nalpha")
+        apply_pai_watch_update(store, preview_pai_watch_update(store, [removed]))
+
+        returned = preview_pai_watch_update(store, [source])
+        assert returned.counts == {ACTION_NOOP: 1, ACTION_REPAIR: 1}
+        repair = _row_with_action(returned, ACTION_REPAIR)
+        assert repair.target_id == removed_id
+        assert "reactivating mapped engram" in repair.reason
+
+        result = apply_pai_watch_update(store, returned)
+        assert result.counts == {ACTION_NOOP: 1, ACTION_REPAIR: 1}
+        row = store._get_conn().execute(
+            "SELECT state FROM engrams WHERE id = ?",
+            (removed_id,),
+        ).fetchone()
+        assert row["state"] == "active"
+        row_map = store._get_conn().execute(
+            "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
+            (removed_id,),
+        ).fetchone()
+        assert row_map["tombstone_at"] is None
+        archive = store._get_conn().execute(
+            "SELECT 1 FROM archive WHERE id = ?",
+            (removed_id,),
+        ).fetchone()
+        assert archive is None
+    finally:
+        store.close()
+
+
+def test_u3c_legacy_pai_tombstoned_engram_reactivates_without_row_map_tombstone(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha\n\n# B\nbravo")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        legacy_id = next(row for row in first.rows if row.source_anchor == "h:b:001").target_id
+        conn = store._get_conn()
+        engram = conn.execute("SELECT * FROM engrams WHERE id = ?", (legacy_id,)).fetchone()
+        conn.execute("UPDATE engrams SET state = 'archived' WHERE id = ?", (legacy_id,))
+        conn.execute(
+            """
+            INSERT INTO archive (
+                id, content, content_at_encoding, kind, tags,
+                archived_at, archive_reason, final_accessibility
+            ) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?, ?)
+            """,
+            (
+                legacy_id,
+                engram["content"],
+                engram["content_at_encoding"],
+                engram["kind"],
+                engram["tags"],
+                "pai_import_tombstone:u3c-job",
+                engram["accessibility"],
+            ),
+        )
+        conn.execute(
+            "UPDATE pai_import_row_map SET tombstone_at = NULL WHERE target_id = ?",
+            (legacy_id,),
+        )
+        conn.commit()
+
+        returned = preview_pai_watch_update(store, [source])
+        assert returned.counts == {ACTION_NOOP: 1, ACTION_REPAIR: 1}
+        repair = _row_with_action(returned, ACTION_REPAIR)
+        assert repair.target_id == legacy_id
+        assert "reactivating mapped engram" in repair.reason
+
+        result = apply_pai_watch_update(store, returned)
+        assert result.counts == {ACTION_NOOP: 1, ACTION_REPAIR: 1}
+        row = conn.execute("SELECT state FROM engrams WHERE id = ?", (legacy_id,)).fetchone()
+        assert row["state"] == "active"
+        archive = conn.execute("SELECT 1 FROM archive WHERE id = ?", (legacy_id,)).fetchone()
+        assert archive is None
+    finally:
+        store.close()
+
+
+def test_u3c_manually_archived_engram_still_refuses_reactivation(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+        store._get_conn().execute(
+            "UPDATE engrams SET state = 'archived' WHERE id = ?",
+            (target_id,),
+        )
+        store._get_conn().commit()
+
+        preview = preview_pai_watch_update(store, [source])
+        assert preview.counts == {ACTION_ERROR: 1}
+        assert "refusing implicit PAI reactivation" in preview.rows[0].reason
+    finally:
+        store.close()
+
+
+def test_u3c_empty_watched_source_tombstones_all_mapped_rows(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        imported_id = first.rows[0].target_id
+
+        empty = replace(source, source_text="")
+        preview = preview_pai_watch_update(store, [empty])
+
+        assert preview.counts == {ACTION_TOMBSTONE: 1}
+        tombstone = _row_with_action(preview, ACTION_TOMBSTONE)
+        assert tombstone.target_id == imported_id
+
+        apply_pai_watch_update(store, preview)
+        row = store._get_conn().execute(
+            "SELECT state FROM engrams WHERE id = ?",
+            (imported_id,),
+        ).fetchone()
+        assert row["state"] == "archived"
     finally:
         store.close()
 

@@ -57,7 +57,11 @@ class PaiOperatorRun:
         return self.preview.counts
 
 
-def load_pai_manifest(path: str | Path) -> PaiManifest:
+def load_pai_manifest(
+    path: str | Path,
+    *,
+    allow_missing_sources: bool = False,
+) -> PaiManifest:
     """Load a JSON PAI import manifest into canonical import sources.
 
     Manifest shape:
@@ -107,8 +111,15 @@ def load_pai_manifest(path: str | Path) -> PaiManifest:
         source_kind = _clean_required(
             config.get("source_kind") or config.get("kind"), "source_kind"
         )
-        source_file = _resolve_source_file(manifest_path, raw_source_path)
-        source_text = source_file.read_text(encoding="utf-8")
+        source_file = _resolve_source_path(manifest_path, raw_source_path)
+        if not source_file.exists():
+            if not allow_missing_sources:
+                raise FileNotFoundError(source_file)
+            source_text = ""
+        else:
+            if not source_file.is_file():
+                raise ValueError(f"PAI source path is not a file: {source_file}")
+            source_text = source_file.read_text(encoding="utf-8")
         original_substrate = _clean_required(
             config.get("original_substrate", defaults.get("original_substrate")),
             "original_substrate",
@@ -192,7 +203,7 @@ def preview_pai_watch_manifest(
             "Preview is read-only by contract; bootstrap a representative DB "
             "via `mnemos init --db-path <path>` first."
         )
-    manifest = load_pai_manifest(manifest_path)
+    manifest = load_pai_manifest(manifest_path, allow_missing_sources=True)
     store = EngramStore(db, read_only=True)
     try:
         preview = preview_pai_watch_update(store, manifest.sources)
@@ -273,7 +284,7 @@ def apply_pai_watch_manifest(
     if not db.exists():
         raise FileNotFoundError(f"PAI watch apply requires an existing database: {db}")
 
-    manifest = load_pai_manifest(manifest_path)
+    manifest = load_pai_manifest(manifest_path, allow_missing_sources=True)
     backup_path = _backup_path(db, manifest.job_id, backup_dir)
     backup_sqlite_db(db, backup_path)
 
@@ -401,7 +412,7 @@ def _source_config(value: Any) -> dict[str, Any]:
     raise ValueError("PAI source config must be a source kind string or object")
 
 
-def _resolve_source_file(manifest_path: Path, source_path: str) -> Path:
+def _resolve_source_path(manifest_path: Path, source_path: str) -> Path:
     raw = _clean_required(source_path, "source_path")
     path = Path(raw).expanduser()
     if not path.is_absolute():
@@ -412,10 +423,6 @@ def _resolve_source_file(manifest_path: Path, source_path: str) -> Path:
         resolved.relative_to(root)
     except ValueError as exc:
         raise ValueError("PAI source path must stay within the manifest directory") from exc
-    if not resolved.exists():
-        raise FileNotFoundError(resolved)
-    if not resolved.is_file():
-        raise ValueError(f"PAI source path is not a file: {resolved}")
     return resolved
 
 

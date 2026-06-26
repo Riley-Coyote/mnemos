@@ -1516,3 +1516,145 @@ def test_u3b_row_map_populates_extended_columns_on_insert(tmp_path):
         assert row["tombstone_at"] is None
     finally:
         store.close()
+
+
+# ── Hardening pass III: ce-debug — recovery-doc trap documentation ──
+
+
+def test_u3b_drift_error_message_documents_recovery_options_honestly(tmp_path):
+    """ce-debug finding: the prior 'Reconcile manually or clear
+    content_at_last_import' message was a trap — an operator who followed it
+    naively (clearing baseline to NULL OR setting baseline to current target)
+    had their hand-edit silently clobbered on next import.
+
+    The fix is in the message TEXT: name the ONLY non-destructive path
+    (edit the source file) AND explicitly warn that EITHER baseline
+    manipulation (NULL or current-target) clobbers. The asymmetry is real:
+    there's no row-map-only recovery that preserves a hand-edit.
+    """
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source("identity_kernel", "# Core\nI am Oliver.")
+        apply_pai_import(store, preview_pai_import(store, [source]))
+        target_id = preview_pai_import(store, [source]).rows[0].target_id
+
+        # Operator hand-edit
+        store._get_conn().execute(
+            "UPDATE engrams SET content = ? WHERE id = ?",
+            ("# Core\nI am Oliver. (operator edit)", target_id),
+        )
+        store._get_conn().commit()
+
+        preview = preview_pai_import(store, [source])
+        assert preview.counts == {ACTION_ERROR: 1}
+        reason = preview.rows[0].reason
+
+        # Headline still names the failure mode (existing test contract)
+        assert "diverged from importer baseline" in reason
+        assert "operator hand-edit detected" in reason
+
+        # Non-destructive recovery is named
+        assert "edit the source file" in reason, (
+            "Must name the source-side fix as the only non-destructive option"
+        )
+
+        # Destructive paths are explicitly labeled DESTRUCTIVE
+        assert "DESTRUCTIVE" in reason and "NULL" in reason, (
+            "NULL-clear must be labeled DESTRUCTIVE"
+        )
+
+        # The trap-shaped intent (set baseline to current target) is
+        # explicitly disclaimed — operators must not believe this preserves
+        # their edit
+        assert "does NOT preserve" in reason or "still clobbers" in reason, (
+            "Must warn that setting baseline to current-target does NOT "
+            "preserve the hand-edit"
+        )
+    finally:
+        store.close()
+
+
+def test_u3b_recovery_doc_NULL_clobbers_hand_edit_as_documented(tmp_path):
+    """Operator follows the NULL path: per the new message, this is
+    DESTRUCTIVE. Test asserts the clobber actually happens — so the
+    documentation matches the behavior.
+    """
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        canonical = "# Core\ncanonical source content"
+        source = _source("identity_kernel", canonical)
+        apply_pai_import(store, preview_pai_import(store, [source]))
+        target_id = preview_pai_import(store, [source]).rows[0].target_id
+
+        hand_edited = "# Core\nhand-edited substance the operator added"
+        conn = store._get_conn()
+        conn.execute(
+            "UPDATE engrams SET content = ? WHERE id = ?",
+            (hand_edited, target_id),
+        )
+        # Operator follows the NULL path
+        conn.execute(
+            "UPDATE pai_import_row_map SET content_at_last_import = NULL WHERE target_id = ?",
+            (target_id,),
+        )
+        conn.commit()
+
+        preview = preview_pai_import(store, [source])
+        assert ACTION_REPAIR in preview.counts
+        apply_pai_import(store, preview)
+
+        final = conn.execute(
+            "SELECT content FROM engrams WHERE id = ?", (target_id,)
+        ).fetchone()["content"]
+        assert final == canonical, (
+            f"NULL path per message: discards edit, restores source. "
+            f"Expected {canonical!r}, got {final!r}."
+        )
+    finally:
+        store.close()
+
+
+def test_u3b_recovery_doc_baseline_to_current_target_ALSO_clobbers(tmp_path):
+    """The trap path: operator follows what FEELS like a 'soft' recovery —
+    'my edit IS the baseline now' — by setting content_at_last_import to
+    their current target content. The message now explicitly disclaims this:
+    it does NOT preserve the edit. The next REPAIR still clobbers because
+    source still diverges from the (now-aligned) target.
+
+    This test pins the behavior so the message stays honest.
+    """
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        canonical = "# Core\ncanonical"
+        source = _source("identity_kernel", canonical)
+        apply_pai_import(store, preview_pai_import(store, [source]))
+        target_id = preview_pai_import(store, [source]).rows[0].target_id
+
+        hand_edited = "# Core\ncanonical plus operator note"
+        conn = store._get_conn()
+        conn.execute(
+            "UPDATE engrams SET content = ? WHERE id = ?",
+            (hand_edited, target_id),
+        )
+        # Operator's well-intentioned attempt: "my edit is new baseline"
+        conn.execute(
+            "UPDATE pai_import_row_map SET content_at_last_import = ? WHERE target_id = ?",
+            (hand_edited, target_id),
+        )
+        conn.commit()
+
+        preview = preview_pai_import(store, [source])
+        # baseline==target now → divergence check passes; source_hash unchanged
+        # → REPAIR fires because target_matches_row sees engram.content != row.content
+        assert ACTION_REPAIR in preview.counts
+        apply_pai_import(store, preview)
+
+        final = conn.execute(
+            "SELECT content FROM engrams WHERE id = ?", (target_id,)
+        ).fetchone()["content"]
+        assert final == canonical, (
+            "Setting baseline to current target does NOT preserve hand-edit; "
+            f"REPAIR clobbers. Expected {canonical!r}, got {final!r}."
+        )
+    finally:
+        store.close()

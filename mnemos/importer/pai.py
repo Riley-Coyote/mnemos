@@ -238,12 +238,20 @@ SPLITTERS: dict[str, Callable[[PaiImportSource], list[PaiImportRow]]] = {
 
 
 def split_pai_source(source: PaiImportSource) -> list[PaiImportRow]:
+    return _split_pai_source(source, allow_empty=False)
+
+
+def _split_pai_source(
+    source: PaiImportSource,
+    *,
+    allow_empty: bool,
+) -> list[PaiImportRow]:
     source = _canonical_source(source)
     source_kind = _clean_required(source.source_kind, "source_kind")
     if source_kind not in SPLITTERS:
         supported = ", ".join(sorted(SPLITTERS))
         raise ValueError(f"Unsupported PAI source_kind {source_kind!r}; expected {supported}")
-    return SPLITTERS[source_kind](source)
+    return _split_with_profile(source, allow_empty=allow_empty)
 
 
 def preview_pai_import(
@@ -273,13 +281,16 @@ def preview_pai_watch_update(
     The watcher operates on a full current source snapshot, so absence is
     meaningful and maps to per-table lifecycle actions.
     """
-    rows = _collect_rows(sources)
-    job_id = _single_job_id(rows)
+    source_tuple = tuple(_canonical_source(source) for source in sources)
+    job_id = _single_source_job_id(source_tuple)
+    rows = _collect_rows(source_tuple, allow_empty_sources=True)
     conn = store._get_conn()
 
     preview_rows: list[PaiImportRow] = []
     for row in rows:
-        preview_rows.append(_classify_row(conn, row))
+        preview_rows.append(
+            _classify_row(conn, row, allow_pai_tombstone_reactivation=True)
+        )
     preview_rows.extend(
         _stale_mapped_rows(conn, job_id, rows, missing_source_policy="u3c")
     )
@@ -435,23 +446,29 @@ def apply_pai_watch_update(
                 applied.append(row)
                 continue
             if row.action in _U3C_RESERVED_ACTIONS:
-                _apply_u3c_lifecycle_row_no_commit(conn, row)
-                insert_pai_import_event(
-                    conn,
-                    job_id=row.job_id,
-                    source_path=row.source_path,
-                    source_anchor=row.source_anchor,
-                    target_table=row.target_table,
-                    target_id=row.target_id,
-                    action=row.action,
-                    source_hash_before=row.mapped_source_hash,
-                    source_hash_after=row.source_hash,
-                    change_reason=row.reason,
-                )
-                applied.append(row)
+                changed = _apply_u3c_lifecycle_row_no_commit(conn, row)
+                if changed:
+                    insert_pai_import_event(
+                        conn,
+                        job_id=row.job_id,
+                        source_path=row.source_path,
+                        source_anchor=row.source_anchor,
+                        target_table=row.target_table,
+                        target_id=row.target_id,
+                        action=row.action,
+                        source_hash_before=row.mapped_source_hash,
+                        source_hash_after=row.source_hash,
+                        change_reason=row.reason,
+                    )
+                    applied.append(row)
                 continue
 
-            _write_target_row(store, conn, row)
+            _write_target_row(
+                store,
+                conn,
+                row,
+                allow_pai_tombstone_reactivation=True,
+            )
             upsert_pai_import_row(
                 conn,
                 job_id=row.job_id,
@@ -489,11 +506,17 @@ def apply_pai_watch_update(
     return PaiImportResult(job_id=preview.job_id, rows=tuple(applied))
 
 
-def _collect_rows(sources: Iterable[PaiImportSource]) -> list[PaiImportRow]:
+def _collect_rows(
+    sources: Iterable[PaiImportSource],
+    *,
+    allow_empty_sources: bool = False,
+) -> list[PaiImportRow]:
     rows: list[PaiImportRow] = []
     for source in sources:
-        rows.extend(split_pai_source(source))
+        rows.extend(_split_pai_source(source, allow_empty=allow_empty_sources))
     if not rows:
+        if allow_empty_sources:
+            return rows
         raise ValueError("At least one PAI import row is required")
     seen_keys: set[tuple[str, str, str, str]] = set()
     for row in rows:
@@ -511,17 +534,35 @@ def _single_job_id(rows: list[PaiImportRow]) -> str:
     return next(iter(job_ids))
 
 
-def _split_expected_kind(source: PaiImportSource, expected_kind: str) -> list[PaiImportRow]:
+def _single_source_job_id(sources: tuple[PaiImportSource, ...]) -> str:
+    if not sources:
+        raise ValueError("At least one PAI import source is required")
+    job_ids = {source.job_id for source in sources}
+    if len(job_ids) != 1:
+        raise ValueError("A preview/apply batch must use one job_id")
+    return next(iter(job_ids))
+
+
+def _split_expected_kind(
+    source: PaiImportSource,
+    expected_kind: str,
+    *,
+    allow_empty: bool = False,
+) -> list[PaiImportRow]:
     source = _canonical_source(source)
     if source.source_kind != expected_kind:
         raise ValueError(
             f"{expected_kind} splitter requires source_kind={expected_kind!r}; "
             f"got {source.source_kind!r}"
         )
-    return _split_with_profile(source)
+    return _split_with_profile(source, allow_empty=allow_empty)
 
 
-def _split_with_profile(source: PaiImportSource) -> list[PaiImportRow]:
+def _split_with_profile(
+    source: PaiImportSource,
+    *,
+    allow_empty: bool = False,
+) -> list[PaiImportRow]:
     _validate_source(source)
     profile = _PROFILES[source.source_kind]
     blocks = _split_blocks(source.source_text)
@@ -534,7 +575,7 @@ def _split_with_profile(source: PaiImportSource) -> list[PaiImportRow]:
         )
         for anchor, content in blocks
     ]
-    if not rows:
+    if not rows and not allow_empty:
         raise ValueError(f"No importable content in {source.source_path!r}")
     return rows
 
@@ -589,9 +630,16 @@ def _write_target_row(
     store: EngramStore,
     conn,
     row: PaiImportRow,
+    *,
+    allow_pai_tombstone_reactivation: bool = False,
 ) -> None:
     if row.target_table == TARGET_ENGRAMS:
-        _write_pai_engram_no_commit(store, conn, row)
+        _write_pai_engram_no_commit(
+            store,
+            conn,
+            row,
+            allow_pai_tombstone_reactivation=allow_pai_tombstone_reactivation,
+        )
     elif row.target_table == TARGET_BELIEFS:
         _write_pai_belief_no_commit(store, conn, row)
     elif row.target_table == TARGET_HYPOMNEMA:
@@ -670,12 +718,32 @@ def _row_to_belief(row: PaiImportRow) -> Belief:
     )
 
 
-def _write_pai_engram_no_commit(store: EngramStore, conn, row: PaiImportRow) -> None:
+def _write_pai_engram_no_commit(
+    store: EngramStore,
+    conn,
+    row: PaiImportRow,
+    *,
+    allow_pai_tombstone_reactivation: bool = False,
+) -> None:
     existing = _target_record(conn, row)
     engram = _row_to_engram(row)
     if existing is None:
         store._save_engram_no_commit(conn, engram)
         return
+
+    reactivating = existing["state"] == "archived"
+    if reactivating:
+        if not allow_pai_tombstone_reactivation or not _is_pai_tombstoned_engram(
+            conn, row
+        ):
+            raise ValueError(
+                "mapped target is archived; refusing implicit PAI reactivation"
+            )
+        conn.execute(
+            "DELETE FROM archive WHERE id = ? AND archive_reason = ?",
+            (row.target_id, _pai_tombstone_reason(row)),
+        )
+        _clear_row_map_tombstone_no_commit(conn, row)
 
     if existing["content"] != row.content:
         next_version = conn.execute(
@@ -721,7 +789,8 @@ def _write_pai_engram_no_commit(store: EngramStore, conn, row: PaiImportRow) -> 
             original_substrate = ?,
             original_timestamp = ?,
             consolidation_authorized = ?,
-            decay_protected = ?
+            decay_protected = ?,
+            state = 'active'
         WHERE id = ?
         """,
         (
@@ -817,31 +886,30 @@ def _write_pai_belief_no_commit(store: EngramStore, conn, row: PaiImportRow) -> 
     )
 
 
-def _apply_u3c_lifecycle_row_no_commit(conn, row: PaiImportRow) -> None:
+def _apply_u3c_lifecycle_row_no_commit(conn, row: PaiImportRow) -> bool:
     if row.action == ACTION_TOMBSTONE:
         if row.target_table != TARGET_ENGRAMS:
             raise ValueError("ACTION_TOMBSTONE requires an engrams target")
-        _tombstone_pai_engram_no_commit(conn, row)
-        return
+        return _tombstone_pai_engram_no_commit(conn, row)
     if row.action == ACTION_DEACTIVATE:
         if row.target_table != TARGET_HYPOMNEMA:
             raise ValueError("ACTION_DEACTIVATE requires a hypomnema target")
-        _deactivate_pai_hypomnema_no_commit(conn, row)
-        return
+        return _deactivate_pai_hypomnema_no_commit(conn, row)
     if row.action == ACTION_REVIEW:
         if row.target_table != TARGET_BELIEFS:
             raise ValueError("ACTION_REVIEW requires a beliefs target")
-        _review_pai_belief_no_commit(conn, row)
-        return
+        return _review_pai_belief_no_commit(conn, row)
     raise ValueError(f"Unsupported U3c lifecycle action: {row.action}")
 
 
-def _tombstone_pai_engram_no_commit(conn, row: PaiImportRow) -> None:
+def _tombstone_pai_engram_no_commit(conn, row: PaiImportRow) -> bool:
     existing = _target_record(conn, row)
     if existing is None:
         raise ValueError(f"Cannot tombstone missing engram target {row.target_id!r}")
     if existing["state"] == "archived":
-        return
+        if _is_pai_tombstoned_engram(conn, row):
+            _mark_row_map_tombstone_no_commit(conn, row)
+        return False
 
     next_version = conn.execute(
         "SELECT COALESCE(MAX(version_num), 0) + 1 FROM versions WHERE engram_id = ?",
@@ -884,14 +952,16 @@ def _tombstone_pai_engram_no_commit(conn, row: PaiImportRow) -> None:
     )
     conn.execute("UPDATE engrams SET state = 'archived' WHERE id = ?", (row.target_id,))
     conn.execute("DELETE FROM engrams_fts WHERE id = ?", (row.target_id,))
+    _mark_row_map_tombstone_no_commit(conn, row)
+    return True
 
 
-def _deactivate_pai_hypomnema_no_commit(conn, row: PaiImportRow) -> None:
+def _deactivate_pai_hypomnema_no_commit(conn, row: PaiImportRow) -> bool:
     existing = _target_record(conn, row)
     if existing is None:
         raise ValueError(f"Cannot deactivate missing hypomnema target {row.target_id!r}")
     if not bool(existing["active"]):
-        return
+        return False
 
     revisions = _safe_json_loads(existing["revisions_json"], [])
     if not isinstance(revisions, list):
@@ -915,14 +985,74 @@ def _deactivate_pai_hypomnema_no_commit(conn, row: PaiImportRow) -> None:
         """,
         (json.dumps(revisions), now, row.target_id),
     )
+    return True
 
 
-def _review_pai_belief_no_commit(conn, row: PaiImportRow) -> None:
+def _pai_tombstone_reason(row: PaiImportRow) -> str:
+    return f"pai_import_tombstone:{row.job_id}"
+
+
+def _is_pai_tombstoned_engram(conn, row: PaiImportRow) -> bool:
+    if row.target_table != TARGET_ENGRAMS:
+        return False
+    record = _target_record(conn, row)
+    if record is None or record["state"] != "archived":
+        return False
+    archive = conn.execute(
+        "SELECT archive_reason FROM archive WHERE id = ?",
+        (row.target_id,),
+    ).fetchone()
+    return archive is not None and archive["archive_reason"] == _pai_tombstone_reason(row)
+
+
+def _mark_row_map_tombstone_no_commit(conn, row: PaiImportRow) -> None:
+    conn.execute(
+        """
+        UPDATE pai_import_row_map
+        SET tombstone_at = COALESCE(tombstone_at, CAST(strftime('%s', 'now') AS INTEGER))
+        WHERE job_id = ?
+          AND source_path = ?
+          AND source_anchor = ?
+          AND target_table = ?
+          AND target_id = ?
+        """,
+        (
+            row.job_id,
+            row.source_path,
+            row.source_anchor,
+            row.target_table,
+            row.target_id,
+        ),
+    )
+
+
+def _clear_row_map_tombstone_no_commit(conn, row: PaiImportRow) -> None:
+    conn.execute(
+        """
+        UPDATE pai_import_row_map
+        SET tombstone_at = NULL
+        WHERE job_id = ?
+          AND source_path = ?
+          AND source_anchor = ?
+          AND target_table = ?
+          AND target_id = ?
+        """,
+        (
+            row.job_id,
+            row.source_path,
+            row.source_anchor,
+            row.target_table,
+            row.target_id,
+        ),
+    )
+
+
+def _review_pai_belief_no_commit(conn, row: PaiImportRow) -> bool:
     existing = _target_record(conn, row)
     if existing is None:
         raise ValueError(f"Cannot review missing belief target {row.target_id!r}")
     if bool(existing["needs_review"]) and bool(existing["confidence_pending_review"]):
-        return
+        return False
 
     revisions = _safe_json_loads(existing["revision_history"], [])
     if not isinstance(revisions, list):
@@ -948,6 +1078,7 @@ def _review_pai_belief_no_commit(conn, row: PaiImportRow) -> None:
         """,
         (json.dumps(revisions), now, row.target_id),
     )
+    return True
 
 
 def _split_blocks(text: str) -> list[tuple[str, str]]:
@@ -1054,7 +1185,12 @@ def _source_hash(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _classify_row(conn, row: PaiImportRow) -> PaiImportRow:
+def _classify_row(
+    conn,
+    row: PaiImportRow,
+    *,
+    allow_pai_tombstone_reactivation: bool = False,
+) -> PaiImportRow:
     target_projection_hash = _target_projection_hash(conn, row)
     existing = conn.execute(
         """
@@ -1106,7 +1242,60 @@ def _classify_row(conn, row: PaiImportRow) -> PaiImportRow:
     # the row-map when external code DELETEs an imported target. Without this
     # check, the next preview classifies as REPAIR ("target missing") and
     # silently resurrects the engram on apply.
-    if tombstone_at is not None:
+    is_pai_tombstoned_engram = (
+        allow_pai_tombstone_reactivation and _is_pai_tombstoned_engram(conn, row)
+    )
+    if tombstone_at is not None or is_pai_tombstoned_engram:
+        if is_pai_tombstoned_engram:
+            current_target_content = _target_content(
+                conn, row.target_table, row.target_id
+            )
+            if (
+                mapped_content is not None
+                and current_target_content is not None
+                and current_target_content != mapped_content
+            ):
+                return replace(
+                    row,
+                    action=ACTION_ERROR,
+                    reason=(
+                        "target content diverged from importer baseline "
+                        "(operator hand-edit detected); refusing PAI tombstone "
+                        "reactivation. To preserve your edit: edit the source "
+                        "file to match it, then re-import (source becomes "
+                        "canonical). To overwrite your edit with source content: "
+                        "UPDATE pai_import_row_map SET content_at_last_import "
+                        "= NULL WHERE target_id = ? — DESTRUCTIVE: next import "
+                        "will REPAIR-clobber your edit with the source's content. "
+                        "(Setting content_at_last_import to your current target "
+                        "content does NOT preserve the edit either — it only "
+                        "re-aligns the baseline; the next REPAIR still clobbers "
+                        "because source still diverges from target.)"
+                    ),
+                    mapped_source_hash=mapped_source_hash,
+                    target_projection_hash=target_projection_hash,
+                )
+            action = (
+                ACTION_REPAIR
+                if mapped_source_hash == row.source_hash
+                else ACTION_UPDATE
+            )
+            reason = (
+                "source returned after PAI watcher tombstone; "
+                "reactivating mapped engram"
+            )
+            if action == ACTION_UPDATE:
+                reason = (
+                    "source returned after PAI watcher tombstone with changed "
+                    "content; reactivating mapped engram"
+                )
+            return replace(
+                row,
+                action=action,
+                reason=reason,
+                mapped_source_hash=mapped_source_hash,
+                target_projection_hash=target_projection_hash,
+            )
         return replace(
             row,
             action=ACTION_ERROR,
@@ -1182,8 +1371,15 @@ def _classify_row(conn, row: PaiImportRow) -> PaiImportRow:
                 reason=(
                     "target content diverged from importer baseline "
                     "(operator hand-edit detected); refusing silent clobber. "
-                    "Reconcile manually or clear content_at_last_import in "
-                    "pai_import_row_map."
+                    "To preserve your edit: edit the source file to match it, "
+                    "then re-import (source becomes canonical). To overwrite "
+                    "your edit with source content: UPDATE pai_import_row_map "
+                    "SET content_at_last_import = NULL WHERE target_id = ? — "
+                    "DESTRUCTIVE: next import will REPAIR-clobber your edit "
+                    "with the source's content. (Setting content_at_last_import "
+                    "to your current target content does NOT preserve the edit "
+                    "either — it only re-aligns the baseline; the next REPAIR "
+                    "still clobbers because source still diverges from target.)"
                 ),
                 mapped_source_hash=mapped_source_hash,
                 target_projection_hash=target_projection_hash,
@@ -1237,7 +1433,23 @@ def _assert_preview_current(conn, row: PaiImportRow) -> None:
 
 def _assert_preview_current_for_watch(conn, row: PaiImportRow) -> None:
     if row.action not in _U3C_RESERVED_ACTIONS:
-        _assert_preview_current(conn, row)
+        current = _classify_row(
+            conn,
+            row,
+            allow_pai_tombstone_reactivation=True,
+        )
+        if current.action == ACTION_ERROR:
+            raise ValueError(current.reason)
+        if (
+            current.action != row.action
+            or current.mapped_source_hash != row.mapped_source_hash
+            or current.target_projection_hash != row.target_projection_hash
+            or current.reason != row.reason
+        ):
+            raise ValueError(
+                "PAI watch preview is stale for "
+                f"{row.source_path}#{row.source_anchor}; re-preview before apply"
+            )
         return
 
     record = _pai_row_map_record(conn, row)
@@ -1495,10 +1707,14 @@ def _stale_mapped_row_from_record(
         conn, target_table, target_id
     )
     current_content = _target_content(conn, target_table, target_id)
+    target_lifecycle_status = _target_lifecycle_status_for_record(
+        conn, target_table, target_id
+    )
     mapped_content = _row_value(record, "content_at_last_import")
     action, reason = _stale_missing_source_action(
         record,
         target_projection_hash=target_projection_hash,
+        target_lifecycle_status=target_lifecycle_status,
         current_content=current_content,
         mapped_content=mapped_content,
         missing_source_policy=missing_source_policy,
@@ -1534,6 +1750,7 @@ def _stale_missing_source_action(
     record,
     *,
     target_projection_hash: str | None,
+    target_lifecycle_status: str,
     current_content: str | None,
     mapped_content: str | None,
     missing_source_policy: str,
@@ -1547,6 +1764,17 @@ def _stale_missing_source_action(
 
     tombstone_at = _row_value(record, "tombstone_at")
     if tombstone_at is not None:
+        if (
+            missing_source_policy == "u3c"
+            and record["target_table"] == TARGET_ENGRAMS
+            and target_lifecycle_status == "archived"
+            and target_projection_hash is not None
+        ):
+            return (
+                ACTION_TOMBSTONE,
+                "source key remains absent from current PAI watch batch; "
+                "mapped engram is already archived",
+            )
         return (
             ACTION_ERROR,
             f"mapped target was deleted (tombstone_at={tombstone_at}); "
@@ -1567,8 +1795,15 @@ def _stale_missing_source_action(
         return (
             ACTION_ERROR,
             "target content diverged from importer baseline (operator hand-edit "
-            "detected); refusing PAI watcher lifecycle action. Reconcile manually "
-            "or clear content_at_last_import in pai_import_row_map.",
+            "detected); refusing PAI watcher lifecycle action. To preserve your "
+            "edit: edit the source file to match it, then re-import (source "
+            "becomes canonical). To overwrite your edit with source content: "
+            "UPDATE pai_import_row_map SET content_at_last_import = NULL WHERE "
+            "target_id = ? — DESTRUCTIVE: next import will clobber your edit "
+            "with the source's content. (Setting content_at_last_import to your "
+            "current target content does NOT preserve the edit either — it only "
+            "re-aligns the baseline; the next watcher cycle still clobbers "
+            "because source still diverges from target.)",
         )
 
     target_table = record["target_table"]
@@ -1717,12 +1952,20 @@ def _target_projection_hash_for_record(
 
 
 def _target_lifecycle_status(conn, row: PaiImportRow) -> str:
-    record = _target_record(conn, row)
+    return _target_lifecycle_status_for_record(conn, row.target_table, row.target_id)
+
+
+def _target_lifecycle_status_for_record(
+    conn,
+    target_table: str,
+    target_id: str,
+) -> str:
+    record = _target_record_by_id(conn, target_table, target_id)
     if record is None:
         return "missing"
-    if row.target_table == TARGET_ENGRAMS:
+    if target_table == TARGET_ENGRAMS:
         return "active" if record["state"] == "active" else record["state"]
-    if row.target_table == TARGET_HYPOMNEMA:
+    if target_table == TARGET_HYPOMNEMA:
         # U3b hardening CB8: check superseded BEFORE active flag. The prior
         # ordering returned "inactive" for rows that were both deactivated AND
         # superseded, hiding the supersede signal from per-table reactivation
@@ -1733,9 +1976,9 @@ def _target_lifecycle_status(conn, row: PaiImportRow) -> str:
         if not bool(record["active"]):
             return "inactive"
         return "active"
-    if row.target_table == TARGET_BELIEFS:
+    if target_table == TARGET_BELIEFS:
         return "superseded" if record["superseded_by"] is not None else "active"
-    raise ValueError(f"Unsupported target_table: {row.target_table}")
+    raise ValueError(f"Unsupported target_table: {target_table}")
 
 
 def _infer_source_kind_for_target(conn, record) -> str:

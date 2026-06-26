@@ -8,13 +8,17 @@ import json
 from pathlib import Path
 import plistlib
 import re
+import shutil
+import subprocess
 import sys
 import time
 from typing import Any
+import uuid
 
 from .operator import (
     PaiManifest,
     PaiOperatorRun,
+    _checked_operator_db_path,
     apply_pai_watch_manifest,
     load_pai_manifest,
     preview_pai_watch_manifest,
@@ -57,10 +61,10 @@ def pai_watch_once(
     leaves state untouched so an operator can inspect the same source change and
     still apply it later.
     """
-    manifest = load_pai_manifest(manifest_path)
+    manifest = load_pai_manifest(manifest_path, allow_missing_sources=True)
     state = _read_watch_state(state_path)
     current = _source_fingerprints(manifest)
-    changed_sources = _changed_sources(state.get("sources", {}), current)
+    changed_sources = _changed_sources(state, current, manifest=manifest)
     if not changed_sources and not force:
         return PaiWatchOnceRun(
             manifest=manifest,
@@ -83,10 +87,11 @@ def pai_watch_once(
             backup_dir=backup_dir,
             allow_live_db=allow_live_db,
         )
+        applied_fingerprints = _source_fingerprints(operator_run.manifest)
         _write_watch_state(
             state_path,
-            manifest=manifest,
-            source_fingerprints=current,
+            manifest=operator_run.manifest,
+            source_fingerprints=applied_fingerprints,
         )
         state_written = True
     else:
@@ -125,7 +130,19 @@ def write_pai_watch_launchd_plist(
         raise ValueError("interval_seconds must be >= 10")
     plist = Path(plist_path).expanduser()
     plist.parent.mkdir(parents=True, exist_ok=True)
-    python = str(python_executable or sys.executable)
+    manifest = load_pai_manifest(manifest_path, allow_missing_sources=True)
+    db = _checked_operator_db_path(db_path, allow_live_db=allow_live_db)
+    if not db.exists():
+        raise FileNotFoundError(f"PAI watch launchd requires an existing database: {db}")
+    state = Path(state_path).expanduser()
+    state.parent.mkdir(parents=True, exist_ok=True)
+    artifact_root = Path(artifact_dir).expanduser()
+    backup_root = Path(backup_dir).expanduser()
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    backup_root.mkdir(parents=True, exist_ok=True)
+    python = _resolve_python_executable(python_executable)
+    repo_root = Path(__file__).resolve().parents[2]
+    _assert_python_can_import_mnemos(python, cwd=repo_root)
     args = [
         python,
         "-m",
@@ -133,15 +150,15 @@ def write_pai_watch_launchd_plist(
         "pai-import",
         "watch-once",
         "--manifest",
-        str(Path(manifest_path).expanduser()),
+        str(manifest.path.expanduser().resolve()),
         "--db-path",
-        str(Path(db_path).expanduser()),
+        str(db),
         "--state",
-        str(Path(state_path).expanduser()),
+        str(state),
         "--artifact-dir",
-        str(Path(artifact_dir).expanduser()),
+        str(artifact_root),
         "--backup-dir",
-        str(Path(backup_dir).expanduser()),
+        str(backup_root),
         "--apply",
     ]
     if allow_live_db:
@@ -155,34 +172,78 @@ def write_pai_watch_launchd_plist(
         "StartInterval": interval_seconds,
         "StandardOutPath": str(out_path),
         "StandardErrorPath": str(err_path),
+        "WorkingDirectory": str(repo_root),
+        "EnvironmentVariables": {"PYTHONPATH": str(repo_root)},
     }
-    plist.write_bytes(plistlib.dumps(payload, sort_keys=True))
+    _write_bytes_atomic(plist, plistlib.dumps(payload, sort_keys=True))
     return plist
+
+
+def _write_bytes_atomic(path: str | Path, payload: bytes) -> None:
+    target = Path(path).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_bytes(payload)
+        tmp.replace(target)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def _source_fingerprints(manifest: PaiManifest) -> dict[str, dict[str, Any]]:
     fingerprints: dict[str, dict[str, Any]] = {}
     for source in manifest.sources:
-        path = Path(source.source_path)
-        stat = path.stat()
+        content = source.source_text.encode("utf-8")
         fingerprints[source.source_path] = {
-            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "size": stat.st_size,
-            "mtime_ns": stat.st_mtime_ns,
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "size": len(content),
+            "agent_id": source.agent_id,
+            "person_id": source.person_id,
+            "project_scope": source.project_scope,
             "source_kind": source.source_kind,
+            "original_substrate": source.original_substrate,
+            "original_timestamp": source.original_timestamp,
         }
     return fingerprints
 
 
 def _changed_sources(
-    previous: dict[str, Any],
+    state: dict[str, Any],
     current: dict[str, dict[str, Any]],
+    *,
+    manifest: PaiManifest,
 ) -> tuple[str, ...]:
-    changed = []
+    previous = state.get("sources", {})
+    if not isinstance(previous, dict):
+        return tuple(sorted(current))
+
+    if state.get("job_id") not in {None, manifest.job_id}:
+        return tuple(sorted(current))
+
+    manifest_path = str(manifest.path.expanduser().resolve())
+    if state.get("manifest_path") not in {None, manifest_path}:
+        return tuple(sorted(current))
+
+    changed = set(previous) - set(current)
+    semantic_keys = {
+        "sha256",
+        "agent_id",
+        "person_id",
+        "project_scope",
+        "source_kind",
+        "original_substrate",
+        "original_timestamp",
+    }
     for source_path, fingerprint in current.items():
         prior = previous.get(source_path)
-        if not isinstance(prior, dict) or prior.get("sha256") != fingerprint["sha256"]:
-            changed.append(source_path)
+        if not isinstance(prior, dict):
+            changed.add(source_path)
+            continue
+        for key in semantic_keys:
+            if prior.get(key) != fingerprint.get(key):
+                changed.add(source_path)
+                break
     return tuple(sorted(changed))
 
 
@@ -212,13 +273,50 @@ def _write_watch_state(
     payload = {
         "schema": WATCH_STATE_SCHEMA,
         "job_id": manifest.job_id,
-        "manifest_path": str(manifest.path.expanduser()),
+        "manifest_path": str(manifest.path.expanduser().resolve()),
         "sources": source_fingerprints,
         "updated_at": int(time.time()),
     }
-    tmp = state_path.with_name(f"{state_path.name}.tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(state_path)
+    tmp = state_path.with_name(f".{state_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        tmp.replace(state_path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def _resolve_python_executable(python_executable: str | Path | None) -> str:
+    raw = str(python_executable or sys.executable)
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute() or candidate.parent != Path("."):
+        if not candidate.exists():
+            raise FileNotFoundError(f"Python executable not found: {candidate}")
+        return str(candidate)
+    resolved = shutil.which(raw)
+    if resolved is None:
+        raise FileNotFoundError(f"Python executable not found on PATH: {raw}")
+    return resolved
+
+
+def _assert_python_can_import_mnemos(python: str, *, cwd: Path) -> None:
+    check = subprocess.run(
+        [python, "-c", "import mnemos.cli"],
+        cwd=str(cwd),
+        env={"PYTHONPATH": str(cwd)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if check.returncode != 0:
+        detail = (check.stderr or check.stdout).strip()
+        raise RuntimeError(
+            f"Python executable cannot import mnemos.cli: {python}"
+            + (f" ({detail})" if detail else "")
+        )
 
 
 def _watch_artifact_path(

@@ -295,6 +295,152 @@ def migrate_v4_u3a(conn: sqlite3.Connection) -> None:
     apply_u3a_schema_migration(conn)
 
 
+U3B_HARDENING_CONTRACT = """
+U3b hardening v5 (additive, no U3a semantic changes):
+
+pai_import_row_map gains:
+- content_at_last_import: literal content the importer last wrote. _classify_row
+  uses this to detect operator hand-edits and refuse silent REPAIR/UPDATE
+  clobber. Without it, the row-map only tracks source_hash — the importer
+  cannot tell "target still has what I wrote" from "operator changed the target."
+- tombstone_at: epoch seconds when the mapped target was DELETED. Populated by
+  AFTER DELETE triggers on engrams/beliefs/hypomnema_entries. _classify_row
+  refuses REPAIR on tombstoned targets — hard-DELETE-then-reimport must be an
+  explicit operator decision, not silent resurrection.
+- agent_id / project_scope / source_kind / original_timestamp: source metadata
+  the U3c watcher needs to reconcile SOUL/ edits against row-map without
+  re-joining target tables every cycle. source_kind specifically prevents the
+  `_infer_source_kind_for_target` fallback to identity_kernel from corrupting
+  stale-row profile reconstruction.
+
+beliefs gains:
+- original_substrate / original_timestamp: provenance fields engrams + hypomnema
+  already carry. Without them, a belief computed under claude-opus-4-6 cannot
+  be down-weighted when substrate shifts to claude-opus-4-8.
+
+pai_import_events: append-only audit table. One row per row-touched per apply.
+After job B touches a target job A inserted, pai_import_row_map is overwritten
+in place; without events, the operator cannot reconstruct "what did job X do"
+post-mortem. versions.change_reason is per-engram and carries no job link.
+
+Triggers: AFTER DELETE on engrams/beliefs/hypomnema_entries set
+pai_import_row_map.tombstone_at for any matching mapped row. DB-level
+enforcement — fires regardless of WHO deleted the target.
+"""
+
+
+def apply_u3b_hardening_schema_migration(conn: sqlite3.Connection) -> None:
+    """Apply the U3b hardening schema additions idempotently.
+
+    Strictly additive over U3a (v4). Existing rows get NULL for new columns;
+    upsert_pai_import_row + the importer populate them on the next touch.
+    """
+    for column, definition in (
+        ("content_at_last_import", "TEXT"),
+        ("tombstone_at", "INTEGER"),
+        ("agent_id", "TEXT"),
+        ("project_scope", "TEXT"),
+        ("source_kind", "TEXT"),
+        ("original_timestamp", "INTEGER"),
+    ):
+        _add_column_if_missing(conn, "pai_import_row_map", column, definition)
+
+    for column, definition in (
+        ("original_substrate", "TEXT"),
+        ("original_timestamp", "INTEGER"),
+    ):
+        _add_column_if_missing(conn, "beliefs", column, definition)
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pai_import_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            source_anchor TEXT NOT NULL DEFAULT '',
+            target_table TEXT NOT NULL
+                CHECK (target_table IN ('engrams', 'beliefs', 'hypomnema_entries')),
+            target_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            source_hash_before TEXT,
+            source_hash_after TEXT,
+            event_at INTEGER NOT NULL,
+            change_reason TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pai_import_events_job "
+        "ON pai_import_events(job_id, event_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pai_import_events_target "
+        "ON pai_import_events(target_table, target_id)"
+    )
+
+    # Tombstone triggers — DB-level, fire on any DELETE regardless of caller.
+    for table in ("engrams", "beliefs", "hypomnema_entries"):
+        trigger_name = f"pai_import_{table}_tombstone"
+        conn.execute(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS {trigger_name}
+            AFTER DELETE ON {table}
+            FOR EACH ROW
+            BEGIN
+                UPDATE pai_import_row_map
+                SET tombstone_at = CAST(strftime('%s', 'now') AS INTEGER)
+                WHERE target_table = '{table}' AND target_id = OLD.id
+                  AND tombstone_at IS NULL;
+            END
+            """
+        )
+
+
+@register_migration(5, "U3b hardening: row-map extensions + pai_import_events + tombstone triggers")
+def migrate_v5_u3b_hardening(conn: sqlite3.Connection) -> None:
+    apply_u3b_hardening_schema_migration(conn)
+
+
+def insert_pai_import_event(
+    conn: sqlite3.Connection,
+    *,
+    job_id: str,
+    source_path: str,
+    target_table: str,
+    target_id: str,
+    action: str,
+    source_anchor: str = "",
+    source_hash_before: str | None = None,
+    source_hash_after: str | None = None,
+    change_reason: str | None = None,
+    timestamp: int | None = None,
+) -> None:
+    """Append a row to pai_import_events. Caller owns the transaction."""
+    if target_table not in _PAI_IMPORT_TARGET_TABLES:
+        raise ValueError(f"Unsupported target_table: {target_table}")
+    now = int(timestamp if timestamp is not None else time.time())
+    conn.execute(
+        """
+        INSERT INTO pai_import_events (
+            job_id, source_path, source_anchor, target_table, target_id,
+            action, source_hash_before, source_hash_after, event_at, change_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            job_id,
+            source_path,
+            source_anchor,
+            target_table,
+            target_id,
+            action,
+            source_hash_before,
+            source_hash_after,
+            now,
+            change_reason,
+        ),
+    )
+
+
 def upsert_pai_import_row(
     conn: sqlite3.Connection,
     *,
@@ -307,13 +453,27 @@ def upsert_pai_import_row(
     source_hash: str = "",
     timestamp: int | None = None,
     ensure_schema: bool = True,
+    content_at_last_import: str | None = None,
+    agent_id: str | None = None,
+    project_scope: str | None = None,
+    source_kind: str | None = None,
+    original_timestamp: int | None = None,
 ) -> dict[str, int | bool]:
     """Idempotently record a PAI import source-to-row mapping.
 
     Re-running the same job/source/hash is a no-op. Changed source content
-    advances updated_at while preserving the mapped target identifier. A
-    source key that already maps to one target cannot silently drift to
-    another target; use a new source anchor or job boundary for that.
+    advances updated_at AND content_at_last_import while preserving the mapped
+    target identifier. A source key that already maps to one target cannot
+    silently drift to another target; use a new source anchor or job boundary
+    for that.
+
+    U3b hardening fields (all optional, written on first INSERT and refreshed
+    on UPDATE where they represent fresh state):
+    - content_at_last_import: literal content the importer last wrote.
+      Refreshed on every UPDATE because it tracks importer-side state.
+    - agent_id / project_scope / source_kind / original_timestamp: source
+      metadata. Written on INSERT; preserved on UPDATE unless caller
+      explicitly overrides (defensive — these should be stable per source).
     """
     job_id = _clean_required(job_id, "job_id")
     source_path = _clean_required(source_path, "source_path")
@@ -335,10 +495,13 @@ def upsert_pai_import_row(
 
     if ensure_schema:
         apply_u3a_schema_migration(conn)
+        apply_u3b_hardening_schema_migration(conn)
     now = int(timestamp if timestamp is not None else time.time())
     existing = conn.execute(
         """
-        SELECT target_id, engram_id, source_hash, created_at, updated_at
+        SELECT target_id, engram_id, source_hash, created_at, updated_at,
+               content_at_last_import, agent_id, project_scope, source_kind,
+               original_timestamp
         FROM pai_import_row_map
         WHERE job_id = ? AND source_path = ? AND source_anchor = ? AND target_table = ?
         """,
@@ -351,6 +514,11 @@ def upsert_pai_import_row(
         existing_source_hash = _row_value(existing, "source_hash", 2)
         existing_created_at = _row_value(existing, "created_at", 3)
         existing_updated_at = _row_value(existing, "updated_at", 4)
+        existing_content = _row_value(existing, "content_at_last_import", 5)
+        existing_agent_id = _row_value(existing, "agent_id", 6)
+        existing_project_scope = _row_value(existing, "project_scope", 7)
+        existing_source_kind = _row_value(existing, "source_kind", 8)
+        existing_original_ts = _row_value(existing, "original_timestamp", 9)
         if existing_target_id != target_id:
             raise ValueError(
                 "PAI import source already maps to target "
@@ -361,20 +529,47 @@ def upsert_pai_import_row(
             effective_engram_id = existing_engram_id or None
         same_engram = (existing_engram_id or None) == effective_engram_id
         same_hash = existing_source_hash == source_hash
-        if same_engram and same_hash:
+        same_content = (
+            content_at_last_import is None
+            or existing_content == content_at_last_import
+        )
+        if same_engram and same_hash and same_content:
             return {
                 "inserted": False,
                 "updated": False,
                 "created_at": int(existing_created_at),
                 "updated_at": int(existing_updated_at),
             }
+        new_content = (
+            content_at_last_import
+            if content_at_last_import is not None
+            else existing_content
+        )
+        # Source metadata is write-once unless caller overrides.
+        new_agent_id = agent_id if agent_id is not None else existing_agent_id
+        new_project_scope = (
+            project_scope if project_scope is not None else existing_project_scope
+        )
+        new_source_kind = (
+            source_kind if source_kind is not None else existing_source_kind
+        )
+        new_original_ts = (
+            original_timestamp
+            if original_timestamp is not None
+            else existing_original_ts
+        )
         conn.execute(
             """
             UPDATE pai_import_row_map
             SET target_id = ?,
                 engram_id = ?,
                 source_hash = ?,
-                updated_at = ?
+                updated_at = ?,
+                content_at_last_import = ?,
+                agent_id = ?,
+                project_scope = ?,
+                source_kind = ?,
+                original_timestamp = ?
             WHERE job_id = ? AND source_path = ? AND source_anchor = ? AND target_table = ?
             """,
             (
@@ -382,6 +577,11 @@ def upsert_pai_import_row(
                 effective_engram_id,
                 source_hash,
                 now,
+                new_content,
+                new_agent_id,
+                new_project_scope,
+                new_source_kind,
+                new_original_ts,
                 job_id,
                 source_path,
                 source_anchor,
@@ -399,8 +599,10 @@ def upsert_pai_import_row(
         """
         INSERT INTO pai_import_row_map (
             job_id, source_path, source_anchor, target_table, target_id,
-            engram_id, source_hash, created_at, updated_at, imported_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            engram_id, source_hash, created_at, updated_at, imported_at,
+            content_at_last_import, agent_id, project_scope, source_kind,
+            original_timestamp
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             job_id,
@@ -413,6 +615,11 @@ def upsert_pai_import_row(
             now,
             now,
             now,
+            content_at_last_import,
+            agent_id,
+            project_scope,
+            source_kind,
+            original_timestamp,
         ),
     )
     return {"inserted": True, "updated": False, "created_at": now, "updated_at": now}

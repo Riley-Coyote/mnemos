@@ -23,7 +23,7 @@ from typing import Callable, Iterable
 from ..core.belief import Belief
 from ..core.engram import Engram, MemorySource
 from ..core.types import ConfidenceSource, EngramKind, SourceType
-from ..store.migrations import upsert_pai_import_row
+from ..store.migrations import insert_pai_import_event, upsert_pai_import_row
 from ..store.sqlite_store import EngramStore
 
 
@@ -254,6 +254,21 @@ def apply_pai_import(
             _assert_preview_current(conn, row)
         for row in preview.rows:
             if row.action == ACTION_NOOP:
+                # U3b hardening B5-audit-6: even NOOPs get an event row so the
+                # operator can prove "job X touched this target and confirmed
+                # no change required."
+                insert_pai_import_event(
+                    conn,
+                    job_id=row.job_id,
+                    source_path=row.source_path,
+                    source_anchor=row.source_anchor,
+                    target_table=row.target_table,
+                    target_id=row.target_id,
+                    action=row.action,
+                    source_hash_before=row.mapped_source_hash,
+                    source_hash_after=row.source_hash,
+                    change_reason=row.reason,
+                )
                 applied.append(row)
                 continue
             _write_target_row(store, conn, row)
@@ -267,6 +282,27 @@ def apply_pai_import(
                 engram_id=row.target_id if row.target_table == TARGET_ENGRAMS else None,
                 source_hash=row.source_hash,
                 ensure_schema=False,
+                # U3b hardening B1-state-2/4 + B4-u3c-4: write content baseline
+                # and source metadata so the next preview can detect operator
+                # hand-edits and so the U3c watcher has source_kind without
+                # joining target tables.
+                content_at_last_import=row.content,
+                agent_id=row.agent_id,
+                project_scope=row.project_scope,
+                source_kind=row.source_kind,
+                original_timestamp=row.original_timestamp,
+            )
+            insert_pai_import_event(
+                conn,
+                job_id=row.job_id,
+                source_path=row.source_path,
+                source_anchor=row.source_anchor,
+                target_table=row.target_table,
+                target_id=row.target_id,
+                action=row.action,
+                source_hash_before=row.mapped_source_hash,
+                source_hash_after=row.source_hash,
+                change_reason=row.reason,
             )
             applied.append(row)
         conn.commit()
@@ -383,6 +419,17 @@ def _write_target_row(
     elif row.target_table == TARGET_BELIEFS:
         _write_pai_belief_no_commit(store, conn, row)
     elif row.target_table == TARGET_HYPOMNEMA:
+        # U3b hardening CB8: PAI re-import reactivates a deactivated hypomnema
+        # entry (active=0 AND superseded_by IS NULL). _classify_row already
+        # gated superseded entries to ACTION_ERROR — this UPDATE only fires
+        # for the unambiguous reactivation case. The downstream UPSERT in
+        # _write_hypomnema_entry_no_commit preserves active = existing.active,
+        # so we have to flip it explicitly here before the UPSERT runs.
+        conn.execute(
+            "UPDATE hypomnema_entries SET active = 1 "
+            "WHERE id = ? AND active = 0 AND superseded_by IS NULL",
+            (row.target_id,),
+        )
         store._write_hypomnema_entry_no_commit(
             conn,
             row.content,
@@ -429,6 +476,12 @@ def _row_to_engram(row: PaiImportRow) -> Engram:
 
 
 def _row_to_belief(row: PaiImportRow) -> Belief:
+    # U3b hardening CB3: imported beliefs arrive flagged for review.
+    # PAI imports are canonical AT THE MOMENT OF IMPORT, but the substrate's
+    # downstream review work (consolidation flagging a stale belief for
+    # re-examination) is real continuity material that should not be
+    # auto-cleared by the next import. needs_review=True is the canonical
+    # post-import state; the substrate clears it once review concludes.
     return Belief(
         id=row.target_id,
         agent_id=row.agent_id,
@@ -436,8 +489,8 @@ def _row_to_belief(row: PaiImportRow) -> Belief:
         confidence=row.confidence,
         domain=row.domain,
         tier=row.tier,
-        needs_review=False,
-        confidence_pending_review=False,
+        needs_review=True,
+        confidence_pending_review=True,
     )
 
 
@@ -523,6 +576,15 @@ def _write_pai_belief_no_commit(store: EngramStore, conn, row: PaiImportRow) -> 
     existing = _target_record(conn, row)
     if existing is None:
         store._save_belief_no_commit(conn, _row_to_belief(row))
+        # U3b hardening CB3: populate original_substrate / original_timestamp.
+        # These columns were added in v5 — engrams and hypomnema already
+        # carried them; beliefs didn't, so substrate-shift downstream
+        # couldn't down-weight beliefs from older substrate.
+        conn.execute(
+            "UPDATE beliefs SET original_substrate = ?, original_timestamp = ? "
+            "WHERE id = ?",
+            (row.original_substrate, row.original_timestamp, row.target_id),
+        )
         return
 
     revisions = _safe_json_loads(existing["revision_history"], [])
@@ -540,9 +602,13 @@ def _write_pai_belief_no_commit(store: EngramStore, conn, row: PaiImportRow) -> 
                 "trigger_engram_id": None,
                 "old_content": existing["content"],
                 "new_content": row.content,
+                "job_id": row.job_id,
             }
         )
 
+    # U3b hardening CB3: re-imported beliefs return to needs_review=True. The
+    # substrate's prior review work is preserved in revision_history (above);
+    # the flag flips so the next consolidation pass knows to re-evaluate.
     conn.execute(
         """
         UPDATE beliefs
@@ -550,10 +616,12 @@ def _write_pai_belief_no_commit(store: EngramStore, conn, row: PaiImportRow) -> 
             confidence = ?,
             domain = ?,
             tier = ?,
-            needs_review = 0,
-            confidence_pending_review = 0,
+            needs_review = 1,
+            confidence_pending_review = 1,
             revision_history = ?,
-            last_revised = ?
+            last_revised = ?,
+            original_substrate = ?,
+            original_timestamp = ?
         WHERE id = ?
         """,
         (
@@ -563,6 +631,8 @@ def _write_pai_belief_no_commit(store: EngramStore, conn, row: PaiImportRow) -> 
             row.tier,
             json.dumps(revisions),
             _now_iso(),
+            row.original_substrate,
+            row.original_timestamp,
             row.target_id,
         ),
     )
@@ -599,11 +669,12 @@ def _heading_sections(text: str) -> list[tuple[str, str]]:
         content = "\n".join(current_lines).strip()
         if content:
             slug = _slugify(current_title)
-            if slug in slug_counts:
-                raise ValueError(
-                    "Duplicate PAI heading slug "
-                    f"{slug!r}; use unique section headings"
-                )
+            # U3b hardening B4-u3c-1: duplicate slugs use ordinal suffixes
+            # rather than raising. SOUL files routinely repeat H2s like "Voce"
+            # / "Note" / "Stato"; raising on dup made the importer unusable
+            # for the live watcher and for real SOUL/ content. The anchor's
+            # `:N:003`-style ordinal preserves stable per-file ordering: the
+            # first occurrence is :001, the second :002, etc.
             slug_counts[slug] = slug_counts.get(slug, 0) + 1
             sections.append((f"h:{slug}:{slug_counts[slug]:03d}", content))
         current_title = None
@@ -675,7 +746,7 @@ def _classify_row(conn, row: PaiImportRow) -> PaiImportRow:
     target_projection_hash = _target_projection_hash(conn, row)
     existing = conn.execute(
         """
-        SELECT target_id, source_hash
+        SELECT target_id, source_hash, content_at_last_import, tombstone_at
         FROM pai_import_row_map
         WHERE job_id = ?
           AND source_path = ?
@@ -705,6 +776,8 @@ def _classify_row(conn, row: PaiImportRow) -> PaiImportRow:
         )
 
     mapped_source_hash = existing["source_hash"]
+    mapped_content = existing["content_at_last_import"]
+    tombstone_at = existing["tombstone_at"]
     if existing["target_id"] != row.target_id:
         return replace(
             row,
@@ -712,6 +785,23 @@ def _classify_row(conn, row: PaiImportRow) -> PaiImportRow:
             reason=(
                 "source key already maps to "
                 f"{existing['target_id']!r}; refusing remap"
+            ),
+            mapped_source_hash=mapped_source_hash,
+            target_projection_hash=target_projection_hash,
+        )
+
+    # U3b hardening B1-state-3: AFTER DELETE triggers populate tombstone_at on
+    # the row-map when external code DELETEs an imported target. Without this
+    # check, the next preview classifies as REPAIR ("target missing") and
+    # silently resurrects the engram on apply.
+    if tombstone_at is not None:
+        return replace(
+            row,
+            action=ACTION_ERROR,
+            reason=(
+                f"mapped target was deleted (tombstone_at={tombstone_at}); "
+                "refusing implicit PAI resurrection. Operator must clear the "
+                "row-map entry before re-importing."
             ),
             mapped_source_hash=mapped_source_hash,
             target_projection_hash=target_projection_hash,
@@ -727,17 +817,65 @@ def _classify_row(conn, row: PaiImportRow) -> PaiImportRow:
         )
 
     target_status = _target_lifecycle_status(conn, row)
-    if target_status != "active":
+    # U3b hardening CB8: per-table reactivation policy.
+    # - engrams: archived state means decay or operator archival decided this
+    #   row should not be active; refuse implicit PAI reactivation.
+    # - beliefs: superseded means a newer belief replaced this one; refuse.
+    # - hypomnema: inactive (active=False AND superseded_by IS NULL) is a
+    #   retire-without-successor signal that PAI re-import IS the canonical
+    #   reactivation channel. Superseded hypomnema still refuses.
+    if target_status == "superseded":
         return replace(
             row,
             action=ACTION_ERROR,
             reason=(
-                "mapped target is "
-                f"{target_status}; refusing implicit PAI reactivation"
+                "mapped target is superseded; refusing implicit PAI "
+                "reactivation (a successor exists)"
             ),
             mapped_source_hash=mapped_source_hash,
             target_projection_hash=target_projection_hash,
         )
+    if target_status != "active":
+        if row.target_table != TARGET_HYPOMNEMA:
+            return replace(
+                row,
+                action=ACTION_ERROR,
+                reason=(
+                    "mapped target is "
+                    f"{target_status}; refusing implicit PAI reactivation"
+                ),
+                mapped_source_hash=mapped_source_hash,
+                target_projection_hash=target_projection_hash,
+            )
+        # Hypomnema inactive without successor → flag as REPAIR; write path
+        # will reactivate before writing.
+
+    # U3b hardening B1-state-2/4 + B5-audit-13: detect operator hand-edits to
+    # imported content. content_at_last_import is what the importer wrote on
+    # the previous apply. If the target's current content differs from that
+    # baseline, someone other than the importer changed it. REPAIR/UPDATE
+    # would silently clobber the change. Pre-v5 rows have content_at_last_import
+    # NULL and are not subject to this check until the next upsert populates it.
+    if mapped_content is not None and target_status == "active":
+        current_target_content = _target_content(
+            conn, row.target_table, row.target_id
+        )
+        if (
+            current_target_content is not None
+            and current_target_content != mapped_content
+        ):
+            return replace(
+                row,
+                action=ACTION_ERROR,
+                reason=(
+                    "target content diverged from importer baseline "
+                    "(operator hand-edit detected); refusing silent clobber. "
+                    "Reconcile manually or clear content_at_last_import in "
+                    "pai_import_row_map."
+                ),
+                mapped_source_hash=mapped_source_hash,
+                target_projection_hash=target_projection_hash,
+            )
 
     target_matches = _target_matches_row(conn, row)
     if existing["source_hash"] == row.source_hash and target_matches:
@@ -828,8 +966,8 @@ def _engram_matches_row(conn, row: PaiImportRow) -> bool | None:
 def _belief_matches_row(conn, row: PaiImportRow) -> bool | None:
     record = conn.execute(
         """
-        SELECT agent_id, content, confidence, domain, tier, needs_review,
-               confidence_pending_review, superseded_by
+        SELECT agent_id, content, confidence, domain, tier,
+               original_substrate, original_timestamp, superseded_by
         FROM beliefs
         WHERE id = ?
         """,
@@ -837,14 +975,19 @@ def _belief_matches_row(conn, row: PaiImportRow) -> bool | None:
     ).fetchone()
     if record is None:
         return None
+    # U3b hardening CB3: needs_review/confidence_pending_review are no longer
+    # part of the equality projection. They're workflow flags managed by the
+    # substrate's consolidation pass — equating on them produced spurious
+    # NOOP→UPDATE flips when the substrate flipped a review flag between
+    # imports. Match on content + identity + provenance instead.
     return (
         record["agent_id"] == row.agent_id
         and record["content"] == row.content
         and _float_equal(record["confidence"], row.confidence)
         and record["domain"] == row.domain
         and record["tier"] == row.tier
-        and bool(record["needs_review"]) is False
-        and bool(record["confidence_pending_review"]) is False
+        and record["original_substrate"] == row.original_substrate
+        and record["original_timestamp"] == row.original_timestamp
         and record["superseded_by"] is None
     )
 
@@ -893,7 +1036,8 @@ def _stale_mapped_rows(
     stale_rows: list[PaiImportRow] = []
     records = conn.execute(
         """
-        SELECT job_id, source_path, source_anchor, target_table, target_id, source_hash
+        SELECT job_id, source_path, source_anchor, target_table, target_id,
+               source_hash, source_kind
         FROM pai_import_row_map
         WHERE job_id = ?
         ORDER BY source_path, source_anchor, target_table
@@ -1046,10 +1190,15 @@ def _target_lifecycle_status(conn, row: PaiImportRow) -> str:
     if row.target_table == TARGET_ENGRAMS:
         return "active" if record["state"] == "active" else record["state"]
     if row.target_table == TARGET_HYPOMNEMA:
-        if not bool(record["active"]):
-            return "inactive"
+        # U3b hardening CB8: check superseded BEFORE active flag. The prior
+        # ordering returned "inactive" for rows that were both deactivated AND
+        # superseded, hiding the supersede signal from per-table reactivation
+        # policy. Superseded must outrank inactive — reactivating a superseded
+        # row would create two active hypomnema in the supersede chain.
         if record["superseded_by"] is not None:
             return "superseded"
+        if not bool(record["active"]):
+            return "inactive"
         return "active"
     if row.target_table == TARGET_BELIEFS:
         return "superseded" if record["superseded_by"] is not None else "active"
@@ -1057,7 +1206,24 @@ def _target_lifecycle_status(conn, row: PaiImportRow) -> str:
 
 
 def _infer_source_kind_for_target(conn, record) -> str:
+    """Recover source_kind for a stale-mapped row.
+
+    U3b hardening CB6: prefer the row-map's explicit `source_kind` column
+    (written by upsert_pai_import_row) over tag-based inference. The tag-based
+    fallback was unsafe — engrams whose `tags` column got hand-edited would
+    silently default to `identity_kernel`, causing stale-row PaiImportRow
+    construction with the wrong profile values. That cascaded to bogus
+    target_projection_hash comparisons and misleading ACTION_ERROR reasons.
+    """
     target_table = record["target_table"]
+    # Trust the row-map's source_kind column if populated (post-v5 imports).
+    row_map_kind = None
+    try:
+        row_map_kind = record["source_kind"]
+    except (IndexError, KeyError):
+        row_map_kind = None
+    if row_map_kind and row_map_kind in _PROFILES:
+        return row_map_kind
     if target_table == TARGET_BELIEFS:
         return "beliefs"
     if target_table == TARGET_HYPOMNEMA:
@@ -1073,7 +1239,16 @@ def _infer_source_kind_for_target(conn, record) -> str:
                     return "growth_substrate"
                 if "identity-kernel" in tags:
                     return "identity_kernel"
-        return "identity_kernel"
+        # No marker tag found and no row-map source_kind. This is ambiguous —
+        # the stale row's profile cannot be reconstructed safely. Raise rather
+        # than silently default to identity_kernel (the prior behavior, which
+        # caused profile-incoherent stale-row construction).
+        raise ValueError(
+            "Cannot infer source_kind for stale-mapped engram "
+            f"target_id={record['target_id']!r}: row-map source_kind is empty "
+            "and target tags contain no PAI marker. Hand-edited tags or "
+            "pre-v5 row-map entry — operator must reconcile."
+        )
     raise ValueError(f"Unsupported target_table: {target_table}")
 
 

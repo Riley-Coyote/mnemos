@@ -332,7 +332,9 @@ def test_u3a_migration_and_row_map_are_idempotent(tmp_path):
     conn = store._get_conn()
     try:
         assert any(m["version"] == 4 for m in list_migrations())
-        assert run_migrations(conn, target_version=4) == []
+        # Re-run target_version=5 (current SCHEMA_VERSION) — should be no-op
+        # since EngramStore.__init__ already migrated to latest.
+        assert run_migrations(conn, target_version=5) == []
         apply_u3a_schema_migration(conn)
         apply_u3a_schema_migration(conn)
 
@@ -626,7 +628,7 @@ def test_legacy_v3_db_opens_and_migrates_through_engram_store(tmp_path):
 
     store = EngramStore(db_path)
     try:
-        assert store.get_meta("schema_version") == "4"
+        assert store.get_meta("schema_version") == "5"
         legacy = store.get_engram("legacy_e")
         assert legacy is not None
         assert legacy.voice_exemplar_eligible is True
@@ -663,7 +665,7 @@ def test_backed_up_legacy_db_rehearsal_preserves_u3a_sentinels(tmp_path, monkeyp
     store = EngramStore(backup_db)
     sentinel_ids: set[str] = set()
     try:
-        assert store.get_meta("schema_version") == "4"
+        assert store.get_meta("schema_version") == "5"
         assert store._get_conn().execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert store.get_engram("legacy_e") is not None
 
@@ -778,10 +780,11 @@ def test_backed_up_legacy_db_rehearsal_preserves_u3a_sentinels(tmp_path, monkeyp
 def test_migration_version_guards(tmp_path):
     empty = sqlite3.connect(tmp_path / "empty.db")
     try:
-        assert run_migrations(empty, target_version=4) == []
+        # Bootstrap empty DB to the current latest schema (v5).
+        assert run_migrations(empty, target_version=5) == []
         assert empty.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
-        ).fetchone()[0] == "4"
+        ).fetchone()[0] == "5"
     finally:
         empty.close()
 
@@ -817,11 +820,15 @@ def test_migration_version_guards(tmp_path):
 
 
 def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
+    """v5 hardening exists as a real migration now; use slot 6 to test failure
+    isolation — the DB rolls back to v5 (current latest) when a hypothetical
+    v6 migration fails partway through.
+    """
     db_path = tmp_path / "rollback.db"
     store = EngramStore(db_path)
     store.close()
 
-    previous = migrations._MIGRATIONS.get(5)
+    previous = migrations._MIGRATIONS.get(6)
 
     def fail_after_writes(conn):
         conn.execute("CREATE TABLE u3a_failure_probe (id TEXT PRIMARY KEY)")
@@ -830,14 +837,14 @@ def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
         )
         raise ValueError("synthetic migration failure")
 
-    migrations._MIGRATIONS[5] = ("synthetic failing migration", fail_after_writes)
+    migrations._MIGRATIONS[6] = ("synthetic failing migration", fail_after_writes)
     conn = sqlite3.connect(db_path)
     try:
-        with pytest.raises(RuntimeError, match="Migration 5 failed"):
-            run_migrations(conn, target_version=5)
+        with pytest.raises(RuntimeError, match="Migration 6 failed"):
+            run_migrations(conn, target_version=6)
         assert conn.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
-        ).fetchone()[0] == "4"
+        ).fetchone()[0] == "5"
         assert not conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'u3a_failure_probe'"
         ).fetchone()
@@ -847,9 +854,9 @@ def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
     finally:
         conn.close()
         if previous is None:
-            del migrations._MIGRATIONS[5]
+            del migrations._MIGRATIONS[6]
         else:
-            migrations._MIGRATIONS[5] = previous
+            migrations._MIGRATIONS[6] = previous
 
 
 def test_future_schema_store_open_fails_before_mutating_schema(tmp_path):

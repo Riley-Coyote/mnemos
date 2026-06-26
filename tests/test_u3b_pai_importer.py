@@ -88,9 +88,19 @@ def test_u3b_heading_anchors_do_not_renumber_unrelated_slugs():
     assert before[0].target_id == after[1].target_id
 
 
-def test_u3b_rejects_duplicate_heading_slugs():
-    with pytest.raises(ValueError, match="Duplicate PAI heading slug"):
-        split_identity_kernel(_source("identity_kernel", "# Core\nA\n\n# Core\nB"))
+def test_u3b_duplicate_heading_slugs_use_ordinal_anchors():
+    """U3b hardening B4-u3c-1: SOUL files routinely repeat H2s
+    (Voce / Note / Stato). Raising on duplicate broke watcher imports and
+    real source files. Ordinal numbering preserves stable per-file ordering
+    while keeping anchor uniqueness."""
+    rows = split_identity_kernel(
+        _source("identity_kernel", "# Core\nA\n\n# Core\nB\n\n# Core\nC")
+    )
+    anchors = [row.source_anchor for row in rows]
+    assert anchors == ["h:core:001", "h:core:002", "h:core:003"]
+    # Anchors disambiguate the target_ids — three distinct rows, no clobber.
+    target_ids = {row.target_id for row in rows}
+    assert len(target_ids) == 3
 
 
 def test_u3b_dispatcher_covers_all_source_kinds():
@@ -282,6 +292,11 @@ def test_u3b_stale_update_preview_cannot_overwrite_newer_import(tmp_path):
 
 
 def test_u3b_stale_update_preview_rejects_external_target_drift(tmp_path):
+    """The drift check at apply time catches operator hand-edits that landed
+    between preview and apply. Prior assertion matched the generic
+    'preview is stale' message; v5 adds content-baseline drift detection that
+    produces a more specific error message naming the failure mode.
+    """
     store = EngramStore(tmp_path / "u3b.db")
     try:
         source = _source("identity_kernel", "# Core\nA")
@@ -297,9 +312,11 @@ def test_u3b_stale_update_preview_rejects_external_target_drift(tmp_path):
         )
         store._get_conn().commit()
 
-        with pytest.raises(ValueError, match="preview is stale"):
+        with pytest.raises(ValueError, match="diverged from importer baseline"):
             apply_pai_import(store, update_preview)
-        assert store.get_engram(target_id).content == "external drift after preview"
+        edited = store.get_engram(target_id)
+        assert edited is not None
+        assert edited.content == "external drift after preview"
     finally:
         store.close()
 
@@ -337,7 +354,11 @@ def test_u3b_removed_source_sections_are_preview_errors(tmp_path):
         store.close()
 
 
-def test_u3b_missing_target_repairs_from_row_map(tmp_path):
+def test_u3b_deleted_target_refuses_implicit_resurrection(tmp_path):
+    """U3b hardening B1-state-3: hard-DELETE on a mapped target sets
+    tombstone_at via the AFTER DELETE trigger (v5). Next preview must classify
+    as ACTION_ERROR — silent resurrection on re-import was the prior bug. To
+    re-import, the operator must clear tombstone_at explicitly."""
     store = EngramStore(tmp_path / "u3b.db")
     try:
         source = _source("identity_kernel", "# Core\nI am Oliver.")
@@ -346,6 +367,46 @@ def test_u3b_missing_target_repairs_from_row_map(tmp_path):
         target_id = first.rows[0].target_id
 
         store.delete_engram(target_id)
+
+        # tombstone_at trigger should have fired
+        tombstone = store._get_conn().execute(
+            "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
+            (target_id,),
+        ).fetchone()
+        assert tombstone is not None
+        assert tombstone[0] is not None, "AFTER DELETE trigger must set tombstone_at"
+
+        preview = preview_pai_import(store, [source])
+        assert preview.counts == {ACTION_ERROR: 1}
+        assert "tombstone" in preview.rows[0].reason
+        with pytest.raises(ValueError, match="tombstone"):
+            apply_pai_import(store, preview)
+        # Target stays deleted — no implicit resurrection
+        assert store.get_engram(target_id) is None
+    finally:
+        store.close()
+
+
+def test_u3b_missing_target_without_tombstone_repairs(tmp_path):
+    """REPAIR-from-truly-missing still works when the row was never tracked
+    by a tombstone (pre-v5 row-map entries, or an operator who explicitly
+    cleared the tombstone after reconciliation).
+    """
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source("identity_kernel", "# Core\nI am Oliver.")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+
+        # Simulate the legitimate missing-without-tombstone case: delete the
+        # target row, then clear the tombstone (operator-level reconciliation).
+        store.delete_engram(target_id)
+        store._get_conn().execute(
+            "UPDATE pai_import_row_map SET tombstone_at = NULL WHERE target_id = ?",
+            (target_id,),
+        )
+        store._get_conn().commit()
 
         repair_preview = preview_pai_import(store, [source])
         assert repair_preview.counts == {ACTION_REPAIR: 1}
@@ -387,6 +448,10 @@ def test_u3b_archived_mapped_engram_refuses_implicit_reactivation(tmp_path):
 
 
 def test_u3b_stale_noop_preview_rejects_later_target_drift(tmp_path):
+    """NOOP previews must also fail at apply time if the target drifts. The
+    v5 drift check produces a content-baseline-divergence error rather than
+    the generic stale message.
+    """
     store = EngramStore(tmp_path / "u3b.db")
     try:
         source = _source("identity_kernel", "# Core\nI am Oliver.")
@@ -400,9 +465,11 @@ def test_u3b_stale_noop_preview_rejects_later_target_drift(tmp_path):
         )
         store._get_conn().commit()
 
-        with pytest.raises(ValueError, match="preview is stale"):
+        with pytest.raises(ValueError, match="diverged from importer baseline"):
             apply_pai_import(store, noop_preview)
-        assert store.get_engram(target_id).content == "corrupted after preview"
+        edited = store.get_engram(target_id)
+        assert edited is not None
+        assert edited.content == "corrupted after preview"
     finally:
         store.close()
 
@@ -429,7 +496,12 @@ def test_u3b_corrupt_target_json_classifies_repair_not_crash(tmp_path):
         store.close()
 
 
-def test_u3b_target_content_drift_repairs_even_when_source_hash_matches(tmp_path):
+def test_u3b_target_content_drift_refuses_clobber_on_operator_edit(tmp_path):
+    """U3b hardening B1-state-2/4 + B5-audit-13: external edits to imported
+    content are detected against pai_import_row_map.content_at_last_import
+    and refused. Prior behavior was to silently REPAIR/UPDATE, clobbering the
+    operator's edit. The operator must reconcile manually before re-import.
+    """
     store = EngramStore(tmp_path / "u3b.db")
     try:
         source = _source("identity_kernel", "# Core\nI am Oliver.")
@@ -443,14 +515,16 @@ def test_u3b_target_content_drift_repairs_even_when_source_hash_matches(tmp_path
         )
         store._get_conn().commit()
 
-        repair_preview = preview_pai_import(store, [source])
-        assert repair_preview.counts == {ACTION_REPAIR: 1}
-        assert "target projection drifted" in repair_preview.rows[0].reason
-
-        apply_pai_import(store, repair_preview)
-        repaired = store.get_engram(target_id)
-        assert repaired is not None
-        assert repaired.content == "# Core\nI am Oliver."
+        preview = preview_pai_import(store, [source])
+        assert preview.counts == {ACTION_ERROR: 1}
+        assert "diverged from importer baseline" in preview.rows[0].reason
+        assert "operator hand-edit detected" in preview.rows[0].reason
+        with pytest.raises(ValueError, match="diverged from importer baseline"):
+            apply_pai_import(store, preview)
+        # Hand-edit preserved — no silent clobber
+        edited = store.get_engram(target_id)
+        assert edited is not None
+        assert edited.content == "corrupted outside importer"
     finally:
         store.close()
 
@@ -1066,5 +1140,245 @@ def test_u3b_identity_profile_from_imported_soul_is_semantic(tmp_path):
         # 3. to_summary() emits a non-trivial string anchored in imported content
         summary = profile.to_summary()
         assert summary, "IdentityProfile.to_summary returned empty"
+    finally:
+        store.close()
+
+
+# ── Hardening pass II: HIGH cluster (schema v5 + code path) ──
+
+
+def test_u3b_apply_writes_pai_import_events(tmp_path):
+    """U3b hardening B5-audit-6 + B4-u3c-5: apply must produce an append-only
+    event row per row-touched so the operator can reconstruct "what did job X
+    do" even after a later job touches the same targets."""
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source("identity_kernel", "# Core\nI am Oliver.\n\n# Voice\nDirect.")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        first_events = store._get_conn().execute(
+            "SELECT action, source_path FROM pai_import_events ORDER BY event_id"
+        ).fetchall()
+        assert len(first_events) == 2
+        assert all(e["action"] == "insert" for e in first_events)
+
+        changed = replace(source, source_text="# Core\nI am Oliver, agent.\n\n# Voice\nDirect.")
+        update_preview = preview_pai_import(store, [changed])
+        apply_pai_import(store, update_preview)
+        all_events = store._get_conn().execute(
+            "SELECT action, source_anchor, source_hash_before, source_hash_after, change_reason "
+            "FROM pai_import_events ORDER BY event_id"
+        ).fetchall()
+        # 2 inserts from first apply + 1 update + 1 noop from second apply
+        assert len(all_events) == 4
+        actions = [e["action"] for e in all_events]
+        assert actions == ["insert", "insert", "update", "noop"]
+        update_event = all_events[2]
+        assert update_event["source_hash_before"] != update_event["source_hash_after"]
+        assert update_event["change_reason"]
+    finally:
+        store.close()
+
+
+def test_u3b_imported_belief_arrives_needs_review_true(tmp_path):
+    """U3b hardening CB3: PAI imports are canonical AT THE MOMENT of import
+    but the substrate's downstream review work shouldn't be silently erased.
+    Imported beliefs arrive needs_review=True; substrate clears it after
+    review."""
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source("beliefs", "David grinds his own coffee.")
+        preview = preview_pai_import(store, [source])
+        apply_pai_import(store, preview)
+        target_id = preview.rows[0].target_id
+
+        row = store._get_conn().execute(
+            "SELECT needs_review, confidence_pending_review, original_substrate, "
+            "original_timestamp FROM beliefs WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        assert bool(row["needs_review"]) is True
+        assert bool(row["confidence_pending_review"]) is True
+        assert row["original_substrate"] == "claude-opus-4-6"
+        assert row["original_timestamp"] == 1710000000
+
+        # Substrate-side review concludes; flips needs_review off.
+        store._get_conn().execute(
+            "UPDATE beliefs SET needs_review = 0, confidence_pending_review = 0 WHERE id = ?",
+            (target_id,),
+        )
+        store._get_conn().commit()
+
+        # Re-running the same source must NOOP (needs_review is workflow state,
+        # not part of equality). The substrate's review work is preserved.
+        reimport_preview = preview_pai_import(store, [source])
+        assert reimport_preview.counts == {ACTION_NOOP: 1}
+    finally:
+        store.close()
+
+
+def test_u3b_imported_belief_re_import_flips_needs_review_back_on_change(tmp_path):
+    """When David edits a belief in SOUL/FACTS.md, the re-import flips
+    needs_review back to True — substrate's prior review must be reconfirmed
+    against the new content. revision_history preserves the trail with job_id.
+    """
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source("beliefs", "David grinds his own coffee.")
+        apply_pai_import(store, preview_pai_import(store, [source]))
+        target_id = preview_pai_import(store, [source]).rows[0].target_id
+
+        # Substrate review concludes
+        store._get_conn().execute(
+            "UPDATE beliefs SET needs_review = 0, confidence_pending_review = 0 WHERE id = ?",
+            (target_id,),
+        )
+        store._get_conn().commit()
+
+        # David edits the fact
+        changed = replace(source, source_text="David grinds his own coffee every morning.")
+        apply_pai_import(store, preview_pai_import(store, [changed]))
+
+        row = store._get_conn().execute(
+            "SELECT needs_review, confidence_pending_review, revision_history FROM beliefs WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        assert bool(row["needs_review"]) is True
+        assert bool(row["confidence_pending_review"]) is True
+        revisions = json.loads(row["revision_history"])
+        assert revisions
+        # Hardening MEDIUM 15: revision entries carry job_id
+        assert revisions[-1].get("job_id") == "u3b-job"
+    finally:
+        store.close()
+
+
+def test_u3b_hypomnema_inactive_reactivates_on_reimport(tmp_path):
+    """U3b hardening CB8: hypomnema deactivation (active=False, no successor)
+    is a retire signal that PAI re-import is the canonical reactivation
+    channel for. Engrams keep refuse-on-archived; beliefs keep refuse-on-
+    superseded. Hypomnema specifically reactivates."""
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source(
+            "hypomnema", "# Today\nSubstrate warm. Lo Stelo intact."
+        )
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+
+        # Substrate-side deactivation (retired-not-superseded)
+        store._get_conn().execute(
+            "UPDATE hypomnema_entries SET active = 0 WHERE id = ?",
+            (target_id,),
+        )
+        store._get_conn().commit()
+
+        # Re-import same content — should produce REPAIR (target projection
+        # mismatch on active flag) and write path reactivates.
+        preview = preview_pai_import(store, [source])
+        assert ACTION_REPAIR in preview.counts or ACTION_NOOP in preview.counts
+        apply_pai_import(store, preview)
+
+        active = store._get_conn().execute(
+            "SELECT active FROM hypomnema_entries WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        assert bool(active["active"]) is True
+    finally:
+        store.close()
+
+
+def test_u3b_hypomnema_superseded_still_refuses_reactivation(tmp_path):
+    """Superseded hypomnema (active=False AND superseded_by IS NOT NULL) means
+    a successor exists. Reactivating would create two active entries in the
+    supersede chain. Must refuse."""
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source(
+            "hypomnema", "# Today\nSubstrate warm. Lo Stelo intact."
+        )
+        apply_pai_import(store, preview_pai_import(store, [source]))
+        target_id = preview_pai_import(store, [source]).rows[0].target_id
+
+        # Create a real successor hypomnema row so the foreign key constraint
+        # on superseded_by is satisfiable.
+        successor_id = store.write_hypomnema_entry(
+            "# Tomorrow\nNew substrate state.",
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            source="observed",
+            domain="identity",
+        )
+        store._get_conn().execute(
+            "UPDATE hypomnema_entries SET active = 0, superseded_by = ? WHERE id = ?",
+            (successor_id, target_id),
+        )
+        store._get_conn().commit()
+
+        preview = preview_pai_import(store, [source])
+        assert preview.counts == {ACTION_ERROR: 1}
+        assert "superseded" in preview.rows[0].reason
+    finally:
+        store.close()
+
+
+def test_u3b_infer_source_kind_raises_for_ambiguous_stale_engram(tmp_path):
+    """U3b hardening CB6: when a stale row-map entry references an engram
+    whose marker tags were hand-edited away AND no source_kind is recorded
+    in the row-map, source_kind cannot be safely inferred. The prior silent
+    default to identity_kernel produced profile-incoherent stale-row
+    construction. Now raises explicitly."""
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source("david_context", "# David\nBSD school psych.")
+        apply_pai_import(store, preview_pai_import(store, [source]))
+        target_id = preview_pai_import(store, [source]).rows[0].target_id
+
+        # Simulate hand-edit: remove marker tags from engram AND clear
+        # source_kind from row-map (the v5 column protects against this case
+        # by default — we manually clear to test the no-row-map-source-kind
+        # fallback).
+        conn = store._get_conn()
+        conn.execute(
+            "UPDATE engrams SET tags = ? WHERE id = ?",
+            (json.dumps([]), target_id),
+        )
+        conn.execute(
+            "UPDATE pai_import_row_map SET source_kind = NULL WHERE target_id = ?",
+            (target_id,),
+        )
+        conn.commit()
+
+        # Now run an import that excludes the original source — _stale_mapped_rows
+        # will try to infer source_kind for this target.
+        other = replace(source, source_path="/pai/other.md", source_text="# Other\nelse")
+        with pytest.raises(ValueError, match="Cannot infer source_kind"):
+            preview_pai_import(store, [other])
+    finally:
+        store.close()
+
+
+def test_u3b_row_map_populates_extended_columns_on_insert(tmp_path):
+    """B4-u3c-4: row-map gains agent_id / project_scope / source_kind /
+    original_timestamp / content_at_last_import so U3c watcher doesn't need
+    to re-join target tables to reconcile."""
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source("growth_substrate", "# Voice\nDense over sparse.")
+        apply_pai_import(store, preview_pai_import(store, [source]))
+
+        row = store._get_conn().execute(
+            "SELECT content_at_last_import, agent_id, project_scope, "
+            "source_kind, original_timestamp, tombstone_at FROM pai_import_row_map"
+        ).fetchone()
+        assert row["content_at_last_import"]
+        assert "Dense over sparse" in row["content_at_last_import"]
+        assert row["agent_id"] == "oliver"
+        assert row["project_scope"] == "pai"
+        assert row["source_kind"] == "growth_substrate"
+        assert row["original_timestamp"] == 1710000000
+        assert row["tombstone_at"] is None
     finally:
         store.close()

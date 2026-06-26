@@ -24,11 +24,16 @@ from ..core.engram import Connection, Engram, VersionRef
 from ..core.belief import Belief
 from ..core.emotional_state import EmotionalState
 from ..core.identity import AgentIdentity
-from .migrations import apply_u3a_schema_migration, get_current_version, run_migrations
+from .migrations import (
+    apply_u3a_schema_migration,
+    apply_u3b_hardening_schema_migration,
+    get_current_version,
+    run_migrations,
+)
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -432,6 +437,7 @@ class EngramStore:
         conn.commit()
         run_migrations(conn, target_version=SCHEMA_VERSION)
         apply_u3a_schema_migration(conn)
+        apply_u3b_hardening_schema_migration(conn)
         # Set schema version
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",

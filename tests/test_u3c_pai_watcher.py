@@ -325,6 +325,39 @@ def test_u3c_launchd_plist_write_is_atomic_on_replace_failure(tmp_path, monkeypa
     assert not list(tmp_path.glob(f".{plist_path.name}.*.tmp"))
 
 
+def test_u3c_launchd_plist_resolves_relative_python_executable(tmp_path, monkeypatch):
+    manifest, _source = _write_manifest(tmp_path)
+    db_path = tmp_path / "representative.db"
+    EngramStore(db_path).close()
+    venv_bin = tmp_path / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    python_link = venv_bin / "python"
+    python_link.symlink_to(sys.executable)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "mnemos.importer.watcher._assert_python_can_import_mnemos",
+        lambda python, *, cwd: None,
+    )
+
+    written = write_pai_watch_launchd_plist(
+        plist_path=tmp_path / "relpy.plist",
+        manifest_path=manifest,
+        db_path=db_path,
+        state_path=tmp_path / "watch-state.json",
+        artifact_dir=tmp_path / "artifacts",
+        backup_dir=tmp_path / "backups",
+        label="com.example.mnemos.duallife",
+        interval_seconds=60,
+        python_executable="venv/bin/python",
+    )
+
+    payload = plistlib.loads(written.read_bytes())
+    persisted_python = payload["ProgramArguments"][0]
+    assert Path(persisted_python).is_absolute()
+    assert Path(persisted_python).exists()
+    assert Path(persisted_python).is_symlink()
+
+
 def test_u3c_launchd_plist_refuses_unsafe_or_invalid_jobs(tmp_path):
     manifest, _source = _write_manifest(tmp_path)
     db_path = tmp_path / "representative.db"

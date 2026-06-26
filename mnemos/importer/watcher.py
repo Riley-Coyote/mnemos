@@ -299,7 +299,9 @@ def _resolve_python_executable(python_executable: str | Path | None) -> str:
     if candidate.is_absolute() or candidate.parent != Path("."):
         if not candidate.exists():
             raise FileNotFoundError(f"Python executable not found: {candidate}")
-        return str(candidate)
+        if candidate.is_absolute():
+            return str(candidate)
+        return os.path.abspath(candidate)
     resolved = shutil.which(raw)
     if resolved is None:
         raise FileNotFoundError(f"Python executable not found on PATH: {raw}")

@@ -76,6 +76,28 @@ class TestEngramStore:
         assert matched.content == "Type hints improve code quality"
         assert matched.confidence == pytest.approx(0.7)
 
+    def test_get_beliefs_excludes_pending_confidence_by_default(self, store):
+        """Pending-confidence beliefs require an explicit opt-in."""
+        pending = Belief(
+            content="Imported belief awaits confidence review",
+            confidence=0.9,
+            confidence_pending_review=True,
+        )
+        reviewed = Belief(
+            content="Reviewed belief participates in consumers",
+            confidence=0.6,
+        )
+        store.save_belief(pending)
+        store.save_belief(reviewed)
+
+        default_beliefs = store.get_beliefs()
+        assert reviewed.id in {b.id for b in default_beliefs}
+        assert pending.id not in {b.id for b in default_beliefs}
+
+        all_beliefs = store.get_beliefs(include_pending_review=True)
+        assert pending.id in {b.id for b in all_beliefs}
+        assert reviewed.id in {b.id for b in all_beliefs}
+
     def test_count_engrams(self, store):
         """Count engrams by state."""
         e1 = Engram(content="Active memory one")

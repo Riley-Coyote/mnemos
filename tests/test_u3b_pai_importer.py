@@ -547,7 +547,11 @@ def test_u3b_belief_and_hypomnema_projection_drift_repairs(tmp_path):
         repair_belief = preview_pai_import(store, [belief_source])
         assert repair_belief.counts == {ACTION_REPAIR: 1}
         apply_pai_import(store, repair_belief)
-        [belief] = store.get_beliefs(agent_id="oliver", domain="identity")
+        [belief] = store.get_beliefs(
+            agent_id="oliver",
+            domain="identity",
+            include_pending_review=True,
+        )
         assert belief.tier == "operational"
 
         hypo_source = replace(
@@ -867,7 +871,11 @@ def test_u3b_belief_preview_apply_noop_and_update(tmp_path):
         apply_pai_import(store, preview)
         target_id = preview.rows[0].target_id
 
-        [belief] = store.get_beliefs(agent_id="oliver", domain="identity")
+        [belief] = store.get_beliefs(
+            agent_id="oliver",
+            domain="identity",
+            include_pending_review=True,
+        )
         assert belief.id == target_id
         assert belief.content == "David context is foundational."
         assert belief.tier == "operational"
@@ -877,7 +885,11 @@ def test_u3b_belief_preview_apply_noop_and_update(tmp_path):
         changed_preview = preview_pai_import(store, [changed])
         assert changed_preview.counts == {ACTION_UPDATE: 1}
         apply_pai_import(store, changed_preview)
-        [updated] = store.get_beliefs(agent_id="oliver", domain="identity")
+        [updated] = store.get_beliefs(
+            agent_id="oliver",
+            domain="identity",
+            include_pending_review=True,
+        )
         assert updated.id == target_id
         assert updated.content == "David context remains foundational."
     finally:
@@ -1151,19 +1163,31 @@ def test_u3b_identity_profile_from_imported_soul_is_semantic(tmp_path):
         leaked = {tag for tag, _ in profile.persistent_concerns} & pai_marker_tags
         assert not leaked, f"PAI tags leaked: {leaked}"
 
-        # 2. core_beliefs has the imported facts (not zero)
-        assert len(profile.core_beliefs) >= 2, (
-            "Imported beliefs not surfacing in IdentityProfile.core_beliefs. "
-            f"Got {len(profile.core_beliefs)}; expected >=2 from the 2 fact blocks."
+        # 2. pending-confidence imports stay out of substrate identity until review.
+        assert profile.core_beliefs == []
+        store._get_conn().execute(
+            """
+            UPDATE beliefs
+            SET needs_review = 0, confidence_pending_review = 0
+            WHERE agent_id = ?
+            """,
+            ("oliver",),
         )
-        belief_text = " ".join(content for content, _ in profile.core_beliefs)
+        store._get_conn().commit()
+
+        reviewed_profile = compute_identity_profile(store, engrams, identity)
+        assert len(reviewed_profile.core_beliefs) >= 2, (
+            "Reviewed imported beliefs not surfacing in IdentityProfile.core_beliefs. "
+            f"Got {len(reviewed_profile.core_beliefs)}; expected >=2 from the 2 fact blocks."
+        )
+        belief_text = " ".join(content for content, _ in reviewed_profile.core_beliefs)
         assert "coffee" in belief_text.lower() or "report" in belief_text.lower(), (
             "Belief content from fixture not present in core_beliefs. "
-            f"Got: {profile.core_beliefs}"
+            f"Got: {reviewed_profile.core_beliefs}"
         )
 
         # 3. to_summary() emits a non-trivial string anchored in imported content
-        summary = profile.to_summary()
+        summary = reviewed_profile.to_summary()
         assert summary, "IdentityProfile.to_summary returned empty"
     finally:
         store.close()
@@ -1293,7 +1317,11 @@ def test_u3b_imported_belief_revision_metadata_survives_later_save(tmp_path):
         apply_pai_import(store, preview_pai_import(store, [changed]))
 
         loaded = next(
-            b for b in store.get_beliefs(agent_id=first.rows[0].agent_id)
+            b
+            for b in store.get_beliefs(
+                agent_id=first.rows[0].agent_id,
+                include_pending_review=True,
+            )
             if b.id == target_id
         )
         loaded.challenge()

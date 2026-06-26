@@ -70,7 +70,11 @@ def run_belief_review(
         return stats
 
     # Get active beliefs
-    beliefs = store.get_beliefs(agent_id, active_only=True)
+    beliefs = store.get_beliefs(
+        agent_id,
+        active_only=True,
+        include_pending_review=True,
+    )
     if not beliefs:
         log.info("No active beliefs to review")
         return stats

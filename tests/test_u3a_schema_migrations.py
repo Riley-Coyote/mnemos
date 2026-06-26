@@ -204,7 +204,10 @@ def test_u3a_schema_fields_roundtrip(tmp_path):
             confidence_pending_review=True,
         )
         store.save_belief(belief)
-        [loaded_belief] = store.get_beliefs(agent_id="oliver")
+        [loaded_belief] = store.get_beliefs(
+            agent_id="oliver",
+            include_pending_review=True,
+        )
         assert loaded_belief.tier == "foundational"
         assert loaded_belief.needs_review is True
         assert loaded_belief.confidence_pending_review is True

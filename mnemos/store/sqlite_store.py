@@ -883,8 +883,9 @@ class EngramStore:
         agent_id: str = "default",
         domain: str | None = None,
         active_only: bool = True,
+        include_pending_review: bool = False,
     ) -> list[Belief]:
-        """Get beliefs for an agent, optionally filtered by domain."""
+        """Get beliefs, excluding pending-confidence rows unless opted in."""
         conn = self._get_conn()
         query = "SELECT * FROM beliefs WHERE agent_id = ?"
         params: list[Any] = [agent_id]
@@ -895,6 +896,9 @@ class EngramStore:
 
         if active_only:
             query += " AND superseded_by IS NULL"
+
+        if not include_pending_review:
+            query += " AND confidence_pending_review = 0"
 
         query += " ORDER BY confidence DESC"
         rows = conn.execute(query, params).fetchall()

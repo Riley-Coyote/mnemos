@@ -19,7 +19,9 @@ from .pai import (
     PaiImportResult,
     PaiImportSource,
     apply_pai_import,
+    apply_pai_watch_update,
     preview_pai_import,
+    preview_pai_watch_update,
 )
 
 
@@ -175,6 +177,40 @@ def preview_pai_manifest(
     return run
 
 
+def preview_pai_watch_manifest(
+    *,
+    db_path: str | Path,
+    manifest_path: str | Path,
+    artifact_path: str | Path | None = None,
+    allow_live_db: bool = False,
+) -> PaiOperatorRun:
+    """Preview a U3c watcher manifest update and lifecycle actions."""
+    db = _checked_operator_db_path(db_path, allow_live_db=allow_live_db)
+    if not db.exists():
+        raise FileNotFoundError(
+            f"PAI watch preview requires an existing database: {db}. "
+            "Preview is read-only by contract; bootstrap a representative DB "
+            "via `mnemos init --db-path <path>` first."
+        )
+    manifest = load_pai_manifest(manifest_path)
+    store = EngramStore(db, read_only=True)
+    try:
+        preview = preview_pai_watch_update(store, manifest.sources)
+    finally:
+        store.close()
+
+    artifact = _artifact_output_path(artifact_path)
+    run = PaiOperatorRun(
+        mode="watch-preview",
+        manifest=manifest,
+        preview=preview,
+        artifact_path=artifact,
+    )
+    if artifact is not None:
+        write_pai_import_artifact(run, db_path=db)
+    return run
+
+
 def apply_pai_manifest(
     *,
     db_path: str | Path,
@@ -213,6 +249,55 @@ def apply_pai_manifest(
 
     run = PaiOperatorRun(
         mode="apply",
+        manifest=manifest,
+        preview=preview,
+        artifact_path=_artifact_output_path(artifact_path),
+        backup_path=backup_path,
+        result=result,
+    )
+    if run.artifact_path is not None:
+        write_pai_import_artifact(run, db_path=db)
+    return run
+
+
+def apply_pai_watch_manifest(
+    *,
+    db_path: str | Path,
+    manifest_path: str | Path,
+    artifact_path: str | Path | None = None,
+    backup_dir: str | Path | None = None,
+    allow_live_db: bool = False,
+) -> PaiOperatorRun:
+    """Backup a database, preview, then apply a U3c watcher manifest update."""
+    db = _checked_operator_db_path(db_path, allow_live_db=allow_live_db)
+    if not db.exists():
+        raise FileNotFoundError(f"PAI watch apply requires an existing database: {db}")
+
+    manifest = load_pai_manifest(manifest_path)
+    backup_path = _backup_path(db, manifest.job_id, backup_dir)
+    backup_sqlite_db(db, backup_path)
+
+    store = EngramStore(db)
+    try:
+        preview = preview_pai_watch_update(store, manifest.sources)
+        errors = [row for row in preview.rows if row.action == ACTION_ERROR]
+        if errors:
+            run = PaiOperatorRun(
+                mode="watch-apply",
+                manifest=manifest,
+                preview=preview,
+                artifact_path=_artifact_output_path(artifact_path),
+                backup_path=backup_path,
+            )
+            if run.artifact_path is not None:
+                write_pai_import_artifact(run, db_path=db)
+            raise ValueError(errors[0].reason)
+        result = apply_pai_watch_update(store, preview)
+    finally:
+        store.close()
+
+    run = PaiOperatorRun(
+        mode="watch-apply",
         manifest=manifest,
         preview=preview,
         artifact_path=_artifact_output_path(artifact_path),

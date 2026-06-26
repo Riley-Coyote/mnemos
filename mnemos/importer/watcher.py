@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
 import re
@@ -131,15 +132,18 @@ def write_pai_watch_launchd_plist(
     plist = Path(plist_path).expanduser()
     plist.parent.mkdir(parents=True, exist_ok=True)
     manifest = load_pai_manifest(manifest_path, allow_missing_sources=True)
-    db = _checked_operator_db_path(db_path, allow_live_db=allow_live_db)
+    db = _checked_operator_db_path(db_path, allow_live_db=allow_live_db).resolve()
     if not db.exists():
         raise FileNotFoundError(f"PAI watch launchd requires an existing database: {db}")
     state = Path(state_path).expanduser()
     state.parent.mkdir(parents=True, exist_ok=True)
+    state = state.resolve()
     artifact_root = Path(artifact_dir).expanduser()
     backup_root = Path(backup_dir).expanduser()
     artifact_root.mkdir(parents=True, exist_ok=True)
     backup_root.mkdir(parents=True, exist_ok=True)
+    artifact_root = artifact_root.resolve()
+    backup_root = backup_root.resolve()
     python = _resolve_python_executable(python_executable)
     repo_root = Path(__file__).resolve().parents[2]
     _assert_python_can_import_mnemos(python, cwd=repo_root)
@@ -163,8 +167,8 @@ def write_pai_watch_launchd_plist(
     ]
     if allow_live_db:
         args.append("--allow-live-db")
-    out_path = Path(artifact_dir).expanduser() / "launchd.out.log"
-    err_path = Path(artifact_dir).expanduser() / "launchd.err.log"
+    out_path = artifact_root / "launchd.out.log"
+    err_path = artifact_root / "launchd.err.log"
     payload = {
         "Label": label,
         "ProgramArguments": args,
@@ -303,10 +307,12 @@ def _resolve_python_executable(python_executable: str | Path | None) -> str:
 
 
 def _assert_python_can_import_mnemos(python: str, *, cwd: Path) -> None:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(cwd)
     check = subprocess.run(
         [python, "-c", "import mnemos.cli"],
         cwd=str(cwd),
-        env={"PYTHONPATH": str(cwd)},
+        env=env,
         capture_output=True,
         text=True,
         check=False,

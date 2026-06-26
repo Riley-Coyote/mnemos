@@ -1,11 +1,14 @@
 """PAI import scaffolding for Mnemos."""
 
 from .pai import (
+    ACTION_DEACTIVATE,
     ACTION_ERROR,
     ACTION_INSERT,
     ACTION_NOOP,
     ACTION_PENDING,
     ACTION_REPAIR,
+    ACTION_REVIEW,
+    ACTION_TOMBSTONE,
     ACTION_UPDATE,
     PaiImportPreview,
     PaiImportResult,
@@ -32,11 +35,14 @@ from .operator import (
 )
 
 __all__ = [
+    "ACTION_DEACTIVATE",
     "ACTION_ERROR",
     "ACTION_INSERT",
     "ACTION_NOOP",
     "ACTION_PENDING",
     "ACTION_REPAIR",
+    "ACTION_REVIEW",
+    "ACTION_TOMBSTONE",
     "ACTION_UPDATE",
     "ARTIFACT_SCHEMA",
     "MANIFEST_SCHEMA",

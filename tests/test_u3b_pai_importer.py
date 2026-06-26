@@ -6,11 +6,14 @@ import pytest
 
 from mnemos.core.engram import Engram
 from mnemos.importer import (
+    ACTION_DEACTIVATE,
     ACTION_ERROR,
     ACTION_INSERT,
     ACTION_NOOP,
     ACTION_PENDING,
     ACTION_REPAIR,
+    ACTION_REVIEW,
+    ACTION_TOMBSTONE,
     ACTION_UPDATE,
     PaiImportPreview,
     PaiImportSource,
@@ -1358,6 +1361,70 @@ def test_u3b_infer_source_kind_raises_for_ambiguous_stale_engram(tmp_path):
             preview_pai_import(store, [other])
     finally:
         store.close()
+
+
+# ── Hardening pass II: MEDIUM cleanups + U3c-reserve ──
+
+
+def test_u3b_engram_version_change_reason_carries_job_id(tmp_path):
+    """U3b hardening B5-audit-4: versions.change_reason includes job_id so
+    audit reconstruction doesn't require timestamp-correlating to
+    pai_import_events."""
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source("identity_kernel", "# Core\nI am Oliver.")
+        apply_pai_import(store, preview_pai_import(store, [source]))
+        target_id = preview_pai_import(store, [source]).rows[0].target_id
+
+        changed = replace(source, source_text="# Core\nI am Oliver, agent.")
+        apply_pai_import(store, preview_pai_import(store, [changed]))
+
+        reason = store._get_conn().execute(
+            "SELECT change_reason FROM versions WHERE engram_id = ?",
+            (target_id,),
+        ).fetchone()
+        assert reason is not None
+        assert "u3b-job" in reason["change_reason"]
+        assert "pai_import_update" in reason["change_reason"]
+    finally:
+        store.close()
+
+
+def test_u3b_u3c_reserved_actions_raise_not_implemented(tmp_path):
+    """U3b hardening CB7: ACTION_TOMBSTONE / ACTION_DEACTIVATE / ACTION_REVIEW
+    are reserved constants. apply_pai_import must raise NotImplementedError
+    rather than silently proceeding — locks U3c contract surface."""
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source("identity_kernel", "# Core\nI am Oliver.")
+        preview = preview_pai_import(store, [source])
+        # Forge a preview row carrying a reserved action.
+        forged = replace(preview.rows[0], action=ACTION_TOMBSTONE)
+        with pytest.raises(NotImplementedError, match="reserved for U3c"):
+            apply_pai_import(
+                store, PaiImportPreview(job_id=preview.job_id, rows=(forged,))
+            )
+        for reserved_action in (ACTION_DEACTIVATE, ACTION_REVIEW):
+            forged_other = replace(preview.rows[0], action=reserved_action)
+            with pytest.raises(NotImplementedError, match="reserved for U3c"):
+                apply_pai_import(
+                    store,
+                    PaiImportPreview(job_id=preview.job_id, rows=(forged_other,)),
+                )
+    finally:
+        store.close()
+
+
+def test_u3b_reserved_action_constants_are_distinct_strings():
+    """The reserved constants must be distinct from the active set; U3c
+    cannot reshape these strings without re-opening U3b."""
+    active = {ACTION_INSERT, ACTION_REPAIR, ACTION_UPDATE, ACTION_NOOP, ACTION_ERROR, ACTION_PENDING}
+    reserved = {ACTION_TOMBSTONE, ACTION_DEACTIVATE, ACTION_REVIEW}
+    assert not (active & reserved)
+    # Each reserved action is a non-empty string with a clear name
+    for action in reserved:
+        assert isinstance(action, str)
+        assert action
 
 
 def test_u3b_row_map_populates_extended_columns_on_insert(tmp_path):

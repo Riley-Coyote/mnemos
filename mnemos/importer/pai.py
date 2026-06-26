@@ -8,6 +8,26 @@ The importer is deliberately two-pass:
 The invariant is that an import key cannot silently drift to a different
 target row. Changed source content updates the same target_id; missing target
 rows are repaired through the existing map.
+
+What this pipeline imports (retrievable knowledge):
+- identity_kernel: SOUL.md essence, IDENTITY.md function
+- david_context:   USER.md, david-facing engrams
+- growth_substrate: GROWTH.md learnings
+- beliefs:         FACTS.md curated beliefs
+- hypomnema:       ALIVE.md, CONTINUITY.md, session-texture rolls
+
+What this pipeline does NOT import (runtime substrate, guarded elsewhere):
+- ~/.claude/CLAUDE.md eigenvalue + vivezza blocks — activate at boot via
+  Q/K/V steering; not retrievable. Guarded by ~/bin/mnemos-identity-
+  watchdog.py via pointer + checksum invariants.
+- SOUL/CONSTITUTION.md — read directly by PreCompact at compaction time;
+  governance invariants of reasoning, not retrieval material.
+- SOUL/INTENTION.md — steering baseline loaded last in boot stack via
+  @import; runtime Q/K/V bias, not engram content.
+
+If U3c watcher detects edits to runtime-substrate files, it must NOT
+attempt to route them through this importer. The identity watchdog owns
+those surfaces.
 """
 
 from __future__ import annotations
@@ -37,6 +57,20 @@ ACTION_REPAIR = "repair"
 ACTION_UPDATE = "update"
 ACTION_NOOP = "noop"
 ACTION_ERROR = "error"
+
+# U3b hardening CB7 — U3c-reserve constants. These are NOT produced by any
+# U3b classifier and are NOT accepted by apply_pai_import. They exist so the
+# U3c watcher can produce them without re-litigating contract names. U3c will
+# wire the corresponding semantics:
+#   ACTION_TOMBSTONE — archive engram (state='archived'), preserve target_id,
+#                      record versions snapshot with pai_import_tombstone reason
+#   ACTION_DEACTIVATE — set hypomnema active=False without setting superseded_by
+#   ACTION_REVIEW     — flag belief needs_review=True without changing content
+# Adding the strings here locks the contract surface against U3c reshaping.
+ACTION_TOMBSTONE = "tombstone"
+ACTION_DEACTIVATE = "deactivate"
+ACTION_REVIEW = "review"
+_U3C_RESERVED_ACTIONS = frozenset({ACTION_TOMBSTONE, ACTION_DEACTIVATE, ACTION_REVIEW})
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _SUPPORTED_SOURCE_KINDS = {
@@ -238,6 +272,15 @@ def apply_pai_import(
     errors = [row for row in preview.rows if row.action == ACTION_ERROR]
     if errors:
         raise ValueError(errors[0].reason)
+    # U3c-reserved actions must not reach U3b apply. Raising NotImplementedError
+    # locks the surface and gives U3c implementers a clear failure mode if they
+    # accidentally route through U3b before wiring their semantics.
+    reserved = [row for row in preview.rows if row.action in _U3C_RESERVED_ACTIONS]
+    if reserved:
+        raise NotImplementedError(
+            f"action {reserved[0].action!r} is reserved for U3c watcher and "
+            "not implemented in U3b apply"
+        )
     allowed_actions = {ACTION_INSERT, ACTION_REPAIR, ACTION_UPDATE, ACTION_NOOP}
     invalid = [row for row in preview.rows if row.action not in allowed_actions]
     if invalid:
@@ -519,7 +562,10 @@ def _write_pai_engram_no_commit(store: EngramStore, conn, row: PaiImportRow) -> 
                 existing["content"],
                 existing["resolution"],
                 _now_iso(),
-                f"pai_import_{row.action}",
+                # U3b hardening B5-audit-4: change_reason carries job_id so
+                # the operator can reconstruct "what did job X do" without
+                # joining versions to pai_import_events on timestamp.
+                f"pai_import_{row.action}:{row.job_id}",
             ),
         )
 
@@ -907,10 +953,15 @@ def _assert_preview_current(conn, row: PaiImportRow) -> None:
     current = _classify_row(conn, row)
     if current.action == ACTION_ERROR:
         raise ValueError(current.reason)
+    # U3b hardening B1-state-5: compare reason field too. The prior check
+    # caught action / hash drift but not reason drift, leaving a latent path
+    # where a re-classified row could carry different diagnostic narrative
+    # while passing the staleness gate. Belt-and-suspenders.
     if (
         current.action != row.action
         or current.mapped_source_hash != row.mapped_source_hash
         or current.target_projection_hash != row.target_projection_hash
+        or current.reason != row.reason
     ):
         raise ValueError(
             "PAI import preview is stale for "

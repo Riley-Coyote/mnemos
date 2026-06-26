@@ -885,7 +885,12 @@ class EngramStore:
         active_only: bool = True,
         include_pending_review: bool = False,
     ) -> list[Belief]:
-        """Get beliefs, excluding pending-confidence rows unless opted in."""
+        """Get beliefs, excluding pending-confidence rows unless opted in.
+
+        Imported or changed PAI beliefs use ``confidence_pending_review`` to
+        keep stale confidence out of normal consumers. Belief review passes
+        ``include_pending_review=True`` so it can resolve those rows.
+        """
         conn = self._get_conn()
         query = "SELECT * FROM beliefs WHERE agent_id = ?"
         params: list[Any] = [agent_id]

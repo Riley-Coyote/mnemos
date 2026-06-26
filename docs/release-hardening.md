@@ -10,6 +10,8 @@ Use this checklist before publishing Mnemos or opening a release PR.
   - `mnemos_recall`
   - `mnemos_correct`
   - `mnemos_maintain`
+  - `mnemos_introduce`
+  - `mnemos_health`
 - Advanced mode preserves the existing admin tools.
 - Injected FastMCP context parameters are not exposed in public tool schemas.
 - Sampling is optional and occurs only inside an active client request.
@@ -33,6 +35,9 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Wheel contains:
   - `mnemos/simple_runtime.py`
   - `mnemos/simple_mcp.py`
+  - `mnemos/importer/pai.py`
+  - `mnemos/importer/operator.py`
+  - `mnemos/importer/watcher.py`
   - `templates/SOUL.md`
   - `templates/IDENTITY.md`
 - Package metadata passes `twine check`.
@@ -63,12 +68,20 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - `watch-once` advances state only after a successful apply. Preview mode
   leaves state untouched so an operator can inspect a change and still apply
   it later.
+- Missing source files or removed source sections are handled as explicit
+  watcher lifecycle actions: imported engrams are tombstoned, imported
+  hypomnema entries are deactivated without a successor, and imported beliefs
+  are flagged `needs_review` / `confidence_pending_review` without changing
+  their content or confidence.
 - `watch-plist` writes the launchd plist atomically (temp file + `rename`),
   resolves the configured Python interpreter on `PATH`, asserts the
   interpreter can `import mnemos.cli` against the repo, and bakes absolute
   paths for manifest, DB, state, artifact, and backup directories into the
   generated `ProgramArguments`. Loading the plist with `launchctl` remains
   an explicit operator action; `watch-plist` only writes the file.
+- Default `get_beliefs()` consumers exclude `confidence_pending_review` rows;
+  belief review is the explicit opt-in path that can clear pending review,
+  including no-op acceptance.
 - Error messages that mention recovery actions are probed against actual
   behavior. Recovery steps that would destroy operator hand-edits or in-flight
   state must be removed from user-facing text, even when the underlying code
@@ -82,7 +95,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
 
 ```bash
 uv run --extra dev --extra mcp pytest -q
-uv run --extra mcp python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py
+uv run --extra mcp python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/importer/pai.py mnemos/importer/operator.py mnemos/importer/watcher.py
 uv build
 uvx twine check dist/*
 git diff --check

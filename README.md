@@ -195,7 +195,7 @@ Advanced tools include:
 | `mnemos_recall` | Retrieve memories. |
 | `mnemos_inspect` | View full memory details. |
 | `mnemos_status` | Show memory system statistics. |
-| `mnemos_beliefs` | List current beliefs. |
+| `mnemos_beliefs` | List reviewed current beliefs. |
 | `mnemos_shared` | Read shared memory pool entries. |
 | `mnemos_hypomnema_write` | Write scoped continuity manually. |
 | `mnemos_hypomnema_search` | Search scoped continuity manually. |
@@ -416,7 +416,7 @@ mnemos hermes doctor
 mnemos hermes shim
 ```
 
-PAI import (operator workflow for replaying SOUL/-shaped source manifests
+PAI import (operator workflow for replaying PAI-shaped source manifests
 into a Mnemos store; only intended for operators bringing a pre-existing
 PAI corpus into a fresh agent):
 
@@ -425,14 +425,46 @@ mnemos pai-import preview --manifest ./pai-manifest.json --db-path ./test.db
 mnemos pai-import apply   --manifest ./pai-manifest.json --db-path ./test.db \
                           --backup-dir ./pai-import-backups
 mnemos pai-import watch-preview --manifest ./pai-manifest.json --db-path ./test.db
+mnemos pai-import watch-apply   --manifest ./pai-manifest.json --db-path ./test.db \
+                          --backup-dir ./pai-import-backups
 mnemos pai-import watch-once --manifest ./pai-manifest.json --db-path ./test.db \
-                          --state ./pai-watch-state.json --apply
+                          --state ./pai-watch-state.json \
+                          --artifact-dir ./pai-watch-artifacts \
+                          --backup-dir ./pai-import-backups --apply
 mnemos pai-import watch-plist --manifest ./pai-manifest.json --db-path ./test.db \
                           --state ./pai-watch-state.json \
                           --artifact-dir ./pai-watch-artifacts \
                           --backup-dir  ./pai-import-backups \
                           --plist ~/Library/LaunchAgents/com.davidef.mnemos.duallife.plist
 ```
+
+Minimal manifest:
+
+```json
+{
+  "schema": "mnemos.pai_import.manifest.v1",
+  "job_id": "pai-seed",
+  "defaults": {
+    "agent_id": "oliver",
+    "person_id": "david",
+    "project_scope": "pai",
+    "original_substrate": "claude-opus-4-6",
+    "original_timestamp": 1710000000
+  },
+  "sources": {
+    "identity.md": "identity_kernel",
+    "beliefs.md": { "source_kind": "beliefs" }
+  }
+}
+```
+
+Supported source kinds are `identity_kernel`, `david_context`,
+`growth_substrate`, `beliefs`, and `hypomnema`. Source paths are resolved
+relative to the manifest and must stay inside that directory. Source files are
+split into deterministic target rows by Markdown headings when present, or by
+blank-line blocks otherwise. `--artifact` writes a preview/apply JSON artifact;
+`watch-once` writes artifacts under `--artifact-dir`. `watch-once --force`
+polls even when source fingerprints are unchanged.
 
 Every PAI import command refuses the default live database (`~/.mnemos/memory.db`)
 unless `--allow-live-db` is passed. `apply` and `watch-apply` take an

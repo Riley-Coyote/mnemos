@@ -23,7 +23,7 @@ Tools:
     mnemos_hypomnema_promote — Promote stable continuity into Mnemos
     mnemos_inspect      — View full details of a memory
     mnemos_status       — Get memory system status
-    mnemos_beliefs      — List current beliefs
+    mnemos_beliefs      — List reviewed current beliefs
     mnemos_forget       — Archive a specific memory
     mnemos_consolidate  — Trigger a consolidation cycle
 
@@ -1374,7 +1374,10 @@ def mnemos_status(agent_id: str = "default") -> str:
 
 @mcp.tool()
 def mnemos_beliefs(agent_id: str = "default", domain: str = "") -> str:
-    """List current beliefs with confidence levels.
+    """List reviewed current beliefs with confidence levels.
+
+    Beliefs with ``confidence_pending_review`` are hidden until the belief
+    review pass opts in and clears their pending state.
 
     Args:
         agent_id: Which agent's beliefs to show. Default: "default".

@@ -306,6 +306,7 @@ def upsert_pai_import_row(
     target_table: str = "engrams",
     source_hash: str = "",
     timestamp: int | None = None,
+    ensure_schema: bool = True,
 ) -> dict[str, int | bool]:
     """Idempotently record a PAI import source-to-row mapping.
 
@@ -332,7 +333,8 @@ def upsert_pai_import_row(
     elif not target_id:
         raise ValueError(f"target_id is required for {target_table}")
 
-    apply_u3a_schema_migration(conn)
+    if ensure_schema:
+        apply_u3a_schema_migration(conn)
     now = int(timestamp if timestamp is not None else time.time())
     existing = conn.execute(
         """

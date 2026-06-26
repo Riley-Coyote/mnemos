@@ -446,6 +446,15 @@ class EngramStore:
         wrapped in a single transaction for atomicity.
         """
         conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._save_engram_no_commit(conn, engram)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    def _save_engram_no_commit(self, conn: sqlite3.Connection, engram: Engram) -> None:
         data = engram.to_dict()
 
         # Validate column names to prevent SQL injection
@@ -454,34 +463,26 @@ class EngramStore:
         placeholders = ", ".join("?" for _ in safe_data)
         updates = ", ".join(f"{k}=excluded.{k}" for k in safe_data if k != "id")
 
-        try:
-            conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            f"INSERT INTO engrams ({columns}) VALUES ({placeholders}) "
+            f"ON CONFLICT(id) DO UPDATE SET {updates}",
+            list(safe_data.values()),
+        )
 
-            conn.execute(
-                f"INSERT INTO engrams ({columns}) VALUES ({placeholders}) "
-                f"ON CONFLICT(id) DO UPDATE SET {updates}",
-                list(safe_data.values()),
-            )
+        # Update FTS index (atomic with engram)
+        conn.execute("DELETE FROM engrams_fts WHERE id = ?", (engram.id,))
+        conn.execute(
+            "INSERT INTO engrams_fts (id, content) VALUES (?, ?)",
+            (engram.id, engram.content),
+        )
 
-            # Update FTS index (atomic with engram)
-            conn.execute("DELETE FROM engrams_fts WHERE id = ?", (engram.id,))
-            conn.execute(
-                "INSERT INTO engrams_fts (id, content) VALUES (?, ?)",
-                (engram.id, engram.content),
-            )
+        # Save connections
+        for conn_obj in engram.connections:
+            self._save_connection_no_commit(conn, engram.id, conn_obj)
 
-            # Save connections
-            for conn_obj in engram.connections:
-                self._save_connection_no_commit(conn, engram.id, conn_obj)
-
-            # Save versions
-            for version in engram.versions:
-                self._save_version_no_commit(conn, engram.id, version)
-
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
+        # Save versions
+        for version in engram.versions:
+            self._save_version_no_commit(conn, engram.id, version)
 
     def get_engram(self, engram_id: str) -> Engram | None:
         """Load an engram by ID, including connections and versions."""
@@ -809,6 +810,10 @@ class EngramStore:
     def save_belief(self, belief: Belief) -> None:
         """Insert or update a belief."""
         conn = self._get_conn()
+        self._save_belief_no_commit(conn, belief)
+        conn.commit()
+
+    def _save_belief_no_commit(self, conn: sqlite3.Connection, belief: Belief) -> None:
         data = belief.to_dict()
 
         # Validate column names
@@ -822,7 +827,6 @@ class EngramStore:
             f"ON CONFLICT(id) DO UPDATE SET {updates}",
             list(safe_data.values()),
         )
-        conn.commit()
 
     def get_beliefs(
         self,
@@ -1256,6 +1260,7 @@ class EngramStore:
         self,
         content: str,
         *,
+        entry_id: str | None = None,
         agent_id: str = "default",
         person_id: str = "user",
         project_scope: str = "global",
@@ -1275,6 +1280,48 @@ class EngramStore:
         Hypomnema is durable, relationship-scoped continuity that can be
         revised before it graduates into shared Mnemos engrams.
         """
+        conn = self._get_conn()
+        entry_id = self._write_hypomnema_entry_no_commit(
+            conn,
+            content,
+            entry_id=entry_id,
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope=project_scope,
+            source=source,
+            density=density,
+            domain=domain,
+            tags=tags,
+            confidence=confidence,
+            salience=salience,
+            foundational=foundational,
+            original_timestamp=original_timestamp,
+            related_session_id=related_session_id,
+            related_engram_id=related_engram_id,
+        )
+        conn.commit()
+        return entry_id
+
+    def _write_hypomnema_entry_no_commit(
+        self,
+        conn: sqlite3.Connection,
+        content: str,
+        *,
+        entry_id: str | None = None,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        source: str = "observed",
+        density: float = 0.5,
+        domain: str = "topical",
+        tags: str | list[str] | tuple[str, ...] | None = None,
+        confidence: float = 0.6,
+        salience: float = 0.5,
+        foundational: bool = False,
+        original_timestamp: int | None = None,
+        related_session_id: str | None = None,
+        related_engram_id: str | None = None,
+    ) -> str:
         if source not in VALID_HYPO_SOURCES:
             raise ValueError(f"Unsupported hypomnema source: {source}")
         if domain not in VALID_HYPO_DOMAINS:
@@ -1283,8 +1330,39 @@ class EngramStore:
             raise ValueError("Hypomnema content cannot be empty")
 
         now = _utc_now()
-        entry_id = _new_id()
-        conn = self._get_conn()
+        entry_id = (entry_id or "").strip() or _new_id()
+        existing = conn.execute(
+            """
+            SELECT agent_id, person_id, project_scope, content, revision_count,
+                   revisions_json
+            FROM hypomnema_entries
+            WHERE id = ?
+            """,
+            (entry_id,),
+        ).fetchone()
+        if existing is not None and (
+            existing["agent_id"] != agent_id
+            or existing["person_id"] != person_id
+            or existing["project_scope"] != project_scope
+        ):
+            raise ValueError(
+                "Hypomnema entry ID already exists outside the requested scope"
+            )
+        revision_count = 0
+        revisions_json = "[]"
+        if existing is not None:
+            revision_count = int(existing["revision_count"] or 0)
+            revisions = _decode_json(existing["revisions_json"], [])
+            if existing["content"] != content.strip():
+                revisions.append(
+                    {
+                        "content": existing["content"],
+                        "revised_at": now,
+                        "reason": "pai_import_update",
+                    }
+                )
+                revision_count += 1
+            revisions_json = _encode_json(revisions)
         conn.execute(
             """
             INSERT INTO hypomnema_entries(
@@ -1293,7 +1371,23 @@ class EngramStore:
                 active, foundational, revision_count, revisions_json,
                 original_timestamp, related_session_id, related_engram_id,
                 created_at, last_revised_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, '[]', ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                content = excluded.content,
+                source = excluded.source,
+                density = excluded.density,
+                domain = excluded.domain,
+                tags_json = excluded.tags_json,
+                confidence = excluded.confidence,
+                salience = excluded.salience,
+                active = hypomnema_entries.active,
+                foundational = excluded.foundational,
+                revision_count = excluded.revision_count,
+                revisions_json = excluded.revisions_json,
+                original_timestamp = excluded.original_timestamp,
+                related_session_id = excluded.related_session_id,
+                related_engram_id = excluded.related_engram_id,
+                last_revised_at = excluded.last_revised_at
             """,
             (
                 entry_id,
@@ -1308,6 +1402,8 @@ class EngramStore:
                 _clamp(confidence),
                 _clamp(salience),
                 int(foundational),
+                revision_count,
+                revisions_json,
                 original_timestamp,
                 related_session_id,
                 related_engram_id,
@@ -1315,7 +1411,6 @@ class EngramStore:
                 now,
             ),
         )
-        conn.commit()
         return entry_id
 
     def get_hypomnema_entry(

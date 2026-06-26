@@ -1,0 +1,755 @@
+"""U3b PAI importer preview/apply scaffolding.
+
+The importer is deliberately two-pass:
+- split source files into deterministic target rows;
+- preview those rows against pai_import_row_map before any writes;
+- apply only rows that are inserts, repairs, or same-target updates.
+
+The invariant is that an import key cannot silently drift to a different
+target row. Changed source content updates the same target_id; missing target
+rows are repaired through the existing map.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from dataclasses import dataclass, replace
+import hashlib
+import json
+import re
+from typing import Callable, Iterable
+
+from ..core.belief import Belief
+from ..core.engram import Engram, MemorySource
+from ..core.types import ConfidenceSource, EngramKind, SourceType
+from ..store.migrations import apply_u3a_schema_migration, upsert_pai_import_row
+from ..store.sqlite_store import EngramStore
+
+
+TARGET_ENGRAMS = "engrams"
+TARGET_BELIEFS = "beliefs"
+TARGET_HYPOMNEMA = "hypomnema_entries"
+
+ACTION_PENDING = "pending"
+ACTION_INSERT = "insert"
+ACTION_REPAIR = "repair"
+ACTION_UPDATE = "update"
+ACTION_NOOP = "noop"
+ACTION_ERROR = "error"
+
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+_SUPPORTED_SOURCE_KINDS = {
+    "identity_kernel",
+    "david_context",
+    "growth_substrate",
+    "beliefs",
+    "hypomnema",
+}
+_PAI_AGENT_ID = "oliver"
+_PAI_PERSON_ID = "david"
+_PAI_PROJECT_SCOPE = "pai"
+
+
+@dataclass(frozen=True)
+class PaiImportSource:
+    """A single source partition prepared for PAI import."""
+
+    job_id: str
+    source_path: str
+    source_kind: str
+    source_text: str
+    agent_id: str = "oliver"
+    person_id: str = "david"
+    project_scope: str = "pai"
+    original_substrate: str = "unknown-pre-import"
+    original_timestamp: int | None = None
+
+
+@dataclass(frozen=True)
+class PaiImportRow:
+    """One deterministic target row planned by a splitter or preview."""
+
+    job_id: str
+    source_path: str
+    source_anchor: str
+    source_kind: str
+    target_table: str
+    target_id: str
+    source_hash: str
+    content: str
+    action: str = ACTION_PENDING
+    reason: str = ""
+    mapped_source_hash: str | None = None
+    agent_id: str = "oliver"
+    person_id: str = "david"
+    project_scope: str = "pai"
+    original_substrate: str = "unknown-pre-import"
+    original_timestamp: int | None = None
+    tags: tuple[str, ...] = ()
+    domain: str = "identity"
+    tier: str | None = None
+    confidence: float = 0.7
+    voice_exemplar_eligible: bool = False
+    softening_protected: bool = True
+    decay_protected: bool = True
+    consolidation_authorized: bool = False
+    foundational: bool = True
+
+
+@dataclass(frozen=True)
+class PaiImportPreview:
+    job_id: str
+    rows: tuple[PaiImportRow, ...]
+
+    @property
+    def counts(self) -> dict[str, int]:
+        return dict(Counter(row.action for row in self.rows))
+
+
+@dataclass(frozen=True)
+class PaiImportResult:
+    job_id: str
+    rows: tuple[PaiImportRow, ...]
+
+    @property
+    def counts(self) -> dict[str, int]:
+        return dict(Counter(row.action for row in self.rows))
+
+
+@dataclass(frozen=True)
+class _Profile:
+    target_table: str
+    tags: tuple[str, ...]
+    domain: str
+    confidence: float
+    tier: str | None = None
+    voice_exemplar_eligible: bool = False
+    softening_protected: bool = True
+    decay_protected: bool = True
+    consolidation_authorized: bool = False
+    foundational: bool = True
+
+
+_PROFILES = {
+    "identity_kernel": _Profile(
+        target_table=TARGET_ENGRAMS,
+        tags=("pai-import", "identity-kernel"),
+        domain="identity",
+        confidence=0.9,
+        tier="foundational",
+    ),
+    "david_context": _Profile(
+        target_table=TARGET_ENGRAMS,
+        tags=("pai-import", "david-context"),
+        domain="social",
+        confidence=0.85,
+        tier="foundational",
+    ),
+    "growth_substrate": _Profile(
+        target_table=TARGET_ENGRAMS,
+        tags=("pai-import", "growth-substrate"),
+        domain="self",
+        confidence=0.8,
+        tier="operational",
+    ),
+    "beliefs": _Profile(
+        target_table=TARGET_BELIEFS,
+        tags=("pai-import", "belief"),
+        domain="identity",
+        confidence=0.72,
+        tier="operational",
+        softening_protected=False,
+        decay_protected=False,
+        consolidation_authorized=True,
+    ),
+    "hypomnema": _Profile(
+        target_table=TARGET_HYPOMNEMA,
+        tags=("pai-import", "hypomnema"),
+        domain="identity",
+        confidence=0.7,
+        tier="foundational",
+    ),
+}
+
+
+def split_identity_kernel(source: PaiImportSource) -> list[PaiImportRow]:
+    return _split_expected_kind(source, "identity_kernel")
+
+
+def split_david_context(source: PaiImportSource) -> list[PaiImportRow]:
+    return _split_expected_kind(source, "david_context")
+
+
+def split_growth_substrate(source: PaiImportSource) -> list[PaiImportRow]:
+    return _split_expected_kind(source, "growth_substrate")
+
+
+def split_beliefs(source: PaiImportSource) -> list[PaiImportRow]:
+    return _split_expected_kind(source, "beliefs")
+
+
+def split_hypomnema(source: PaiImportSource) -> list[PaiImportRow]:
+    return _split_expected_kind(source, "hypomnema")
+
+
+SPLITTERS: dict[str, Callable[[PaiImportSource], list[PaiImportRow]]] = {
+    "identity_kernel": split_identity_kernel,
+    "david_context": split_david_context,
+    "growth_substrate": split_growth_substrate,
+    "beliefs": split_beliefs,
+    "hypomnema": split_hypomnema,
+}
+
+
+def split_pai_source(source: PaiImportSource) -> list[PaiImportRow]:
+    source = _canonical_source(source)
+    source_kind = _clean_required(source.source_kind, "source_kind")
+    if source_kind not in SPLITTERS:
+        supported = ", ".join(sorted(SPLITTERS))
+        raise ValueError(f"Unsupported PAI source_kind {source_kind!r}; expected {supported}")
+    return SPLITTERS[source_kind](source)
+
+
+def preview_pai_import(
+    store: EngramStore,
+    sources: Iterable[PaiImportSource],
+) -> PaiImportPreview:
+    rows = _collect_rows(sources)
+    job_id = _single_job_id(rows)
+    conn = store._get_conn()
+    apply_u3a_schema_migration(conn)
+
+    preview_rows: list[PaiImportRow] = []
+    for row in rows:
+        preview_rows.append(_classify_row(conn, row))
+
+    return PaiImportPreview(job_id=job_id, rows=tuple(preview_rows))
+
+
+def apply_pai_import(
+    store: EngramStore,
+    preview: PaiImportPreview,
+) -> PaiImportResult:
+    if not isinstance(preview, PaiImportPreview):
+        raise TypeError("apply_pai_import requires a PaiImportPreview")
+    errors = [row for row in preview.rows if row.action == ACTION_ERROR]
+    if errors:
+        raise ValueError(errors[0].reason)
+    allowed_actions = {ACTION_INSERT, ACTION_REPAIR, ACTION_UPDATE, ACTION_NOOP}
+    invalid = [row for row in preview.rows if row.action not in allowed_actions]
+    if invalid:
+        raise ValueError(
+            "apply_pai_import requires previewed rows; "
+            f"got action {invalid[0].action!r}"
+        )
+
+    conn = store._get_conn()
+    apply_u3a_schema_migration(conn)
+    applied: list[PaiImportRow] = []
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for row in preview.rows:
+            _assert_preview_current(conn, row)
+        for row in preview.rows:
+            if row.action == ACTION_NOOP:
+                applied.append(row)
+                continue
+            _write_target_row(store, conn, row)
+            upsert_pai_import_row(
+                conn,
+                job_id=row.job_id,
+                source_path=row.source_path,
+                source_anchor=row.source_anchor,
+                target_table=row.target_table,
+                target_id=row.target_id,
+                engram_id=row.target_id if row.target_table == TARGET_ENGRAMS else None,
+                source_hash=row.source_hash,
+                ensure_schema=False,
+            )
+            applied.append(row)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    return PaiImportResult(job_id=preview.job_id, rows=tuple(applied))
+
+
+def _collect_rows(sources: Iterable[PaiImportSource]) -> list[PaiImportRow]:
+    rows: list[PaiImportRow] = []
+    for source in sources:
+        rows.extend(split_pai_source(source))
+    if not rows:
+        raise ValueError("At least one PAI import row is required")
+    seen_keys: set[tuple[str, str, str, str]] = set()
+    for row in rows:
+        key = (row.job_id, row.source_path, row.source_anchor, row.target_table)
+        if key in seen_keys:
+            raise ValueError(f"Duplicate PAI import row key: {key!r}")
+        seen_keys.add(key)
+    return rows
+
+
+def _single_job_id(rows: list[PaiImportRow]) -> str:
+    job_ids = {row.job_id for row in rows}
+    if len(job_ids) != 1:
+        raise ValueError("A preview/apply batch must use one job_id")
+    return next(iter(job_ids))
+
+
+def _split_expected_kind(source: PaiImportSource, expected_kind: str) -> list[PaiImportRow]:
+    source = _canonical_source(source)
+    if source.source_kind != expected_kind:
+        raise ValueError(
+            f"{expected_kind} splitter requires source_kind={expected_kind!r}; "
+            f"got {source.source_kind!r}"
+        )
+    return _split_with_profile(source)
+
+
+def _split_with_profile(source: PaiImportSource) -> list[PaiImportRow]:
+    _validate_source(source)
+    profile = _PROFILES[source.source_kind]
+    blocks = _split_blocks(source.source_text)
+    rows = [
+        _make_row(
+            source=source,
+            profile=profile,
+            source_anchor=anchor,
+            content=content,
+        )
+        for anchor, content in blocks
+    ]
+    if not rows:
+        raise ValueError(f"No importable content in {source.source_path!r}")
+    return rows
+
+
+def _make_row(
+    *,
+    source: PaiImportSource,
+    profile: _Profile,
+    source_anchor: str,
+    content: str,
+) -> PaiImportRow:
+    target_id = _target_id(
+        job_id=source.job_id,
+        source_path=source.source_path,
+        source_anchor=source_anchor,
+        target_table=profile.target_table,
+    )
+    source_hash = _source_hash(
+        source_kind=source.source_kind,
+        source_anchor=source_anchor,
+        content=content,
+        original_substrate=source.original_substrate,
+        original_timestamp=source.original_timestamp,
+    )
+    return PaiImportRow(
+        job_id=source.job_id,
+        source_path=source.source_path,
+        source_anchor=source_anchor,
+        source_kind=source.source_kind,
+        target_table=profile.target_table,
+        target_id=target_id,
+        source_hash=source_hash,
+        content=content,
+        agent_id=source.agent_id,
+        person_id=source.person_id,
+        project_scope=source.project_scope,
+        original_substrate=source.original_substrate,
+        original_timestamp=source.original_timestamp,
+        tags=profile.tags,
+        domain=profile.domain,
+        tier=profile.tier,
+        confidence=profile.confidence,
+        voice_exemplar_eligible=profile.voice_exemplar_eligible,
+        softening_protected=profile.softening_protected,
+        decay_protected=profile.decay_protected,
+        consolidation_authorized=profile.consolidation_authorized,
+        foundational=profile.foundational,
+    )
+
+
+def _write_target_row(
+    store: EngramStore,
+    conn,
+    row: PaiImportRow,
+) -> None:
+    if row.target_table == TARGET_ENGRAMS:
+        store._save_engram_no_commit(conn, _row_to_engram(row))
+    elif row.target_table == TARGET_BELIEFS:
+        store._save_belief_no_commit(conn, _row_to_belief(row))
+    elif row.target_table == TARGET_HYPOMNEMA:
+        store._write_hypomnema_entry_no_commit(
+            conn,
+            row.content,
+            entry_id=row.target_id,
+            agent_id=row.agent_id,
+            person_id=row.person_id,
+            project_scope=row.project_scope,
+            source="observed",
+            domain=row.domain,
+            tags=list(row.tags),
+            confidence=row.confidence,
+            salience=0.7,
+            foundational=row.foundational,
+            original_timestamp=row.original_timestamp,
+        )
+    else:
+        raise ValueError(f"Unsupported target_table: {row.target_table}")
+
+
+def _row_to_engram(row: PaiImportRow) -> Engram:
+    return Engram(
+        id=row.target_id,
+        content=row.content,
+        content_at_encoding=row.content,
+        impact=f"Imported PAI {row.source_kind.replace('_', ' ')} substrate.",
+        kind=EngramKind.SEMANTIC,
+        tags=list(row.tags),
+        strength=0.7,
+        stability=0.7,
+        accessibility=0.6,
+        voice_exemplar_eligible=row.voice_exemplar_eligible,
+        softening_protected=row.softening_protected,
+        original_substrate=row.original_substrate,
+        original_timestamp=row.original_timestamp,
+        consolidation_authorized=row.consolidation_authorized,
+        decay_protected=row.decay_protected,
+        source=MemorySource(
+            type=SourceType.EXTERNAL,
+            confidence=row.confidence,
+            confidence_source=ConfidenceSource.USER_EXPLICIT,
+        ),
+        owner_agent_id=row.agent_id,
+    )
+
+
+def _row_to_belief(row: PaiImportRow) -> Belief:
+    return Belief(
+        id=row.target_id,
+        agent_id=row.agent_id,
+        content=row.content,
+        confidence=row.confidence,
+        domain=row.domain,
+        tier=row.tier,
+        needs_review=False,
+        confidence_pending_review=False,
+    )
+
+
+def _split_blocks(text: str) -> list[tuple[str, str]]:
+    stripped = text.strip()
+    if not stripped:
+        return []
+
+    heading_sections = _heading_sections(stripped)
+    if heading_sections:
+        return heading_sections
+
+    blocks = [
+        block.strip()
+        for block in re.split(r"\n\s*\n", stripped)
+        if block.strip()
+    ]
+    return [(f"block:{index:03d}", block) for index, block in enumerate(blocks, start=1)]
+
+
+def _heading_sections(text: str) -> list[tuple[str, str]]:
+    sections: list[tuple[str, str]] = []
+    current_title: str | None = None
+    current_lines: list[str] = []
+    preamble_lines: list[str] = []
+    slug_counts: dict[str, int] = {}
+
+    def flush() -> None:
+        nonlocal current_title, current_lines
+        if current_title is None:
+            return
+        content = "\n".join(current_lines).strip()
+        if content:
+            slug = _slugify(current_title)
+            slug_counts[slug] = slug_counts.get(slug, 0) + 1
+            sections.append((f"h:{slug}:{slug_counts[slug]:03d}", content))
+        current_title = None
+        current_lines = []
+
+    def flush_preamble() -> None:
+        nonlocal preamble_lines
+        content = "\n".join(preamble_lines).strip()
+        if content:
+            sections.append(("preamble:001", content))
+        preamble_lines = []
+
+    for line in text.splitlines():
+        match = _HEADING_RE.match(line)
+        if match:
+            if current_title is None:
+                flush_preamble()
+            flush()
+            current_title = match.group(2).strip()
+            current_lines = [line.strip()]
+        elif current_title is not None:
+            current_lines.append(line.rstrip())
+        else:
+            preamble_lines.append(line.rstrip())
+
+    flush()
+    return sections
+
+
+def _target_id(
+    *,
+    job_id: str,
+    source_path: str,
+    source_anchor: str,
+    target_table: str,
+) -> str:
+    digest = hashlib.sha256(
+        "\n".join((job_id, source_path, source_anchor, target_table)).encode("utf-8")
+    ).hexdigest()[:16]
+    prefix = {
+        TARGET_ENGRAMS: "engram_pai",
+        TARGET_BELIEFS: "belief_pai",
+        TARGET_HYPOMNEMA: "hypomnema_pai",
+    }[target_table]
+    return f"{prefix}_{digest}"
+
+
+def _source_hash(
+    *,
+    source_kind: str,
+    source_anchor: str,
+    content: str,
+    original_substrate: str,
+    original_timestamp: int | None,
+) -> str:
+    payload = "\n".join(
+        (
+            source_kind,
+            source_anchor,
+            content.strip(),
+            original_substrate,
+            str(original_timestamp or ""),
+        )
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _classify_row(conn, row: PaiImportRow) -> PaiImportRow:
+    existing = conn.execute(
+        """
+        SELECT target_id, source_hash
+        FROM pai_import_row_map
+        WHERE job_id = ?
+          AND source_path = ?
+          AND source_anchor = ?
+          AND target_table = ?
+        """,
+        (row.job_id, row.source_path, row.source_anchor, row.target_table),
+    ).fetchone()
+    if existing is None:
+        return replace(
+            row,
+            action=ACTION_INSERT,
+            reason="source key is new",
+            mapped_source_hash=None,
+        )
+
+    mapped_source_hash = existing["source_hash"]
+    if existing["target_id"] != row.target_id:
+        return replace(
+            row,
+            action=ACTION_ERROR,
+            reason=(
+                "source key already maps to "
+                f"{existing['target_id']!r}; refusing remap"
+            ),
+            mapped_source_hash=mapped_source_hash,
+        )
+
+    target_matches = _target_matches_row(conn, row)
+    if target_matches is None:
+        return replace(
+            row,
+            action=ACTION_REPAIR,
+            reason="row map exists but target row is missing",
+            mapped_source_hash=mapped_source_hash,
+        )
+    if existing["source_hash"] == row.source_hash and target_matches:
+        return replace(
+            row,
+            action=ACTION_NOOP,
+            reason="source hash unchanged",
+            mapped_source_hash=mapped_source_hash,
+        )
+    if existing["source_hash"] == row.source_hash:
+        return replace(
+            row,
+            action=ACTION_REPAIR,
+            reason="row map hash is unchanged but target projection drifted",
+            mapped_source_hash=mapped_source_hash,
+        )
+    return replace(
+        row,
+        action=ACTION_UPDATE,
+        reason="source hash changed; preserving target_id",
+        mapped_source_hash=mapped_source_hash,
+    )
+
+
+def _assert_preview_current(conn, row: PaiImportRow) -> None:
+    current = _classify_row(conn, row)
+    if current.action == ACTION_ERROR:
+        raise ValueError(current.reason)
+    if current.action != row.action or current.mapped_source_hash != row.mapped_source_hash:
+        raise ValueError(
+            "PAI import preview is stale for "
+            f"{row.source_path}#{row.source_anchor}; re-preview before apply"
+        )
+
+
+def _target_matches_row(conn, row: PaiImportRow) -> bool | None:
+    if row.target_table == TARGET_ENGRAMS:
+        return _engram_matches_row(conn, row)
+    if row.target_table == TARGET_BELIEFS:
+        return _belief_matches_row(conn, row)
+    if row.target_table == TARGET_HYPOMNEMA:
+        return _hypomnema_matches_row(conn, row)
+    raise ValueError(f"Unsupported target_table: {row.target_table}")
+
+
+def _engram_matches_row(conn, row: PaiImportRow) -> bool | None:
+    record = conn.execute(
+        """
+        SELECT content, kind, tags, owner_agent_id, voice_exemplar_eligible,
+               softening_protected, original_substrate, original_timestamp,
+               consolidation_authorized, decay_protected, source
+        FROM engrams
+        WHERE id = ?
+        """,
+        (row.target_id,),
+    ).fetchone()
+    if record is None:
+        return None
+    source = json.loads(record["source"] or "{}")
+    tags = json.loads(record["tags"] or "[]")
+    return (
+        record["content"] == row.content
+        and record["kind"] == EngramKind.SEMANTIC.value
+        and tags == list(row.tags)
+        and record["owner_agent_id"] == row.agent_id
+        and bool(record["voice_exemplar_eligible"]) == row.voice_exemplar_eligible
+        and bool(record["softening_protected"]) == row.softening_protected
+        and record["original_substrate"] == row.original_substrate
+        and record["original_timestamp"] == row.original_timestamp
+        and bool(record["consolidation_authorized"]) == row.consolidation_authorized
+        and bool(record["decay_protected"]) == row.decay_protected
+        and source.get("type") == SourceType.EXTERNAL.value
+        and _float_equal(source.get("confidence"), row.confidence)
+        and source.get("confidence_source") == ConfidenceSource.USER_EXPLICIT.value
+    )
+
+
+def _belief_matches_row(conn, row: PaiImportRow) -> bool | None:
+    record = conn.execute(
+        """
+        SELECT agent_id, content, confidence, domain, tier, needs_review,
+               confidence_pending_review
+        FROM beliefs
+        WHERE id = ?
+        """,
+        (row.target_id,),
+    ).fetchone()
+    if record is None:
+        return None
+    return (
+        record["agent_id"] == row.agent_id
+        and record["content"] == row.content
+        and _float_equal(record["confidence"], row.confidence)
+        and record["domain"] == row.domain
+        and record["tier"] == row.tier
+        and bool(record["needs_review"]) is False
+        and bool(record["confidence_pending_review"]) is False
+    )
+
+
+def _hypomnema_matches_row(conn, row: PaiImportRow) -> bool | None:
+    record = conn.execute(
+        """
+        SELECT agent_id, person_id, project_scope, content, source, domain,
+               tags_json, confidence, salience, foundational,
+               original_timestamp
+        FROM hypomnema_entries
+        WHERE id = ?
+        """,
+        (row.target_id,),
+    ).fetchone()
+    if record is None:
+        return None
+    tags = json.loads(record["tags_json"] or "[]")
+    return (
+        record["agent_id"] == row.agent_id
+        and record["person_id"] == row.person_id
+        and record["project_scope"] == row.project_scope
+        and record["content"] == row.content
+        and record["source"] == "observed"
+        and record["domain"] == row.domain
+        and tags == list(row.tags)
+        and _float_equal(record["confidence"], row.confidence)
+        and _float_equal(record["salience"], 0.7)
+        and bool(record["foundational"]) == row.foundational
+        and record["original_timestamp"] == row.original_timestamp
+    )
+
+
+def _validate_source(source: PaiImportSource) -> None:
+    _clean_required(source.job_id, "job_id")
+    _clean_required(source.source_path, "source_path")
+    source_kind = _clean_required(source.source_kind, "source_kind")
+    if source_kind not in _SUPPORTED_SOURCE_KINDS:
+        raise ValueError(f"Unsupported source_kind: {source_kind}")
+
+
+def _canonical_source(source: PaiImportSource) -> PaiImportSource:
+    canonical = replace(
+        source,
+        job_id=_clean_required(source.job_id, "job_id"),
+        source_path=_clean_required(source.source_path, "source_path"),
+        source_kind=_clean_required(source.source_kind, "source_kind"),
+        agent_id=_clean_required(source.agent_id, "agent_id"),
+        person_id=_clean_required(source.person_id, "person_id"),
+        project_scope=_clean_required(source.project_scope, "project_scope"),
+        original_substrate=_clean_required(
+            source.original_substrate, "original_substrate"
+        ),
+    )
+    if (
+        canonical.agent_id != _PAI_AGENT_ID
+        or canonical.person_id != _PAI_PERSON_ID
+        or canonical.project_scope != _PAI_PROJECT_SCOPE
+    ):
+        raise ValueError("PAI imports are restricted to oliver/david/pai scope")
+    return canonical
+
+
+def _clean_required(value: str, name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{name} is required")
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError(f"{name} is required")
+    return cleaned
+
+
+def _float_equal(left, right: float) -> bool:
+    try:
+        return abs(float(left) - float(right)) < 1e-9
+    except (TypeError, ValueError):
+        return False
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "section"

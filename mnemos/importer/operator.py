@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -149,8 +150,14 @@ def preview_pai_manifest(
 ) -> PaiOperatorRun:
     """Preview a manifest import and optionally write a JSON artifact."""
     db = _checked_operator_db_path(db_path, allow_live_db=allow_live_db)
+    if not db.exists():
+        raise FileNotFoundError(
+            f"PAI preview requires an existing database: {db}. "
+            "Preview is read-only by contract; bootstrap a representative DB "
+            "via `mnemos init --db-path <path>` first."
+        )
     manifest = load_pai_manifest(manifest_path)
-    store = EngramStore(db)
+    store = EngramStore(db, read_only=True)
     try:
         preview = preview_pai_import(store, manifest.sources)
     finally:
@@ -338,7 +345,21 @@ def _checked_operator_db_path(db_path: str | Path, *, allow_live_db: bool) -> Pa
 
 
 def _same_path(left: Path, right: Path) -> bool:
-    return left.expanduser().resolve() == right.expanduser().resolve()
+    """Inode-equality when both paths exist; resolved-path equality otherwise.
+
+    Inode equality is the only check that's safe on case-insensitive filesystems
+    (default APFS). Without samefile, ~/.MNEMOS/memory.db and ~/.mnemos/memory.db
+    resolve to different strings but the same on-disk file, bypassing the live-DB
+    guard. The fallback handles fresh machines where the live DB does not yet
+    exist — case-mangle bypass on a missing file is harmless (no live data to
+    corrupt).
+    """
+    left_p = left.expanduser()
+    right_p = right.expanduser()
+    try:
+        return os.path.samefile(left_p, right_p)
+    except (FileNotFoundError, OSError):
+        return left_p.resolve() == right_p.resolve()
 
 
 def _backup_path(db: Path, job_id: str, backup_dir: str | Path | None) -> Path:

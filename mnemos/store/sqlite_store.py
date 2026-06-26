@@ -387,14 +387,35 @@ class EngramStore:
         engram = store.get_engram("engram_abc123")
     """
 
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, *, read_only: bool = False):
+        """Open a Mnemos store.
+
+        Args:
+            db_path: SQLite file path. Created if missing in read-write mode.
+            read_only: When True, open via `file:...?mode=ro` URI and skip
+                schema bootstrap entirely. Required for preview/inspection
+                paths that must not mutate the database — without this, the
+                default constructor runs `executescript`, `ALTER TABLE`,
+                migrations, and a `meta` write on every instantiation, which
+                silently upgrades older-schema DBs and writes 2+ bytes even on
+                already-current DBs. Caller must guarantee the DB exists.
+        """
         self.db_path = Path(db_path).expanduser()
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._read_only = read_only
         self._conn: sqlite3.Connection | None = None
+        if read_only:
+            if not self.db_path.exists():
+                raise FileNotFoundError(
+                    f"read_only EngramStore requires existing db: {self.db_path}"
+                )
+            return
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _init_db(self) -> None:
-        """Initialize database with schema."""
+        """Initialize database with schema. Never called in read_only mode."""
+        if self._read_only:
+            raise RuntimeError("_init_db must not be called on a read-only store")
         conn = self._get_conn()
         current_version = get_current_version(conn)
         if current_version > SCHEMA_VERSION:
@@ -419,16 +440,33 @@ class EngramStore:
         conn.commit()
 
     def _get_conn(self) -> sqlite3.Connection:
-        """Get or create SQLite connection with WAL mode."""
+        """Get or create SQLite connection.
+
+        Read-only mode opens via SQLite URI form (`file:...?mode=ro`), which
+        makes the connection reject INSERT/UPDATE/DELETE/DDL at the SQLite
+        layer. WAL pragma is incompatible with read-only mode (would attempt
+        to create WAL file); we skip the write-side pragmas there.
+        """
         if self._conn is None:
-            self._conn = sqlite3.connect(
-                str(self.db_path),
-                check_same_thread=False,
-            )
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
-            self._conn.execute("PRAGMA foreign_keys=ON")
+            if self._read_only:
+                uri = f"file:{self.db_path}?mode=ro"
+                self._conn = sqlite3.connect(
+                    uri,
+                    uri=True,
+                    check_same_thread=False,
+                )
+                self._conn.row_factory = sqlite3.Row
+                # foreign_keys is harmless on read-only; PRAGMA query is allowed
+                self._conn.execute("PRAGMA foreign_keys=ON")
+            else:
+                self._conn = sqlite3.connect(
+                    str(self.db_path),
+                    check_same_thread=False,
+                )
+                self._conn.row_factory = sqlite3.Row
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA synchronous=NORMAL")
+                self._conn.execute("PRAGMA foreign_keys=ON")
         return self._conn
 
     def close(self) -> None:

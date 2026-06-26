@@ -1,6 +1,10 @@
+import hashlib
 import json
 import sqlite3
+import sys
 from pathlib import Path
+
+import pytest
 
 import mnemos.importer.operator as pai_operator
 from mnemos.cli import main
@@ -94,6 +98,7 @@ def test_u3b_manifest_rejects_sources_outside_manifest_directory(tmp_path):
 def test_u3b_preview_writes_operator_artifact(tmp_path):
     manifest_path = _write_manifest(tmp_path)
     db_path = tmp_path / "representative.db"
+    EngramStore(db_path).close()  # preview is read-only; bootstrap the DB first
     artifact = tmp_path / "preview.json"
 
     run = preview_pai_manifest(
@@ -211,6 +216,84 @@ def test_u3b_cli_preview_apply_and_rerun_noop(tmp_path, capsys):
 
     rerun = preview_pai_manifest(db_path=db_path, manifest_path=manifest_path)
     assert rerun.counts == {ACTION_NOOP: 2}
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_u3b_preview_does_not_mutate_db_bytes(tmp_path):
+    """Hardening B3-operator-2: preview must not touch the DB on disk.
+
+    Without read-only mode, `EngramStore(db)` runs `executescript`,
+    `ALTER TABLE`, `run_migrations`, and writes `meta.schema_version` on every
+    instantiation. The probe Boris ran showed schema_version 1→4 and 12KB→217KB
+    on what should have been a read-only operation. This test enforces the
+    contract at the byte level.
+    """
+    manifest_path = _write_manifest(tmp_path)
+    db_path = tmp_path / "representative.db"
+    EngramStore(db_path).close()
+    hash_before = _file_sha256(db_path)
+    size_before = db_path.stat().st_size
+
+    preview_pai_manifest(db_path=db_path, manifest_path=manifest_path)
+
+    assert _file_sha256(db_path) == hash_before
+    assert db_path.stat().st_size == size_before
+
+
+def test_u3b_preview_against_missing_db_raises(tmp_path):
+    """Read-only preview cannot create a DB it doesn't find."""
+    manifest_path = _write_manifest(tmp_path)
+    missing_db = tmp_path / "does-not-exist.db"
+
+    with pytest.raises(FileNotFoundError, match="requires an existing database"):
+        preview_pai_manifest(db_path=missing_db, manifest_path=manifest_path)
+    assert not missing_db.exists()
+
+
+def test_u3b_read_only_engramstore_blocks_writes(tmp_path):
+    """The URI `?mode=ro` connection must reject INSERT at SQLite layer."""
+    db_path = tmp_path / "ro.db"
+    EngramStore(db_path).close()
+    ro = EngramStore(db_path, read_only=True)
+    try:
+        conn = ro._get_conn()
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('hardening-probe', '1')"
+            )
+    finally:
+        ro.close()
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="APFS case-insensitive bypass surface; meaningful only on darwin",
+)
+def test_u3b_same_path_blocks_apfs_case_variant(tmp_path, monkeypatch):
+    """Hardening B3-operator-3: live-DB guard must not be bypassable via case.
+
+    On APFS (default macOS filesystem) ~/.MNEMOS/memory.db and ~/.mnemos/memory.db
+    address the same on-disk inode but Path.resolve() preserves the case spelling.
+    The resolved-string equality check the guard used before this hardening pass
+    returned False for case variants, letting a typo bypass the live-DB refusal
+    and silently mutate the production DB. os.path.samefile compares inodes.
+    """
+    fake_live = tmp_path / ".mnemos" / "memory.db"
+    fake_live.parent.mkdir(parents=True, exist_ok=True)
+    fake_live.write_bytes(b"placeholder")
+    monkeypatch.setattr(pai_operator, "DEFAULT_LIVE_DB_PATH", fake_live)
+
+    case_variant = tmp_path / ".MNEMOS" / "memory.db"
+    # On APFS the parent dir created above is case-insensitively addressable
+    assert case_variant.exists(), (
+        "test precondition: APFS resolves .MNEMOS to .mnemos"
+    )
+
+    with pytest.raises(ValueError, match="refuses the default live database"):
+        pai_operator._checked_operator_db_path(case_variant, allow_live_db=False)
 
 
 def test_u3b_cli_refuses_default_live_db_without_override(tmp_path, capsys):

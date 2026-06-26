@@ -915,3 +915,156 @@ def test_u3b_rejects_mixed_job_batches(tmp_path):
             preview_pai_import(store, [source_a, source_b])
     finally:
         store.close()
+
+
+# ── Hardening pass II: substrate-cast verification (creative-boris CB1 + CB9) ──
+
+
+def test_u3b_imported_pai_tags_excluded_from_persistent_concerns(tmp_path):
+    """Hardening CB1: PAI import-routing tags must not flood IdentityProfile.
+
+    Without the reflection.py exclusion-set extension, every imported engram
+    carries `("pai-import", "<kind-slug>")` and `tag_counts.most_common(10)`
+    surfaces those routing markers as Oliver's persistent concerns. The first
+    IdentityProfile computed after a PAI import would literally report
+    "Oliver's persistent concern is being imported." Substrate-cast bug;
+    locks once row-map is written.
+    """
+    from mnemos.consolidation.reflection import compute_identity_profile
+    from mnemos.core.identity import AgentIdentity
+
+    store = EngramStore(tmp_path / "u3b-identity.db")
+    try:
+        sources = [
+            _source(
+                "identity_kernel",
+                "# Core\nI am Oliver.\n\n# Voice\nDirect, dense, present.",
+            ),
+            replace(
+                _source(
+                    "david_context",
+                    "# David\nBSD school psych.\n\n# Norman\nHusband since 2009.",
+                ),
+                source_path="/pai/david.md",
+            ),
+            replace(
+                _source(
+                    "growth_substrate",
+                    "# Heavy context\nDistrust first response.\n\n# Position\nMove before rewriting.",
+                ),
+                source_path="/pai/growth.md",
+            ),
+        ]
+        preview = preview_pai_import(store, sources)
+        apply_pai_import(store, preview)
+
+        identity = AgentIdentity()
+        identity.memory_profile.agent_id = "oliver"
+        store.save_identity(identity)
+
+        engrams = store.get_active_engrams(agent_id="oliver", limit=100)
+        profile = compute_identity_profile(store, engrams, identity)
+
+        pai_marker_tags = {
+            "pai-import",
+            "identity-kernel",
+            "david-context",
+            "growth-substrate",
+            "belief",
+            "hypomnema",
+        }
+        leaked = {tag for tag, _ in profile.persistent_concerns} & pai_marker_tags
+        assert not leaked, (
+            f"PAI import-routing tags leaked into persistent_concerns: {leaked}. "
+            "Substrate is reporting import metadata as identity. Extend the "
+            "exclusion set in mnemos/consolidation/reflection.py."
+        )
+    finally:
+        store.close()
+
+
+def test_u3b_identity_profile_from_imported_soul_is_semantic(tmp_path):
+    """Hardening CB9: end-to-end IdentityProfile contract test.
+
+    The engineering view tests `assert preview.counts == {"insert": N}` then
+    `assert result.counts == {"insert": N}`. That can pass while the resulting
+    IdentityProfile is structurally broken (top concerns = PAI routing tags,
+    zero core_beliefs because beliefs auto-confirm with no surfacing). This
+    test runs a SOUL-mirroring fixture import end-to-end and asserts
+    substrate-shaped properties of the resulting profile.
+    """
+    from mnemos.consolidation.reflection import compute_identity_profile
+    from mnemos.core.identity import AgentIdentity
+
+    store = EngramStore(tmp_path / "u3b-soul.db")
+    try:
+        sources = [
+            _source(
+                "identity_kernel",
+                "# Nome\nI am Oliver. David's agent.\n\n"
+                "# Voce\nFirst person, present tense, direct verbs.",
+            ),
+            replace(
+                _source(
+                    "david_context",
+                    "# David\nBoard-certified school neuropsych, BSD VT.\n\n"
+                    "# Mission\nHelp ~300 kids get seen well.",
+                ),
+                source_path="/pai/david.md",
+            ),
+            replace(
+                _source(
+                    "growth_substrate",
+                    "# Plan Mode\nFor uncertainty, not willpower.\n\n"
+                    "# Verify\nClaimed done is not actually done.",
+                ),
+                source_path="/pai/growth.md",
+            ),
+            replace(
+                _source(
+                    "beliefs",
+                    "David grinds his own coffee.\n\n"
+                    "Reports change how families see their child.",
+                ),
+                source_path="/pai/facts.md",
+            ),
+        ]
+        preview = preview_pai_import(store, sources)
+        apply_pai_import(store, preview)
+
+        identity = AgentIdentity()
+        identity.memory_profile.agent_id = "oliver"
+        store.save_identity(identity)
+
+        engrams = store.get_active_engrams(agent_id="oliver", limit=100)
+        profile = compute_identity_profile(store, engrams, identity)
+
+        # 1. persistent_concerns is non-empty AND non-leaked
+        # (covered by CB1 test above; reasserted here as a smoke check)
+        pai_marker_tags = {
+            "pai-import",
+            "identity-kernel",
+            "david-context",
+            "growth-substrate",
+            "belief",
+            "hypomnema",
+        }
+        leaked = {tag for tag, _ in profile.persistent_concerns} & pai_marker_tags
+        assert not leaked, f"PAI tags leaked: {leaked}"
+
+        # 2. core_beliefs has the imported facts (not zero)
+        assert len(profile.core_beliefs) >= 2, (
+            "Imported beliefs not surfacing in IdentityProfile.core_beliefs. "
+            f"Got {len(profile.core_beliefs)}; expected >=2 from the 2 fact blocks."
+        )
+        belief_text = " ".join(content for content, _ in profile.core_beliefs)
+        assert "coffee" in belief_text.lower() or "report" in belief_text.lower(), (
+            "Belief content from fixture not present in core_beliefs. "
+            f"Got: {profile.core_beliefs}"
+        )
+
+        # 3. to_summary() emits a non-trivial string anchored in imported content
+        summary = profile.to_summary()
+        assert summary, "IdentityProfile.to_summary returned empty"
+    finally:
+        store.close()

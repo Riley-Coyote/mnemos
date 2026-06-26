@@ -744,7 +744,7 @@ class EngramStore:
         params.append(limit)
 
         rows = self._conn.execute(query, params).fetchall()
-        return [self._row_to_engram(dict(r)) for r in rows]
+        return [Engram.from_dict(dict(r)) for r in rows]
 
 
     def get_connected_engram_ids(

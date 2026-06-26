@@ -81,6 +81,7 @@ def run_belief_review(
         agent_id=agent_id,
         since=cutoff,
         limit=max_memories,
+        require_consolidation_authorized=True,
     )
 
     for engram in recent:

@@ -718,6 +718,7 @@ class EngramStore:
         agent_id: str | None = None,
         since: "datetime | None" = None,
         limit: int = 50,
+        require_consolidation_authorized: bool = False,
     ) -> list:
         """Get recently created engrams, optionally filtered by agent and time.
 
@@ -725,6 +726,8 @@ class EngramStore:
             agent_id: Filter by agent ID (optional).
             since: Only return engrams created after this datetime (optional).
             limit: Maximum number to return.
+            require_consolidation_authorized: If True, exclude read-only
+                imported engrams from consolidation review inputs.
 
         Returns:
             List of Engram objects, most recent first.
@@ -739,6 +742,9 @@ class EngramStore:
         if since:
             query += " AND created_at > ?"
             params.append(since.isoformat())
+
+        if require_consolidation_authorized:
+            query += " AND consolidation_authorized = 1"
 
         query += " ORDER BY created_at DESC LIMIT ?"
         params.append(limit)

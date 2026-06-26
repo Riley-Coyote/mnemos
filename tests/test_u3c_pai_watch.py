@@ -236,6 +236,22 @@ def test_u3c_empty_watched_source_tombstones_all_mapped_rows(tmp_path):
         store.close()
 
 
+def test_u3c_empty_watched_source_without_prior_import_applies_as_noop(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        preview = preview_pai_watch_update(store, [_source("identity_kernel", "")])
+
+        assert preview.rows == ()
+        assert preview.counts == {}
+
+        result = apply_pai_watch_update(store, preview)
+        assert result.job_id == "u3c-job"
+        assert result.rows == ()
+        assert result.counts == {}
+    finally:
+        store.close()
+
+
 def test_u3c_removed_hypomnema_section_deactivates_without_successor(tmp_path):
     store = EngramStore(tmp_path / "u3c.db")
     try:

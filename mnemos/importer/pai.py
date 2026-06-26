@@ -403,7 +403,9 @@ def apply_pai_watch_update(
     """Apply a U3c watcher preview with lifecycle semantics for missing sources."""
     if not isinstance(preview, PaiImportPreview):
         raise TypeError("apply_pai_watch_update requires a PaiImportPreview")
-    _validate_preview(preview)
+    _validate_preview(preview, allow_empty=True)
+    if not preview.rows:
+        return PaiImportResult(job_id=preview.job_id, rows=())
     errors = [row for row in preview.rows if row.action == ACTION_ERROR]
     if errors:
         raise ValueError(errors[0].reason)
@@ -1828,9 +1830,9 @@ def _stale_missing_source_action(
     raise ValueError(f"Unsupported target_table: {target_table}")
 
 
-def _validate_preview(preview: PaiImportPreview) -> None:
+def _validate_preview(preview: PaiImportPreview, *, allow_empty: bool = False) -> None:
     _clean_required(preview.job_id, "job_id")
-    if not isinstance(preview.rows, tuple) or not preview.rows:
+    if not isinstance(preview.rows, tuple) or (not allow_empty and not preview.rows):
         raise ValueError("apply_pai_import requires a non-empty preview")
     for row in preview.rows:
         if row.action == ACTION_ERROR:

@@ -5,9 +5,12 @@ import pytest
 import mnemos.store.migrations as migrations
 from mnemos.consolidation.connection_discovery import run_connection_discovery
 from mnemos.consolidation.decay import run_decay_pass
+from mnemos.consolidation.reflection import run_reflection_pass
 from mnemos.consolidation.softening import run_softening_pass
+from mnemos.core.emotional_state import EmotionalState
 from mnemos.core.belief import Belief
 from mnemos.core.engram import Engram
+from mnemos.core.identity import AgentIdentity
 from mnemos.substrate.events import EventType
 from mnemos.store.migrations import (
     U3A_PHASE0_DECAY_FINDING,
@@ -779,12 +782,29 @@ def test_backed_up_legacy_db_rehearsal_preserves_u3a_sentinels(tmp_path, monkeyp
 
 def test_migration_version_guards(tmp_path):
     empty = sqlite3.connect(tmp_path / "empty.db")
+    empty.row_factory = sqlite3.Row
     try:
         # Bootstrap empty DB to the current latest schema (v5).
-        assert run_migrations(empty, target_version=5) == []
+        assert run_migrations(empty, target_version=5) == [4, 5]
         assert empty.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
-        ).fetchone()[0] == "5"
+        ).fetchone()["value"] == "5"
+        row_map_cols = _column_map(empty, "pai_import_row_map")
+        assert "content_at_last_import" in row_map_cols
+        assert "tombstone_at" in row_map_cols
+        assert empty.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pai_import_events'"
+        ).fetchone()
+        assert empty.execute(
+            """
+            SELECT COUNT(*) FROM sqlite_master
+            WHERE type = 'trigger' AND name IN (
+                'pai_import_engrams_tombstone',
+                'pai_import_beliefs_tombstone',
+                'pai_import_hypomnema_entries_tombstone'
+            )
+            """
+        ).fetchone()[0] == 3
     finally:
         empty.close()
 
@@ -1146,5 +1166,41 @@ def test_connection_discovery_skips_unauthorized_sources_and_targets(tmp_path):
         assert stats["engrams_processed"] == 1
         assert store.get_connections(source.id) == []
         assert store.get_connections(unauthorized_source.id) == []
+    finally:
+        store.close()
+
+
+def test_reflection_skips_unauthorized_imports_for_prompts_and_identity(tmp_path):
+    store = EngramStore(tmp_path / "reflection.db")
+    authorized = [
+        _old_engram("authorized reflection memory one", tags=["authorized-theme"]),
+        _old_engram("authorized reflection memory two", tags=["authorized-theme"]),
+        _old_engram("authorized reflection memory three", tags=["authorized-theme"]),
+    ]
+    unauthorized = _old_engram(
+        "UNAUTHORIZED-PROMPT-LEAK",
+        impact="UNAUTHORIZED-LIVING-QUESTION",
+        tags=["unresolved", "unauthorized-theme"],
+        consolidation_authorized=False,
+    )
+    for engram in (*authorized, unauthorized):
+        store.save_engram(engram)
+
+    identity = AgentIdentity()
+    identity.memory_profile.agent_id = "oliver"
+    stub = StubLLM("authorized synthesized thought")
+    try:
+        stats = run_reflection_pass(
+            store,
+            identity,
+            EmotionalState(),
+            stub,
+            {"reflection_lookback_hours": 999999},
+        )
+        assert stats["engrams_reviewed"] == 3
+        assert stub.prompts
+        assert "UNAUTHORIZED-PROMPT-LEAK" not in stub.prompts[0]
+        assert "UNAUTHORIZED-LIVING-QUESTION" not in identity.epoch_state.self_summary
+        assert "unauthorized-theme" not in identity.epoch_state.self_summary
     finally:
         store.close()

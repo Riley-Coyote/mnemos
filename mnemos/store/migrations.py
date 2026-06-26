@@ -132,12 +132,13 @@ def run_migrations(conn: sqlite3.Connection, target_version: int | None = None) 
         from .sqlite_store import SQL_CREATE_TABLES
 
         conn.executescript(SQL_CREATE_TABLES)
+        bootstrap_version = min(_MIGRATIONS.keys(), default=target_version + 1) - 1
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
-            (str(target_version),),
+            (str(bootstrap_version),),
         )
         conn.commit()
-        current = target_version
+        current = bootstrap_version
 
     applied: list[int] = []
 

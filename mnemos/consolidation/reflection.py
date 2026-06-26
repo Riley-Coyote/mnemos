@@ -86,7 +86,11 @@ def run_reflection_pass(
     }
 
     # 1. LOAD RECENT ENGRAMS
-    all_engrams = store.get_active_engrams(agent_id=agent_id, limit=200)
+    all_engrams = store.get_active_engrams(
+        agent_id=agent_id,
+        limit=200,
+        require_consolidation_authorized=True,
+    )
     recent = [
         e for e in all_engrams
         if _hours_since(e.created_at) < lookback_hours

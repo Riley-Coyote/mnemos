@@ -122,13 +122,15 @@ def compute_modulators(
     ).fetchone()[0] or 0.25
 
     # ── Belief stability ──
-    if agent_id is None:
-        belief_count = conn.execute("SELECT COUNT(*) FROM beliefs").fetchone()[0]
-    else:
-        belief_count = conn.execute(
-            "SELECT COUNT(*) FROM beliefs WHERE agent_id = ?",
-            (agent_id,),
-        ).fetchone()[0]
+    belief_predicates = ["superseded_by IS NULL", "confidence_pending_review = 0"]
+    belief_params: list[str] = []
+    if agent_id is not None:
+        belief_predicates.append("agent_id = ?")
+        belief_params.append(agent_id)
+    belief_count = conn.execute(
+        f"SELECT COUNT(*) FROM beliefs WHERE {' AND '.join(belief_predicates)}",
+        belief_params,
+    ).fetchone()[0]
 
     conn.close()
 

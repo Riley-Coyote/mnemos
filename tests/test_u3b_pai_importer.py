@@ -1266,6 +1266,44 @@ def test_u3b_imported_belief_arrives_needs_review_true(tmp_path):
         store.close()
 
 
+def test_u3b_reviewed_belief_confidence_is_same_source_workflow_state(tmp_path):
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source("beliefs", "David grinds his own coffee.")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+
+        store._get_conn().execute(
+            """
+            UPDATE beliefs
+            SET confidence = ?, needs_review = 0, confidence_pending_review = 0
+            WHERE id = ?
+            """,
+            (0.91, target_id),
+        )
+        store._get_conn().commit()
+
+        reimport_preview = preview_pai_import(store, [source])
+        assert reimport_preview.counts == {ACTION_NOOP: 1}
+        reimport_result = apply_pai_import(store, reimport_preview)
+        assert reimport_result.counts == {ACTION_NOOP: 1}
+
+        row = store._get_conn().execute(
+            """
+            SELECT confidence, needs_review, confidence_pending_review
+            FROM beliefs
+            WHERE id = ?
+            """,
+            (target_id,),
+        ).fetchone()
+        assert row["confidence"] == pytest.approx(0.91)
+        assert bool(row["needs_review"]) is False
+        assert bool(row["confidence_pending_review"]) is False
+    finally:
+        store.close()
+
+
 def test_u3b_imported_belief_re_import_flips_needs_review_back_on_change(tmp_path):
     """When David edits a belief in SOUL/FACTS.md, the re-import flips
     needs_review back to True — substrate's prior review must be reconfirmed

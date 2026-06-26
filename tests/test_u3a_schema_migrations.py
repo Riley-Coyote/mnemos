@@ -1475,6 +1475,26 @@ def test_substrate_modulator_connection_density_scopes_to_authorized_agent_edges
     assert modulators.temperature == pytest.approx(0.85)
 
 
+def test_substrate_modulators_ignore_pending_confidence_beliefs(tmp_path):
+    db_path = tmp_path / "modulator_pending_beliefs.db"
+    store = EngramStore(db_path)
+    store.save_engram(_old_engram("authorized modulator anchor"))
+    for index in range(10):
+        store.save_belief(
+            Belief(
+                agent_id="oliver",
+                content=f"pending imported belief {index}",
+                confidence=0.9,
+                confidence_pending_review=True,
+            )
+        )
+    store.close()
+
+    modulators = compute_modulators(str(db_path), agent_id="oliver")
+
+    assert modulators.openness == pytest.approx(0.8)
+
+
 def test_substrate_temporal_event_ignores_unauthorized_and_other_agent_rows(
     tmp_path,
     monkeypatch,

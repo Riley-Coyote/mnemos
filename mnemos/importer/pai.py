@@ -1521,7 +1521,7 @@ def _engram_matches_row(conn, row: PaiImportRow) -> bool | None:
 def _belief_matches_row(conn, row: PaiImportRow) -> bool | None:
     record = conn.execute(
         """
-        SELECT agent_id, content, confidence, domain, tier,
+        SELECT agent_id, content, domain, tier,
                original_substrate, original_timestamp, superseded_by
         FROM beliefs
         WHERE id = ?
@@ -1530,15 +1530,9 @@ def _belief_matches_row(conn, row: PaiImportRow) -> bool | None:
     ).fetchone()
     if record is None:
         return None
-    # U3b hardening CB3: needs_review/confidence_pending_review are no longer
-    # part of the equality projection. They're workflow flags managed by the
-    # substrate's consolidation pass — equating on them produced spurious
-    # NOOP→UPDATE flips when the substrate flipped a review flag between
-    # imports. Match on content + identity + provenance instead.
     return (
         record["agent_id"] == row.agent_id
         and record["content"] == row.content
-        and _float_equal(record["confidence"], row.confidence)
         and record["domain"] == row.domain
         and record["tier"] == row.tier
         and record["original_substrate"] == row.original_substrate

@@ -14,8 +14,12 @@ Commands:
     mnemos bootstrap             Bootstrap a complete agent stack
     mnemos identity diff         Diff graph-derived identity against SOUL.md
     mnemos identity accept       Accept a divergence, open a new epoch
-    mnemos pai-import preview    Preview a PAI source manifest import
-    mnemos pai-import apply      Backup DB and apply a PAI source manifest
+    mnemos pai-import preview        Preview a PAI source manifest import
+    mnemos pai-import apply          Backup DB and apply a PAI source manifest
+    mnemos pai-import watch-preview  Preview a U3c watcher manifest update
+    mnemos pai-import watch-apply    Backup DB and apply a U3c watcher update
+    mnemos pai-import watch-once     Run one dual-life watcher poll
+    mnemos pai-import watch-plist    Write a launchd plist for watch-once
     mnemos remember CONTENT      Capture durable continuity from the CLI
     mnemos hermes install        Install Mnemos for Hermes Agent
     mnemos hermes quickstart     Safely install Mnemos for Hermes Agent

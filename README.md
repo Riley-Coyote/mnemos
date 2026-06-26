@@ -416,6 +416,29 @@ mnemos hermes doctor
 mnemos hermes shim
 ```
 
+PAI import (operator workflow for replaying SOUL/-shaped source manifests
+into a Mnemos store; only intended for operators bringing a pre-existing
+PAI corpus into a fresh agent):
+
+```bash
+mnemos pai-import preview --manifest ./pai-manifest.json --db-path ./test.db
+mnemos pai-import apply   --manifest ./pai-manifest.json --db-path ./test.db \
+                          --backup-dir ./pai-import-backups
+mnemos pai-import watch-preview --manifest ./pai-manifest.json --db-path ./test.db
+mnemos pai-import watch-once --manifest ./pai-manifest.json --db-path ./test.db \
+                          --state ./pai-watch-state.json --apply
+mnemos pai-import watch-plist --manifest ./pai-manifest.json --db-path ./test.db \
+                          --state ./pai-watch-state.json \
+                          --artifact-dir ./pai-watch-artifacts \
+                          --backup-dir  ./pai-import-backups \
+                          --plist ~/Library/LaunchAgents/com.davidef.mnemos.duallife.plist
+```
+
+Every PAI import command refuses the default live database (`~/.mnemos/memory.db`)
+unless `--allow-live-db` is passed. `apply` and `watch-apply` take an
+integrity-checked SQLite backup before writing. `preview` and `watch-preview`
+open the DB read-only and never mutate state.
+
 Global options:
 
 ```bash

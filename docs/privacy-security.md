@@ -74,6 +74,29 @@ keys, or unscoped cross-agent memories. Hosts that render images may display
 the SVG inline; hosts that do not can ignore it and continue using the text and
 structured content.
 
+## PAI Importer
+
+The `mnemos pai-import` operator workflow replays a JSON source manifest
+(identity-kernel, david-context, growth-substrate, beliefs, hypomnema) into a
+Mnemos store. It is opt-in and intended for operators bringing a pre-existing
+PAI-shaped corpus into a fresh agent — not for end users.
+
+Safety boundaries enforced by the importer:
+
+- `preview` and `watch-preview` open the DB read-only and never mutate state.
+- `apply` and `watch-apply` take an integrity-checked SQLite backup before
+  writing, into the configured `--backup-dir`.
+- Every subcommand refuses the default live database (`~/.mnemos/memory.db`)
+  unless `--allow-live-db` is passed. The guard is inode-based so
+  case-insensitive path variants cannot bypass it.
+- Manifest source paths must stay inside the manifest directory; absolute
+  paths and `..`-escaping paths are rejected at load.
+- The dual-life watcher (`watch-once` / `watch-plist`) advances its state only
+  after a successful apply. Preview mode leaves state untouched.
+- Imported rows carry `decay_protected`, `softening_protected`, and
+  `consolidation_authorized` flags so the consolidation and substrate passes
+  cannot silently rewrite imported identity material.
+
 ## Correction and Forgetting
 
 Mnemos favors audited correction over hard deletion:

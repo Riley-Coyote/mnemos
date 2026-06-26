@@ -42,6 +42,11 @@ The fundamental unit of memory. Each engram has:
 - **State lifecycle**: Active → consolidating → dormant → archived
 - **Resolution**: High → low (details fade through softening, like human memory)
 - **Full version history**: Every reconsolidation is tracked
+- **PAI import controls** (schema v4/v5): `decay_protected`, `softening_protected`,
+  `consolidation_authorized`, `voice_exemplar_eligible`, `original_substrate`,
+  `original_timestamp`. The decay, softening, and connection-discovery passes
+  honor these flags so imported identity material is not silently rewritten
+  by background maintenance.
 
 ### Connections
 
@@ -59,6 +64,9 @@ Higher-order knowledge structures extracted from patterns across engrams:
 - Domain categorization (engineering, social, preferences, etc.)
 - Stagnant beliefs get stress-tested during deep consolidation
 - Full revision history
+- PAI import metadata: `tier` (foundational | operational | tactical),
+  `needs_review`, and `confidence_pending_review` mark beliefs whose
+  upstream source has changed but has not been re-reviewed by the operator.
 
 ### Encoding Pipeline
 

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### PAI Importer (U3a / U3b / U3c)
+- Schema v4 (U3a) — adds `voice_exemplar_eligible`, `softening_protected`, `decay_protected`, `consolidation_authorized`, `original_substrate`, `original_timestamp` to `engrams`; `tier`, `needs_review`, `confidence_pending_review` to `beliefs`; `original_timestamp` to `hypomnema_entries`; new `pai_import_row_map` table for idempotent re-runs and repair
+- Schema v5 (U3b hardening) — extends `pai_import_row_map` with `content_at_last_import`, `tombstone_at`, source metadata; adds `pai_import_events` audit table and AFTER DELETE tombstone triggers
+- `mnemos pai-import preview` / `apply` — operator workflow that loads a JSON source manifest, splits each source into deterministic target rows (identity-kernel, david-context, growth-substrate, beliefs, hypomnema), previews against `pai_import_row_map`, and on apply takes an integrity-checked SQLite backup before writing. Refuses the default live `~/.mnemos/memory.db` unless `--allow-live-db` is passed.
+- `mnemos pai-import watch-preview` / `watch-apply` / `watch-once` / `watch-plist` (U3c) — dual-life watcher that polls source SHA-256 fingerprints, replays preview/apply only for changed sources, advances state only after a successful apply, and can write a launchd plist that runs `watch-once` on a fixed interval. Manifest source paths are constrained to the manifest directory; `EngramStore(read_only=True)` opens the SQLite DB via `file:…?mode=ro` so previews cannot mutate state.
+- Consolidation and substrate passes now honor the new flags: decay, softening, connection discovery, and the substrate tick all skip rows where `decay_protected = 1`, `softening_protected = 1`, or `consolidation_authorized = 0`, and voice exemplars are filtered by `voice_exemplar_eligible`. The substrate tick decay/softening SQL is now agent-scoped.
+- `IdentityProfile` reflection excludes PAI routing tags (`pai-import`, `identity-kernel`, `david-context`, `growth-substrate`, `belief`, `hypomnema`) from persistent-concern counts so an import does not surface as "Oliver's persistent concern is being imported."
+
 ### Simple Mode Magic UX (5 → 7 tools)
 - Onboarding ritual — a fresh scope's first context packet walks the agent through a short get-to-know-you script (name, current work, durable facts); stores that predate onboarding are grandfathered and never see it
 - mnemos_introduce — the agent declares its own model id and name; the declaration feeds the substrate-affinity gate so maintenance stays kin (an explicit MNEMOS_AGENT_MODEL still takes precedence)

@@ -122,7 +122,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         max_results: int = 5,
         include_graph: bool = False,
         graph_max_nodes: int = 18,
-    ) -> Any:
+    ) -> types.CallToolResult:
         """Get the startup continuity packet for this agent/session.
 
         Call at the beginning of a session. It auto-creates local storage on
@@ -135,7 +135,9 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         runtime = _get_runtime()
         packet = runtime.context(query=query, max_results=max_results)
         if not include_graph:
-            return packet
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=packet)],
+            )
 
         graph = runtime.identity_graph(max_nodes=graph_max_nodes)
         svg = graph.pop("svg")
@@ -319,7 +321,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             idempotent=True,
         )
     )
-    def mnemos_health() -> Any:
+    def mnemos_health() -> types.CallToolResult:
         """Report a human-relayable health card for this memory scope.
 
         Read-only. Shows where memory lives, how much there is, who performed

@@ -1518,6 +1518,49 @@ def test_u3b_row_map_populates_extended_columns_on_insert(tmp_path):
         store.close()
 
 
+def test_u3b_noop_apply_backfills_v5_row_map_baseline(tmp_path):
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source("growth_substrate", "# Voice\nDense over sparse.")
+        apply_pai_import(store, preview_pai_import(store, [source]))
+        target_id = preview_pai_import(store, [source]).rows[0].target_id
+
+        conn = store._get_conn()
+        conn.execute(
+            """
+            UPDATE pai_import_row_map
+            SET source_kind = NULL,
+                agent_id = NULL,
+                project_scope = NULL,
+                original_timestamp = NULL
+            WHERE target_id = ?
+            """,
+            (target_id,),
+        )
+        conn.commit()
+
+        preview = preview_pai_import(store, [source])
+        assert preview.counts == {ACTION_NOOP: 1}
+        apply_pai_import(store, preview)
+
+        row = conn.execute(
+            """
+            SELECT content_at_last_import, source_kind, agent_id, project_scope,
+                   original_timestamp
+            FROM pai_import_row_map
+            WHERE target_id = ?
+            """,
+            (target_id,),
+        ).fetchone()
+        assert row["content_at_last_import"] == "# Voice\nDense over sparse."
+        assert row["source_kind"] == "growth_substrate"
+        assert row["agent_id"] == "oliver"
+        assert row["project_scope"] == "pai"
+        assert row["original_timestamp"] == 1710000000
+    finally:
+        store.close()
+
+
 # ── Hardening pass III: ce-debug — recovery-doc trap documentation ──
 
 

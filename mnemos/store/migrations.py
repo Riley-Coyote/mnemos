@@ -534,7 +534,23 @@ def upsert_pai_import_row(
             content_at_last_import is None
             or existing_content == content_at_last_import
         )
-        if same_engram and same_hash and same_content:
+        same_agent_id = agent_id is None or existing_agent_id == agent_id
+        same_project_scope = (
+            project_scope is None or existing_project_scope == project_scope
+        )
+        same_source_kind = source_kind is None or existing_source_kind == source_kind
+        same_original_ts = (
+            original_timestamp is None or existing_original_ts == original_timestamp
+        )
+        if (
+            same_engram
+            and same_hash
+            and same_content
+            and same_agent_id
+            and same_project_scope
+            and same_source_kind
+            and same_original_ts
+        ):
             return {
                 "inserted": False,
                 "updated": False,

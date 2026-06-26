@@ -35,6 +35,50 @@ def _row_with_action(preview, action: str):
     return next(row for row in preview.rows if row.action == action)
 
 
+def test_u3c_watch_noop_apply_backfills_v5_row_map_baseline(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        apply_pai_import(store, preview_pai_import(store, [source]))
+        target_id = preview_pai_watch_update(store, [source]).rows[0].target_id
+
+        conn = store._get_conn()
+        conn.execute(
+            """
+            UPDATE pai_import_row_map
+            SET content_at_last_import = NULL,
+                source_kind = NULL,
+                agent_id = NULL,
+                project_scope = NULL,
+                original_timestamp = NULL
+            WHERE target_id = ?
+            """,
+            (target_id,),
+        )
+        conn.commit()
+
+        preview = preview_pai_watch_update(store, [source])
+        assert preview.counts == {ACTION_NOOP: 1}
+        apply_pai_watch_update(store, preview)
+
+        row = conn.execute(
+            """
+            SELECT content_at_last_import, source_kind, agent_id, project_scope,
+                   original_timestamp
+            FROM pai_import_row_map
+            WHERE target_id = ?
+            """,
+            (target_id,),
+        ).fetchone()
+        assert row["content_at_last_import"] == "# A\nalpha"
+        assert row["source_kind"] == "identity_kernel"
+        assert row["agent_id"] == "oliver"
+        assert row["project_scope"] == "pai"
+        assert row["original_timestamp"] == 1710000000
+    finally:
+        store.close()
+
+
 def test_u3c_removed_engram_section_tombstones_target_idempotently(tmp_path):
     store = EngramStore(tmp_path / "u3c.db")
     try:

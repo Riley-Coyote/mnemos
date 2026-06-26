@@ -42,13 +42,10 @@ def run_decay_pass(
     dormant_threshold = config.get("dormant_threshold", 0.05)
     archive_threshold = config.get("archive_threshold", 0.01)
 
-    # load_connections=True because decay uses connection count for decay resistance.
-    # U3a: decay_protected and consolidation_authorized filter at the candidate
-    # query layer so protected engrams are never considered for mutation.
     engrams = store.get_active_engrams(
         agent_id=agent_id,
         limit=10000,
-        load_connections=True,
+        load_connections=False,
         include_decay_protected=False,
         require_consolidation_authorized=True,
     )
@@ -80,7 +77,9 @@ def run_decay_pass(
         effective_decay = decay_rate * math.exp(-stability_factor * engram.stability)
 
         # Connection factor: well-connected memories decay slower (multiplicative)
-        n_connections = len(engram.connections)
+        n_connections = _count_authorized_same_agent_connections(
+            store, engram.id, engram.owner_agent_id
+        )
         if n_connections > 0:
             connection_factor = min(1.0, 0.2 + 0.2 * math.log1p(n_connections))
             effective_decay *= (1.0 - connection_factor * 0.5)
@@ -148,6 +147,27 @@ def run_decay_pass(
     stats["avg_accessibility_after"] = round(total_after / n, 4)
 
     return stats
+
+
+def _count_authorized_same_agent_connections(
+    store: EngramStore,
+    source_id: str,
+    owner_agent_id: str,
+) -> int:
+    conn = store._get_conn()
+    row = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM connections c
+        JOIN engrams target ON target.id = c.target_id
+        WHERE c.source_id = ?
+          AND target.owner_agent_id = ?
+          AND target.state = 'active'
+          AND target.consolidation_authorized = 1
+        """,
+        (source_id, owner_agent_id),
+    ).fetchone()
+    return int(row[0]) if row else 0
 
 
 def _hours_since(iso_timestamp: str) -> float:

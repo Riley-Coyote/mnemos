@@ -14,7 +14,7 @@ import pytest
 from mnemos.core.belief import Belief
 from mnemos.core.engram import Engram, EncodingContext
 from mnemos.core.identity import AgentIdentity
-from mnemos.core.types import DEFAULT_AGENT_ID, EngramKind
+from mnemos.core.types import DEFAULT_AGENT_ID, ConnectionRelation, EngramKind
 from mnemos.consolidation.belief_review import run_belief_review
 from mnemos.consolidation.connection_discovery import run_connection_discovery
 from mnemos.consolidation.decay import run_decay_pass
@@ -86,6 +86,78 @@ def test_decay_scoped_leaves_other_agent_untouched(two_agent_store):
     after_b = _snapshot(two_agent_store, AGENT_B)
     assert after_b == before_b
     assert stats["engrams_processed"] > 0
+
+
+def test_decay_ignores_unauthorized_and_other_agent_connection_targets(tmp_path):
+    store = EngramStore(tmp_path / "decay-connections.db")
+    try:
+        connected = Engram(
+            content="connected source",
+            content_at_encoding="connected source",
+            kind=EngramKind.SEMANTIC,
+            owner_agent_id=AGENT_A,
+        )
+        control = Engram(
+            content="control source",
+            content_at_encoding="control source",
+            kind=EngramKind.SEMANTIC,
+            owner_agent_id=AGENT_A,
+        )
+        unauthorized = Engram(
+            content="unauthorized target",
+            content_at_encoding="unauthorized target",
+            kind=EngramKind.SEMANTIC,
+            owner_agent_id=AGENT_A,
+            consolidation_authorized=False,
+        )
+        other_agent = Engram(
+            content="other agent target",
+            content_at_encoding="other agent target",
+            kind=EngramKind.SEMANTIC,
+            owner_agent_id=AGENT_B,
+        )
+        archived = Engram(
+            content="archived target",
+            content_at_encoding="archived target",
+            kind=EngramKind.SEMANTIC,
+            owner_agent_id=AGENT_A,
+            state="archived",
+        )
+        for engram in (connected, control, unauthorized, other_agent, archived):
+            engram.accessibility = 0.9
+            engram.stability = 0.1
+            engram.last_accessed = "2026-01-01T00:00:00+00:00"
+            store.save_engram(engram)
+
+        for target in (unauthorized, other_agent, archived):
+            connected.add_connection(
+                target.id,
+                ConnectionRelation.SUPPORTS,
+                formed_by="test",
+            )
+        store.save_engram(connected)
+
+        run_decay_pass(
+            store,
+            {
+                "decay_rate": 0.0001,
+                "archive_threshold": 0.0,
+                "dormant_threshold": 0.0,
+                "stability_connection_threshold": 1,
+                "stability_growth_rate": 0.1,
+                "stability_growth_cap": 0.5,
+            },
+            agent_id=AGENT_A,
+        )
+
+        after_connected = store.get_engram(connected.id)
+        after_control = store.get_engram(control.id)
+        assert after_connected.accessibility == pytest.approx(after_control.accessibility)
+        assert after_connected.strength == pytest.approx(after_control.strength)
+        assert after_connected.stability == pytest.approx(after_control.stability)
+        assert after_connected.stability == pytest.approx(0.1)
+    finally:
+        store.close()
 
 
 def test_softening_scoped_leaves_other_agent_untouched(two_agent_store):

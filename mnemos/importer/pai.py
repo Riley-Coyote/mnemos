@@ -337,9 +337,7 @@ def apply_pai_import(
             _assert_preview_current(conn, row)
         for row in preview.rows:
             if row.action == ACTION_NOOP:
-                # U3b hardening B5-audit-6: even NOOPs get an event row so the
-                # operator can prove "job X touched this target and confirmed
-                # no change required."
+                _upsert_pai_import_row_for_preview(conn, row)
                 insert_pai_import_event(
                     conn,
                     job_id=row.job_id,
@@ -355,26 +353,7 @@ def apply_pai_import(
                 applied.append(row)
                 continue
             _write_target_row(store, conn, row)
-            upsert_pai_import_row(
-                conn,
-                job_id=row.job_id,
-                source_path=row.source_path,
-                source_anchor=row.source_anchor,
-                target_table=row.target_table,
-                target_id=row.target_id,
-                engram_id=row.target_id if row.target_table == TARGET_ENGRAMS else None,
-                source_hash=row.source_hash,
-                ensure_schema=False,
-                # U3b hardening B1-state-2/4 + B4-u3c-4: write content baseline
-                # and source metadata so the next preview can detect operator
-                # hand-edits and so the U3c watcher has source_kind without
-                # joining target tables.
-                content_at_last_import=row.content,
-                agent_id=row.agent_id,
-                project_scope=row.project_scope,
-                source_kind=row.source_kind,
-                original_timestamp=row.original_timestamp,
-            )
+            _upsert_pai_import_row_for_preview(conn, row)
             insert_pai_import_event(
                 conn,
                 job_id=row.job_id,
@@ -394,6 +373,25 @@ def apply_pai_import(
         raise
 
     return PaiImportResult(job_id=preview.job_id, rows=tuple(applied))
+
+
+def _upsert_pai_import_row_for_preview(conn, row: PaiImportRow) -> None:
+    upsert_pai_import_row(
+        conn,
+        job_id=row.job_id,
+        source_path=row.source_path,
+        source_anchor=row.source_anchor,
+        target_table=row.target_table,
+        target_id=row.target_id,
+        engram_id=row.target_id if row.target_table == TARGET_ENGRAMS else None,
+        source_hash=row.source_hash,
+        ensure_schema=False,
+        content_at_last_import=row.content,
+        agent_id=row.agent_id,
+        project_scope=row.project_scope,
+        source_kind=row.source_kind,
+        original_timestamp=row.original_timestamp,
+    )
 
 
 def apply_pai_watch_update(
@@ -433,6 +431,7 @@ def apply_pai_watch_update(
             _assert_preview_current_for_watch(conn, row)
         for row in preview.rows:
             if row.action == ACTION_NOOP:
+                _upsert_pai_import_row_for_preview(conn, row)
                 insert_pai_import_event(
                     conn,
                     job_id=row.job_id,
@@ -471,22 +470,7 @@ def apply_pai_watch_update(
                 row,
                 allow_pai_tombstone_reactivation=True,
             )
-            upsert_pai_import_row(
-                conn,
-                job_id=row.job_id,
-                source_path=row.source_path,
-                source_anchor=row.source_anchor,
-                target_table=row.target_table,
-                target_id=row.target_id,
-                engram_id=row.target_id if row.target_table == TARGET_ENGRAMS else None,
-                source_hash=row.source_hash,
-                ensure_schema=False,
-                content_at_last_import=row.content,
-                agent_id=row.agent_id,
-                project_scope=row.project_scope,
-                source_kind=row.source_kind,
-                original_timestamp=row.original_timestamp,
-            )
+            _upsert_pai_import_row_for_preview(conn, row)
             insert_pai_import_event(
                 conn,
                 job_id=row.job_id,

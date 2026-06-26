@@ -430,6 +430,10 @@ def _create_or_reinforce_lesson(
     for candidate in existing:
         if candidate.id == engram.id:
             continue
+        if candidate.owner_agent_id != engram.owner_agent_id:
+            continue
+        if candidate.state != "active" or not candidate.consolidation_authorized:
+            continue
         if "lesson" in candidate.tags or "distilled" in candidate.tags:
             # Reinforce existing lesson
             candidate.strength = min(1.0, candidate.strength + 0.1)

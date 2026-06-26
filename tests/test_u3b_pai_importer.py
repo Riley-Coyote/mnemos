@@ -1261,7 +1261,10 @@ def test_u3b_imported_belief_re_import_flips_needs_review_back_on_change(tmp_pat
         store._get_conn().commit()
 
         # David edits the fact
-        changed = replace(source, source_text="David grinds his own coffee every morning.")
+        changed = replace(
+            source,
+            source_text="David grinds his own coffee every morning.",
+        )
         apply_pai_import(store, preview_pai_import(store, [changed]))
 
         row = store._get_conn().execute(
@@ -1274,6 +1277,39 @@ def test_u3b_imported_belief_re_import_flips_needs_review_back_on_change(tmp_pat
         assert revisions
         # Hardening MEDIUM 15: revision entries carry job_id
         assert revisions[-1].get("job_id") == "u3b-job"
+    finally:
+        store.close()
+
+
+def test_u3b_imported_belief_revision_metadata_survives_later_save(tmp_path):
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source("beliefs", "David grinds his own coffee.")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+
+        changed = replace(source, source_text="David grinds his own coffee every morning.")
+        apply_pai_import(store, preview_pai_import(store, [changed]))
+
+        loaded = next(
+            b for b in store.get_beliefs(agent_id=first.rows[0].agent_id)
+            if b.id == target_id
+        )
+        loaded.challenge()
+        store.save_belief(loaded)
+
+        row = store._get_conn().execute(
+            "SELECT revision_history FROM beliefs WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        revisions = json.loads(row["revision_history"])
+        assert revisions[-1]["job_id"] == "u3b-job"
+        assert revisions[-1]["old_content"] == "David grinds his own coffee."
+        assert (
+            revisions[-1]["new_content"]
+            == "David grinds his own coffee every morning."
+        )
     finally:
         store.close()
 

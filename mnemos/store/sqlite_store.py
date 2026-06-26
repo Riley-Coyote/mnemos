@@ -455,7 +455,7 @@ class EngramStore:
         """
         if self._conn is None:
             if self._read_only:
-                uri = f"file:{self.db_path}?mode=ro"
+                uri = f"{self.db_path.resolve().as_uri()}?mode=ro"
                 self._conn = sqlite3.connect(
                     uri,
                     uri=True,

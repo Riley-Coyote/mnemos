@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 import ulid as _ulid_mod
 
@@ -64,19 +65,38 @@ class BeliefRevision:
     new_confidence: float = 0.0
     reason: str = ""
     trigger_engram_id: str | None = None
+    _extra_fields: dict[str, Any] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
 
     def to_dict(self) -> dict:
-        return {
-            "timestamp": self.timestamp,
-            "old_confidence": self.old_confidence,
-            "new_confidence": self.new_confidence,
-            "reason": self.reason,
-            "trigger_engram_id": self.trigger_engram_id,
-        }
+        data = dict(self._extra_fields)
+        data.update(
+            {
+                "timestamp": self.timestamp,
+                "old_confidence": self.old_confidence,
+                "new_confidence": self.new_confidence,
+                "reason": self.reason,
+                "trigger_engram_id": self.trigger_engram_id,
+            }
+        )
+        return data
 
     @classmethod
     def from_dict(cls, d: dict) -> BeliefRevision:
-        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+        fields = {
+            "timestamp",
+            "old_confidence",
+            "new_confidence",
+            "reason",
+            "trigger_engram_id",
+        }
+        return cls(
+            **{k: v for k, v in d.items() if k in fields},
+            _extra_fields={k: v for k, v in d.items() if k not in fields},
+        )
 
 
 @dataclass

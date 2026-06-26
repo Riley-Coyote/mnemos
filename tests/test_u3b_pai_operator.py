@@ -269,6 +269,28 @@ def test_u3b_read_only_engramstore_blocks_writes(tmp_path):
 
 
 @pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows filenames cannot contain the '?' URI metacharacter",
+)
+def test_u3b_read_only_engramstore_escapes_uri_metacharacters(tmp_path):
+    db_path = tmp_path / "ro?query#fragment.db"
+    EngramStore(db_path).close()
+    ro = EngramStore(db_path, read_only=True)
+    try:
+        conn = ro._get_conn()
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
+        assert row is not None
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('hardening-probe', '1')"
+            )
+    finally:
+        ro.close()
+
+
+@pytest.mark.skipif(
     sys.platform != "darwin",
     reason="APFS case-insensitive bypass surface; meaningful only on darwin",
 )

@@ -9,7 +9,7 @@ from mnemos.consolidation.reflection import run_reflection_pass
 from mnemos.consolidation.softening import run_softening_pass
 from mnemos.core.emotional_state import EmotionalState
 from mnemos.core.belief import Belief
-from mnemos.core.engram import Engram
+from mnemos.core.engram import Connection, Engram
 from mnemos.core.identity import AgentIdentity
 from mnemos.substrate.events import EventType, SubstrateEvent
 from mnemos.store.migrations import (
@@ -1409,6 +1409,67 @@ def test_substrate_modulators_scope_to_authorized_agent_rows(tmp_path):
     )
 
     assert modulators.resolution == pytest.approx(0.2)
+
+
+def test_substrate_modulator_connection_density_scopes_to_authorized_agent_edges(tmp_path):
+    db_path = tmp_path / "modulator_connections.db"
+    store = EngramStore(db_path)
+    authorized_source = _old_engram("authorized source")
+    authorized_target = _old_engram("authorized target")
+    unauthorized_source = _old_engram(
+        "unauthorized source",
+        consolidation_authorized=False,
+    )
+    unauthorized_target = _old_engram(
+        "unauthorized target",
+        consolidation_authorized=False,
+    )
+    other_source = _old_engram("other source", owner_agent_id="claude")
+    other_target = _old_engram("other target", owner_agent_id="claude")
+    for engram in (
+        authorized_source,
+        authorized_target,
+        unauthorized_source,
+        unauthorized_target,
+        other_source,
+        other_target,
+    ):
+        store.save_engram(engram)
+
+    store.save_connection(
+        authorized_source.id,
+        Connection(target_id=authorized_target.id, relation="supports"),
+    )
+    store.save_connection(
+        unauthorized_source.id,
+        Connection(target_id=unauthorized_target.id, relation="supports"),
+    )
+    store.save_connection(
+        authorized_source.id,
+        Connection(target_id=unauthorized_target.id, relation="contradicts"),
+    )
+    store.save_connection(
+        unauthorized_source.id,
+        Connection(target_id=authorized_target.id, relation="extends"),
+    )
+    store.save_connection(
+        other_source.id,
+        Connection(target_id=other_target.id, relation="supports"),
+    )
+    store.save_connection(
+        other_source.id,
+        Connection(target_id=authorized_target.id, relation="grounds"),
+    )
+    store.close()
+
+    modulators = compute_modulators(
+        str(db_path),
+        agent_id="oliver",
+        require_consolidation_authorized=True,
+    )
+
+    assert modulators.openness == pytest.approx(0.75)
+    assert modulators.temperature == pytest.approx(0.85)
 
 
 def test_substrate_temporal_event_ignores_unauthorized_and_other_agent_rows(

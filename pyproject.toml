@@ -40,6 +40,7 @@ all = [
 ]
 dev = [
     "pytest>=7.0",
+    "hypothesis>=6.155.7",
 ]
 
 [project.scripts]

@@ -218,6 +218,27 @@ def test_u3b_cli_preview_apply_and_rerun_noop(tmp_path, capsys):
     assert rerun.counts == {ACTION_NOOP: 2}
 
 
+def test_u3b_cli_preview_requires_db_path(tmp_path, capsys):
+    manifest_path = _write_manifest(tmp_path)
+    artifact = tmp_path / "should-not-exist.json"
+
+    result = main(
+        [
+            "pai-import",
+            "preview",
+            "--manifest",
+            str(manifest_path),
+            "--artifact",
+            str(artifact),
+        ]
+    )
+    err = capsys.readouterr().err
+
+    assert result == 1
+    assert "requires --db-path" in err
+    assert not artifact.exists()
+
+
 def _file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 

@@ -228,6 +228,7 @@ def apply_pai_manifest(
     manifest_path: str | Path,
     artifact_path: str | Path | None = None,
     backup_dir: str | Path | None = None,
+    backup_keep: int | None = None,
     allow_live_db: bool = False,
 ) -> PaiOperatorRun:
     """Backup a database, preview the manifest, then apply the import."""
@@ -238,6 +239,13 @@ def apply_pai_manifest(
     manifest = load_pai_manifest(manifest_path)
     backup_path = _backup_path(db, manifest.job_id, backup_dir)
     backup_sqlite_db(db, backup_path)
+    _prune_pai_backups(
+        db=db,
+        job_id=manifest.job_id,
+        backup_dir=backup_dir,
+        keep=backup_keep,
+        latest_backup=backup_path,
+    )
 
     store = EngramStore(db)
     try:
@@ -277,6 +285,7 @@ def apply_pai_watch_manifest(
     manifest_path: str | Path,
     artifact_path: str | Path | None = None,
     backup_dir: str | Path | None = None,
+    backup_keep: int | None = None,
     allow_live_db: bool = False,
 ) -> PaiOperatorRun:
     """Backup a database, preview, then apply a U3c watcher manifest update."""
@@ -287,6 +296,13 @@ def apply_pai_watch_manifest(
     manifest = load_pai_manifest(manifest_path, allow_missing_sources=True)
     backup_path = _backup_path(db, manifest.job_id, backup_dir)
     backup_sqlite_db(db, backup_path)
+    _prune_pai_backups(
+        db=db,
+        job_id=manifest.job_id,
+        backup_dir=backup_dir,
+        keep=backup_keep,
+        latest_backup=backup_path,
+    )
 
     store = EngramStore(db)
     try:
@@ -455,11 +471,42 @@ def _same_path(left: Path, right: Path) -> bool:
 
 
 def _backup_path(db: Path, job_id: str, backup_dir: str | Path | None) -> Path:
-    root = Path(backup_dir).expanduser() if backup_dir is not None else db.parent / "pai-import-backups"
+    root = _backup_root(db, backup_dir)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     unique = time.time_ns()
-    clean_job = re.sub(r"[^A-Za-z0-9_.-]+", "-", job_id).strip("-") or "pai-import"
+    clean_job = _backup_job_segment(job_id)
     return root / f"{db.stem}.{clean_job}.{stamp}.{unique}.backup.db"
+
+
+def _backup_root(db: Path, backup_dir: str | Path | None) -> Path:
+    return Path(backup_dir).expanduser() if backup_dir is not None else db.parent / "pai-import-backups"
+
+
+def _backup_job_segment(job_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", job_id).strip("-") or "pai-import"
+
+
+def _prune_pai_backups(
+    *,
+    db: Path,
+    job_id: str,
+    backup_dir: str | Path | None,
+    keep: int | None,
+    latest_backup: Path,
+) -> None:
+    if keep is None:
+        return
+    if isinstance(keep, bool) or keep < 1:
+        raise ValueError("backup_keep must be a positive integer")
+    root = _backup_root(db, backup_dir)
+    pattern = f"{db.stem}.{_backup_job_segment(job_id)}.*.backup.db"
+    backups = [path for path in root.glob(pattern) if path.is_file()]
+    backups.sort(key=lambda path: path.name, reverse=True)
+    latest = latest_backup.expanduser().resolve()
+    ordered = [latest_backup]
+    ordered.extend(path for path in backups if path.expanduser().resolve() != latest)
+    for stale in ordered[keep:]:
+        stale.unlink(missing_ok=True)
 
 
 def _artifact_output_path(path: str | Path | None) -> Path | None:

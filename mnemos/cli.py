@@ -20,6 +20,8 @@ Commands:
     mnemos pai-import watch-apply    Backup DB and apply a U3c watcher update
     mnemos pai-import watch-once     Run one dual-life watcher poll
     mnemos pai-import watch-plist    Write a launchd plist for watch-once
+    mnemos pai-import watch-doctor   Run the Step 3 launch-readiness gate
+    mnemos pai-import review-gate    Run diff-focused adversarial U3c gate
     mnemos remember CONTENT      Capture durable continuity from the CLI
     mnemos hermes install        Install Mnemos for Hermes Agent
     mnemos hermes quickstart     Safely install Mnemos for Hermes Agent
@@ -307,6 +309,12 @@ def main(argv: list[str] | None = None) -> int:
     p_pai_apply.add_argument("--artifact", default=None, help="Write apply artifact JSON")
     p_pai_apply.add_argument("--backup-dir", default=None, help="Directory for integrity-checked DB backup")
     p_pai_apply.add_argument(
+        "--backup-keep",
+        type=int,
+        default=None,
+        help="Keep only the newest N matching PAI backups after this apply",
+    )
+    p_pai_apply.add_argument(
         "--allow-live-db",
         action="store_true",
         help="Allow ~/.mnemos/memory.db; intended only for a deliberate final import",
@@ -352,6 +360,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory for integrity-checked DB backup",
     )
     p_pai_watch_apply.add_argument(
+        "--backup-keep",
+        type=int,
+        default=None,
+        help="Keep only the newest N matching PAI backups after this apply",
+    )
+    p_pai_watch_apply.add_argument(
         "--allow-live-db",
         action="store_true",
         help="Allow ~/.mnemos/memory.db; intended only for a deliberate watcher run",
@@ -376,6 +390,12 @@ def main(argv: list[str] | None = None) -> int:
         "--backup-dir",
         default=None,
         help="Directory for integrity-checked DB backups",
+    )
+    p_pai_watch_once.add_argument(
+        "--backup-keep",
+        type=int,
+        default=None,
+        help="Keep only the newest N matching PAI backups after this apply",
     )
     p_pai_watch_once.add_argument(
         "--apply", action="store_true", help="Apply changed-source previews"
@@ -408,11 +428,67 @@ def main(argv: list[str] | None = None) -> int:
     p_pai_watch_plist.add_argument("--plist", required=True, help="Output launchd plist path")
     p_pai_watch_plist.add_argument("--label", default=None, help="launchd label")
     p_pai_watch_plist.add_argument("--interval-seconds", type=int, default=60)
+    p_pai_watch_plist.add_argument(
+        "--backup-keep",
+        type=int,
+        default=None,
+        help="Include bounded backup retention in generated ProgramArguments",
+    )
     p_pai_watch_plist.add_argument("--python", default=None, help="Python executable for launchd")
     p_pai_watch_plist.add_argument(
         "--allow-live-db",
         action="store_true",
         help="Include --allow-live-db in generated ProgramArguments",
+    )
+    p_pai_watch_doctor = pai_sub.add_parser(
+        "watch-doctor",
+        help="Run U3c Step 3 launch-readiness gate",
+    )
+    p_pai_watch_doctor.add_argument(
+        "--manifest", required=True, help="PAI source manifest JSON"
+    )
+    p_pai_watch_doctor.add_argument(
+        "--db-path",
+        default=argparse.SUPPRESS,
+        help="Representative SQLite DB path",
+    )
+    p_pai_watch_doctor.add_argument("--state", required=True, help="Watcher state JSON path")
+    p_pai_watch_doctor.add_argument(
+        "--artifact-dir", required=True, help="Directory for watch artifacts"
+    )
+    p_pai_watch_doctor.add_argument(
+        "--backup-dir",
+        required=True,
+        help="Directory for integrity-checked DB backups",
+    )
+    p_pai_watch_doctor.add_argument(
+        "--backup-keep",
+        type=int,
+        required=True,
+        help="Required bounded backup retention count for launch readiness",
+    )
+    p_pai_watch_doctor.add_argument(
+        "--plist", default=None, help="Existing launchd plist to lint"
+    )
+    p_pai_watch_doctor.add_argument("--python", default=None, help="Python executable")
+    p_pai_watch_doctor.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow live ~/.mnemos DB paths during explicit launch-gate checks",
+    )
+    p_pai_review_gate = pai_sub.add_parser(
+        "review-gate",
+        help="Run diff-focused adversarial U3c review gate",
+    )
+    p_pai_review_gate.add_argument(
+        "--base-ref",
+        default="HEAD",
+        help="Git ref to compare against for changed-file review",
+    )
+    p_pai_review_gate.add_argument(
+        "--intent",
+        default=None,
+        help="Intent artifact path for the U3c launch diff",
     )
 
     args = parser.parse_args(argv)
@@ -862,17 +938,19 @@ def _cmd_pai_import(args: argparse.Namespace) -> int:
         "watch-apply",
         "watch-once",
         "watch-plist",
+        "watch-doctor",
+        "review-gate",
     }
     if command not in valid_commands:
         print(
             "Usage: mnemos pai-import "
-            "{preview|apply|watch-preview|watch-apply|watch-once|watch-plist}",
+            "{preview|apply|watch-preview|watch-apply|watch-once|watch-plist|watch-doctor|review-gate}",
             file=sys.stderr,
         )
         return 1
 
     db_path = getattr(args, "db_path", None)
-    if command != "watch-plist" and not db_path:
+    if command not in {"watch-plist", "review-gate"} and not db_path:
         print(
             "mnemos pai-import requires --db-path; use a representative test DB",
             file=sys.stderr,
@@ -880,6 +958,17 @@ def _cmd_pai_import(args: argparse.Namespace) -> int:
         return 1
 
     try:
+        if command == "review-gate":
+            from .importer import DEFAULT_U3C_INTENT_PATH, run_pai_diff_review_gate
+
+            report = run_pai_diff_review_gate(
+                repo_root=Path(__file__).resolve().parents[1],
+                base_ref=args.base_ref,
+                intent_path=args.intent or DEFAULT_U3C_INTENT_PATH,
+            )
+            _print_pai_review_gate_report(report)
+            return 0 if report.ok else 1
+
         if command == "watch-plist":
             from .importer import DEFAULT_WATCH_LABEL, write_pai_watch_launchd_plist
 
@@ -892,11 +981,29 @@ def _cmd_pai_import(args: argparse.Namespace) -> int:
                 backup_dir=args.backup_dir,
                 label=args.label or DEFAULT_WATCH_LABEL,
                 interval_seconds=args.interval_seconds,
+                backup_keep=args.backup_keep,
                 python_executable=args.python,
                 allow_live_db=args.allow_live_db,
             )
             print(f"PAI watch launchd plist: {plist}")
             return 0
+
+        if command == "watch-doctor":
+            from .importer import run_pai_watch_doctor
+
+            report = run_pai_watch_doctor(
+                manifest_path=args.manifest,
+                db_path=db_path,
+                state_path=args.state,
+                artifact_dir=args.artifact_dir,
+                backup_dir=args.backup_dir,
+                backup_keep=args.backup_keep,
+                plist_path=args.plist,
+                python_executable=args.python,
+                allow_live_db=args.allow_live_db,
+            )
+            _print_pai_watch_doctor_report(report)
+            return 0 if report.ok else 1
 
         if command == "preview":
             from .importer import ACTION_ERROR, preview_pai_manifest
@@ -931,6 +1038,7 @@ def _cmd_pai_import(args: argparse.Namespace) -> int:
                 state_path=args.state,
                 artifact_dir=args.artifact_dir,
                 backup_dir=args.backup_dir,
+                backup_keep=args.backup_keep,
                 apply=args.apply,
                 force=args.force,
                 allow_live_db=args.allow_live_db,
@@ -955,6 +1063,7 @@ def _cmd_pai_import(args: argparse.Namespace) -> int:
                 manifest_path=args.manifest,
                 artifact_path=args.artifact,
                 backup_dir=args.backup_dir,
+                backup_keep=args.backup_keep,
                 allow_live_db=args.allow_live_db,
             )
             _print_pai_operator_run(run, db_path=db_path)
@@ -967,6 +1076,7 @@ def _cmd_pai_import(args: argparse.Namespace) -> int:
             manifest_path=args.manifest,
             artifact_path=args.artifact,
             backup_dir=args.backup_dir,
+            backup_keep=args.backup_keep,
             allow_live_db=args.allow_live_db,
         )
         _print_pai_operator_run(run, db_path=db_path)
@@ -995,6 +1105,40 @@ def _print_pai_operator_run(run, *, db_path: str) -> None:
         print(f"Artifact: {run.artifact_path}")
     print(f"Rows:     {len(run.result.rows if run.result is not None else run.preview.rows)}")
     print(f"Counts:   {_format_counts(run.counts)}")
+
+
+def _print_pai_watch_doctor_report(report) -> None:
+    print("PAI watch doctor")
+    print("----------------")
+    for check in report.checks:
+        print(f"[{check.status}] {check.ident:<3} {check.label}: {check.evidence}")
+    passed = sum(1 for check in report.checks if check.status == "PASS")
+    failed = sum(1 for check in report.checks if check.status == "FAIL")
+    skipped = sum(1 for check in report.checks if check.status == "SKIP")
+    print()
+    print(f"Summary: {passed} passed, {failed} failed, {skipped} skipped")
+    print(f"Verdict: {'GREEN' if report.ok else 'RED'}")
+
+
+def _print_pai_review_gate_report(report) -> None:
+    print("PAI diff review gate")
+    print("--------------------")
+    print(f"Base:     {report.base_ref}")
+    print(f"Intent:   {report.intent_path}")
+    print(f"Changed:  {len(report.changed_files)} file(s)")
+    for path in report.changed_files:
+        print(f"  - {path}")
+    if report.findings:
+        print()
+        print("findings{id,severity,file,description,required_proof,status,action}:")
+        for finding in report.findings:
+            print(
+                f"  {finding.ident},{finding.severity},{finding.file},"
+                f"{finding.description},{finding.required_proof},"
+                f"{finding.status},{finding.action}"
+            )
+    print()
+    print(f"Verdict: {'GREEN' if report.ok else 'RED'}")
 
 
 def _format_counts(counts: dict[str, int]) -> str:

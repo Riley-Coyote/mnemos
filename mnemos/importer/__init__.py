@@ -37,11 +37,21 @@ from .operator import (
     preview_pai_watch_manifest,
     write_pai_import_artifact,
 )
+from .review_gate import (
+    DEFAULT_U3C_INTENT_PATH,
+    PaiReviewFinding,
+    PaiReviewReport,
+    evaluate_pai_diff_review,
+    run_pai_diff_review_gate,
+)
 from .watcher import (
     DEFAULT_WATCH_LABEL,
     WATCH_STATE_SCHEMA,
+    PaiWatchDoctorCheck,
+    PaiWatchDoctorReport,
     PaiWatchOnceRun,
     pai_watch_once,
+    run_pai_watch_doctor,
     write_pai_watch_launchd_plist,
 )
 
@@ -57,6 +67,7 @@ __all__ = [
     "ACTION_UPDATE",
     "ARTIFACT_SCHEMA",
     "DEFAULT_WATCH_LABEL",
+    "DEFAULT_U3C_INTENT_PATH",
     "MANIFEST_SCHEMA",
     "PaiManifest",
     "PaiImportPreview",
@@ -64,6 +75,10 @@ __all__ = [
     "PaiImportRow",
     "PaiImportSource",
     "PaiOperatorRun",
+    "PaiReviewFinding",
+    "PaiReviewReport",
+    "PaiWatchDoctorCheck",
+    "PaiWatchDoctorReport",
     "PaiWatchOnceRun",
     "WATCH_STATE_SCHEMA",
     "apply_pai_manifest",
@@ -76,12 +91,15 @@ __all__ = [
     "preview_pai_watch_manifest",
     "preview_pai_import",
     "preview_pai_watch_update",
+    "evaluate_pai_diff_review",
     "split_beliefs",
     "split_david_context",
     "split_growth_substrate",
     "split_hypomnema",
     "split_identity_kernel",
     "split_pai_source",
+    "run_pai_watch_doctor",
+    "run_pai_diff_review_gate",
     "write_pai_import_artifact",
     "write_pai_watch_launchd_plist",
 ]

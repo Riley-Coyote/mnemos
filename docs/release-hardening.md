@@ -37,6 +37,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
   - `mnemos/simple_mcp.py`
   - `mnemos/importer/pai.py`
   - `mnemos/importer/operator.py`
+  - `mnemos/importer/review_gate.py`
   - `mnemos/importer/watcher.py`
   - `templates/SOUL.md`
   - `templates/IDENTITY.md`
@@ -56,8 +57,22 @@ Use this checklist before publishing Mnemos or opening a release PR.
   (`EngramStore(read_only=True)` → `file:…?mode=ro`) and never mutate state.
 - `mnemos pai-import apply` and `watch-apply` take an integrity-checked
   SQLite backup before any write, into the configured `--backup-dir` (or
-  `<db>/pai-import-backups/` by default). Backup retention rotation is the
-  operator's responsibility.
+  `<db>/pai-import-backups/` by default). `--backup-keep N` prunes older
+  matching PAI backups after each successful backup.
+- `mnemos pai-import watch-doctor` is the Step 3 launch gate before launchd
+  activation. It previews the real manifest read-only, fingerprints the
+  representative DB across copy-based apply probes, copies DB/WAL/SHM before
+  applying, verifies backup `PRAGMA integrity_check`, performs a backup
+  restore/open drill, lints launchd plist paths/env/logs/retention, runs static
+  negative lifecycle checks, and refuses live `~/.mnemos` DB paths unless
+  explicitly allowed.
+- `mnemos pai-import review-gate` is the Step 3 diff gate. It reviews changed
+  files against `docs/u3c-step3-launch-intent.md` and fails when dangerous
+  source changes lack matching proof surfaces, when broad lifecycle deletes are
+  introduced, when the launch taxonomy disappears, or when release packaging
+  omits a launch-critical module.
+  Enforcement lives in `mnemos.importer.review_gate.run_pai_diff_review_gate`
+  with `tests/test_u3c_pai_review_gate.py`.
 - Every PAI import subcommand refuses the default live database
   (`~/.mnemos/memory.db`) unless the operator passes `--allow-live-db`. The
   guard uses inode equality so case-insensitive paths like
@@ -95,7 +110,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
 
 ```bash
 uv run --extra dev --extra mcp pytest -q
-uv run --extra mcp python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/importer/pai.py mnemos/importer/operator.py mnemos/importer/watcher.py
+uv run --extra mcp python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/importer/pai.py mnemos/importer/operator.py mnemos/importer/review_gate.py mnemos/importer/watcher.py
 uv build
 uvx twine check dist/*
 git diff --check

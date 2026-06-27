@@ -279,6 +279,8 @@ def test_u3c_launchd_plist_points_to_watch_once_apply(tmp_path):
     assert Path(payload["StandardOutPath"]).parent.exists()
     assert Path(payload["StandardErrorPath"]).parent.exists()
     assert payload["WorkingDirectory"] == str(Path.cwd())
+    assert payload["EnvironmentVariables"]["HOME"]
+    assert payload["EnvironmentVariables"]["PATH"]
     completed = subprocess.run(
         args,
         cwd=payload["WorkingDirectory"],

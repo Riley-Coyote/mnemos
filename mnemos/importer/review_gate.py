@@ -108,6 +108,7 @@ def run_pai_diff_review_gate(
         file_texts=file_texts,
         diff_text=diff_text,
         intent_text=intent_text,
+        repo_root=root,
     )
     findings = [*committed_review_findings, *findings]
     return PaiReviewReport(
@@ -124,6 +125,7 @@ def evaluate_pai_diff_review(
     file_texts: Mapping[str, str],
     diff_text: str,
     intent_text: str,
+    repo_root: Path | None = None,
 ) -> list[PaiReviewFinding]:
     """Pure evaluator used by tests and the CLI wrapper."""
     changed = set(changed_files)
@@ -132,7 +134,12 @@ def evaluate_pai_diff_review(
     findings.extend(_proof_surface_findings(changed))
     findings.extend(_forbidden_diff_findings(diff_text))
     findings.extend(
-        _repository_content_findings(changed, file_texts, diff_text=diff_text)
+        _repository_content_findings(
+            changed,
+            file_texts,
+            diff_text=diff_text,
+            repo_root=repo_root,
+        )
     )
     return findings
 
@@ -529,6 +536,7 @@ def _repository_content_findings(
     file_texts: Mapping[str, str],
     *,
     diff_text: str = "",
+    repo_root: Path | None = None,
 ) -> list[PaiReviewFinding]:
     findings: list[PaiReviewFinding] = []
     added_texts = _added_text_by_file(diff_text) if diff_text else {}
@@ -668,7 +676,9 @@ def _repository_content_findings(
             re.IGNORECASE,
         )
         has_enforcement_links = _has_enforcement_links(
-            launch_doc_review_text, file_texts=file_texts
+            launch_doc_review_text,
+            file_texts=file_texts,
+            repo_root=repo_root,
         )
         explicit_docs_only_risk = (
             "documentation-only risk" in launch_doc_review_text.lower()
@@ -699,7 +709,9 @@ def _repository_content_findings(
         if not doc_text or doc_path == "docs/u3c-step3-launch-gate.md":
             continue
         if _has_safety_claim(doc_text) and not _has_enforcement_links(
-            doc_text, file_texts=file_texts
+            doc_text,
+            file_texts=file_texts,
+            repo_root=repo_root,
         ):
             findings.append(
                 PaiReviewFinding(
@@ -1549,17 +1561,26 @@ def _has_enforcement_links(
     text: str,
     *,
     file_texts: Mapping[str, str] | None = None,
+    repo_root: Path | None = None,
 ) -> bool:
     lowered = text.lower()
     if "documentation-only risk" in lowered:
         return True
-    if _has_explicit_enforcement_links_anchor(text, file_texts=file_texts):
+    if _has_explicit_enforcement_links_anchor(
+        text,
+        file_texts=file_texts,
+        repo_root=repo_root,
+    ):
         return True
     contexts = _safety_claim_contexts(text)
     if not contexts:
         contexts = (text,)
     return all(
-        _context_has_enforcement_links(context, file_texts=file_texts)
+        _context_has_enforcement_links(
+            context,
+            file_texts=file_texts,
+            repo_root=repo_root,
+        )
         for context in contexts
     )
 
@@ -1593,13 +1614,18 @@ def _has_explicit_enforcement_links_anchor(
     text: str,
     *,
     file_texts: Mapping[str, str] | None = None,
+    repo_root: Path | None = None,
 ) -> bool:
     if not re.search(
         r"(?im)^(?:#{1,6}\s+)?enforcement links\s*:?",
         text,
     ):
         return False
-    return _context_has_enforcement_links(text, file_texts=file_texts)
+    return _context_has_enforcement_links(
+        text,
+        file_texts=file_texts,
+        repo_root=repo_root,
+    )
 
 
 def _markdown_section_bounds(lines: Sequence[str], index: int) -> tuple[int, int]:
@@ -1621,6 +1647,7 @@ def _context_has_enforcement_links(
     text: str,
     *,
     file_texts: Mapping[str, str] | None = None,
+    repo_root: Path | None = None,
 ) -> bool:
     test_paths = re.findall(r"\btests/[A-Za-z0-9_./-]+\.py\b", text)
     code_paths = re.findall(r"\bmnemos/[A-Za-z0-9_./-]+\.py\b", text)
@@ -1628,10 +1655,20 @@ def _context_has_enforcement_links(
         r"\bmnemos(?:\.[A-Za-z_][A-Za-z0-9_]*){1,}\b",
         text,
     )
-    test_exists = any(_repo_path_exists(path, file_texts) for path in test_paths)
-    code_exists = any(_repo_path_exists(path, file_texts) for path in code_paths)
+    test_exists = any(
+        _repo_path_exists(path, file_texts, repo_root=repo_root)
+        for path in test_paths
+    )
+    code_exists = any(
+        _repo_path_exists(path, file_texts, repo_root=repo_root)
+        for path in code_paths
+    )
     code_exists = code_exists or any(
-        _dotted_module_path_exists(module, file_texts)
+        _dotted_module_path_exists(
+            module,
+            file_texts,
+            repo_root=repo_root,
+        )
         for module in dotted_modules
     )
     return test_exists and code_exists
@@ -1640,20 +1677,25 @@ def _context_has_enforcement_links(
 def _repo_path_exists(
     path: str,
     file_texts: Mapping[str, str] | None = None,
+    *,
+    repo_root: Path | None = None,
 ) -> bool:
     if file_texts is not None and path in file_texts:
         return bool(file_texts[path])
-    return (Path.cwd() / path).is_file()
+    root = repo_root or Path.cwd()
+    return (root / path).is_file()
 
 
 def _dotted_module_path_exists(
     dotted: str,
     file_texts: Mapping[str, str] | None = None,
+    *,
+    repo_root: Path | None = None,
 ) -> bool:
     parts = dotted.split(".")
     for end in range(len(parts), 1, -1):
         path = "/".join(parts[:end]) + ".py"
-        if _repo_path_exists(path, file_texts):
+        if _repo_path_exists(path, file_texts, repo_root=repo_root):
             return True
     return False
 

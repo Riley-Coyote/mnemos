@@ -98,6 +98,25 @@ class TestEngramStore:
         assert pending.id in {b.id for b in all_beliefs}
         assert reviewed.id in {b.id for b in all_beliefs}
 
+    def test_get_stats_excludes_pending_confidence_by_default(self, store):
+        pending = Belief(
+            content="Imported stats belief awaits confidence review",
+            confidence=0.9,
+            confidence_pending_review=True,
+        )
+        reviewed = Belief(
+            content="Reviewed stats belief participates in status",
+            confidence=0.6,
+        )
+        store.save_belief(pending)
+        store.save_belief(reviewed)
+
+        default_stats = store.get_stats()
+        all_stats = store.get_stats(include_pending_review=True)
+
+        assert default_stats["beliefs_active"] == 1
+        assert all_stats["beliefs_active"] == 2
+
     def test_count_engrams(self, store):
         """Count engrams by state."""
         e1 = Engram(content="Active memory one")

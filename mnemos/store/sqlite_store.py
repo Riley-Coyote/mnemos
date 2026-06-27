@@ -1966,7 +1966,11 @@ class EngramStore:
 
     # ── Stats ──
 
-    def get_stats(self, agent_id: str = "default") -> dict:
+    def get_stats(
+        self,
+        agent_id: str = "default",
+        include_pending_review: bool = False,
+    ) -> dict:
         """Get summary statistics for an agent's memory."""
         conn = self._get_conn()
         stats = {}
@@ -1985,10 +1989,13 @@ class EngramStore:
         stats["connections"] = row[0] if row else 0
 
         # Belief count
-        row = conn.execute(
-            "SELECT COUNT(*) FROM beliefs WHERE agent_id = ? AND superseded_by IS NULL",
-            (agent_id,),
-        ).fetchone()
+        belief_query = (
+            "SELECT COUNT(*) FROM beliefs "
+            "WHERE agent_id = ? AND superseded_by IS NULL"
+        )
+        if not include_pending_review:
+            belief_query += " AND confidence_pending_review = 0"
+        row = conn.execute(belief_query, (agent_id,)).fetchone()
         stats["beliefs_active"] = row[0] if row else 0
 
         # Version count (reconsolidation events)

@@ -237,7 +237,7 @@ def test_u3c_review_gate_rule_signature():
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
-    assert digest == "c5b4eb6324b35e17e7267a9082015db242823f62d412da4edb8b9d1b551b510c"
+    assert digest == "6a4b44e98161bb022b7438a4dd4c80a0ea0bc6bf1e7d45ceb4364cfed2262432"
 
 
 def test_u3c_review_gate_fails_watcher_change_without_test_diff():
@@ -867,6 +867,55 @@ def test_u3c_review_gate_cli_reports_green(tmp_path, monkeypatch, capsys):
     assert result == 0
     assert "PAI diff review gate" in out
     assert "Verdict: GREEN" in out
+
+
+def test_u3c_review_gate_resolves_enforcement_links_from_repo_root(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "a@b.c")
+    _git(repo, "config", "user.name", "t")
+    (repo / "docs").mkdir()
+    (repo / "tests").mkdir()
+    (repo / "mnemos" / "custom").mkdir(parents=True)
+    (repo / "docs" / "u3c-step3-launch-intent.md").write_text(
+        GOOD_INTENT,
+        encoding="utf-8",
+    )
+    (repo / "docs" / "release-hardening.md").write_text(
+        "# Release Hardening\nBaseline docs.\n",
+        encoding="utf-8",
+    )
+    (repo / "tests" / "test_repo_root_evidence.py").write_text(
+        "def test_repo_root_evidence():\n    assert True\n",
+        encoding="utf-8",
+    )
+    (repo / "mnemos" / "custom" / "proof.py").write_text(
+        "PROOF = True\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+    base_ref = _git(repo, "rev-parse", "HEAD")
+    (repo / "docs" / "release-hardening.md").write_text(
+        "# Release Hardening\n"
+        "Backups are verified and the watcher refuses live writes.\n"
+        "Enforced by tests/test_repo_root_evidence.py and mnemos/custom/proof.py.\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "target")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+
+    report = review_gate_module.run_pai_diff_review_gate(
+        repo_root=repo,
+        base_ref=base_ref,
+        intent_path="docs/u3c-step3-launch-intent.md",
+    )
+
+    assert report.findings == ()
 
 
 def test_u3c_review_gate_cli_rejects_head_base_ref(tmp_path, monkeypatch, capsys):

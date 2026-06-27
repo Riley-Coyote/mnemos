@@ -26,7 +26,6 @@ from ..encoding.llm_classifier import evaluate_beliefs, apply_belief_update
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
-    from ..llm import LLMClient
 
 log = logging.getLogger("mnemos.consolidation.beliefs")
 

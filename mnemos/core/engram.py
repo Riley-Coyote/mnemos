@@ -25,7 +25,6 @@ import ulid as _ulid_mod
 
 from .types import (
     ConfidenceSource,
-    ConnectionRelation,
     DEFAULT_ACCESSIBILITY,
     DEFAULT_STABILITY,
     DEFAULT_STRENGTH,

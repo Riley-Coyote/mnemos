@@ -113,8 +113,6 @@ def compute_modulators(
         f"SELECT COUNT(*) FROM engrams WHERE {engram_where} AND created_at > ?",
         (*params, recent_cutoff),
     ).fetchone()[0]
-    recent_connections = count_connections(recent_cutoff)
-
     # ── Average vividness (accessibility * strength) ──
     avg_vividness = conn.execute(
         f"SELECT AVG(accessibility * strength) FROM engrams WHERE {engram_where}",

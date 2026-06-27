@@ -14,14 +14,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ..core.engram import Connection
 from ..core.types import ConnectionRelation, DEFAULT_AGENT_ID
 from ..encoding.llm_classifier import classify_connections
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
-    from ..store.embedding_index import EmbeddingIndex
-    from ..llm import LLMClient
 
 log = logging.getLogger("mnemos.consolidation.connections")
 

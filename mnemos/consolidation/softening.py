@@ -97,7 +97,6 @@ def run_softening_pass(
     Returns:
         Statistics dict.
     """
-    softening_threshold = config.get("softening_threshold", 0.15)
     minimum_resolution = config.get("minimum_resolution", 0.1)
     max_llm_calls = config.get("max_llm_calls_per_cycle", 50)
     dry_run = bool(config.get("softening_dry_run", False))

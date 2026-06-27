@@ -1,4 +1,3 @@
-from __future__ import annotations
 """
 Substrate — consolidation daemon for the Mnemos memory system.
 
@@ -12,17 +11,19 @@ This is the background process that keeps the memory graph alive:
 Runs via cron every 4 hours. Each tick is a complete cycle.
 """
 
+from __future__ import annotations
+
 import sys
 import os
 import json
 import logging
 import sqlite3
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import datetime, timezone
 
 from .events import SubstrateEvent, EventType
 from .config import SubstrateConfig
-from .modulators import compute_modulators, ModulatorState
+from .handlers import reflection, dreaming, insight, surprise, wandering, initiation
+from .modulators import compute_modulators
 
 from mnemos.store.sqlite_store import EngramStore
 from mnemos.store.embedding_index import EmbeddingIndex
@@ -47,9 +48,6 @@ try:
     from mnemos.llm import create_client
 except ImportError:
     create_client = None
-
-# Handler registry: event_type -> handler module
-from .handlers import reflection, dreaming, insight, surprise, wandering, initiation
 
 HANDLER_MAP = {
     EventType.BELIEF_CONTRADICTED: reflection,

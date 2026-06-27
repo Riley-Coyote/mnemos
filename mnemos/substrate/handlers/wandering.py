@@ -18,9 +18,9 @@ import json
 import logging
 import sqlite3
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
-from ..events import SubstrateEvent, EventType
+from ..events import SubstrateEvent
 from ..config import SubstrateConfig
 from ..modulators import ModulatorState
 

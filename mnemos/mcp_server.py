@@ -38,17 +38,15 @@ import logging
 import os
 import signal
 import sys
-from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from .core.types import EngramKind, SourceType
+from .core.types import SourceType
 from .store.sqlite_store import EngramStore
 from .store.embedding_index import EmbeddingIndex
 from .encoding.encoder import Encoder
 from .retrieval.reactive import ReactiveRetriever
 from .consolidation.daemon import ConsolidationDaemon
-from .interface.openclaw_export import OpenClawExporter
 from .interface.context_packet import build_context_packet
 from .interface.visual_snapshot import build_memory_visual_snapshot
 from .config.loader import load_config, save_config
@@ -354,7 +352,7 @@ def mnemos_setup(response: str = "") -> str:
             try:
                 _encoder.encode(
                     content=f"Active project: {proj}",
-                    impact=f"Part of the current work context.",
+                    impact="Part of the current work context.",
                     kind="semantic",
                     tags=["project", "context"],
                     source=SourceType.USER_EXPLICIT,

@@ -3,7 +3,7 @@ import pytest
 
 from mnemos.core.engram import Connection, Engram
 from mnemos.core.belief import Belief
-from mnemos.core.types import ConnectionRelation, EngramState
+from mnemos.core.types import ConnectionRelation
 from mnemos.store.sqlite_store import EngramStore
 
 

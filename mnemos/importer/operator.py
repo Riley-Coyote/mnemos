@@ -444,12 +444,26 @@ def _resolve_source_path(manifest_path: Path, source_path: str) -> Path:
 
 def _checked_operator_db_path(db_path: str | Path, *, allow_live_db: bool) -> Path:
     db = Path(_clean_required(str(db_path), "db_path")).expanduser()
-    if _same_path(db, DEFAULT_LIVE_DB_PATH) and not allow_live_db:
-        raise ValueError(
-            "PAI import refuses the default live database "
-            f"{DEFAULT_LIVE_DB_PATH}; use a representative test DB"
-        )
+    if not allow_live_db:
+        if _same_path(db, DEFAULT_LIVE_DB_PATH):
+            raise ValueError(
+                "PAI import refuses the default live database "
+                f"{DEFAULT_LIVE_DB_PATH}; use a representative test DB"
+            )
+        if _path_is_within(db, DEFAULT_LIVE_DB_PATH.parent):
+            raise ValueError(
+                "PAI import refuses live Mnemos root databases "
+                f"under {DEFAULT_LIVE_DB_PATH.parent}; use a representative test DB"
+            )
     return db
+
+
+def _db_path_requires_live_override(db_path: str | Path) -> bool:
+    db = Path(str(db_path)).expanduser()
+    return _same_path(db, DEFAULT_LIVE_DB_PATH) or _path_is_within(
+        db,
+        DEFAULT_LIVE_DB_PATH.parent,
+    )
 
 
 def _same_path(left: Path, right: Path) -> bool:
@@ -468,6 +482,31 @@ def _same_path(left: Path, right: Path) -> bool:
         return os.path.samefile(left_p, right_p)
     except (FileNotFoundError, OSError):
         return left_p.resolve() == right_p.resolve()
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    path_p = path.expanduser()
+    root_p = root.expanduser()
+    current = path_p
+    while True:
+        try:
+            if os.path.samefile(current, root_p):
+                return True
+        except (FileNotFoundError, OSError):
+            pass
+        if current == current.parent:
+            break
+        current = current.parent
+    try:
+        path_p.resolve().relative_to(root_p.resolve())
+        return True
+    except (OSError, ValueError):
+        pass
+    try:
+        path_p.absolute().relative_to(root_p.absolute())
+        return True
+    except ValueError:
+        return False
 
 
 def _backup_path(db: Path, job_id: str, backup_dir: str | Path | None) -> Path:

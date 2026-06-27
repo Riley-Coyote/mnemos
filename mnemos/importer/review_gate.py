@@ -729,7 +729,7 @@ def _marker_present(file: str, label: str, text: str) -> bool:
     if file.startswith("tests/") and label.startswith("Test"):
         return _test_class_has_proof(text, label)
     if file.startswith("tests/") and label == "row_map_targets_are_coherent":
-        return _test_function_has_proof(text, label)
+        return _test_method_has_proof(text, label)
     return label in _strip_python_comments(text)
 
 
@@ -741,7 +741,7 @@ def _test_function_has_proof(text: str, name: str) -> bool:
     if _module_has_skip_or_xfail(tree):
         return False
     empty_names = _empty_parametrize_names(tree)
-    for node in ast.walk(tree):
+    for node in getattr(tree, "body", []):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if node.name != name:
@@ -762,7 +762,7 @@ def _test_class_has_proof(text: str, name: str) -> bool:
     if _module_has_skip_or_xfail(tree):
         return False
     empty_names = _empty_parametrize_names(tree)
-    for node in ast.walk(tree):
+    for node in getattr(tree, "body", []):
         if not isinstance(node, ast.ClassDef) or node.name != name:
             continue
         if _has_skip_or_xfail(node.decorator_list) or _has_empty_parametrize(
@@ -778,7 +778,7 @@ def _test_class_has_proof(text: str, name: str) -> bool:
             and _body_has_substantive_proof(child.body)
             for child in node.body
         )
-    for node in ast.walk(tree):
+    for node in getattr(tree, "body", []):
         if not isinstance(node, ast.Assign):
             continue
         if not any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
@@ -790,6 +790,54 @@ def _test_class_has_proof(text: str, name: str) -> bool:
             and isinstance(value.value, ast.Name)
         ):
             return _test_class_has_proof(text, value.value.id)
+    return False
+
+
+def _test_method_has_proof(text: str, name: str) -> bool:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return False
+    if _module_has_skip_or_xfail(tree):
+        return False
+    empty_names = _empty_parametrize_names(tree)
+    collectible_classes = {
+        node.name
+        for node in getattr(tree, "body", [])
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test")
+    }
+    for node in getattr(tree, "body", []):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id.startswith("Test")
+            for target in node.targets
+        ):
+            continue
+        value = node.value
+        if (
+            isinstance(value, ast.Attribute)
+            and value.attr == "TestCase"
+            and isinstance(value.value, ast.Name)
+        ):
+            collectible_classes.add(value.value.id)
+    for node in getattr(tree, "body", []):
+        if not isinstance(node, ast.ClassDef) or node.name not in collectible_classes:
+            continue
+        if _has_skip_or_xfail(node.decorator_list) or _has_empty_parametrize(
+            node.decorator_list, empty_names=empty_names
+        ):
+            continue
+        for child in node.body:
+            if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if child.name != name:
+                continue
+            if _has_skip_or_xfail(child.decorator_list) or _has_empty_parametrize(
+                child.decorator_list, empty_names=empty_names
+            ):
+                return False
+            return _body_has_substantive_proof(child.body)
     return False
 
 
@@ -1059,11 +1107,12 @@ def _has_direct_persistence_write(line: str, aliases: set[str]) -> bool:
     receiver_match = re.search(r"\b(\w+)\.write_(?:text|bytes)\(", line)
     if receiver_match:
         receiver = receiver_match.group(1)
+        if receiver in aliases:
+            return True
         if receiver in _SAFE_WATCHER_WRITE_RECEIVERS:
             return False
         return (
-            receiver in aliases
-            or "state" in receiver.lower()
+            "state" in receiver.lower()
             or "plist" in receiver.lower()
             or receiver in {"target_path", "output_file"}
         )
@@ -1344,6 +1393,60 @@ def _has_enforcement_links(
     lowered = text.lower()
     if "documentation-only risk" in lowered:
         return True
+    contexts = _safety_claim_contexts(text)
+    if not contexts:
+        contexts = (text,)
+    return all(
+        _context_has_enforcement_links(context, file_texts=file_texts)
+        for context in contexts
+    )
+
+
+def _safety_claim_contexts(text: str) -> tuple[str, ...]:
+    lines = text.splitlines()
+    contexts: list[str] = []
+    seen: set[tuple[int, int, int, int]] = set()
+    for index, line in enumerate(lines):
+        if not _has_safety_claim(line):
+            continue
+        section_start, section_end = _markdown_section_bounds(lines, index)
+        near_start = max(0, index - 4)
+        near_end = min(len(lines), index + 5)
+        key = (section_start, section_end, near_start, near_end)
+        if key in seen:
+            continue
+        seen.add(key)
+        contexts.append(
+            "\n".join(
+                (
+                    "\n".join(lines[section_start:section_end]),
+                    "\n".join(lines[near_start:near_end]),
+                )
+            )
+        )
+    return tuple(contexts)
+
+
+def _markdown_section_bounds(lines: Sequence[str], index: int) -> tuple[int, int]:
+    start = 0
+    heading = re.compile(r"^\s{0,3}(#{1,6})\s+\S")
+    for cursor in range(index, -1, -1):
+        if heading.match(lines[cursor]):
+            start = cursor
+            break
+    end = len(lines)
+    for cursor in range(index + 1, len(lines)):
+        if heading.match(lines[cursor]):
+            end = cursor
+            break
+    return start, end
+
+
+def _context_has_enforcement_links(
+    text: str,
+    *,
+    file_texts: Mapping[str, str] | None = None,
+) -> bool:
     test_paths = re.findall(r"\btests/[A-Za-z0-9_./-]+\.py\b", text)
     code_paths = re.findall(r"\bmnemos/[A-Za-z0-9_./-]+\.py\b", text)
     dotted_modules = re.findall(

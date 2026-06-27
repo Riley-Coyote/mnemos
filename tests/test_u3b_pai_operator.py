@@ -360,3 +360,24 @@ def test_u3b_cli_refuses_default_live_db_without_override(tmp_path, capsys):
     assert result == 1
     assert "refuses the default live database" in err
     assert not artifact.exists()
+
+
+def test_u3b_operator_refuses_any_db_under_live_root(tmp_path, monkeypatch):
+    fake_live = tmp_path / ".mnemos" / "memory.db"
+    fake_live.parent.mkdir(parents=True)
+    monkeypatch.setattr(pai_operator, "DEFAULT_LIVE_DB_PATH", fake_live)
+    alternate_live = fake_live.parent / "alternate.db"
+
+    with pytest.raises(ValueError, match="refuses live Mnemos root"):
+        pai_operator._checked_operator_db_path(
+            alternate_live,
+            allow_live_db=False,
+        )
+
+    assert (
+        pai_operator._checked_operator_db_path(
+            alternate_live,
+            allow_live_db=True,
+        )
+        == alternate_live
+    )

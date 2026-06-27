@@ -129,6 +129,8 @@ _PROOF_CASES = [
     ("return-before-assert",   "def t():\n    return\n    assert True\n", False),
     ("nested-assert-only",     "def t():\n    def helper():\n        assert True\n", False),
     ("nested-skip-real-assert","def t():\n    def helper():\n        pytest.skip('x')\n    assert True\n", True),
+    ("nested-test-function",    "def outer():\n    def t():\n        assert True\n", False),
+    ("if-false-test-function",  "if False:\n    def t():\n        assert True\n", False),
     ("decorator-skip",         "import pytest\n@pytest.mark.skip\ndef t():\n    assert True\n", False),
     ("decorator-xfail",        "import pytest\n@pytest.mark.xfail\ndef t():\n    assert True\n", False),
     ("module-pytestmark-skip", "import pytest\npytestmark = pytest.mark.skip\ndef t():\n    assert True\n", False),
@@ -158,6 +160,23 @@ def test_proof_authenticity(cid, src, is_proof):
 )
 def test_proof_empty_parametrize_indirection(src):
     assert rg._test_function_has_proof(src, "t") is False
+
+
+def test_proof_class_inside_if_false_is_not_collectible():
+    src = "if False:\n    class TestRequired:\n        def test_x(self):\n            assert True\n"
+    assert rg._test_class_has_proof(src, "TestRequired") is False
+
+
+def test_state_machine_method_proof_requires_collectible_alias():
+    method = "class PaiLifecycleMachine:\n    def row_map_targets_are_coherent(self):\n        assert True\n"
+    assert rg._test_method_has_proof(method, "row_map_targets_are_coherent") is False
+    assert (
+        rg._test_method_has_proof(
+            method + "TestPaiLifecycleMachine = PaiLifecycleMachine.TestCase\n",
+            "row_map_targets_are_coherent",
+        )
+        is True
+    )
 
 
 def test_proof_matching_filename_no_assertions_flags():
@@ -274,6 +293,17 @@ def test_docs_real_enforcement_links_pass():
     assert not any(f.ident.startswith("RG-docs-risk") for f in findings)
 
 
+def test_docs_global_enforcement_links_do_not_satisfy_unlinked_claim():
+    findings = _findings(
+        changed_files=["README.md"],
+        file_texts=_file_texts(**{"README.md":
+            "# R\n\n## New Claim\nThe watcher refuses live writes.\n\n"
+            "context\ncontext\ncontext\ncontext\ncontext\n"
+            "## References\nSee tests/test_u3c_pai_watch_doctor.py and mnemos/importer/watcher.py\n"}),
+    )
+    assert any(f.file == "README.md" for f in findings)
+
+
 def test_docs_evasive_keyword_claim_flag():
     findings = _findings(
         changed_files=["docs/release-hardening.md"],
@@ -309,6 +339,7 @@ _WRITE_CASES = [
     ("path-open",           ('Path(args.state).open("w").write(x)',), True),
     ("jsondump-open",       ('json.dump(p, open(state_path, "w"))',), True),
     ("alias-from-assign",   ("cfg = state_path", "cfg.write_text(json.dumps(p))"), True),
+    ("safe-name-aliased",    ("source = state_path", "source.write_text(json.dumps(p))"), True),
     ("safe-tmp",            ("tmp.write_text(json.dumps(p))",), False),
     ("safe-source",         ("source.write_text(data)",), False),
 ]

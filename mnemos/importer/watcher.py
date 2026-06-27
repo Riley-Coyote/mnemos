@@ -22,6 +22,7 @@ from .operator import (
     PaiManifest,
     PaiOperatorRun,
     _checked_operator_db_path,
+    _db_path_requires_live_override,
     apply_pai_watch_manifest,
     load_pai_manifest,
     preview_pai_watch_manifest,
@@ -427,6 +428,12 @@ def _doctor_plist_check(
         return False, "watch plist must run watch-once with --apply"
     if "--allow-live-db" in args and not allow_live_db:
         return False, "plist opts into live DB without doctor allow_live_db"
+    if (
+        allow_live_db
+        and _db_path_requires_live_override(db_path)
+        and "--allow-live-db" not in args
+    ):
+        return False, "live DB plist must include --allow-live-db"
 
     expected_python = _resolve_python_executable(python_executable or args[0])
     if Path(args[0]).expanduser().resolve() != Path(expected_python).resolve():
@@ -796,17 +803,13 @@ def _validate_backup_keep(backup_keep: int) -> None:
 
 
 def _checked_doctor_db_path(db_path: str | Path, *, allow_live_db: bool) -> Path:
-    db = _checked_operator_db_path(db_path, allow_live_db=allow_live_db)
-    live_root = Path("~/.mnemos").expanduser().resolve()
-    try:
-        db.expanduser().resolve().relative_to(live_root)
-    except ValueError:
-        return db
-    if not allow_live_db:
+    db = Path(str(db_path)).expanduser()
+    if _db_path_requires_live_override(db) and not allow_live_db:
         raise ValueError(
             "PAI watch doctor refuses live ~/.mnemos databases; use a "
             "representative DB copy or pass --allow-live-db deliberately"
         )
+    db = _checked_operator_db_path(db_path, allow_live_db=allow_live_db)
     return db
 
 

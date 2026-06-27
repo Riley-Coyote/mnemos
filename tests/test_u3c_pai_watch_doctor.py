@@ -18,6 +18,7 @@ from mnemos.importer import (
     write_pai_watch_launchd_plist,
 )
 from mnemos.store.sqlite_store import EngramStore
+import mnemos.importer.operator as pai_operator
 import mnemos.importer.watcher as watcher_module
 
 
@@ -212,6 +213,45 @@ def test_u3c_watch_doctor_requires_backup_keep_in_plist(tmp_path):
     assert report.ok is False
     assert _check_status(report, "D5") == "FAIL"
     assert "missing --backup-keep" in next(
+        check.evidence for check in report.checks if check.ident == "D5"
+    )
+
+
+def test_u3c_watch_doctor_live_db_requires_matching_plist_flag(tmp_path, monkeypatch):
+    fake_live = tmp_path / ".mnemos" / "memory.db"
+    fake_live.parent.mkdir(parents=True)
+    monkeypatch.setattr(pai_operator, "DEFAULT_LIVE_DB_PATH", fake_live)
+    manifest, _source = _write_manifest(tmp_path)
+    db_path = fake_live.parent / "watch.db"
+    EngramStore(db_path).close()
+    paths = _doctor_paths(tmp_path)
+    plist = tmp_path / "watch.plist"
+    write_pai_watch_launchd_plist(
+        plist_path=plist,
+        manifest_path=manifest,
+        db_path=db_path,
+        backup_keep=2,
+        python_executable=sys.executable,
+        allow_live_db=True,
+        **paths,
+    )
+    payload = plistlib.loads(plist.read_bytes())
+    payload["ProgramArguments"].remove("--allow-live-db")
+    plist.write_bytes(plistlib.dumps(payload, sort_keys=True))
+
+    report = run_pai_watch_doctor(
+        manifest_path=manifest,
+        db_path=db_path,
+        backup_keep=2,
+        plist_path=plist,
+        python_executable=sys.executable,
+        allow_live_db=True,
+        **paths,
+    )
+
+    assert report.ok is False
+    assert _check_status(report, "D5") == "FAIL"
+    assert "must include --allow-live-db" in next(
         check.evidence for check in report.checks if check.ident == "D5"
     )
 

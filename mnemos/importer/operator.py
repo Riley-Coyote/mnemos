@@ -64,12 +64,20 @@ def load_pai_manifest(
 ) -> PaiManifest:
     """Load a JSON PAI import manifest into canonical import sources.
 
+    Source paths are resolved relative to the manifest unless already absolute,
+    and the resolved path must stay inside the manifest directory. Defaults can
+    supply agent/person/project scope and original PAI provenance for every
+    source, with per-source overrides when needed.
+
     Manifest shape:
 
     {
       "schema": "mnemos.pai_import.manifest.v1",
       "job_id": "u3b-pai-import",
       "defaults": {
+        "agent_id": "oliver",
+        "person_id": "david",
+        "project_scope": "pai",
         "original_substrate": "claude-opus-4-6",
         "original_timestamp": 1710000000
       },

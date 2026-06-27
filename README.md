@@ -434,9 +434,17 @@ mnemos pai-import watch-once --manifest ./pai-manifest.json --db-path ./test.db 
 mnemos pai-import watch-plist --manifest ./pai-manifest.json --db-path ./test.db \
                           --state ./pai-watch-state.json \
                           --artifact-dir ./pai-watch-artifacts \
-                          --backup-dir  ./pai-import-backups \
+                          --backup-dir ./pai-import-backups \
                           --backup-keep 24 \
                           --plist ~/Library/LaunchAgents/com.davidef.mnemos.duallife.plist
+mnemos pai-import watch-doctor --manifest ./pai-manifest.json --db-path ./test.db \
+                          --state ./pai-watch-state.json \
+                          --artifact-dir ./pai-watch-artifacts \
+                          --backup-dir ./pai-import-backups \
+                          --backup-keep 24 \
+                          --plist ~/Library/LaunchAgents/com.davidef.mnemos.duallife.plist
+mnemos pai-import review-gate --base-ref "$(git merge-base HEAD origin/main)" \
+                          --intent docs/u3c-step3-launch-intent.md
 ```
 
 Minimal manifest:
@@ -467,12 +475,16 @@ blank-line blocks otherwise. `--artifact` writes a preview/apply JSON artifact;
 `watch-once` writes artifacts under `--artifact-dir`. `watch-once --force`
 polls even when source fingerprints are unchanged.
 
-Every PAI import command refuses the default live database (`~/.mnemos/memory.db`)
-unless `--allow-live-db` is passed. `apply` and `watch-apply` take an
-integrity-checked SQLite backup before writing. `preview` and `watch-preview`
-open the DB read-only and never mutate state.
+Every DB-using PAI import command refuses the default live database
+(`~/.mnemos/memory.db`) and other databases under `~/.mnemos` unless
+`--allow-live-db` is passed. `apply` and `watch-apply` take an integrity-checked
+SQLite backup before writing. `preview` and `watch-preview` open the DB read-only
+and never mutate state. `watch-doctor` is the launch-readiness gate; `review-gate`
+is the diff/intent proof gate.
 Enforcement links: `mnemos/importer/operator.py`, `mnemos/importer/watcher.py`,
-`tests/test_u3b_pai_operator.py`, and `tests/test_u3c_pai_watch_doctor.py`.
+`mnemos/importer/review_gate.py`, `tests/test_u3b_pai_operator.py`,
+`tests/test_u3c_pai_watch_doctor.py`, and
+`tests/test_u3c_pai_review_gate.py`.
 
 Global options:
 

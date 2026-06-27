@@ -41,7 +41,7 @@ The doctor must return `Verdict: GREEN` before launchd activation.
 | ISA-U3C-001 | Manifest loads as a full watcher snapshot, including missing files as empty source snapshots. | `mnemos.importer.watcher.run_pai_watch_doctor` D0 | `tests/test_u3c_pai_watch_doctor.py` |
 | ISA-U3C-002 | Representative DB preview is read-only and byte-stable. | D1 uses `preview_pai_watch_manifest` and DB fingerprinting | `test_u3c_watch_doctor_passes_with_representative_db_and_plist` |
 | ISA-U3C-003 | State, artifact, backup, stdout, and stderr directories are writable before launch. | D2 and D5 directory probes | `test_u3c_watch_doctor_passes_with_representative_db_and_plist` |
-| ISA-U3C-004 | Backup retention is explicit and bounded. | `--backup-keep` on apply/watch/apply-once/plist; doctor D3 and D5 | `test_u3c_backup_keep_prunes_old_matching_backups` |
+| ISA-U3C-004 | Backup retention is explicit and bounded. | `--backup-keep` on apply/watch-apply/watch-once/watch-plist; doctor D3 and D5 | `test_u3c_backup_keep_prunes_old_matching_backups` |
 | ISA-U3C-005 | Python executable imports this checkout, not a stale clone. | D4 import check plus D5 WorkingDirectory/PYTHONPATH check | `test_u3c_watch_doctor_fails_stale_clone_plist` |
 | ISA-U3C-006 | launchd plist invokes `python -m mnemos.cli pai-import watch-once --apply` with absolute paths and matching retention. | D5 plist lint | `test_u3c_watch_doctor_requires_backup_keep_in_plist` |
 | ISA-U3C-007 | Static anti-criteria are absent: broad lifecycle deletes, unsafe NULL-baseline recovery text, non-atomic plist/state writes, time-window lifecycle selection, default-live mutation paths. | D6 static negative scan | `test_u3c_watch_doctor_passes_with_representative_db_and_plist` |
@@ -49,13 +49,14 @@ The doctor must return `Verdict: GREEN` before launchd activation.
 | ISA-U3C-009 | File deletion tombstones imported sections and preserves row-map/source/engram coherence. | D8 destructive delete probe | `test_u3c_watch_doctor_passes_with_representative_db_and_plist` |
 | ISA-U3C-010 | Crash after apply but before state write does not hide changed sources. | State advances only after `_write_watch_state`; replay remains detectable | `test_u3c_crash_before_state_write_does_not_hide_changed_source` |
 | ISA-U3C-011 | Generated lifecycle sequences preserve invariants after every step. | Hypothesis state machine with code-based invariants | `TestPaiLifecycleMachine` |
-| ISA-U3C-012 | Dangerous source diffs carry their matching proof surfaces before runtime tests are trusted. | `mnemos.importer.review_gate.run_pai_diff_review_gate` checks changed files against `docs/u3c-step3-launch-intent.md` | `tests/test_u3c_pai_review_gate.py` |
+| ISA-U3C-012 | Dangerous source diffs carry their matching proof surfaces before runtime tests are trusted. | `mnemos.importer.review_gate.run_pai_diff_review_gate` checks changed files against `docs/u3c-step3-launch-intent.md` | `tests/test_u3c_pai_review_gate.py`, `tests/test_u3c_pai_review_gate_attacks.py` |
 
 ## Enforcement Links
 
 Launch readiness is enforced by `mnemos/importer/watcher.py` and
 `mnemos/importer/review_gate.py`, with regressions in
-`tests/test_u3c_pai_watch_doctor.py` and `tests/test_u3c_pai_review_gate.py`.
+`tests/test_u3c_pai_watch_doctor.py`, `tests/test_u3c_pai_review_gate.py`, and
+`tests/test_u3c_pai_review_gate_attacks.py`.
 
 ## Anti-Criteria
 
@@ -114,13 +115,14 @@ UI gates into a local SQLite/launchd watcher.
 | `test_u3c_crash_before_state_write_does_not_hide_changed_source` | binary failure-injection test | Partial write recovery |
 | `TestPaiLifecycleMachine` | Hypothesis stateful test | Generated edit/delete/restore/delete-file sequences and invariants |
 | `tests/test_u3c_pai_review_gate.py` | diff-review gate tests | Missing proof surfaces, broad deletes, thin intent, doc taxonomy loss, and package-gate drift |
+| `tests/test_u3c_pai_review_gate_attacks.py` | adversarial diff-review tests | Previously found bypass classes for SQL scope, persistence writes, proof spoofing, and review-gate self-change |
 
 ## Verification
 
 Focused launch-gate eval:
 
 ```bash
-uv run --extra dev pytest -q tests/test_u3c_pai_review_gate.py
+uv run --extra dev pytest -q tests/test_u3c_pai_review_gate.py tests/test_u3c_pai_review_gate_attacks.py
 uv run --extra dev pytest -q tests/test_u3c_pai_watch_doctor.py
 ```
 
@@ -134,7 +136,8 @@ uv run --extra dev pytest -q \
   tests/test_u3c_pai_operator.py \
   tests/test_u3c_pai_watcher.py \
   tests/test_u3c_pai_watch_doctor.py \
-  tests/test_u3c_pai_review_gate.py
+  tests/test_u3c_pai_review_gate.py \
+  tests/test_u3c_pai_review_gate_attacks.py
 ```
 
 CLI smoke:

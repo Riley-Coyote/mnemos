@@ -89,11 +89,13 @@ Safety boundaries enforced by the importer:
 - `preview` and `watch-preview` open the DB read-only and never mutate state.
 - `apply` and `watch-apply` take an integrity-checked SQLite backup before
   writing, into the configured `--backup-dir`.
-- Every subcommand refuses the default live database (`~/.mnemos/memory.db`)
-  unless `--allow-live-db` is passed. The guard is inode-based so
-  case-insensitive path variants cannot bypass it.
-- Manifest source paths must stay inside the manifest directory; absolute
-  paths and `..`-escaping paths are rejected at load.
+- Every DB-using subcommand refuses the default live database
+  (`~/.mnemos/memory.db`) and other databases under `~/.mnemos` unless
+  `--allow-live-db` is passed. The guard is inode-based so case-insensitive
+  path variants cannot bypass it.
+- Manifest source paths must stay inside the manifest directory after
+  resolution; absolute paths are allowed only when they still resolve inside
+  that directory, and `..`-escaping paths are rejected at load.
 - The dual-life watcher (`watch-once` / `watch-plist`) advances its state only
   after a successful apply. Preview mode leaves state untouched. Missing source
   files are treated as an empty current snapshot so removed sections become
@@ -104,7 +106,9 @@ Safety boundaries enforced by the importer:
 - Imported beliefs carry `confidence_pending_review` and are excluded from
   default belief consumers until belief review clears the flag.
 - Enforcement links: `mnemos/importer/operator.py`, `mnemos/importer/watcher.py`,
-  `tests/test_u3b_pai_operator.py`, and `tests/test_u3c_pai_watch_doctor.py`.
+  `mnemos/importer/review_gate.py`, `tests/test_u3b_pai_operator.py`,
+  `tests/test_u3c_pai_watch_doctor.py`, and
+  `tests/test_u3c_pai_review_gate.py`.
 
 ## Correction and Forgetting
 

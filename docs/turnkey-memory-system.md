@@ -9,40 +9,39 @@ Mnemos gives an agent four cooperating surfaces:
 1. **Functional memory**: current task state, active corrections, commitments, preferences, and open questions.
 2. **Hypomnema**: durable scoped continuity for one human/project/agent relationship, still easy to revise.
 3. **Mnemos graph**: long-term engrams, connections, beliefs, decay, and reconsolidation.
-4. **Visibility**: context packets, review queue, status, and inline Mermaid snapshots.
+4. **Visibility**: context packets, health cards, recall, and optional SVG identity graphs.
 
 ## Default Session Loop
 
 At the beginning of a meaningful session:
 
 ```text
-mnemos_session_start
-mnemos_context_packet
+mnemos_context
+mnemos_introduce, if Mnemos asks for the agent's model/name
 ```
 
 During the session:
 
 ```text
-mnemos_functional_update
-mnemos_hypomnema_write or mnemos_hypomnema_revise
-mnemos_remember only for stable long-term memory
+mnemos_capture for stable preferences, decisions, project state, workflows, and corrections
+mnemos_recall before relying on prior-session memory
+mnemos_correct when remembered continuity is stale, wrong, superseded, or should be forgotten
 ```
 
 When the human asks to inspect memory:
 
 ```text
-mnemos_review_queue
-mnemos_visual_snapshot
-mnemos_status
+mnemos_health
+mnemos_context with include_graph=true, when the client can display visual artifacts
 ```
 
-At the end of the session:
+For explicit admin workflows, start advanced mode with `mnemos serve --mode
+advanced`; that surface still exposes direct functional-memory, hypomnema,
+belief, inspect, and consolidate tools.
 
-```text
-mnemos_session_close
-```
-
-That compresses active functional memory into hypomnema. Promotion into Mnemos remains explicit.
+Simple mode handles functional memory, hypomnema, and long-term promotion
+internally so the agent does not have to choose storage layers during normal
+conversation.
 
 ## Onboarding Walkthrough
 
@@ -56,7 +55,7 @@ The agent should walk the human through:
 6. Whether the substrate should run in the background.
 7. Optional LLM provider for richer memory processing.
 
-The setup wizard seeds:
+The onboarding ritual seeds:
 
 - foundational hypomnema about the relationship
 - active functional memory for onboarding
@@ -72,7 +71,8 @@ The setup wizard seeds:
 
 ## Inline Visual Content
 
-`mnemos_visual_snapshot` returns Markdown with Mermaid:
+`mnemos_context(include_graph=true)` returns the normal continuity packet plus
+an SVG identity graph artifact and structured graph data:
 
 ```mermaid
 flowchart LR
@@ -85,4 +85,6 @@ flowchart LR
   R --> H
 ```
 
-This lets the agent show the human what the memory system is doing inside the same chat session, without requiring a separate dashboard.
+This lets visual-capable clients show the human what the memory system is doing
+inside the same chat session, without requiring a separate dashboard. Advanced
+mode still has `mnemos_visual_snapshot` for Markdown/Mermaid inspection.

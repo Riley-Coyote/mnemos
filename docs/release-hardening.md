@@ -35,6 +35,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Wheel contains:
   - `mnemos/simple_runtime.py`
   - `mnemos/simple_mcp.py`
+  - `mnemos/importer/__init__.py`
   - `mnemos/importer/pai.py`
   - `mnemos/importer/operator.py`
   - `mnemos/importer/review_gate.py`
@@ -57,8 +58,8 @@ Use this checklist before publishing Mnemos or opening a release PR.
   (`EngramStore(read_only=True)` → `file:…?mode=ro`) and never mutate state.
 - `mnemos pai-import apply` and `watch-apply` take an integrity-checked
   SQLite backup before any write, into the configured `--backup-dir` (or
-  `<db>/pai-import-backups/` by default). `--backup-keep N` prunes older
-  matching PAI backups after each successful backup.
+  `pai-import-backups/` beside the DB by default). `--backup-keep N` prunes
+  older matching PAI backups after each successful backup.
 - `mnemos pai-import watch-doctor` is the Step 3 launch gate before launchd
   activation. It previews the real manifest read-only, fingerprints the
   representative DB across copy-based apply probes, copies DB/WAL/SHM before
@@ -72,14 +73,15 @@ Use this checklist before publishing Mnemos or opening a release PR.
   introduced, when the launch taxonomy disappears, or when release packaging
   omits a launch-critical module.
   Enforcement lives in `mnemos.importer.review_gate.run_pai_diff_review_gate`
-  with `tests/test_u3c_pai_review_gate.py`.
-- Every PAI import subcommand refuses the default live database
-  (`~/.mnemos/memory.db`) unless the operator passes `--allow-live-db`. The
-  guard uses inode equality so case-insensitive paths like
-  `~/.MNEMOS/memory.db` cannot bypass it.
+  with `tests/test_u3c_pai_review_gate.py` and
+  `tests/test_u3c_pai_review_gate_attacks.py`.
+- Every DB-using PAI import subcommand refuses the default live database
+  (`~/.mnemos/memory.db`) and other databases under `~/.mnemos` unless the
+  operator passes `--allow-live-db`. The guard uses inode equality so
+  case-insensitive paths like `~/.MNEMOS/memory.db` cannot bypass it.
 - Manifest source paths must stay inside the manifest directory (path
-  resolution + `relative_to` guard); absolute or `..`-escaping paths are
-  rejected at load.
+  resolution + `relative_to` guard); absolute paths are allowed only inside
+  that directory, and `..`-escaping paths are rejected at load.
 - `watch-once` advances state only after a successful apply. Preview mode
   leaves state untouched so an operator can inspect a change and still apply
   it later.
@@ -110,7 +112,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
 
 ```bash
 uv run --extra dev --extra mcp pytest -q
-uv run --extra mcp python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/importer/pai.py mnemos/importer/operator.py mnemos/importer/review_gate.py mnemos/importer/watcher.py
+uv run --extra mcp python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/importer/__init__.py mnemos/importer/pai.py mnemos/importer/operator.py mnemos/importer/review_gate.py mnemos/importer/watcher.py
 uv build
 uvx twine check dist/*
 git diff --check

@@ -103,6 +103,8 @@ Safety boundaries enforced by the importer:
   cannot silently rewrite imported identity material.
 - Imported beliefs carry `confidence_pending_review` and are excluded from
   default belief consumers until belief review clears the flag.
+- Enforcement links: `mnemos/importer/operator.py`, `mnemos/importer/watcher.py`,
+  `tests/test_u3b_pai_operator.py`, and `tests/test_u3c_pai_watch_doctor.py`.
 
 ## Correction and Forgetting
 

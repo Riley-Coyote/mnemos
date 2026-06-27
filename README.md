@@ -471,6 +471,8 @@ Every PAI import command refuses the default live database (`~/.mnemos/memory.db
 unless `--allow-live-db` is passed. `apply` and `watch-apply` take an
 integrity-checked SQLite backup before writing. `preview` and `watch-preview`
 open the DB read-only and never mutate state.
+Enforcement links: `mnemos/importer/operator.py`, `mnemos/importer/watcher.py`,
+`tests/test_u3b_pai_operator.py`, and `tests/test_u3c_pai_watch_doctor.py`.
 
 Global options:
 

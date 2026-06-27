@@ -237,7 +237,7 @@ def test_u3c_review_gate_rule_signature():
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
-    assert digest == "3228a414523d4ed802976316be0c9a2b622edeb570884027b93dd1c1cdcb993f"
+    assert digest == "c5b4eb6324b35e17e7267a9082015db242823f62d412da4edb8b9d1b551b510c"
 
 
 def test_u3c_review_gate_fails_watcher_change_without_test_diff():
@@ -523,6 +523,110 @@ def test_u3c_review_gate_fails_allow_live_db_true_outside_runtime_diff():
     )
 
     assert any("allow_live_db=True" in finding.description for finding in findings)
+
+
+def test_u3c_review_gate_allows_fake_live_db_opt_in_probe():
+    findings = _findings(
+        changed_files=["tests/test_live_db.py"],
+        diff_text=(
+            "diff --git a/tests/test_live_db.py b/tests/test_live_db.py\n"
+            "@@\n"
+            "+def test_operator_live_db_guard(tmp_path, monkeypatch):\n"
+            "+    fake_live = tmp_path / '.mnemos' / 'memory.db'\n"
+            "+    monkeypatch.setattr(pai_operator, 'DEFAULT_LIVE_DB_PATH', fake_live)\n"
+            "+    checked(path, allow_live_db=True)\n"
+        ),
+    )
+
+    assert not any("allow_live_db=True" in finding.description for finding in findings)
+
+
+def test_u3c_review_gate_allows_non_sql_dict_update_in_runtime_diff():
+    findings = _findings(
+        changed_files=["mnemos/core/belief.py"],
+        diff_text=(
+            "diff --git a/mnemos/core/belief.py b/mnemos/core/belief.py\n"
+            "@@\n"
+            "+data = dict(extra)\n"
+            "+data.update({\n"
+            "+    'timestamp': now,\n"
+            "+})\n"
+        ),
+    )
+
+    assert not any(finding.severity == "critical" for finding in findings)
+
+
+def test_u3c_review_gate_allows_multiline_identity_scoped_update():
+    findings = _findings(
+        changed_files=["mnemos/importer/pai.py", "tests/test_u3c_pai_watch.py"],
+        diff_text=(
+            "diff --git a/mnemos/importer/pai.py b/mnemos/importer/pai.py\n"
+            "@@\n"
+            "+conn.execute(\n"
+            "+    \"\"\"\n"
+            "+    UPDATE engrams\n"
+            "+    SET state = 'active',\n"
+            "+        content = ?\n"
+            "+    WHERE id = ?\n"
+            "+    \"\"\"\n"
+            "+)\n"
+        ),
+    )
+
+    assert not any(finding.severity == "critical" for finding in findings)
+
+
+def test_u3c_review_gate_allows_atomic_tmp_alias_write():
+    findings = _findings(
+        changed_files=["mnemos/importer/watcher.py", "tests/test_u3c_pai_watcher.py"],
+        diff_text=(
+            "diff --git a/mnemos/importer/watcher.py b/mnemos/importer/watcher.py\n"
+            "@@\n"
+            "+tmp = state_path.with_name('.state.tmp')\n"
+            "+tmp.write_text(json.dumps(payload), encoding='utf-8')\n"
+            "+tmp.replace(state_path)\n"
+        ),
+    )
+
+    assert not any("direct state/plist write" in finding.description for finding in findings)
+
+
+def test_u3c_review_gate_diff_docs_review_added_safety_claims_only():
+    findings = _findings(
+        changed_files=["README.md"],
+        file_texts=_file_texts(
+            **{
+                "README.md": "# R\nThe old safe path has no local enforcement links.\n"
+            }
+        ),
+        diff_text=(
+            "diff --git a/README.md b/README.md\n"
+            "@@\n"
+            "+Typo fix without a new claim.\n"
+        ),
+    )
+
+    assert not any(finding.ident.startswith("RG-docs-risk") for finding in findings)
+
+
+def test_u3c_review_gate_allows_explicit_doc_enforcement_links_anchor():
+    findings = _findings(
+        changed_files=["docs/release-hardening.md"],
+        file_texts=_file_texts(
+            **{
+                "docs/release-hardening.md": """
+# Release Hardening
+The watcher refuses live writes and verifies backups.
+
+## Enforcement Links
+Enforced by tests/test_u3c_pai_watch_doctor.py and mnemos/importer/watcher.py.
+"""
+            }
+        ),
+    )
+
+    assert not any(finding.ident.startswith("RG-docs-risk") for finding in findings)
 
 
 def test_u3c_review_gate_fails_thin_intent():

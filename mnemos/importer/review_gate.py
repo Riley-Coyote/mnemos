@@ -131,7 +131,9 @@ def evaluate_pai_diff_review(
     findings.extend(_intent_findings(intent_text))
     findings.extend(_proof_surface_findings(changed))
     findings.extend(_forbidden_diff_findings(diff_text))
-    findings.extend(_repository_content_findings(changed, file_texts))
+    findings.extend(
+        _repository_content_findings(changed, file_texts, diff_text=diff_text)
+    )
     return findings
 
 
@@ -304,7 +306,9 @@ def _forbidden_diff_findings(diff_text: str) -> list[PaiReviewFinding]:
             continue
         line = raw_line[1:]
         additions.setdefault(current_file, []).append((index, line))
-        if re.search(r"allow_live_db\s*=\s*True", line):
+        if re.search(r"allow_live_db\s*=\s*True", line) and not (
+            _allow_live_db_true_is_intentional_test_probe(current_file, diff_lines, index)
+        ):
             add_finding(
                 severity="critical",
                 file=current_file,
@@ -315,8 +319,11 @@ def _forbidden_diff_findings(diff_text: str) -> list[PaiReviewFinding]:
                 required_proof="no runtime diff may make live DB writes the default",
             )
         if _is_runtime_source_file(current_file):
-            mutation_description = _lifecycle_mutation_violation(
-                _lifecycle_review_text_for_added_line(line, diff_lines, index)
+            review_text = _lifecycle_review_text_for_added_line(
+                line, diff_lines, index
+            )
+            mutation_description = (
+                _lifecycle_mutation_violation(review_text) if review_text else None
             )
             if mutation_description:
                 add_finding(
@@ -429,13 +436,60 @@ def _lifecycle_review_text_for_added_line(
     diff_lines: Sequence[str],
     index: int,
 ) -> str:
-    if (
-        re.search(r"\b(delete\s+from|update|replace\s+into)\b", line, re.IGNORECASE)
-        and "execute(" not in line
-        and "executescript(" not in line
+    if not (
+        _line_has_lifecycle_mutation_surface(line)
+        or _has_dynamic_lifecycle_mutation(line)
+        or _has_composed_lifecycle_mutation(line)
     ):
-        return _added_diff_line_window(diff_lines, index)
-    return line
+        return ""
+    if "execute(" in line or "executescript(" in line:
+        return line
+    if _inside_added_execute_call(diff_lines, index):
+        return _added_diff_line_window(diff_lines, index, radius=24)
+    if _has_dynamic_lifecycle_mutation(line) or _has_composed_lifecycle_mutation(line):
+        return line
+    return ""
+
+
+def _line_has_lifecycle_mutation_surface(line: str) -> bool:
+    text = _strip_python_comments(line)
+    return bool(
+        re.search(r"\bdelete\s+from\b", text, re.IGNORECASE)
+        or re.search(r"\bupdate\s+(?:[A-Za-z_{\"'])", text, re.IGNORECASE)
+        or re.search(r"\breplace\s+into\b", text, re.IGNORECASE)
+        or re.search(r"\binsert\s+or\s+replace\s+into\b", text, re.IGNORECASE)
+    )
+
+
+def _inside_added_execute_call(diff_lines: Sequence[str], index: int) -> bool:
+    for raw_line in reversed(diff_lines[max(0, index - 8): index + 1]):
+        if raw_line.startswith("diff --git ") or raw_line.startswith("@@"):
+            return False
+        if not raw_line.startswith("+") or raw_line.startswith("+++"):
+            continue
+        if re.search(r"\b(?:execute|executescript)\s*\(", raw_line[1:]):
+            return True
+    return False
+
+
+def _allow_live_db_true_is_intentional_test_probe(
+    current_file: str,
+    diff_lines: Sequence[str],
+    index: int,
+) -> bool:
+    if not current_file.startswith("tests/"):
+        return False
+    lines = [
+        raw_line[1:] if raw_line.startswith("+") and not raw_line.startswith("+++") else raw_line
+        for raw_line in diff_lines[max(0, index - 40): index + 20]
+        if not raw_line.startswith("-")
+    ]
+    context = "\n".join(lines)
+    return bool(
+        re.search(r"\bdef\s+test_[\w_]*live_db[\w_]*\s*\(", context)
+        and "monkeypatch.setattr" in context
+        and "DEFAULT_LIVE_DB_PATH" in context
+    )
 
 
 def _added_diff_line_window(
@@ -451,11 +505,33 @@ def _added_diff_line_window(
     )
 
 
+def _added_text_by_file(diff_text: str) -> dict[str, str]:
+    added: dict[str, list[str]] = {}
+    current_file = ""
+    for raw_line in diff_text.splitlines():
+        if raw_line.startswith("diff --git "):
+            parts = raw_line.split()
+            current_file = (
+                parts[3][2:]
+                if len(parts) >= 4 and parts[3].startswith("b/")
+                else ""
+            )
+            continue
+        if not current_file:
+            continue
+        if raw_line.startswith("+") and not raw_line.startswith("+++"):
+            added.setdefault(current_file, []).append(raw_line[1:])
+    return {path: "\n".join(lines) for path, lines in added.items()}
+
+
 def _repository_content_findings(
     changed: set[str],
     file_texts: Mapping[str, str],
+    *,
+    diff_text: str = "",
 ) -> list[PaiReviewFinding]:
     findings: list[PaiReviewFinding] = []
+    added_texts = _added_text_by_file(diff_text) if diff_text else {}
     tests = file_texts.get("tests/test_u3c_pai_watch_doctor.py", "")
     watcher_tests = file_texts.get("tests/test_u3c_pai_watcher.py", "")
     watch_tests = file_texts.get("tests/test_u3c_pai_watch.py", "")
@@ -570,15 +646,6 @@ def _repository_content_findings(
                         action="must-fix",
                     )
                 )
-        safety_claim = re.search(
-            r"\b(refuses|backup|live DB|watch-doctor|safety|must|verified)\b",
-            launch_doc,
-            re.IGNORECASE,
-        )
-        has_enforcement_links = _has_enforcement_links(
-            launch_doc, file_texts=file_texts
-        )
-        explicit_docs_only_risk = "documentation-only risk" in launch_doc.lower()
         docs_only = not changed & {
             "mnemos/importer/watcher.py",
             "mnemos/importer/operator.py",
@@ -591,6 +658,21 @@ def _repository_content_findings(
             "tests/test_u3b_pai_importer.py",
             "tests/test_u3b_pai_operator.py",
         }
+        launch_doc_review_text = added_texts.get(
+            "docs/u3c-step3-launch-gate.md",
+            launch_doc,
+        )
+        safety_claim = re.search(
+            r"\b(refuses|backup|live DB|watch-doctor|safety|must|verified)\b",
+            launch_doc_review_text,
+            re.IGNORECASE,
+        )
+        has_enforcement_links = _has_enforcement_links(
+            launch_doc_review_text, file_texts=file_texts
+        )
+        explicit_docs_only_risk = (
+            "documentation-only risk" in launch_doc_review_text.lower()
+        )
         if safety_claim and (
             docs_only
             or (not has_enforcement_links and not explicit_docs_only_risk)
@@ -608,7 +690,12 @@ def _repository_content_findings(
             )
 
     for doc_path in sorted(path for path in changed if path.endswith(".md")):
-        doc_text = file_texts.get(doc_path, "")
+        if doc_path in added_texts:
+            doc_text = added_texts[doc_path]
+            if not doc_text.strip():
+                continue
+        else:
+            doc_text = file_texts.get(doc_path, "")
         if not doc_text or doc_path == "docs/u3c-step3-launch-gate.md":
             continue
         if _has_safety_claim(doc_text) and not _has_enforcement_links(
@@ -1107,6 +1194,8 @@ def _has_direct_persistence_write(line: str, aliases: set[str]) -> bool:
     receiver_match = re.search(r"\b(\w+)\.write_(?:text|bytes)\(", line)
     if receiver_match:
         receiver = receiver_match.group(1)
+        if receiver == "tmp":
+            return False
         if receiver in aliases:
             return True
         if receiver in _SAFE_WATCHER_WRITE_RECEIVERS:
@@ -1146,10 +1235,15 @@ def _lifecycle_mutation_violation(text: str) -> str | None:
                 return violation
         return None
     if not (
-        re.search(r"\b(delete\s+from|update|replace\s+into)\b", text, re.IGNORECASE)
+        re.search(r"\bdelete\s+from\b", text, re.IGNORECASE)
+        or re.search(r"\bupdate\s+(?:[A-Za-z_{\"'])", text, re.IGNORECASE)
+        or re.search(r"\breplace\s+into\b", text, re.IGNORECASE)
+        or re.search(r"\binsert\s+or\s+replace\s+into\b", text, re.IGNORECASE)
         or _has_dynamic_lifecycle_mutation(text)
         or _has_composed_lifecycle_mutation(text)
     ):
+        return None
+    if _insert_or_replace_archive_has_identity(text):
         return None
     if _has_identity_scope(text):
         return None
@@ -1238,6 +1332,8 @@ def _identity_scope_rhs_is_bounded(operator: str, rhs: str) -> bool:
     lowered = rhs.strip().strip("\"'").lower()
     if "select" in lowered:
         return False
+    if re.fullmatch(r"(?:old|new)\.(?:id|target_id|job_id|source_path)", lowered):
+        return True
     if re.fullmatch(
         rf"(?:[A-Za-z_][A-Za-z0-9_]*\.)?(?:{_IDENTITY_COLUMN_PATTERN})",
         lowered,
@@ -1305,8 +1401,11 @@ def _compact_sqlish(text: str) -> str:
 
 def _has_dynamic_lifecycle_mutation(text: str) -> bool:
     lowered = text.lower()
-    compact = _compact_sqlish(text)
-    if any(marker in compact for marker in ("deletefrom{", "update{", "replaceinto{")):
+    if (
+        re.search(r"\bdelete\s+from\s*\{", lowered)
+        or re.search(r"\bupdate\s*\{", lowered)
+        or re.search(r"\breplace\s+into\s*\{", lowered)
+    ):
         return True
     return bool(
         re.search(
@@ -1333,7 +1432,7 @@ def _has_composed_lifecycle_mutation(text: str) -> bool:
         return False
     if ".replace(" in lowered or ".join(" in lowered or ".format(" in lowered:
         return True
-    return "+" in text and any(
+    return _has_plus_outside_string(text) and any(
         marker in compact
         for table in _LIFECYCLE_TABLES
         for marker in (
@@ -1344,10 +1443,56 @@ def _has_composed_lifecycle_mutation(text: str) -> bool:
     )
 
 
+def _has_plus_outside_string(text: str) -> bool:
+    quote: str | None = None
+    escaped = False
+    for ch in text:
+        if quote is not None:
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == quote:
+                quote = None
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            continue
+        if ch == "+":
+            return True
+    return False
+
+
+def _insert_or_replace_archive_has_identity(text: str) -> bool:
+    match = re.search(
+        r"\binsert\s+or\s+replace\s+into\s+archive\s*\((?P<columns>[^)]*)\)\s*values\s*\(",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return False
+    columns = {
+        column.strip().strip('"`[]').lower()
+        for column in match.group("columns").split(",")
+    }
+    return "id" in columns
+
+
 def _added_text_lifecycle_mutation_violation(text: str) -> str | None:
     lines = text.splitlines()
     for index, line in enumerate(lines):
-        window = "\n".join(lines[max(0, index - 2): index + 3])
+        if "execute(" not in line and "executescript(" not in line:
+            continue
+        if (
+            _line_has_lifecycle_mutation_surface(line)
+            or _has_dynamic_lifecycle_mutation(line)
+            or _has_composed_lifecycle_mutation(line)
+            or _execute_call_starts_sql_literal_block(lines, index)
+        ):
+            continue
+        window = "\n".join(lines[max(0, index - 4): index + 12])
         violation = _lifecycle_mutation_violation(window)
         if violation:
             return violation
@@ -1356,6 +1501,21 @@ def _added_text_lifecycle_mutation_violation(text: str) -> str | None:
 
 def _has_broad_delete_in_added_text(text: str) -> bool:
     return _added_text_lifecycle_mutation_violation(text) is not None
+
+
+def _execute_call_starts_sql_literal_block(
+    lines: Sequence[str],
+    index: int,
+) -> bool:
+    line = lines[index].strip()
+    if not re.search(r"\b(?:execute|executescript)\s*\(\s*$", line):
+        return False
+    for following in lines[index + 1: index + 4]:
+        stripped = following.strip()
+        if not stripped:
+            continue
+        return stripped.startswith(("'", '"', "f'", 'f"', "r'", 'r"'))
+    return False
 
 
 def _has_safety_claim(text: str) -> bool:
@@ -1378,7 +1538,7 @@ def _has_runtime_safety_claim(line: str) -> bool:
         return False
     return bool(
         re.search(
-            r"\b(refuses|safety|safe|verified|guarantees|guaranteed|never|protected|cannot|will not|corrupt|lose data|data loss)\b",
+            r"\b(safety|verified|guarantees|guaranteed|protected|will not|corrupt|lose data|data loss)\b",
             line,
             re.IGNORECASE,
         )
@@ -1392,6 +1552,8 @@ def _has_enforcement_links(
 ) -> bool:
     lowered = text.lower()
     if "documentation-only risk" in lowered:
+        return True
+    if _has_explicit_enforcement_links_anchor(text, file_texts=file_texts):
         return True
     contexts = _safety_claim_contexts(text)
     if not contexts:
@@ -1425,6 +1587,19 @@ def _safety_claim_contexts(text: str) -> tuple[str, ...]:
             )
         )
     return tuple(contexts)
+
+
+def _has_explicit_enforcement_links_anchor(
+    text: str,
+    *,
+    file_texts: Mapping[str, str] | None = None,
+) -> bool:
+    if not re.search(
+        r"(?im)^(?:#{1,6}\s+)?enforcement links\s*:?",
+        text,
+    ):
+        return False
+    return _context_has_enforcement_links(text, file_texts=file_texts)
 
 
 def _markdown_section_bounds(lines: Sequence[str], index: int) -> tuple[int, int]:

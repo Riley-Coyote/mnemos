@@ -51,6 +51,12 @@ The doctor must return `Verdict: GREEN` before launchd activation.
 | ISA-U3C-011 | Generated lifecycle sequences preserve invariants after every step. | Hypothesis state machine with code-based invariants | `TestPaiLifecycleMachine` |
 | ISA-U3C-012 | Dangerous source diffs carry their matching proof surfaces before runtime tests are trusted. | `mnemos.importer.review_gate.run_pai_diff_review_gate` checks changed files against `docs/u3c-step3-launch-intent.md` | `tests/test_u3c_pai_review_gate.py` |
 
+## Enforcement Links
+
+Launch readiness is enforced by `mnemos/importer/watcher.py` and
+`mnemos/importer/review_gate.py`, with regressions in
+`tests/test_u3c_pai_watch_doctor.py` and `tests/test_u3c_pai_review_gate.py`.
+
 ## Anti-Criteria
 
 The gate fails if any of these are true:

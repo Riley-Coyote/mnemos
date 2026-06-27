@@ -10,6 +10,7 @@
 - Consolidation and substrate passes now honor the new flags precisely: decay and archival skip `decay_protected` or unauthorized rows, softening and voice exemplars skip `softening_protected` / `voice_exemplar_eligible` / unauthorized rows, connection discovery and substrate handlers stay within authorized same-agent rows, and the substrate tick decay/softening SQL is now agent-scoped.
 - Imported beliefs set `needs_review` and `confidence_pending_review`; default `get_beliefs()` consumers exclude pending-confidence rows until belief review explicitly opts in and clears the pending flags.
 - `IdentityProfile` reflection excludes PAI routing tags (`pai-import`, `identity-kernel`, `david-context`, `growth-substrate`, `belief`, `hypomnema`) from persistent-concern counts so an import does not surface as "Oliver's persistent concern is being imported."
+- Enforcement links: `mnemos/importer/watcher.py`, `mnemos/importer/review_gate.py`, `tests/test_u3c_pai_watch_doctor.py`, and `tests/test_u3c_pai_review_gate.py`.
 
 ### Simple Mode Magic UX (5 → 7 tools)
 - Onboarding ritual — a fresh scope's first context packet walks the agent through a short get-to-know-you script (name, current work, durable facts); stores that predate onboarding are grandfathered and never see it

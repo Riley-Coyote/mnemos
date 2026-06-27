@@ -42,6 +42,13 @@ The fundamental unit of memory. Each engram has:
 - **State lifecycle**: Active → consolidating → dormant → archived
 - **Resolution**: High → low (details fade through softening, like human memory)
 - **Full version history**: Every reconsolidation is tracked
+- **PAI import controls** (schema v4/v5): `decay_protected`, `softening_protected`,
+  `consolidation_authorized`, `voice_exemplar_eligible`, `original_substrate`,
+  `original_timestamp`. Decay skips `decay_protected` rows, softening skips
+  `softening_protected` rows and filters voice exemplars through
+  `voice_exemplar_eligible`, and consolidation/substrate mutation paths require
+  `consolidation_authorized` so imported identity material is not silently
+  rewritten by background maintenance.
 
 ### Connections
 
@@ -59,6 +66,11 @@ Higher-order knowledge structures extracted from patterns across engrams:
 - Domain categorization (engineering, social, preferences, etc.)
 - Stagnant beliefs get stress-tested during deep consolidation
 - Full revision history
+- PAI import metadata: `tier` (foundational | operational | tactical),
+  `needs_review`, and `confidence_pending_review` mark beliefs whose
+  upstream source has changed but has not been re-reviewed by the operator.
+  Default `get_beliefs()` consumers exclude pending-confidence beliefs;
+  belief review opts in so it can resolve them and clear the pending flags.
 
 ### Encoding Pipeline
 

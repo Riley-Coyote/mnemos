@@ -35,7 +35,12 @@ class ModulatorState:
         return 0.4 + (self.openness * 0.6)
 
 
-def compute_modulators(db_path: str, recent_window_hours: int = 24) -> ModulatorState:
+def compute_modulators(
+    db_path: str,
+    recent_window_hours: int = 24,
+    agent_id: str | None = None,
+    require_consolidation_authorized: bool = False,
+) -> ModulatorState:
     """Compute modulator values from the memory graph.
 
     Weights recent activity (last N hours) heavily to make modulators
@@ -47,31 +52,83 @@ def compute_modulators(db_path: str, recent_window_hours: int = 24) -> Modulator
     now = datetime.now(timezone.utc)
     recent_cutoff = (now - timedelta(hours=recent_window_hours)).isoformat()
 
+    predicates = ["state='active'"]
+    params: list[str] = []
+    if agent_id is not None:
+        predicates.append("owner_agent_id = ?")
+        params.append(agent_id)
+    if require_consolidation_authorized:
+        predicates.append("consolidation_authorized = 1")
+    engram_where = " AND ".join(predicates)
+
+    def count_connections(formed_after: str | None = None) -> int:
+        if agent_id is None and not require_consolidation_authorized:
+            if formed_after is None:
+                return conn.execute("SELECT COUNT(*) FROM connections").fetchone()[0]
+            return conn.execute(
+                "SELECT COUNT(*) FROM connections WHERE formed_at > ?",
+                (formed_after,),
+            ).fetchone()[0]
+
+        src_predicates = ["src.state='active'"]
+        dst_predicates = ["dst.state='active'"]
+        connection_params: list[str] = []
+        if agent_id is not None:
+            src_predicates.append("src.owner_agent_id = ?")
+            connection_params.append(agent_id)
+            dst_predicates.append("dst.owner_agent_id = ?")
+            connection_params.append(agent_id)
+        if require_consolidation_authorized:
+            src_predicates.append("src.consolidation_authorized = 1")
+            dst_predicates.append("dst.consolidation_authorized = 1")
+
+        connection_predicates = [
+            *src_predicates,
+            *dst_predicates,
+        ]
+        if formed_after is not None:
+            connection_predicates.append("c.formed_at > ?")
+            connection_params.append(formed_after)
+
+        return conn.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM connections c
+            JOIN engrams src ON src.id = c.source_id
+            JOIN engrams dst ON dst.id = c.target_id
+            WHERE {" AND ".join(connection_predicates)}
+            """,
+            connection_params,
+        ).fetchone()[0]
+
     # ── Total counts ──
     total_engrams = conn.execute(
-        "SELECT COUNT(*) FROM engrams WHERE state='active'"
+        f"SELECT COUNT(*) FROM engrams WHERE {engram_where}",
+        params,
     ).fetchone()[0]
-    total_connections = conn.execute(
-        "SELECT COUNT(*) FROM connections"
-    ).fetchone()[0]
+    total_connections = count_connections()
 
     # ── Recent activity ──
     recent_engrams = conn.execute(
-        "SELECT COUNT(*) FROM engrams WHERE state='active' AND created_at > ?",
-        (recent_cutoff,)
+        f"SELECT COUNT(*) FROM engrams WHERE {engram_where} AND created_at > ?",
+        (*params, recent_cutoff),
     ).fetchone()[0]
-    recent_connections = conn.execute(
-        "SELECT COUNT(*) FROM connections WHERE formed_at > ?",
-        (recent_cutoff,)
-    ).fetchone()[0]
-
     # ── Average vividness (accessibility * strength) ──
     avg_vividness = conn.execute(
-        "SELECT AVG(accessibility * strength) FROM engrams WHERE state='active'"
+        f"SELECT AVG(accessibility * strength) FROM engrams WHERE {engram_where}",
+        params,
     ).fetchone()[0] or 0.25
 
     # ── Belief stability ──
-    belief_count = conn.execute("SELECT COUNT(*) FROM beliefs").fetchone()[0]
+    belief_predicates = ["superseded_by IS NULL", "confidence_pending_review = 0"]
+    belief_params: list[str] = []
+    if agent_id is not None:
+        belief_predicates.append("agent_id = ?")
+        belief_params.append(agent_id)
+    belief_count = conn.execute(
+        f"SELECT COUNT(*) FROM beliefs WHERE {' AND '.join(belief_predicates)}",
+        belief_params,
+    ).fetchone()[0]
 
     conn.close()
 

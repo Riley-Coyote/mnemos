@@ -181,3 +181,49 @@ def test_tiny_memory_keeps_original_rather_than_inflating(store):
     # Nothing to shed: conservation keeps the original instead of an
     # "impression" boilerplate that would be longer than the memory itself.
     assert softened.content == "ok then."
+
+
+def test_lesson_reinforcement_skips_unauthorized_and_other_agent(store):
+    impact = "shared durable lesson about calibration"
+    fading = _engram(
+        AGENT_A,
+        "On June 3rd I learned the shared durable lesson about calibration from trace review",
+        accessibility=0.45,
+        impact=impact,
+    )
+    unauthorized = Engram(
+        content=impact,
+        content_at_encoding=impact,
+        kind=EngramKind.PROCEDURAL,
+        tags=["lesson"],
+        impact=impact,
+        owner_agent_id=AGENT_A,
+        consolidation_authorized=False,
+        strength=0.2,
+        stability=0.2,
+    )
+    other_agent = Engram(
+        content=impact,
+        content_at_encoding=impact,
+        kind=EngramKind.PROCEDURAL,
+        tags=["lesson"],
+        impact=impact,
+        owner_agent_id=AGENT_B,
+        strength=0.3,
+        stability=0.3,
+    )
+    for engram in (fading, unauthorized, other_agent):
+        store.save_engram(engram)
+
+    stats = run_softening_pass(store, {}, None, agent_id=AGENT_A)
+
+    assert stats["lessons_reinforced"] == 0
+    assert stats["lessons_created"] == 1
+    unchanged_unauthorized = store.get_engram(unauthorized.id)
+    unchanged_other_agent = store.get_engram(other_agent.id)
+    assert unchanged_unauthorized.strength == pytest.approx(0.2)
+    assert unchanged_unauthorized.stability == pytest.approx(0.2)
+    assert unchanged_unauthorized.access_count == 0
+    assert unchanged_other_agent.strength == pytest.approx(0.3)
+    assert unchanged_other_agent.stability == pytest.approx(0.3)
+    assert unchanged_other_agent.access_count == 0

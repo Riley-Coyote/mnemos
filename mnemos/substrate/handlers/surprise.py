@@ -11,7 +11,7 @@ import json
 import logging
 import os
 
-from ..events import SubstrateEvent, EventType
+from ..events import SubstrateEvent
 from ..config import SubstrateConfig
 from ..modulators import ModulatorState
 
@@ -36,6 +36,11 @@ def handle(
 
     engram = store.get_engram(engram_id)
     if not engram:
+        return produced_events
+    if (
+        engram.owner_agent_id != config.agent_id
+        or not engram.consolidation_authorized
+    ):
         return produced_events
 
     agent_name = config.agent_name
@@ -87,6 +92,7 @@ Respond with:
         impact=f"Expectation violated: {expectation}. {reflection}",
         kind="emotional",
         tags=["surprise", "reflection"],
+        agent_id=config.agent_id,
         skip_surprise_detection=False,  # Surprise CAN chain — it's the original signal
     )
 

@@ -11,15 +11,13 @@ Dedup gates (matching wandering handler pattern):
   3. Time window — no two dreams within 1 hour
 """
 
-import hashlib
 import json
 import logging
 import sqlite3
 import os
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
+from datetime import datetime, timezone
 
-from ..events import SubstrateEvent, EventType
+from ..events import SubstrateEvent
 from ..config import SubstrateConfig
 from ..modulators import ModulatorState
 
@@ -46,16 +44,24 @@ def handle(
     softened = store.get_engram(softened_id)
     if not softened:
         return produced_events
+    if (
+        softened.owner_agent_id != config.agent_id
+        or not softened.consolidation_authorized
+    ):
+        return produced_events
 
     db_path = os.path.expanduser(config.db_path)
     conn = sqlite3.connect(db_path)
+    agent_id = config.agent_id
 
     # ── Gate 1: Count throttle ──
     dream_count = conn.execute("""
         SELECT COUNT(*) FROM engrams
         WHERE state='active' AND content LIKE '%[dream]%'
+        AND owner_agent_id = ?
+        AND consolidation_authorized = 1
         AND created_at > datetime('now', '-7 days')
-    """).fetchone()[0]
+    """, (agent_id,)).fetchone()[0]
 
     max_dreams = config.max_dreams_per_week
     if dream_count >= max_dreams:
@@ -68,8 +74,10 @@ def handle(
     latest_dream = conn.execute("""
         SELECT created_at FROM engrams
         WHERE state='active' AND content LIKE '%[dream]%'
+        AND owner_agent_id = ?
+        AND consolidation_authorized = 1
         ORDER BY created_at DESC LIMIT 1
-    """).fetchone()
+    """, (agent_id,)).fetchone()
 
     if latest_dream:
         try:
@@ -88,10 +96,13 @@ def handle(
     # Find a vivid memory to collide with
     rows = conn.execute("""
         SELECT id, content, impact FROM engrams
-        WHERE state='active' AND id != ?
+        WHERE state='active'
+          AND owner_agent_id = ?
+          AND consolidation_authorized = 1
+          AND id != ?
         ORDER BY (accessibility * strength) DESC
         LIMIT 5
-    """, (softened_id,)).fetchall()
+    """, (agent_id, softened_id)).fetchall()
     conn.close()
 
     if not rows:
@@ -102,6 +113,11 @@ def handle(
     # Check vividness difference meets threshold
     vivid_engram = store.get_engram(vivid_id)
     if not vivid_engram:
+        return produced_events
+    if (
+        vivid_engram.owner_agent_id != config.agent_id
+        or not vivid_engram.consolidation_authorized
+    ):
         return produced_events
 
     softened_vividness = softened.accessibility * softened.strength
@@ -168,7 +184,13 @@ If something does emerge, respond with:
                 if score >= EMBEDDING_SIMILARITY_THRESHOLD:
                     check_conn = sqlite3.connect(db_path)
                     row = check_conn.execute(
-                        "SELECT content FROM engrams WHERE id = ?", (engram_id,)
+                        """
+                        SELECT content FROM engrams
+                        WHERE id = ?
+                          AND owner_agent_id = ?
+                          AND consolidation_authorized = 1
+                        """,
+                        (engram_id, agent_id),
                     ).fetchone()
                     check_conn.close()
                     if row and "[dream]" in row[0]:
@@ -192,6 +214,7 @@ If something does emerge, respond with:
         impact=significance,
         kind="episodic",
         tags=["dream", "collision"],
+        agent_id=agent_id,
         skip_surprise_detection=True,
     )
 

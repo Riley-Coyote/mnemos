@@ -10,6 +10,8 @@ Use this checklist before publishing Mnemos or opening a release PR.
   - `mnemos_recall`
   - `mnemos_correct`
   - `mnemos_maintain`
+  - `mnemos_introduce`
+  - `mnemos_health`
 - Advanced mode preserves the existing admin tools.
 - Injected FastMCP context parameters are not exposed in public tool schemas.
 - Sampling is optional and occurs only inside an active client request.
@@ -33,6 +35,11 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Wheel contains:
   - `mnemos/simple_runtime.py`
   - `mnemos/simple_mcp.py`
+  - `mnemos/importer/__init__.py`
+  - `mnemos/importer/pai.py`
+  - `mnemos/importer/operator.py`
+  - `mnemos/importer/review_gate.py`
+  - `mnemos/importer/watcher.py`
   - `templates/SOUL.md`
   - `templates/IDENTITY.md`
 - Package metadata passes `twine check`.
@@ -45,11 +52,67 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Scope isolation is tested across multiple agents.
 - Correction/forget behavior is documented.
 
+## PAI Importer And Dual-Life Watcher
+
+- `mnemos pai-import preview` and `watch-preview` open the SQLite DB read-only
+  (`EngramStore(read_only=True)` → `file:…?mode=ro`) and never mutate state.
+- `mnemos pai-import apply` and `watch-apply` take an integrity-checked
+  SQLite backup before any write, into the configured `--backup-dir` (or
+  `pai-import-backups/` beside the DB by default). `--backup-keep N` prunes
+  older matching PAI backups after each successful backup.
+- `mnemos pai-import watch-doctor` is the Step 3 launch gate before launchd
+  activation. It previews the real manifest read-only, fingerprints the
+  representative DB across copy-based apply probes, copies DB/WAL/SHM before
+  applying, verifies backup `PRAGMA integrity_check`, performs a backup
+  restore/open drill, lints launchd plist paths/env/logs/retention, runs static
+  negative lifecycle checks, and refuses live `~/.mnemos` DB paths unless
+  explicitly allowed.
+- `mnemos pai-import review-gate` is the Step 3 diff gate. It reviews changed
+  files against `docs/u3c-step3-launch-intent.md` and fails when dangerous
+  source changes lack matching proof surfaces, when broad lifecycle deletes are
+  introduced, when the launch taxonomy disappears, or when release packaging
+  omits a launch-critical module.
+  Enforcement lives in `mnemos.importer.review_gate.run_pai_diff_review_gate`
+  with `tests/test_u3c_pai_review_gate.py` and
+  `tests/test_u3c_pai_review_gate_attacks.py`.
+- Every DB-using PAI import subcommand refuses the default live database
+  (`~/.mnemos/memory.db`) and other databases under `~/.mnemos` unless the
+  operator passes `--allow-live-db`. The guard uses inode equality so
+  case-insensitive paths like `~/.MNEMOS/memory.db` cannot bypass it.
+- Manifest source paths must stay inside the manifest directory (path
+  resolution + `relative_to` guard); absolute paths are allowed only inside
+  that directory, and `..`-escaping paths are rejected at load.
+- `watch-once` advances state only after a successful apply. Preview mode
+  leaves state untouched so an operator can inspect a change and still apply
+  it later.
+- Missing source files or removed source sections are handled as explicit
+  watcher lifecycle actions: imported engrams are tombstoned, imported
+  hypomnema entries are deactivated without a successor, and imported beliefs
+  are flagged `needs_review` / `confidence_pending_review` without changing
+  their content or confidence.
+- `watch-plist` writes the launchd plist atomically (temp file + `rename`),
+  resolves the configured Python interpreter on `PATH`, asserts the
+  interpreter can `import mnemos.cli` against the repo, and bakes absolute
+  paths for manifest, DB, state, artifact, and backup directories into the
+  generated `ProgramArguments`. Loading the plist with `launchctl` remains
+  an explicit operator action; `watch-plist` only writes the file.
+- Default `get_beliefs()` consumers exclude `confidence_pending_review` rows;
+  belief review is the explicit opt-in path that can clear pending review,
+  including no-op acceptance.
+- Error messages that mention recovery actions are probed against actual
+  behavior. Recovery steps that would destroy operator hand-edits or in-flight
+  state must be removed from user-facing text, even when the underlying code
+  path is harmless.
+- `IdentityProfile` excludes PAI routing tags (`pai-import`,
+  `identity-kernel`, `david-context`, `growth-substrate`, `belief`,
+  `hypomnema`) from persistent-concern counts so an import does not surface
+  as the agent's persistent concern.
+
 ## Verification Commands
 
 ```bash
 uv run --extra dev --extra mcp pytest -q
-uv run --extra mcp python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py
+uv run --extra mcp python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/importer/__init__.py mnemos/importer/pai.py mnemos/importer/operator.py mnemos/importer/review_gate.py mnemos/importer/watcher.py
 uv build
 uvx twine check dist/*
 git diff --check

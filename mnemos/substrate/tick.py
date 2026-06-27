@@ -1,4 +1,3 @@
-from __future__ import annotations
 """
 Substrate — consolidation daemon for the Mnemos memory system.
 
@@ -12,17 +11,19 @@ This is the background process that keeps the memory graph alive:
 Runs via cron every 4 hours. Each tick is a complete cycle.
 """
 
+from __future__ import annotations
+
 import sys
 import os
 import json
 import logging
 import sqlite3
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import datetime, timezone
 
 from .events import SubstrateEvent, EventType
 from .config import SubstrateConfig
-from .modulators import compute_modulators, ModulatorState
+from .handlers import reflection, dreaming, insight, surprise, wandering, initiation
+from .modulators import compute_modulators
 
 from mnemos.store.sqlite_store import EngramStore
 from mnemos.store.embedding_index import EmbeddingIndex
@@ -47,9 +48,6 @@ try:
     from mnemos.llm import create_client
 except ImportError:
     create_client = None
-
-# Handler registry: event_type -> handler module
-from .handlers import reflection, dreaming, insight, surprise, wandering, initiation
 
 HANDLER_MAP = {
     EventType.BELIEF_CONTRADICTED: reflection,
@@ -119,6 +117,8 @@ class Substrate:
         modulators = compute_modulators(
             self.db_path,
             recent_window_hours=self.config.recent_window_hours,
+            agent_id=self.config.agent_id,
+            require_consolidation_authorized=True,
         )
         log.info(
             f"Modulators: arousal={modulators.arousal:.2f} openness={modulators.openness:.2f} "
@@ -199,8 +199,11 @@ class Substrate:
             SET accessibility = MAX(0.05, accessibility - ?),
                 strength = MAX(0.05, strength - ? * 0.5)
             WHERE state = 'active'
+              AND owner_agent_id = ?
               AND accessibility > 0.1
-        """, (self.config.decay_rate, self.config.decay_rate))
+              AND decay_protected = 0
+              AND consolidation_authorized = 1
+        """, (self.config.decay_rate, self.config.decay_rate, self.config.agent_id))
         decay_count = decayed.rowcount
         conn.commit()
 
@@ -208,11 +211,14 @@ class Substrate:
         softened = conn.execute("""
             SELECT id FROM engrams
             WHERE state = 'active'
+              AND owner_agent_id = ?
               AND (accessibility * strength) < 0.15
               AND (accessibility * strength) > 0.01
+              AND softening_protected = 0
+              AND consolidation_authorized = 1
             ORDER BY RANDOM()
             LIMIT 3
-        """).fetchall()
+        """, (self.config.agent_id,)).fetchall()
         conn.close()
 
         for row in softened:
@@ -230,9 +236,11 @@ class Substrate:
         recent = conn.execute("""
             SELECT id FROM engrams
             WHERE state = 'active'
+              AND owner_agent_id = ?
+              AND consolidation_authorized = 1
             ORDER BY created_at DESC
             LIMIT ?
-        """, (self.config.connection_discovery_limit,)).fetchall()
+        """, (self.config.agent_id, self.config.connection_discovery_limit)).fetchall()
         conn.close()
 
         new_connections = 0
@@ -244,6 +252,13 @@ class Substrate:
                 similar = self.embedding_index.search(engram.content, limit=3)
                 for match in similar:
                     if match["id"] != row[0]:
+                        matched_engram = self.store.get_engram(match["id"])
+                        if (
+                            not matched_engram
+                            or matched_engram.owner_agent_id != self.config.agent_id
+                            or not matched_engram.consolidation_authorized
+                        ):
+                            continue
                         existing = sqlite3.connect(self.db_path)
                         exists = existing.execute(
                             "SELECT COUNT(*) FROM connections WHERE (from_id=? AND to_id=?) OR (from_id=? AND to_id=?)",
@@ -295,9 +310,11 @@ class Substrate:
         last_memory = conn.execute("""
             SELECT created_at FROM engrams
             WHERE state = 'active'
+              AND owner_agent_id = ?
+              AND consolidation_authorized = 1
             ORDER BY created_at DESC
             LIMIT 1
-        """).fetchone()
+        """, (self.config.agent_id,)).fetchone()
         conn.close()
 
         if last_memory:
@@ -391,7 +408,11 @@ if __name__ == "__main__":
         print(f"Store: {substrate.store.count_engrams(agent_id=config.agent_id)} engrams")
         beliefs = substrate.store.get_beliefs(agent_id=config.agent_id)
         print(f"Beliefs: {len(beliefs)}")
-        mods = compute_modulators(substrate.db_path)
+        mods = compute_modulators(
+            substrate.db_path,
+            agent_id=config.agent_id,
+            require_consolidation_authorized=True,
+        )
         print(f"Modulators: arousal={mods.arousal} openness={mods.openness} resolution={mods.resolution}")
     else:
         summary = substrate.tick()

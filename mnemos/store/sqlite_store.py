@@ -24,10 +24,16 @@ from ..core.engram import Connection, Engram, VersionRef
 from ..core.belief import Belief
 from ..core.emotional_state import EmotionalState
 from ..core.identity import AgentIdentity
+from .migrations import (
+    apply_u3a_schema_migration,
+    apply_u3b_hardening_schema_migration,
+    get_current_version,
+    run_migrations,
+)
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -59,13 +65,15 @@ _ENGRAM_COLUMNS = frozenset({
     "schema_refs", "strength", "stability", "accessibility", "encoding_context",
     "source", "lineage", "owner_agent_id", "visibility", "state", "created_at",
     "last_accessed", "access_count", "reconsolidation_count",
+    "voice_exemplar_eligible", "softening_protected", "original_substrate",
+    "original_timestamp", "consolidation_authorized", "decay_protected",
 })
 
 # Allowed column names for beliefs table
 _BELIEF_COLUMNS = frozenset({
     "id", "agent_id", "content", "confidence", "domain", "created_at",
     "last_revised", "last_challenged", "revision_history", "superseded_by",
-    "supporting_engram_ids",
+    "supporting_engram_ids", "tier", "needs_review", "confidence_pending_review",
 })
 
 SQL_CREATE_TABLES = """
@@ -91,7 +99,17 @@ CREATE TABLE IF NOT EXISTS engrams (
     created_at TEXT NOT NULL,
     last_accessed TEXT NOT NULL,
     access_count INTEGER NOT NULL DEFAULT 0,
-    reconsolidation_count INTEGER NOT NULL DEFAULT 0
+    reconsolidation_count INTEGER NOT NULL DEFAULT 0,
+    voice_exemplar_eligible INTEGER NOT NULL DEFAULT 1
+        CHECK (voice_exemplar_eligible IN (0, 1)),
+    softening_protected INTEGER NOT NULL DEFAULT 0
+        CHECK (softening_protected IN (0, 1)),
+    original_substrate TEXT,
+    original_timestamp INTEGER,
+    consolidation_authorized INTEGER NOT NULL DEFAULT 1
+        CHECK (consolidation_authorized IN (0, 1)),
+    decay_protected INTEGER NOT NULL DEFAULT 0
+        CHECK (decay_protected IN (0, 1))
 );
 
 -- Full-text search on engram content
@@ -134,7 +152,11 @@ CREATE TABLE IF NOT EXISTS beliefs (
     last_challenged TEXT NOT NULL,
     revision_history TEXT NOT NULL DEFAULT '[]',
     superseded_by TEXT,
-    supporting_engram_ids TEXT NOT NULL DEFAULT '[]'
+    supporting_engram_ids TEXT NOT NULL DEFAULT '[]',
+    tier TEXT CHECK (tier IS NULL OR tier IN ('foundational', 'operational', 'tactical')),
+    needs_review INTEGER NOT NULL DEFAULT 0 CHECK (needs_review IN (0, 1)),
+    confidence_pending_review INTEGER NOT NULL DEFAULT 0
+        CHECK (confidence_pending_review IN (0, 1))
 );
 
 -- Hypomnema: scoped durable continuity that can revise before promotion
@@ -156,6 +178,7 @@ CREATE TABLE IF NOT EXISTS hypomnema_entries (
     foundational INTEGER NOT NULL DEFAULT 0,
     revision_count INTEGER NOT NULL DEFAULT 0,
     revisions_json TEXT NOT NULL DEFAULT '[]',
+    original_timestamp INTEGER,
     related_session_id TEXT,
     related_engram_id TEXT REFERENCES engrams(id) ON DELETE SET NULL,
     graduated_to_engram_id TEXT REFERENCES engrams(id) ON DELETE SET NULL,
@@ -251,6 +274,22 @@ CREATE TABLE IF NOT EXISTS consolidation_log (
     stats TEXT NOT NULL DEFAULT '{}'
 );
 
+-- PAI import source-to-row map for idempotent importer re-runs and repair
+CREATE TABLE IF NOT EXISTS pai_import_row_map (
+    job_id TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    source_anchor TEXT NOT NULL DEFAULT '',
+    target_table TEXT NOT NULL DEFAULT 'engrams'
+        CHECK (target_table IN ('engrams', 'beliefs', 'hypomnema_entries')),
+    target_id TEXT NOT NULL,
+    engram_id TEXT,
+    source_hash TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    imported_at INTEGER NOT NULL,
+    PRIMARY KEY (job_id, source_path, source_anchor, target_table)
+);
+
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -266,6 +305,10 @@ CREATE INDEX IF NOT EXISTS idx_engrams_last_accessed ON engrams(last_accessed);
 CREATE INDEX IF NOT EXISTS idx_connections_source ON connections(source_id);
 CREATE INDEX IF NOT EXISTS idx_connections_target ON connections(target_id);
 CREATE INDEX IF NOT EXISTS idx_beliefs_domain ON beliefs(agent_id, domain);
+CREATE INDEX IF NOT EXISTS idx_pai_import_row_map_target
+    ON pai_import_row_map(target_table, target_id);
+CREATE INDEX IF NOT EXISTS idx_pai_import_row_map_job
+    ON pai_import_row_map(job_id);
 CREATE INDEX IF NOT EXISTS idx_hypomnema_scope_revised
     ON hypomnema_entries(agent_id, person_id, project_scope, last_revised_at DESC)
     WHERE active = 1;
@@ -349,21 +392,52 @@ class EngramStore:
         engram = store.get_engram("engram_abc123")
     """
 
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, *, read_only: bool = False):
+        """Open a Mnemos store.
+
+        Args:
+            db_path: SQLite file path. Created if missing in read-write mode.
+            read_only: When True, open via `file:...?mode=ro` URI and skip
+                schema bootstrap entirely. Required for preview/inspection
+                paths that must not mutate the database — without this, the
+                default constructor runs `executescript`, `ALTER TABLE`,
+                migrations, and a `meta` write on every instantiation, which
+                silently upgrades older-schema DBs and writes 2+ bytes even on
+                already-current DBs. Caller must guarantee the DB exists.
+        """
         self.db_path = Path(db_path).expanduser()
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._read_only = read_only
         self._conn: sqlite3.Connection | None = None
+        if read_only:
+            if not self.db_path.exists():
+                raise FileNotFoundError(
+                    f"read_only EngramStore requires existing db: {self.db_path}"
+                )
+            return
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _init_db(self) -> None:
-        """Initialize database with schema."""
+        """Initialize database with schema. Never called in read_only mode."""
+        if self._read_only:
+            raise RuntimeError("_init_db must not be called on a read-only store")
         conn = self._get_conn()
+        current_version = get_current_version(conn)
+        if current_version > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Database schema version {current_version} is newer than supported "
+                f"{SCHEMA_VERSION}"
+            )
         conn.executescript(SQL_CREATE_TABLES)
         # Migrate: add impact column if missing (v0.1 → v0.2)
         try:
             conn.execute("ALTER TABLE engrams ADD COLUMN impact TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
             pass  # Column already exists
+        conn.commit()
+        run_migrations(conn, target_version=SCHEMA_VERSION)
+        apply_u3a_schema_migration(conn)
+        apply_u3b_hardening_schema_migration(conn)
         # Set schema version
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
@@ -372,16 +446,33 @@ class EngramStore:
         conn.commit()
 
     def _get_conn(self) -> sqlite3.Connection:
-        """Get or create SQLite connection with WAL mode."""
+        """Get or create SQLite connection.
+
+        Read-only mode opens via SQLite URI form (`file:...?mode=ro`), which
+        makes the connection reject INSERT/UPDATE/DELETE/DDL at the SQLite
+        layer. WAL pragma is incompatible with read-only mode (would attempt
+        to create WAL file); we skip the write-side pragmas there.
+        """
         if self._conn is None:
-            self._conn = sqlite3.connect(
-                str(self.db_path),
-                check_same_thread=False,
-            )
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
-            self._conn.execute("PRAGMA foreign_keys=ON")
+            if self._read_only:
+                uri = f"{self.db_path.resolve().as_uri()}?mode=ro"
+                self._conn = sqlite3.connect(
+                    uri,
+                    uri=True,
+                    check_same_thread=False,
+                )
+                self._conn.row_factory = sqlite3.Row
+                # foreign_keys is harmless on read-only; PRAGMA query is allowed
+                self._conn.execute("PRAGMA foreign_keys=ON")
+            else:
+                self._conn = sqlite3.connect(
+                    str(self.db_path),
+                    check_same_thread=False,
+                )
+                self._conn.row_factory = sqlite3.Row
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA synchronous=NORMAL")
+                self._conn.execute("PRAGMA foreign_keys=ON")
         return self._conn
 
     def close(self) -> None:
@@ -399,6 +490,15 @@ class EngramStore:
         wrapped in a single transaction for atomicity.
         """
         conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._save_engram_no_commit(conn, engram)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    def _save_engram_no_commit(self, conn: sqlite3.Connection, engram: Engram) -> None:
         data = engram.to_dict()
 
         # Validate column names to prevent SQL injection
@@ -407,34 +507,26 @@ class EngramStore:
         placeholders = ", ".join("?" for _ in safe_data)
         updates = ", ".join(f"{k}=excluded.{k}" for k in safe_data if k != "id")
 
-        try:
-            conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            f"INSERT INTO engrams ({columns}) VALUES ({placeholders}) "
+            f"ON CONFLICT(id) DO UPDATE SET {updates}",
+            list(safe_data.values()),
+        )
 
-            conn.execute(
-                f"INSERT INTO engrams ({columns}) VALUES ({placeholders}) "
-                f"ON CONFLICT(id) DO UPDATE SET {updates}",
-                list(safe_data.values()),
-            )
+        # Update FTS index (atomic with engram)
+        conn.execute("DELETE FROM engrams_fts WHERE id = ?", (engram.id,))
+        conn.execute(
+            "INSERT INTO engrams_fts (id, content) VALUES (?, ?)",
+            (engram.id, engram.content),
+        )
 
-            # Update FTS index (atomic with engram)
-            conn.execute("DELETE FROM engrams_fts WHERE id = ?", (engram.id,))
-            conn.execute(
-                "INSERT INTO engrams_fts (id, content) VALUES (?, ?)",
-                (engram.id, engram.content),
-            )
+        # Save connections
+        for conn_obj in engram.connections:
+            self._save_connection_no_commit(conn, engram.id, conn_obj)
 
-            # Save connections
-            for conn_obj in engram.connections:
-                self._save_connection_no_commit(conn, engram.id, conn_obj)
-
-            # Save versions
-            for version in engram.versions:
-                self._save_version_no_commit(conn, engram.id, version)
-
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
+        # Save versions
+        for version in engram.versions:
+            self._save_version_no_commit(conn, engram.id, version)
 
     def get_engram(self, engram_id: str) -> Engram | None:
         """Load an engram by ID, including connections and versions."""
@@ -460,6 +552,8 @@ class EngramStore:
         agent_id: str | None = "default",
         limit: int = 1000,
         load_connections: bool = True,
+        include_decay_protected: bool = True,
+        require_consolidation_authorized: bool = False,
     ) -> list[Engram]:
         """Get all active engrams for an agent, sorted by accessibility.
 
@@ -469,19 +563,35 @@ class EngramStore:
             load_connections: If True, load connections for each engram.
                 Set to False for bulk operations where connections aren't needed
                 (e.g., decay pass only needs accessibility/strength fields).
+            include_decay_protected: If False, exclude engrams that the
+                decay pass must not mutate.
+            require_consolidation_authorized: If True, exclude read-only
+                imported engrams from consolidation mutation candidates.
         """
         conn = self._get_conn()
+        predicates = ["state = 'active'"]
+        params: list[Any] = []
+        if agent_id is not None:
+            predicates.append("owner_agent_id = ?")
+            params.append(agent_id)
+        if not include_decay_protected:
+            predicates.append("decay_protected = 0")
+        if require_consolidation_authorized:
+            predicates.append("consolidation_authorized = 1")
+        where = " AND ".join(predicates)
+        params.append(limit)
+
         if agent_id is None:
             rows = conn.execute(
-                "SELECT * FROM engrams WHERE state = 'active' "
+                f"SELECT * FROM engrams WHERE {where} "
                 "ORDER BY accessibility DESC LIMIT ?",
-                (limit,),
+                params,
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM engrams WHERE state = 'active' "
-                "AND owner_agent_id = ? ORDER BY accessibility DESC LIMIT ?",
-                (agent_id, limit),
+                f"SELECT * FROM engrams WHERE {where} "
+                "ORDER BY accessibility DESC LIMIT ?",
+                params,
             ).fetchall()
         engrams = [Engram.from_dict(dict(r)) for r in rows]
         if load_connections:
@@ -581,7 +691,8 @@ class EngramStore:
 
     def update_connection(self, source_id: str, connection) -> None:
         """Update an existing connection's relation, strength, or formed_by."""
-        self._conn.execute(
+        conn = self._get_conn()
+        conn.execute(
             """UPDATE connections
                SET relation = ?, strength = ?, formed_by = ?
                WHERE source_id = ? AND target_id = ?""",
@@ -593,21 +704,23 @@ class EngramStore:
                 connection.target_id,
             ),
         )
-        self._conn.commit()
+        conn.commit()
 
     def remove_connection(self, source_id: str, target_id: str) -> None:
         """Remove a connection between two engrams."""
-        self._conn.execute(
+        conn = self._get_conn()
+        conn.execute(
             "DELETE FROM connections WHERE source_id = ? AND target_id = ?",
             (source_id, target_id),
         )
-        self._conn.commit()
+        conn.commit()
 
     def get_recent_engrams(
         self,
         agent_id: str | None = None,
         since: "datetime | None" = None,
         limit: int = 50,
+        require_consolidation_authorized: bool = False,
     ) -> list:
         """Get recently created engrams, optionally filtered by agent and time.
 
@@ -615,6 +728,8 @@ class EngramStore:
             agent_id: Filter by agent ID (optional).
             since: Only return engrams created after this datetime (optional).
             limit: Maximum number to return.
+            require_consolidation_authorized: If True, exclude read-only
+                imported engrams from consolidation review inputs.
 
         Returns:
             List of Engram objects, most recent first.
@@ -630,11 +745,15 @@ class EngramStore:
             query += " AND created_at > ?"
             params.append(since.isoformat())
 
+        if require_consolidation_authorized:
+            query += " AND consolidation_authorized = 1"
+
         query += " ORDER BY created_at DESC LIMIT ?"
         params.append(limit)
 
-        rows = self._conn.execute(query, params).fetchall()
-        return [self._row_to_engram(dict(r)) for r in rows]
+        conn = self._get_conn()
+        rows = conn.execute(query, params).fetchall()
+        return [Engram.from_dict(dict(r)) for r in rows]
 
 
     def get_connected_engram_ids(
@@ -744,6 +863,10 @@ class EngramStore:
     def save_belief(self, belief: Belief) -> None:
         """Insert or update a belief."""
         conn = self._get_conn()
+        self._save_belief_no_commit(conn, belief)
+        conn.commit()
+
+    def _save_belief_no_commit(self, conn: sqlite3.Connection, belief: Belief) -> None:
         data = belief.to_dict()
 
         # Validate column names
@@ -757,15 +880,20 @@ class EngramStore:
             f"ON CONFLICT(id) DO UPDATE SET {updates}",
             list(safe_data.values()),
         )
-        conn.commit()
 
     def get_beliefs(
         self,
         agent_id: str = "default",
         domain: str | None = None,
         active_only: bool = True,
+        include_pending_review: bool = False,
     ) -> list[Belief]:
-        """Get beliefs for an agent, optionally filtered by domain."""
+        """Get beliefs, excluding pending-confidence rows unless opted in.
+
+        Imported or changed PAI beliefs use ``confidence_pending_review`` to
+        keep stale confidence out of normal consumers. Belief review passes
+        ``include_pending_review=True`` so it can resolve those rows.
+        """
         conn = self._get_conn()
         query = "SELECT * FROM beliefs WHERE agent_id = ?"
         params: list[Any] = [agent_id]
@@ -776,6 +904,9 @@ class EngramStore:
 
         if active_only:
             query += " AND superseded_by IS NULL"
+
+        if not include_pending_review:
+            query += " AND confidence_pending_review = 0"
 
         query += " ORDER BY confidence DESC"
         rows = conn.execute(query, params).fetchall()
@@ -1191,6 +1322,7 @@ class EngramStore:
         self,
         content: str,
         *,
+        entry_id: str | None = None,
         agent_id: str = "default",
         person_id: str = "user",
         project_scope: str = "global",
@@ -1201,6 +1333,7 @@ class EngramStore:
         confidence: float = 0.6,
         salience: float = 0.5,
         foundational: bool = False,
+        original_timestamp: int | None = None,
         related_session_id: str | None = None,
         related_engram_id: str | None = None,
     ) -> str:
@@ -1209,6 +1342,48 @@ class EngramStore:
         Hypomnema is durable, relationship-scoped continuity that can be
         revised before it graduates into shared Mnemos engrams.
         """
+        conn = self._get_conn()
+        entry_id = self._write_hypomnema_entry_no_commit(
+            conn,
+            content,
+            entry_id=entry_id,
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope=project_scope,
+            source=source,
+            density=density,
+            domain=domain,
+            tags=tags,
+            confidence=confidence,
+            salience=salience,
+            foundational=foundational,
+            original_timestamp=original_timestamp,
+            related_session_id=related_session_id,
+            related_engram_id=related_engram_id,
+        )
+        conn.commit()
+        return entry_id
+
+    def _write_hypomnema_entry_no_commit(
+        self,
+        conn: sqlite3.Connection,
+        content: str,
+        *,
+        entry_id: str | None = None,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        source: str = "observed",
+        density: float = 0.5,
+        domain: str = "topical",
+        tags: str | list[str] | tuple[str, ...] | None = None,
+        confidence: float = 0.6,
+        salience: float = 0.5,
+        foundational: bool = False,
+        original_timestamp: int | None = None,
+        related_session_id: str | None = None,
+        related_engram_id: str | None = None,
+    ) -> str:
         if source not in VALID_HYPO_SOURCES:
             raise ValueError(f"Unsupported hypomnema source: {source}")
         if domain not in VALID_HYPO_DOMAINS:
@@ -1217,16 +1392,64 @@ class EngramStore:
             raise ValueError("Hypomnema content cannot be empty")
 
         now = _utc_now()
-        entry_id = _new_id()
-        conn = self._get_conn()
+        entry_id = (entry_id or "").strip() or _new_id()
+        existing = conn.execute(
+            """
+            SELECT agent_id, person_id, project_scope, content, revision_count,
+                   revisions_json
+            FROM hypomnema_entries
+            WHERE id = ?
+            """,
+            (entry_id,),
+        ).fetchone()
+        if existing is not None and (
+            existing["agent_id"] != agent_id
+            or existing["person_id"] != person_id
+            or existing["project_scope"] != project_scope
+        ):
+            raise ValueError(
+                "Hypomnema entry ID already exists outside the requested scope"
+            )
+        revision_count = 0
+        revisions_json = "[]"
+        if existing is not None:
+            revision_count = int(existing["revision_count"] or 0)
+            revisions = _decode_json(existing["revisions_json"], [])
+            if existing["content"] != content.strip():
+                revisions.append(
+                    {
+                        "content": existing["content"],
+                        "revised_at": now,
+                        "reason": "pai_import_update",
+                    }
+                )
+                revision_count += 1
+            revisions_json = _encode_json(revisions)
         conn.execute(
             """
             INSERT INTO hypomnema_entries(
                 id, agent_id, person_id, project_scope, content, source,
                 density, domain, tags_json, confidence, salience,
                 active, foundational, revision_count, revisions_json,
-                related_session_id, related_engram_id, created_at, last_revised_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, '[]', ?, ?, ?, ?)
+                original_timestamp, related_session_id, related_engram_id,
+                created_at, last_revised_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                content = excluded.content,
+                source = excluded.source,
+                density = excluded.density,
+                domain = excluded.domain,
+                tags_json = excluded.tags_json,
+                confidence = excluded.confidence,
+                salience = excluded.salience,
+                active = hypomnema_entries.active,
+                foundational = excluded.foundational,
+                revision_count = excluded.revision_count,
+                revisions_json = excluded.revisions_json,
+                original_timestamp = excluded.original_timestamp,
+                related_session_id = excluded.related_session_id,
+                related_engram_id = excluded.related_engram_id,
+                last_revised_at = excluded.last_revised_at
             """,
             (
                 entry_id,
@@ -1241,13 +1464,15 @@ class EngramStore:
                 _clamp(confidence),
                 _clamp(salience),
                 int(foundational),
+                revision_count,
+                revisions_json,
+                original_timestamp,
                 related_session_id,
                 related_engram_id,
                 now,
                 now,
             ),
         )
-        conn.commit()
         return entry_id
 
     def get_hypomnema_entry(
@@ -1440,6 +1665,7 @@ class EngramStore:
             confidence=row["confidence"],
             salience=row["salience"],
             foundational=row["foundational"],
+            original_timestamp=row["original_timestamp"],
             related_session_id=row["related_session_id"],
             related_engram_id=row["related_engram_id"],
         )
@@ -1740,7 +1966,11 @@ class EngramStore:
 
     # ── Stats ──
 
-    def get_stats(self, agent_id: str = "default") -> dict:
+    def get_stats(
+        self,
+        agent_id: str = "default",
+        include_pending_review: bool = False,
+    ) -> dict:
         """Get summary statistics for an agent's memory."""
         conn = self._get_conn()
         stats = {}
@@ -1759,10 +1989,13 @@ class EngramStore:
         stats["connections"] = row[0] if row else 0
 
         # Belief count
-        row = conn.execute(
-            "SELECT COUNT(*) FROM beliefs WHERE agent_id = ? AND superseded_by IS NULL",
-            (agent_id,),
-        ).fetchone()
+        belief_query = (
+            "SELECT COUNT(*) FROM beliefs "
+            "WHERE agent_id = ? AND superseded_by IS NULL"
+        )
+        if not include_pending_review:
+            belief_query += " AND confidence_pending_review = 0"
+        row = conn.execute(belief_query, (agent_id,)).fetchone()
         stats["beliefs_active"] = row[0] if row else 0
 
         # Version count (reconsolidation events)

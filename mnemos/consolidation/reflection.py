@@ -86,7 +86,11 @@ def run_reflection_pass(
     }
 
     # 1. LOAD RECENT ENGRAMS
-    all_engrams = store.get_active_engrams(agent_id=agent_id, limit=200)
+    all_engrams = store.get_active_engrams(
+        agent_id=agent_id,
+        limit=200,
+        require_consolidation_authorized=True,
+    )
     recent = [
         e for e in all_engrams
         if _hours_since(e.created_at) < lookback_hours
@@ -173,10 +177,25 @@ def compute_identity_profile(
     agent_id = identity.memory_profile.agent_id
 
     # 1. PERSISTENT CONCERNS: what tags appear most across all engrams
+    # Exclusion set covers reflection-generated tags AND PAI import-routing markers.
+    # PAI markers are addressability metadata (source_kind classification, batch
+    # provenance), not substrate observations — counting them produces an
+    # IdentityProfile that says "Oliver's persistent concern is being imported."
     tag_counts: dict[str, int] = Counter()
     for e in all_engrams:
         for tag in e.tags:
-            if tag not in ("lesson", "distilled", "reflection", "synthesized"):
+            if tag not in (
+                "lesson",
+                "distilled",
+                "reflection",
+                "synthesized",
+                "pai-import",
+                "identity-kernel",
+                "david-context",
+                "growth-substrate",
+                "belief",
+                "hypomnema",
+            ):
                 tag_counts[tag] += 1
     persistent_concerns = tag_counts.most_common(10)
 

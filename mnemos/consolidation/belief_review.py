@@ -26,7 +26,6 @@ from ..encoding.llm_classifier import evaluate_beliefs, apply_belief_update
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
-    from ..llm import LLMClient
 
 log = logging.getLogger("mnemos.consolidation.beliefs")
 
@@ -70,7 +69,11 @@ def run_belief_review(
         return stats
 
     # Get active beliefs
-    beliefs = store.get_beliefs(agent_id, active_only=True)
+    beliefs = store.get_beliefs(
+        agent_id,
+        active_only=True,
+        include_pending_review=True,
+    )
     if not beliefs:
         log.info("No active beliefs to review")
         return stats
@@ -81,6 +84,7 @@ def run_belief_review(
         agent_id=agent_id,
         since=cutoff,
         limit=max_memories,
+        require_consolidation_authorized=True,
     )
 
     for engram in recent:
@@ -98,7 +102,12 @@ def run_belief_review(
         stats["memories_reviewed"] += 1
 
         # Evaluate against beliefs via LLM
-        evaluations = evaluate_beliefs(llm_client, engram, beliefs)
+        evaluations = evaluate_beliefs(
+            llm_client,
+            engram,
+            beliefs,
+            include_no_bearing=True,
+        )
 
         belief_map = {b.id: b for b in beliefs}
         for evaluation in belief_map.values():
@@ -122,7 +131,16 @@ def run_belief_review(
 
             if cooldown_ok:
                 old_conf = belief.confidence
+                pending_review = (
+                    belief.needs_review or belief.confidence_pending_review
+                )
+                if pending_review:
+                    belief.needs_review = False
+                    belief.confidence_pending_review = False
                 apply_belief_update(belief, eval_result, engram.id, store)
+                if pending_review:
+                    belief.challenge()
+                    store.save_belief(belief)
                 new_conf = belief.confidence
 
                 if new_conf > old_conf:
@@ -131,5 +149,13 @@ def run_belief_review(
                 elif new_conf < old_conf:
                     stats["beliefs_weakened"] += 1
                     stats["beliefs_unchanged"] -= 1
+            elif (
+                eval_result.relation == "NO_BEARING"
+                and (belief.needs_review or belief.confidence_pending_review)
+            ):
+                belief.needs_review = False
+                belief.confidence_pending_review = False
+                belief.challenge()
+                store.save_belief(belief)
 
     return stats

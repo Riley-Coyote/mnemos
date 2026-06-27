@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 import ulid as _ulid_mod
 
@@ -26,6 +27,35 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_VALID_BELIEF_TIERS = {"foundational", "operational", "tactical"}
+
+
+def _bool_to_int(value: bool | int, field_name: str) -> int:
+    if value in (True, 1):
+        return 1
+    if value in (False, 0):
+        return 0
+    raise ValueError(f"{field_name} must be a boolean")
+
+
+def _bool_from_db(value, field_name: str, default: bool) -> bool:
+    if value is None:
+        return default
+    if value in (True, 1):
+        return True
+    if value in (False, 0):
+        return False
+    raise ValueError(f"{field_name} must be stored as 0 or 1")
+
+
+def _validate_tier(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if value not in _VALID_BELIEF_TIERS:
+        raise ValueError(f"Unsupported belief tier: {value}")
+    return value
+
+
 @dataclass
 class BeliefRevision:
     """A record of how a belief changed."""
@@ -35,19 +65,38 @@ class BeliefRevision:
     new_confidence: float = 0.0
     reason: str = ""
     trigger_engram_id: str | None = None
+    _extra_fields: dict[str, Any] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
 
     def to_dict(self) -> dict:
-        return {
-            "timestamp": self.timestamp,
-            "old_confidence": self.old_confidence,
-            "new_confidence": self.new_confidence,
-            "reason": self.reason,
-            "trigger_engram_id": self.trigger_engram_id,
-        }
+        data = dict(self._extra_fields)
+        data.update(
+            {
+                "timestamp": self.timestamp,
+                "old_confidence": self.old_confidence,
+                "new_confidence": self.new_confidence,
+                "reason": self.reason,
+                "trigger_engram_id": self.trigger_engram_id,
+            }
+        )
+        return data
 
     @classmethod
     def from_dict(cls, d: dict) -> BeliefRevision:
-        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+        fields = {
+            "timestamp",
+            "old_confidence",
+            "new_confidence",
+            "reason",
+            "trigger_engram_id",
+        }
+        return cls(
+            **{k: v for k, v in d.items() if k in fields},
+            _extra_fields={k: v for k, v in d.items() if k not in fields},
+        )
 
 
 @dataclass
@@ -80,6 +129,15 @@ class Belief:
 
     supporting_engram_ids: list[str] = field(default_factory=list)
     """Engrams that provide evidence for this belief."""
+
+    tier: str | None = None
+    """foundational | operational | tactical; used by IdentityProfile weighting."""
+
+    needs_review: bool = False
+    """Set when dual-life source changes make this belief stale."""
+
+    confidence_pending_review: bool = False
+    """Set when confidence should be excluded or degraded until review."""
 
     def revise(
         self,
@@ -121,6 +179,11 @@ class Belief:
             ),
             "superseded_by": self.superseded_by,
             "supporting_engram_ids": json.dumps(self.supporting_engram_ids),
+            "tier": _validate_tier(self.tier),
+            "needs_review": _bool_to_int(self.needs_review, "needs_review"),
+            "confidence_pending_review": _bool_to_int(
+                self.confidence_pending_review, "confidence_pending_review"
+            ),
         }
 
     @classmethod
@@ -145,4 +208,11 @@ class Belief:
             revision_history=[BeliefRevision.from_dict(r) for r in revisions],
             superseded_by=d.get("superseded_by"),
             supporting_engram_ids=supporting,
+            tier=_validate_tier(d.get("tier")),
+            needs_review=_bool_from_db(d.get("needs_review", 0), "needs_review", False),
+            confidence_pending_review=_bool_from_db(
+                d.get("confidence_pending_review", 0),
+                "confidence_pending_review",
+                False,
+            ),
         )

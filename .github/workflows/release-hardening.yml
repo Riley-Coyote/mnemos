@@ -35,7 +35,12 @@ jobs:
             mnemos/simple_runtime.py \
             mnemos/simple_mcp.py \
             mnemos/mcp_server.py \
-            mnemos/cli.py
+            mnemos/cli.py \
+            mnemos/importer/__init__.py \
+            mnemos/importer/pai.py \
+            mnemos/importer/operator.py \
+            mnemos/importer/review_gate.py \
+            mnemos/importer/watcher.py
 
       - name: Build package
         run: uv build
@@ -50,6 +55,10 @@ jobs:
           required = {
               "mnemos/simple_runtime.py",
               "mnemos/simple_mcp.py",
+              "mnemos/importer/pai.py",
+              "mnemos/importer/operator.py",
+              "mnemos/importer/review_gate.py",
+              "mnemos/importer/watcher.py",
               "templates/SOUL.md",
               "templates/IDENTITY.md",
           }

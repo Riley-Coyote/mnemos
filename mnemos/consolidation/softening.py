@@ -97,7 +97,6 @@ def run_softening_pass(
     Returns:
         Statistics dict.
     """
-    softening_threshold = config.get("softening_threshold", 0.15)
     minimum_resolution = config.get("minimum_resolution", 0.1)
     max_llm_calls = config.get("max_llm_calls_per_cycle", 50)
     dry_run = bool(config.get("softening_dry_run", False))
@@ -128,6 +127,9 @@ def run_softening_pass(
     dry_run_pairs: list[dict[str, Any]] = []
 
     for engram in all_engrams:
+        if engram.softening_protected or not engram.consolidation_authorized:
+            continue
+
         if engram.resolution <= minimum_resolution:
             continue  # Already at minimum resolution
 
@@ -274,7 +276,16 @@ def _select_voice_exemplars(all_engrams: list, k: int = 4) -> list:
     already agent-scoped by the caller — exemplars must come from the same
     agent whose memories are being rewritten.
     """
-    candidates = [e for e in all_engrams if e.content and len(e.content) >= 20]
+    candidates = [
+        e for e in all_engrams
+        if (
+            e.content
+            and len(e.content) >= 20
+            and e.voice_exemplar_eligible
+            and not e.softening_protected
+            and e.consolidation_authorized
+        )
+    ]
     candidates.sort(key=lambda e: (e.resolution, e.strength), reverse=True)
     return candidates[:k]
 
@@ -417,6 +428,10 @@ def _create_or_reinforce_lesson(
     # Check if any existing engram is a lesson with similar content
     for candidate in existing:
         if candidate.id == engram.id:
+            continue
+        if candidate.owner_agent_id != engram.owner_agent_id:
+            continue
+        if candidate.state != "active" or not candidate.consolidation_authorized:
             continue
         if "lesson" in candidate.tags or "distilled" in candidate.tags:
             # Reinforce existing lesson

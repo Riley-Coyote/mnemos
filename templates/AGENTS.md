@@ -30,35 +30,33 @@ Use Mnemos in this order:
 
 At the start of a meaningful work block:
 
-1. Call `mnemos_session_start` with this agent ID, the human/person ID, and the project scope.
-2. Call `mnemos_context_packet` with the user's first meaningful cue.
-3. Read the packet before answering. Treat functional memory as the most immediate context, hypomnema as revisable continuity, and Mnemos as long-term evidence.
+1. Call `mnemos_context` with the user's first meaningful cue.
+2. If Mnemos asks for an introduction, call `mnemos_introduce` with your own model id and name.
+3. Read the packet before answering. Treat returned continuity as current operating context, with recalled engrams as long-term evidence.
 
 During the session:
 
-- Use `mnemos_functional_update` for task state, preferences, corrections, commitments, and open questions.
-- Use `mnemos_hypomnema_write` when something should survive beyond the session but may still need revision.
-- Use `mnemos_hypomnema_revise` when the human corrects or sharpens existing continuity.
-- Use `mnemos_remember` only for stable decisions, lessons, facts, or experiences that belong in long-term memory.
-- Use `mnemos_review_queue` when the human asks what needs confirmation.
-- Use `mnemos_visual_snapshot` when the human wants to see the memory system inline.
+- Use `mnemos_capture` for stable preferences, decisions, lessons, project state, workflows, corrections, commitments, and context the human should not have to repeat.
+- Use `mnemos_recall` before relying on memory from prior sessions.
+- Use `mnemos_correct` when remembered continuity is stale, wrong, superseded, or should be forgotten.
+- Use `mnemos_health` when the human asks whether memory is working.
+- Use `mnemos_context` with `include_graph=true` when the human wants to see the memory system inline and the client can display visual artifacts.
 
 At the end of a work block:
 
-1. Call `mnemos_session_close`.
-2. Let it compress active functional memory into hypomnema.
-3. Leave promotion into Mnemos explicit unless the continuity is stable and clearly useful.
+1. Capture any stable outcome, decision, correction, or handoff with `mnemos_capture`.
+2. Leave uncertain or inferred claims out of durable memory unless the human confirms them.
+3. Let Mnemos handle layer placement and maintenance in simple mode.
 
 ## Review Rules
 
-- If a memory is inferred, mark it as needing confirmation.
-- If a memory is personal, relationship-scoped, or project-scoped, keep it in hypomnema before promoting it.
-- If the human corrects a memory, update functional memory immediately and revise the hypomnema entry if one exists.
-- If two memories conflict, prefer the most recent explicit human correction and leave a review note.
+- If a memory is inferred, say so in the capture text or ask the human before storing it.
+- If the human corrects a memory, use `mnemos_correct` immediately.
+- If two memories conflict, prefer the most recent explicit human correction.
 
 ## Visual Checks
 
-Use `mnemos_visual_snapshot` to show the current architecture:
+Use `mnemos_context(include_graph=true)` to show the current architecture:
 
 - functional memory count and active session
 - hypomnema scope and promotion candidates
@@ -66,4 +64,6 @@ Use `mnemos_visual_snapshot` to show the current architecture:
 - identity signals and beliefs
 - review queue
 
-The snapshot is Markdown with Mermaid, so it can render directly in chat clients that support diagrams.
+The graph is returned as an SVG artifact plus structured data for clients that
+support visual tool results. Advanced mode still provides `mnemos_visual_snapshot`
+for Markdown/Mermaid inspection.

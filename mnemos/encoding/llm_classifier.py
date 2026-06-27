@@ -230,11 +230,13 @@ def evaluate_beliefs(
     client: "LLMClient",
     new_engram: "Engram",
     beliefs: list["Belief"],
+    *,
+    include_no_bearing: bool = False,
 ) -> list[BeliefEvaluation]:
     """Evaluate how a new memory relates to active beliefs.
 
     Makes a single batched LLM call with all beliefs. Returns only
-    evaluations where relation != NO_BEARING (meaningful changes only).
+    evaluations where relation != NO_BEARING unless include_no_bearing=True.
 
     Args:
         client: LLM client with structured_complete method.
@@ -284,7 +286,11 @@ def evaluate_beliefs(
         return []
 
     # Parse and filter
-    return _parse_belief_response(raw_response, beliefs)
+    return _parse_belief_response(
+        raw_response,
+        beliefs,
+        include_no_bearing=include_no_bearing,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -376,10 +382,12 @@ def _parse_connection_response(
 def _parse_belief_response(
     raw: str,
     beliefs: list["Belief"],
+    *,
+    include_no_bearing: bool = False,
 ) -> list[BeliefEvaluation]:
     """Parse and validate belief evaluation response.
 
-    Filters out NO_BEARING results — only meaningful changes are returned.
+    Filters out NO_BEARING results unless include_no_bearing=True.
     """
     items = _extract_json(raw)
     valid_ids = {b.id for b in beliefs}
@@ -402,7 +410,7 @@ def _parse_belief_response(
                 continue
 
             # Filter out NO_BEARING (log only meaningful changes)
-            if relation == "NO_BEARING":
+            if relation == "NO_BEARING" and not include_no_bearing:
                 continue
 
             # Clamp impact to [0, 1]

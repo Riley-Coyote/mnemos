@@ -13,12 +13,10 @@ Guardrails:
 """
 
 import json
-import os
 import logging
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-from ..events import SubstrateEvent, EventType
+from ..events import SubstrateEvent
 from ..config import SubstrateConfig
 from ..modulators import ModulatorState
 from ..llm import load_prompt
@@ -70,7 +68,11 @@ def handle(
     trigger_impact = ""
     if trigger_engram_id:
         engram = store.get_engram(trigger_engram_id)
-        if engram:
+        if (
+            engram
+            and engram.owner_agent_id == config.agent_id
+            and engram.consolidation_authorized
+        ):
             trigger_content = engram.content
             trigger_impact = engram.impact or ""
 

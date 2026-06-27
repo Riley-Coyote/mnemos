@@ -23,7 +23,7 @@ Tools:
     mnemos_hypomnema_promote — Promote stable continuity into Mnemos
     mnemos_inspect      — View full details of a memory
     mnemos_status       — Get memory system status
-    mnemos_beliefs      — List current beliefs
+    mnemos_beliefs      — List reviewed current beliefs
     mnemos_forget       — Archive a specific memory
     mnemos_consolidate  — Trigger a consolidation cycle
 
@@ -38,17 +38,15 @@ import logging
 import os
 import signal
 import sys
-from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from .core.types import EngramKind, SourceType
+from .core.types import SourceType
 from .store.sqlite_store import EngramStore
 from .store.embedding_index import EmbeddingIndex
 from .encoding.encoder import Encoder
 from .retrieval.reactive import ReactiveRetriever
 from .consolidation.daemon import ConsolidationDaemon
-from .interface.openclaw_export import OpenClawExporter
 from .interface.context_packet import build_context_packet
 from .interface.visual_snapshot import build_memory_visual_snapshot
 from .config.loader import load_config, save_config
@@ -354,7 +352,7 @@ def mnemos_setup(response: str = "") -> str:
             try:
                 _encoder.encode(
                     content=f"Active project: {proj}",
-                    impact=f"Part of the current work context.",
+                    impact="Part of the current work context.",
                     kind="semantic",
                     tags=["project", "context"],
                     source=SourceType.USER_EXPLICIT,
@@ -1374,7 +1372,10 @@ def mnemos_status(agent_id: str = "default") -> str:
 
 @mcp.tool()
 def mnemos_beliefs(agent_id: str = "default", domain: str = "") -> str:
-    """List current beliefs with confidence levels.
+    """List reviewed current beliefs with confidence levels.
+
+    Beliefs with ``confidence_pending_review`` are hidden until the belief
+    review pass opts in and clears their pending state.
 
     Args:
         agent_id: Which agent's beliefs to show. Default: "default".

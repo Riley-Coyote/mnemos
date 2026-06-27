@@ -11,7 +11,7 @@ import logging
 import sqlite3
 import os
 
-from ..events import SubstrateEvent, EventType
+from ..events import SubstrateEvent
 from ..config import SubstrateConfig
 from ..modulators import ModulatorState
 
@@ -30,15 +30,18 @@ def handle(
 
     db_path = os.path.expanduser(config.db_path)
     conn = sqlite3.connect(db_path)
+    agent_id = config.agent_id
 
     # Get high-salience recent memories (high accessibility + strength, recently created)
     rows = conn.execute("""
         SELECT id, content, impact, (accessibility * strength) as vividness
         FROM engrams
         WHERE state='active'
+          AND owner_agent_id = ?
+          AND consolidation_authorized = 1
         ORDER BY vividness DESC
         LIMIT 5
-    """).fetchall()
+    """, (agent_id,)).fetchall()
     conn.close()
 
     if len(rows) < 2:
@@ -97,6 +100,7 @@ If something emerges: {{"pattern": "<the pattern>", "significance": "<why it mat
         impact=significance,
         kind="semantic",
         tags=["initiation", "pattern"],
+        agent_id=agent_id,
         skip_surprise_detection=True,
     )
 

@@ -14,6 +14,14 @@ Commands:
     mnemos bootstrap             Bootstrap a complete agent stack
     mnemos identity diff         Diff graph-derived identity against SOUL.md
     mnemos identity accept       Accept a divergence, open a new epoch
+    mnemos pai-import preview        Preview a PAI source manifest import
+    mnemos pai-import apply          Backup DB and apply a PAI source manifest
+    mnemos pai-import watch-preview  Preview a U3c watcher manifest update
+    mnemos pai-import watch-apply    Backup DB and apply a U3c watcher update
+    mnemos pai-import watch-once     Run one dual-life watcher poll
+    mnemos pai-import watch-plist    Write a launchd plist for watch-once
+    mnemos pai-import watch-doctor   Run the Step 3 launch-readiness gate
+    mnemos pai-import review-gate    Run diff-focused adversarial U3c gate
     mnemos remember CONTENT      Capture durable continuity from the CLI
     mnemos hermes install        Install Mnemos for Hermes Agent
     mnemos hermes quickstart     Safely install Mnemos for Hermes Agent
@@ -283,6 +291,206 @@ def main(argv: list[str] | None = None) -> int:
         help="Write config where safely supported instead of printing a snippet",
     )
 
+    # ── pai-import ──
+    p_pai = sub.add_parser("pai-import", help="Operator PAI import workflow")
+    pai_sub = p_pai.add_subparsers(dest="pai_import_command")
+    p_pai_preview = pai_sub.add_parser("preview", help="Preview a PAI source manifest")
+    p_pai_preview.add_argument("--manifest", required=True, help="PAI source manifest JSON")
+    p_pai_preview.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
+    p_pai_preview.add_argument("--artifact", default=None, help="Write preview artifact JSON")
+    p_pai_preview.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos/memory.db; intended only for a deliberate final import",
+    )
+    p_pai_apply = pai_sub.add_parser("apply", help="Backup DB and apply a PAI source manifest")
+    p_pai_apply.add_argument("--manifest", required=True, help="PAI source manifest JSON")
+    p_pai_apply.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
+    p_pai_apply.add_argument("--artifact", default=None, help="Write apply artifact JSON")
+    p_pai_apply.add_argument("--backup-dir", default=None, help="Directory for integrity-checked DB backup")
+    p_pai_apply.add_argument(
+        "--backup-keep",
+        type=int,
+        default=None,
+        help="Keep only the newest N matching PAI backups after this apply",
+    )
+    p_pai_apply.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos/memory.db; intended only for a deliberate final import",
+    )
+    p_pai_watch_preview = pai_sub.add_parser(
+        "watch-preview",
+        help="Preview a U3c watcher manifest update",
+    )
+    p_pai_watch_preview.add_argument(
+        "--manifest", required=True, help="PAI source manifest JSON"
+    )
+    p_pai_watch_preview.add_argument(
+        "--db-path",
+        default=argparse.SUPPRESS,
+        help="Representative SQLite DB path",
+    )
+    p_pai_watch_preview.add_argument(
+        "--artifact", default=None, help="Write preview artifact JSON"
+    )
+    p_pai_watch_preview.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos/memory.db; intended only for a deliberate watcher run",
+    )
+    p_pai_watch_apply = pai_sub.add_parser(
+        "watch-apply",
+        help="Backup DB and apply a U3c watcher manifest update",
+    )
+    p_pai_watch_apply.add_argument(
+        "--manifest", required=True, help="PAI source manifest JSON"
+    )
+    p_pai_watch_apply.add_argument(
+        "--db-path",
+        default=argparse.SUPPRESS,
+        help="Representative SQLite DB path",
+    )
+    p_pai_watch_apply.add_argument(
+        "--artifact", default=None, help="Write apply artifact JSON"
+    )
+    p_pai_watch_apply.add_argument(
+        "--backup-dir",
+        default=None,
+        help="Directory for integrity-checked DB backup",
+    )
+    p_pai_watch_apply.add_argument(
+        "--backup-keep",
+        type=int,
+        default=None,
+        help="Keep only the newest N matching PAI backups after this apply",
+    )
+    p_pai_watch_apply.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos/memory.db; intended only for a deliberate watcher run",
+    )
+    p_pai_watch_once = pai_sub.add_parser(
+        "watch-once",
+        help="Run one U3c watcher poll",
+    )
+    p_pai_watch_once.add_argument(
+        "--manifest", required=True, help="PAI source manifest JSON"
+    )
+    p_pai_watch_once.add_argument(
+        "--db-path",
+        default=argparse.SUPPRESS,
+        help="Representative SQLite DB path",
+    )
+    p_pai_watch_once.add_argument("--state", required=True, help="Watcher state JSON path")
+    p_pai_watch_once.add_argument(
+        "--artifact-dir", default=None, help="Directory for watch artifacts"
+    )
+    p_pai_watch_once.add_argument(
+        "--backup-dir",
+        default=None,
+        help="Directory for integrity-checked DB backups",
+    )
+    p_pai_watch_once.add_argument(
+        "--backup-keep",
+        type=int,
+        default=None,
+        help="Keep only the newest N matching PAI backups after this apply",
+    )
+    p_pai_watch_once.add_argument(
+        "--apply", action="store_true", help="Apply changed-source previews"
+    )
+    p_pai_watch_once.add_argument(
+        "--force", action="store_true", help="Run even if source hashes are unchanged"
+    )
+    p_pai_watch_once.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos/memory.db; intended only for a deliberate watcher run",
+    )
+    p_pai_watch_plist = pai_sub.add_parser(
+        "watch-plist",
+        help="Write a launchd plist for U3c watch-once",
+    )
+    p_pai_watch_plist.add_argument(
+        "--manifest", required=True, help="PAI source manifest JSON"
+    )
+    p_pai_watch_plist.add_argument("--db-path", required=True, help="SQLite DB path")
+    p_pai_watch_plist.add_argument("--state", required=True, help="Watcher state JSON path")
+    p_pai_watch_plist.add_argument(
+        "--artifact-dir", required=True, help="Directory for watch artifacts"
+    )
+    p_pai_watch_plist.add_argument(
+        "--backup-dir",
+        required=True,
+        help="Directory for integrity-checked DB backups",
+    )
+    p_pai_watch_plist.add_argument("--plist", required=True, help="Output launchd plist path")
+    p_pai_watch_plist.add_argument("--label", default=None, help="launchd label")
+    p_pai_watch_plist.add_argument("--interval-seconds", type=int, default=60)
+    p_pai_watch_plist.add_argument(
+        "--backup-keep",
+        type=int,
+        default=None,
+        help="Include bounded backup retention in generated ProgramArguments",
+    )
+    p_pai_watch_plist.add_argument("--python", default=None, help="Python executable for launchd")
+    p_pai_watch_plist.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Include --allow-live-db in generated ProgramArguments",
+    )
+    p_pai_watch_doctor = pai_sub.add_parser(
+        "watch-doctor",
+        help="Run U3c Step 3 launch-readiness gate",
+    )
+    p_pai_watch_doctor.add_argument(
+        "--manifest", required=True, help="PAI source manifest JSON"
+    )
+    p_pai_watch_doctor.add_argument(
+        "--db-path",
+        default=argparse.SUPPRESS,
+        help="Representative SQLite DB path",
+    )
+    p_pai_watch_doctor.add_argument("--state", required=True, help="Watcher state JSON path")
+    p_pai_watch_doctor.add_argument(
+        "--artifact-dir", required=True, help="Directory for watch artifacts"
+    )
+    p_pai_watch_doctor.add_argument(
+        "--backup-dir",
+        required=True,
+        help="Directory for integrity-checked DB backups",
+    )
+    p_pai_watch_doctor.add_argument(
+        "--backup-keep",
+        type=int,
+        required=True,
+        help="Required bounded backup retention count for launch readiness",
+    )
+    p_pai_watch_doctor.add_argument(
+        "--plist", required=True, help="Existing launchd plist to lint"
+    )
+    p_pai_watch_doctor.add_argument("--python", default=None, help="Python executable")
+    p_pai_watch_doctor.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow live ~/.mnemos DB paths during explicit launch-gate checks",
+    )
+    p_pai_review_gate = pai_sub.add_parser(
+        "review-gate",
+        help="Run diff-focused adversarial U3c review gate",
+    )
+    p_pai_review_gate.add_argument(
+        "--base-ref",
+        required=True,
+        help="Explicit non-HEAD git ref to compare against for changed-file review",
+    )
+    p_pai_review_gate.add_argument(
+        "--intent",
+        default=None,
+        help="Intent artifact path for the U3c launch diff",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -308,6 +516,7 @@ def main(argv: list[str] | None = None) -> int:
         "hermes": _cmd_hermes,
         "identity": _cmd_identity,
         "mcp": _cmd_mcp,
+        "pai-import": _cmd_pai_import,
     }
 
     handler = handlers.get(args.command)
@@ -717,6 +926,225 @@ def _cmd_identity(args: argparse.Namespace) -> int:
         return run_accept_command(args)
     print("Usage: mnemos identity {diff|accept}", file=sys.stderr)
     return 1
+
+
+def _cmd_pai_import(args: argparse.Namespace) -> int:
+    """Operator workflow for PAI source imports."""
+    command = getattr(args, "pai_import_command", None)
+    valid_commands = {
+        "preview",
+        "apply",
+        "watch-preview",
+        "watch-apply",
+        "watch-once",
+        "watch-plist",
+        "watch-doctor",
+        "review-gate",
+    }
+    if command not in valid_commands:
+        print(
+            "Usage: mnemos pai-import "
+            "{preview|apply|watch-preview|watch-apply|watch-once|watch-plist|watch-doctor|review-gate}",
+            file=sys.stderr,
+        )
+        return 1
+
+    db_path = getattr(args, "db_path", None)
+    if command not in {"watch-plist", "review-gate"} and not db_path:
+        print(
+            "mnemos pai-import requires --db-path; use a representative test DB",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        if command == "review-gate":
+            from .importer import DEFAULT_U3C_INTENT_PATH, run_pai_diff_review_gate
+
+            report = run_pai_diff_review_gate(
+                repo_root=Path.cwd(),
+                base_ref=args.base_ref,
+                intent_path=args.intent or DEFAULT_U3C_INTENT_PATH,
+            )
+            _print_pai_review_gate_report(report)
+            return 0 if report.ok else 1
+
+        if command == "watch-plist":
+            from .importer import DEFAULT_WATCH_LABEL, write_pai_watch_launchd_plist
+
+            plist = write_pai_watch_launchd_plist(
+                plist_path=args.plist,
+                manifest_path=args.manifest,
+                db_path=args.db_path,
+                state_path=args.state,
+                artifact_dir=args.artifact_dir,
+                backup_dir=args.backup_dir,
+                label=args.label or DEFAULT_WATCH_LABEL,
+                interval_seconds=args.interval_seconds,
+                backup_keep=args.backup_keep,
+                python_executable=args.python,
+                allow_live_db=args.allow_live_db,
+            )
+            print(f"PAI watch launchd plist: {plist}")
+            return 0
+
+        if command == "watch-doctor":
+            from .importer import run_pai_watch_doctor
+
+            report = run_pai_watch_doctor(
+                manifest_path=args.manifest,
+                db_path=db_path,
+                state_path=args.state,
+                artifact_dir=args.artifact_dir,
+                backup_dir=args.backup_dir,
+                backup_keep=args.backup_keep,
+                plist_path=args.plist,
+                python_executable=args.python,
+                allow_live_db=args.allow_live_db,
+            )
+            _print_pai_watch_doctor_report(report)
+            return 0 if report.ok else 1
+
+        if command == "preview":
+            from .importer import ACTION_ERROR, preview_pai_manifest
+
+            run = preview_pai_manifest(
+                db_path=db_path,
+                manifest_path=args.manifest,
+                artifact_path=args.artifact,
+                allow_live_db=args.allow_live_db,
+            )
+            _print_pai_operator_run(run, db_path=db_path)
+            return 1 if run.preview.counts.get(ACTION_ERROR, 0) else 0
+
+        if command == "watch-preview":
+            from .importer import ACTION_ERROR, preview_pai_watch_manifest
+
+            run = preview_pai_watch_manifest(
+                db_path=db_path,
+                manifest_path=args.manifest,
+                artifact_path=args.artifact,
+                allow_live_db=args.allow_live_db,
+            )
+            _print_pai_operator_run(run, db_path=db_path)
+            return 1 if run.preview.counts.get(ACTION_ERROR, 0) else 0
+
+        if command == "watch-once":
+            from .importer import ACTION_ERROR, pai_watch_once
+
+            watch = pai_watch_once(
+                db_path=db_path,
+                manifest_path=args.manifest,
+                state_path=args.state,
+                artifact_dir=args.artifact_dir,
+                backup_dir=args.backup_dir,
+                backup_keep=args.backup_keep,
+                apply=args.apply,
+                force=args.force,
+                allow_live_db=args.allow_live_db,
+            )
+            if watch.operator_run is None:
+                print("PAI watch once")
+                print("--------------")
+                print(f"Job:      {watch.manifest.job_id}")
+                print(f"State:    {watch.state_path}")
+                print("Changed:  none")
+                return 0
+            _print_pai_operator_run(watch.operator_run, db_path=db_path)
+            if not args.apply:
+                return 1 if watch.operator_run.preview.counts.get(ACTION_ERROR, 0) else 0
+            return 0
+
+        if command == "apply":
+            from .importer import apply_pai_manifest
+
+            run = apply_pai_manifest(
+                db_path=db_path,
+                manifest_path=args.manifest,
+                artifact_path=args.artifact,
+                backup_dir=args.backup_dir,
+                backup_keep=args.backup_keep,
+                allow_live_db=args.allow_live_db,
+            )
+            _print_pai_operator_run(run, db_path=db_path)
+            return 0
+
+        from .importer import apply_pai_watch_manifest
+
+        run = apply_pai_watch_manifest(
+            db_path=db_path,
+            manifest_path=args.manifest,
+            artifact_path=args.artifact,
+            backup_dir=args.backup_dir,
+            backup_keep=args.backup_keep,
+            allow_live_db=args.allow_live_db,
+        )
+        _print_pai_operator_run(run, db_path=db_path)
+        return 0
+    except Exception as exc:
+        print(f"PAI import {command} failed: {exc}", file=sys.stderr)
+        return 1
+
+
+def _print_pai_operator_run(run, *, db_path: str) -> None:
+    titles = {
+        "preview": "PAI import preview",
+        "apply": "PAI import apply",
+        "watch-preview": "PAI watch preview",
+        "watch-apply": "PAI watch apply",
+    }
+    title = titles.get(run.mode, f"PAI import {run.mode}")
+    print(title)
+    print("-" * len(title))
+    print(f"Job:      {run.manifest.job_id}")
+    print(f"DB:       {Path(db_path).expanduser()}")
+    print(f"Manifest: {run.manifest.path.expanduser()}")
+    if run.backup_path is not None:
+        print(f"Backup:   {run.backup_path}")
+    if run.artifact_path is not None:
+        print(f"Artifact: {run.artifact_path}")
+    print(f"Rows:     {len(run.result.rows if run.result is not None else run.preview.rows)}")
+    print(f"Counts:   {_format_counts(run.counts)}")
+
+
+def _print_pai_watch_doctor_report(report) -> None:
+    print("PAI watch doctor")
+    print("----------------")
+    for check in report.checks:
+        print(f"[{check.status}] {check.ident:<3} {check.label}: {check.evidence}")
+    passed = sum(1 for check in report.checks if check.status == "PASS")
+    failed = sum(1 for check in report.checks if check.status == "FAIL")
+    skipped = sum(1 for check in report.checks if check.status == "SKIP")
+    print()
+    print(f"Summary: {passed} passed, {failed} failed, {skipped} skipped")
+    print(f"Verdict: {'GREEN' if report.ok else 'RED'}")
+
+
+def _print_pai_review_gate_report(report) -> None:
+    print("PAI diff review gate")
+    print("--------------------")
+    print(f"Base:     {report.base_ref}")
+    print(f"Intent:   {report.intent_path}")
+    print(f"Changed:  {len(report.changed_files)} file(s)")
+    for path in report.changed_files:
+        print(f"  - {path}")
+    if report.findings:
+        print()
+        print("findings{id,severity,file,description,required_proof,status,action}:")
+        for finding in report.findings:
+            print(
+                f"  {finding.ident},{finding.severity},{finding.file},"
+                f"{finding.description},{finding.required_proof},"
+                f"{finding.status},{finding.action}"
+            )
+    print()
+    print(f"Verdict: {'GREEN' if report.ok else 'RED'}")
+
+
+def _format_counts(counts: dict[str, int]) -> str:
+    if not counts:
+        return "(none)"
+    return ", ".join(f"{name}={count}" for name, count in sorted(counts.items()))
 
 
 def _cmd_mcp(args: argparse.Namespace) -> int:

@@ -10,7 +10,7 @@ import json
 import logging
 import os
 
-from ..events import SubstrateEvent, EventType
+from ..events import SubstrateEvent
 from ..config import SubstrateConfig
 from ..modulators import ModulatorState
 
@@ -38,6 +38,13 @@ def handle(
     to_engram = store.get_engram(to_id)
 
     if not from_engram or not to_engram:
+        return produced_events
+    if (
+        from_engram.owner_agent_id != config.agent_id
+        or to_engram.owner_agent_id != config.agent_id
+        or not from_engram.consolidation_authorized
+        or not to_engram.consolidation_authorized
+    ):
         return produced_events
 
     agent_name = config.agent_name
@@ -90,6 +97,7 @@ If there's a genuine insight: {{"insight": "<the insight>", "significance": "<wh
         impact=significance,
         kind="semantic",
         tags=["insight", "connection"],
+        agent_id=config.agent_id,
         skip_surprise_detection=True,
     )
 

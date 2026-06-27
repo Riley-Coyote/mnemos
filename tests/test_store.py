@@ -3,7 +3,7 @@ import pytest
 
 from mnemos.core.engram import Connection, Engram
 from mnemos.core.belief import Belief
-from mnemos.core.types import ConnectionRelation, EngramState
+from mnemos.core.types import ConnectionRelation
 from mnemos.store.sqlite_store import EngramStore
 
 
@@ -76,6 +76,47 @@ class TestEngramStore:
         assert matched.content == "Type hints improve code quality"
         assert matched.confidence == pytest.approx(0.7)
 
+    def test_get_beliefs_excludes_pending_confidence_by_default(self, store):
+        """Pending-confidence beliefs require an explicit opt-in."""
+        pending = Belief(
+            content="Imported belief awaits confidence review",
+            confidence=0.9,
+            confidence_pending_review=True,
+        )
+        reviewed = Belief(
+            content="Reviewed belief participates in consumers",
+            confidence=0.6,
+        )
+        store.save_belief(pending)
+        store.save_belief(reviewed)
+
+        default_beliefs = store.get_beliefs()
+        assert reviewed.id in {b.id for b in default_beliefs}
+        assert pending.id not in {b.id for b in default_beliefs}
+
+        all_beliefs = store.get_beliefs(include_pending_review=True)
+        assert pending.id in {b.id for b in all_beliefs}
+        assert reviewed.id in {b.id for b in all_beliefs}
+
+    def test_get_stats_excludes_pending_confidence_by_default(self, store):
+        pending = Belief(
+            content="Imported stats belief awaits confidence review",
+            confidence=0.9,
+            confidence_pending_review=True,
+        )
+        reviewed = Belief(
+            content="Reviewed stats belief participates in status",
+            confidence=0.6,
+        )
+        store.save_belief(pending)
+        store.save_belief(reviewed)
+
+        default_stats = store.get_stats()
+        all_stats = store.get_stats(include_pending_review=True)
+
+        assert default_stats["beliefs_active"] == 1
+        assert all_stats["beliefs_active"] == 2
+
     def test_count_engrams(self, store):
         """Count engrams by state."""
         e1 = Engram(content="Active memory one")
@@ -85,6 +126,21 @@ class TestEngramStore:
 
         count = store.count_engrams()
         assert count >= 2
+
+    def test_read_only_get_recent_opens_lazy_connection(self, tmp_db):
+        writable = EngramStore(tmp_db)
+        engram = Engram(content="Read-only recent memory")
+        writable.save_engram(engram)
+        writable.close()
+
+        read_only = EngramStore(tmp_db, read_only=True)
+        try:
+            assert read_only._conn is None
+            recent = read_only.get_recent_engrams(limit=10)
+        finally:
+            read_only.close()
+
+        assert engram.id in {item.id for item in recent}
 
     def test_delete_engram(self, store):
         """Verify delete removes the engram."""

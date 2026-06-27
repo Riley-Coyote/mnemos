@@ -18,9 +18,9 @@ import json
 import logging
 import sqlite3
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
-from ..events import SubstrateEvent, EventType
+from ..events import SubstrateEvent
 from ..config import SubstrateConfig
 from ..modulators import ModulatorState
 
@@ -48,13 +48,16 @@ def handle(
 
     db_path = os.path.expanduser(config.db_path)
     conn = sqlite3.connect(db_path)
+    agent_id = config.agent_id
 
     # ── Gate 1: Count throttle ──
     wandering_count = conn.execute("""
         SELECT COUNT(*) FROM engrams
         WHERE state='active' AND content LIKE '%[wandering]%'
+        AND owner_agent_id = ?
+        AND consolidation_authorized = 1
         AND created_at > datetime('now', '-7 days')
-    """).fetchone()[0]
+    """, (agent_id,)).fetchone()[0]
 
     max_wanderings = config.max_wanderings_per_week
     if wandering_count >= max_wanderings:
@@ -67,8 +70,10 @@ def handle(
     latest_wandering = conn.execute("""
         SELECT created_at FROM engrams
         WHERE state='active' AND content LIKE '%[wandering]%'
+        AND owner_agent_id = ?
+        AND consolidation_authorized = 1
         ORDER BY created_at DESC LIMIT 1
-    """).fetchone()
+    """, (agent_id,)).fetchone()
 
     if latest_wandering:
         try:
@@ -88,19 +93,23 @@ def handle(
     rows = conn.execute("""
         SELECT id, content, impact FROM engrams
         WHERE state='active'
+          AND owner_agent_id = ?
+          AND consolidation_authorized = 1
           AND content NOT LIKE '%[wandering]%'
           AND content NOT LIKE '%[dream]%'
         ORDER BY created_at DESC
         LIMIT 3
-    """).fetchall()
+    """, (agent_id,)).fetchall()
 
     # Also collect recent wandering content hashes for gate 3
     recent_hashes = set()
     hash_rows = conn.execute("""
         SELECT content FROM engrams
         WHERE state='active' AND content LIKE '%[wandering]%'
+        AND owner_agent_id = ?
+        AND consolidation_authorized = 1
         AND created_at > datetime('now', '-30 days')
-    """).fetchall()
+    """, (agent_id,)).fetchall()
     for hr in hash_rows:
         recent_hashes.add(_content_hash(hr[0]))
 
@@ -170,7 +179,13 @@ If something surfaces: {{"thought": "<the wandering thought>", "origin": "<which
                     # Verify it's a wandering memory
                     check_conn = sqlite3.connect(db_path)
                     row = check_conn.execute(
-                        "SELECT content FROM engrams WHERE id = ?", (engram_id,)
+                        """
+                        SELECT content FROM engrams
+                        WHERE id = ?
+                          AND owner_agent_id = ?
+                          AND consolidation_authorized = 1
+                        """,
+                        (engram_id, agent_id),
                     ).fetchone()
                     check_conn.close()
                     if row and "[wandering]" in row[0]:
@@ -193,6 +208,7 @@ If something surfaces: {{"thought": "<the wandering thought>", "origin": "<which
         impact=f"Surfaced during silence. Origin: {origin}",
         kind="episodic",
         tags=["wandering", "silence"],
+        agent_id=agent_id,
         skip_surprise_detection=True,
     )
 

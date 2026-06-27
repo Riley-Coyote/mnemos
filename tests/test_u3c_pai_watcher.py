@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import mnemos.importer.operator as pai_operator
 from mnemos.cli import main
 from mnemos.importer import (
     ACTION_NOOP,
@@ -76,6 +77,55 @@ def test_u3c_watch_once_applies_changed_sources_and_records_state(tmp_path):
     assert second.changed is False
     assert second.operator_run is None
     assert second.state_written is False
+
+
+def test_u3c_watch_once_noop_apply_still_validates_operator_db(tmp_path, monkeypatch):
+    manifest, _source = _write_manifest(tmp_path)
+    db_path = tmp_path / "representative.db"
+    state_path = tmp_path / "watch-state.json"
+    EngramStore(db_path).close()
+    pai_watch_once(
+        db_path=db_path,
+        manifest_path=manifest,
+        state_path=state_path,
+        artifact_dir=tmp_path / "artifacts",
+        backup_dir=tmp_path / "backups",
+        apply=True,
+        force=True,
+    )
+
+    with pytest.raises(FileNotFoundError, match="PAI watch apply requires"):
+        pai_watch_once(
+            db_path=tmp_path / "missing.db",
+            manifest_path=manifest,
+            state_path=state_path,
+            artifact_dir=tmp_path / "missing-artifacts",
+            backup_dir=tmp_path / "missing-backups",
+            apply=True,
+        )
+
+    with pytest.raises(ValueError, match="backup_keep"):
+        pai_watch_once(
+            db_path=db_path,
+            manifest_path=manifest,
+            state_path=state_path,
+            artifact_dir=tmp_path / "bad-keep-artifacts",
+            backup_dir=tmp_path / "bad-keep-backups",
+            backup_keep=0,
+            apply=True,
+        )
+
+    fake_live = tmp_path / ".mnemos" / "memory.db"
+    monkeypatch.setattr(pai_operator, "DEFAULT_LIVE_DB_PATH", fake_live)
+    with pytest.raises(ValueError, match="refuses the default live database"):
+        pai_watch_once(
+            db_path=fake_live,
+            manifest_path=manifest,
+            state_path=state_path,
+            artifact_dir=tmp_path / "live-artifacts",
+            backup_dir=tmp_path / "live-backups",
+            apply=True,
+        )
 
 
 def test_u3c_watch_once_detects_removed_manifest_source(tmp_path):

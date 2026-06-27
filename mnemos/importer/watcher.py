@@ -88,6 +88,12 @@ def pai_watch_once(
     still apply it later.
     """
     manifest = load_pai_manifest(manifest_path, allow_missing_sources=True)
+    db = _checked_operator_db_path(db_path, allow_live_db=allow_live_db)
+    if not db.exists():
+        mode = "apply" if apply else "preview"
+        raise FileNotFoundError(f"PAI watch {mode} requires an existing database: {db}")
+    if backup_keep is not None:
+        _validate_backup_keep(backup_keep)
     state = _read_watch_state(state_path)
     current = _source_fingerprints(manifest)
     changed_sources = _changed_sources(state, current, manifest=manifest)
@@ -107,7 +113,7 @@ def pai_watch_once(
     )
     if apply:
         operator_run = apply_pai_watch_manifest(
-            db_path=db_path,
+            db_path=db,
             manifest_path=manifest_path,
             artifact_path=artifact_path,
             backup_dir=backup_dir,
@@ -123,7 +129,7 @@ def pai_watch_once(
         state_written = True
     else:
         operator_run = preview_pai_watch_manifest(
-            db_path=db_path,
+            db_path=db,
             manifest_path=manifest_path,
             artifact_path=artifact_path,
             allow_live_db=allow_live_db,

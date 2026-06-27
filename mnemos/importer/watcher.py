@@ -440,14 +440,14 @@ def _doctor_plist_check(
         "--backup-dir": Path(backup_dir).expanduser().resolve(),
     }
     for flag, expected in expected_paths.items():
-        actual = _arg_value(args, flag)
-        if actual is None:
-            return False, f"plist missing {flag}"
+        actual, error = _single_arg_value(args, flag)
+        if error is not None:
+            return False, error
         if Path(actual).expanduser().resolve() != expected:
             return False, f"{flag} points at {actual}, expected {expected}"
-    keep_value = _arg_value(args, "--backup-keep")
-    if keep_value is None:
-        return False, "plist missing --backup-keep"
+    keep_value, error = _single_arg_value(args, "--backup-keep")
+    if error is not None:
+        return False, error
     try:
         keep_int = int(keep_value)
     except ValueError:
@@ -811,8 +811,28 @@ def _checked_doctor_db_path(db_path: str | Path, *, allow_live_db: bool) -> Path
     return db
 
 
-def _file_fingerprint(path: Path) -> tuple[int, str]:
-    return (path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest())
+def _file_fingerprint(path: Path) -> tuple[tuple[str, int, str], ...]:
+    main = _fingerprint_member("", path)
+    wal_path = path.with_name(path.name + "-wal")
+    wal = _fingerprint_member("-wal", wal_path, empty_is_absent=True)
+    shm = ("-shm", -1, "")
+    if wal[1] > 0:
+        shm = _fingerprint_member("-shm", path.with_name(path.name + "-shm"))
+    return (main, wal, shm)
+
+
+def _fingerprint_member(
+    label: str,
+    path: Path,
+    *,
+    empty_is_absent: bool = False,
+) -> tuple[str, int, str]:
+    if not path.exists():
+        return (label, -1, "")
+    payload = path.read_bytes()
+    if empty_is_absent and not payload:
+        return (label, -1, "")
+    return (label, len(payload), hashlib.sha256(payload).hexdigest())
 
 
 def _assert_writable_directory(path: Path) -> None:
@@ -830,15 +850,28 @@ def _doctor_counts(counts: dict[str, int]) -> str:
     return ",".join(f"{key}={value}" for key, value in sorted(counts.items()))
 
 
-def _arg_value(args: list[str], flag: str) -> str | None:
-    try:
-        index = args.index(flag)
-    except ValueError:
-        return None
-    next_index = index + 1
-    if next_index >= len(args):
-        return None
-    return args[next_index]
+def _arg_values(args: list[str], flag: str) -> list[str | None]:
+    values: list[str | None] = []
+    for index, arg in enumerate(args):
+        if arg != flag:
+            continue
+        next_index = index + 1
+        if next_index >= len(args) or args[next_index].startswith("--"):
+            values.append(None)
+            continue
+        values.append(args[next_index])
+    return values
+
+
+def _single_arg_value(args: list[str], flag: str) -> tuple[str | None, str | None]:
+    values = _arg_values(args, flag)
+    if not values:
+        return None, f"plist missing {flag}"
+    if len(values) > 1:
+        return None, f"plist duplicate {flag}"
+    if values[0] is None:
+        return None, f"plist missing value for {flag}"
+    return values[0], None
 
 
 def _copy_sqlite_family(src: Path, dst: Path) -> None:

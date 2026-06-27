@@ -124,6 +124,11 @@ _PROOF_CASES = [
     ("docstring-only",         'def t():\n    """d"""\n', False),
     ("bare-raises",            "def t():\n    pytest.raises(Exception)\n", False),
     ("inbody-skip",            "def t():\n    pytest.skip('x')\n", False),
+    ("inbody-skip-assert",     "def t():\n    pytest.skip('x')\n    assert True\n", False),
+    ("inbody-xfail-assert",    "def t():\n    pytest.xfail('x')\n    assert True\n", False),
+    ("return-before-assert",   "def t():\n    return\n    assert True\n", False),
+    ("nested-assert-only",     "def t():\n    def helper():\n        assert True\n", False),
+    ("nested-skip-real-assert","def t():\n    def helper():\n        pytest.skip('x')\n    assert True\n", True),
     ("decorator-skip",         "import pytest\n@pytest.mark.skip\ndef t():\n    assert True\n", False),
     ("decorator-xfail",        "import pytest\n@pytest.mark.xfail\ndef t():\n    assert True\n", False),
     ("module-pytestmark-skip", "import pytest\npytestmark = pytest.mark.skip\ndef t():\n    assert True\n", False),
@@ -350,6 +355,23 @@ def test_rename_preserves_proof_requirement(tmp_path):
     assert "mnemos/importer/watcher.py" in changed
     surface = rg._proof_surface_findings(set(changed))
     assert any("watcher behavior changed" in f.description for f in surface)
+
+
+def test_git_changed_files_includes_deleted_paths(tmp_path):
+    g = _make_repo(tmp_path)
+    (tmp_path / "mnemos" / "importer").mkdir(parents=True)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "mnemos" / "importer" / "watcher.py").write_text("# w\n")
+    (tmp_path / "tests" / "test_u3c_pai_watch_doctor.py").write_text("def t():\n    assert True\n")
+    g("add", "-A")
+    g("commit", "-q", "-m", "init")
+    (tmp_path / "mnemos" / "importer" / "watcher.py").write_text("# w\nCHANGED = 1\n")
+    (tmp_path / "tests" / "test_u3c_pai_watch_doctor.py").unlink()
+    g("add", "-A")
+    g("commit", "-q", "-m", "delete proof")
+    changed = rg._git_changed_files(tmp_path, "HEAD~1")
+    assert "mnemos/importer/watcher.py" in changed
+    assert "tests/test_u3c_pai_watch_doctor.py" in changed
 
 
 def test_deleted_proof_test_while_surface_changed():

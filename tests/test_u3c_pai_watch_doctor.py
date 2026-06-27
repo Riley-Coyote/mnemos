@@ -2,6 +2,7 @@ import json
 import plistlib
 import sqlite3
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from mnemos.importer import (
     write_pai_watch_launchd_plist,
 )
 from mnemos.store.sqlite_store import EngramStore
+import mnemos.importer.watcher as watcher_module
 
 
 def _write_manifest(tmp_path: Path) -> tuple[Path, Path]:
@@ -160,6 +162,103 @@ def test_u3c_watch_doctor_requires_backup_keep_in_plist(tmp_path):
     assert _check_status(report, "D5") == "FAIL"
     assert "missing --backup-keep" in next(
         check.evidence for check in report.checks if check.ident == "D5"
+    )
+
+
+def test_u3c_watch_doctor_rejects_duplicate_plist_path_flags(tmp_path):
+    manifest, _source = _write_manifest(tmp_path)
+    db_path = tmp_path / "representative.db"
+    EngramStore(db_path).close()
+    paths = _doctor_paths(tmp_path)
+    plist = tmp_path / "watch.plist"
+    write_pai_watch_launchd_plist(
+        plist_path=plist,
+        manifest_path=manifest,
+        db_path=db_path,
+        backup_keep=2,
+        python_executable=sys.executable,
+        **paths,
+    )
+    payload = plistlib.loads(plist.read_bytes())
+    payload["ProgramArguments"].extend(["--db-path", str(tmp_path / "other.db")])
+    plist.write_bytes(plistlib.dumps(payload, sort_keys=True))
+
+    report = run_pai_watch_doctor(
+        manifest_path=manifest,
+        db_path=db_path,
+        backup_keep=2,
+        plist_path=plist,
+        python_executable=sys.executable,
+        **paths,
+    )
+
+    assert report.ok is False
+    assert _check_status(report, "D5") == "FAIL"
+    assert "duplicate --db-path" in next(
+        check.evidence for check in report.checks if check.ident == "D5"
+    )
+
+
+def test_u3c_watch_doctor_rejects_duplicate_plist_retention_flags(tmp_path):
+    manifest, _source = _write_manifest(tmp_path)
+    db_path = tmp_path / "representative.db"
+    EngramStore(db_path).close()
+    paths = _doctor_paths(tmp_path)
+    plist = tmp_path / "watch.plist"
+    write_pai_watch_launchd_plist(
+        plist_path=plist,
+        manifest_path=manifest,
+        db_path=db_path,
+        backup_keep=2,
+        python_executable=sys.executable,
+        **paths,
+    )
+    payload = plistlib.loads(plist.read_bytes())
+    payload["ProgramArguments"].extend(["--backup-keep", "99"])
+    plist.write_bytes(plistlib.dumps(payload, sort_keys=True))
+
+    report = run_pai_watch_doctor(
+        manifest_path=manifest,
+        db_path=db_path,
+        backup_keep=2,
+        plist_path=plist,
+        python_executable=sys.executable,
+        **paths,
+    )
+
+    assert report.ok is False
+    assert _check_status(report, "D5") == "FAIL"
+    assert "duplicate --backup-keep" in next(
+        check.evidence for check in report.checks if check.ident == "D5"
+    )
+
+
+def test_u3c_watch_doctor_preview_catches_wal_family_mutation(tmp_path, monkeypatch):
+    manifest, _source = _write_manifest(tmp_path)
+    db_path = tmp_path / "representative.db"
+    EngramStore(db_path).close()
+    paths = _doctor_paths(tmp_path)
+
+    def mutate_wal(**kwargs):
+        Path(kwargs["db_path"]).with_name(Path(kwargs["db_path"]).name + "-wal").write_bytes(
+            b"dirty-wal"
+        )
+        return SimpleNamespace(preview=SimpleNamespace(rows=[]), counts={})
+
+    monkeypatch.setattr(watcher_module, "preview_pai_watch_manifest", mutate_wal)
+
+    report = run_pai_watch_doctor(
+        manifest_path=manifest,
+        db_path=db_path,
+        backup_keep=2,
+        python_executable=sys.executable,
+        **paths,
+    )
+
+    assert report.ok is False
+    assert _check_status(report, "D1") == "FAIL"
+    assert "mutated representative DB bytes" in next(
+        check.evidence for check in report.checks if check.ident == "D1"
     )
 
 

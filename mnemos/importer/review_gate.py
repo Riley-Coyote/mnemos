@@ -880,14 +880,130 @@ def _body_has_substantive_proof(body: Sequence[ast.stmt]) -> bool:
     ]
     if not substantive:
         return False
-    return any(
-        isinstance(node, ast.Assert)
-        or (
-            isinstance(node, ast.Call)
-            and _call_name(node) in {"main", "run_pai_diff_review_gate", "evaluate_pai_diff_review"}
+    if any(_statement_has_skip_or_xfail_call(node) for node in substantive):
+        return False
+    return _reachable_body_has_proof(substantive)
+
+
+def _reachable_body_has_proof(body: Sequence[ast.stmt]) -> bool:
+    for node in body:
+        if _statement_has_substantive_proof(node):
+            return True
+        if _statement_is_terminal(node):
+            return False
+    return False
+
+
+def _statement_has_substantive_proof(node: ast.stmt) -> bool:
+    if isinstance(node, ast.Assert):
+        return True
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return False
+    if isinstance(node, ast.Expr):
+        return _expr_has_proof_call(node.value)
+    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        return any(_expr_has_proof_call(value) for value in _statement_values(node))
+    if isinstance(node, (ast.With, ast.AsyncWith, ast.For, ast.AsyncFor, ast.While)):
+        return _reachable_body_has_proof(node.body) or _reachable_body_has_proof(
+            getattr(node, "orelse", [])
         )
-        for node in ast.walk(ast.Module(body=list(substantive), type_ignores=[]))
+    if isinstance(node, ast.If):
+        truth = _literal_bool(node.test)
+        if truth is True:
+            return _reachable_body_has_proof(node.body)
+        if truth is False:
+            return _reachable_body_has_proof(node.orelse)
+        return _reachable_body_has_proof(node.body) or _reachable_body_has_proof(node.orelse)
+    if isinstance(node, ast.Try):
+        return (
+            _reachable_body_has_proof(node.body)
+            or any(_reachable_body_has_proof(handler.body) for handler in node.handlers)
+            or _reachable_body_has_proof(node.orelse)
+            or _reachable_body_has_proof(node.finalbody)
+        )
+    if isinstance(node, ast.Match):
+        return any(_reachable_body_has_proof(case.body) for case in node.cases)
+    return any(_expr_has_proof_call(value) for value in _statement_values(node))
+
+
+def _statement_values(node: ast.AST) -> tuple[ast.AST, ...]:
+    values: list[ast.AST] = []
+    for field_name, value in ast.iter_fields(node):
+        if field_name in {"body", "orelse", "finalbody", "handlers", "cases", "decorator_list"}:
+            continue
+        if isinstance(value, ast.AST):
+            values.append(value)
+        elif isinstance(value, list):
+            values.extend(item for item in value if isinstance(item, ast.AST))
+    return tuple(values)
+
+
+def _expr_has_proof_call(node: ast.AST | None) -> bool:
+    if node is None:
+        return False
+    for child in _walk_without_nested_defs(node):
+        if isinstance(child, ast.Call) and _call_name(child) in {
+            "main",
+            "run_pai_diff_review_gate",
+            "evaluate_pai_diff_review",
+        }:
+            return True
+    return False
+
+
+def _statement_has_skip_or_xfail_call(node: ast.AST) -> bool:
+    return any(
+        isinstance(child, ast.Call) and _call_name(child) in {"skip", "xfail"}
+        for child in _walk_without_nested_defs(node)
     )
+
+
+def _walk_without_nested_defs(node: ast.AST):
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        yield current
+        if isinstance(
+            current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+        ):
+            continue
+        stack.extend(reversed(list(ast.iter_child_nodes(current))))
+
+
+def _literal_bool(node: ast.AST) -> bool | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+        return node.value
+    return None
+
+
+def _body_is_terminal(body: Sequence[ast.stmt]) -> bool:
+    for node in body:
+        if _statement_is_terminal(node):
+            return True
+    return False
+
+
+def _statement_is_terminal(node: ast.stmt) -> bool:
+    if isinstance(node, (ast.Return, ast.Raise)):
+        return True
+    if isinstance(node, (ast.With, ast.AsyncWith)):
+        return _body_is_terminal(node.body)
+    if isinstance(node, ast.If):
+        truth = _literal_bool(node.test)
+        if truth is True:
+            return _body_is_terminal(node.body)
+        if truth is False:
+            return _body_is_terminal(node.orelse)
+        return bool(node.orelse) and _body_is_terminal(node.body) and _body_is_terminal(node.orelse)
+    if isinstance(node, ast.Try):
+        if _body_is_terminal(node.finalbody):
+            return True
+        return (
+            _body_is_terminal(node.body)
+            and all(_body_is_terminal(handler.body) for handler in node.handlers)
+            and (not node.orelse or _body_is_terminal(node.orelse))
+        )
+    return False
 
 
 def _call_name(node: ast.Call) -> str:
@@ -1421,7 +1537,7 @@ def _git_changed_files(repo_root: Path, base_ref: str) -> list[str]:
             "diff",
             "--name-status",
             "--find-renames",
-            "--diff-filter=ACMRTUXB",
+            "--diff-filter=ACDMRTUXB",
             base_ref,
             "--",
         ],

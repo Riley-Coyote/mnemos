@@ -435,6 +435,7 @@ mnemos pai-import watch-plist --manifest ./pai-manifest.json --db-path ./test.db
                           --state ./pai-watch-state.json \
                           --artifact-dir ./pai-watch-artifacts \
                           --backup-dir  ./pai-import-backups \
+                          --backup-keep 24 \
                           --plist ~/Library/LaunchAgents/com.davidef.mnemos.duallife.plist
 ```
 

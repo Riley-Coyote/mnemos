@@ -76,22 +76,21 @@ to `9ef5242633d1e7f410bc0d50e8283967b2d913f03e144db66686790ff761677c`.
 Exact latest verification:
 
 ```text
-uv run --extra dev mnemos pai-import review-gate --base-ref HEAD --intent docs/u3c-step3-launch-intent.md
-Verdict: GREEN
-
 uv run --extra dev pytest -q tests/test_u3c_pai_review_gate.py tests/test_u3c_pai_review_gate_attacks.py
-136 passed in 0.51s
+161 passed in 0.44s
 
-uv run --extra dev pytest -q tests/test_u3b_pai_importer.py tests/test_u3b_pai_operator.py tests/test_u3c_pai_watch.py tests/test_u3c_pai_operator.py tests/test_u3c_pai_watcher.py tests/test_u3c_pai_watch_doctor.py tests/test_u3c_pai_review_gate.py tests/test_u3c_pai_review_gate_attacks.py
-241 passed in 2.63s
+Review-gate CLI regressions cover explicit branch-point GREEN and HEAD-equivalent RED.
+
+uv run --extra dev pytest -q tests/test_u3c_pai_review_gate.py tests/test_u3c_pai_review_gate_attacks.py tests/test_u3c_pai_watch_doctor.py
+168 passed in 1.90s
 
 uv run --extra dev --extra mcp pytest -q
-473 passed, 2 skipped in 4.42s
+498 passed, 2 skipped in 5.66s
 
-uv run --extra dev ruff check mnemos/importer/review_gate.py tests/test_u3c_pai_review_gate.py tests/test_u3c_pai_review_gate_attacks.py
+uv run --extra dev ruff check mnemos/importer/review_gate.py mnemos/cli.py tests/test_u3c_pai_review_gate.py tests/test_u3c_pai_review_gate_attacks.py
 All checks passed!
 
-uv run --extra mcp python -m py_compile mnemos/importer/review_gate.py
+uv run --extra dev python -m py_compile mnemos/importer/review_gate.py mnemos/cli.py
 # no output, exit 0
 
 git diff --check
@@ -121,7 +120,7 @@ Actual CLI output after the latest patches:
 ```text
 PAI diff review gate
 --------------------
-Base:     HEAD
+Base:     fd34073963e768f47ee017ce7866aff816936bb0
 Intent:   /private/tmp/mnemos-u3c-red4-PEHjAk/docs/u3c-step3-launch-intent.md
 Changed:  1 file(s)
   - mnemos/importer/pai.py
@@ -308,24 +307,20 @@ required_proof  treat no-arg list()/tuple()/set() as empty; imported constants
 status      open
 action      codex-fix-or-accept
 
-residual    tautological always-true predicates (WHERE 1=1, WHERE id=id) cannot
-            be distinguished from real scope by static WHERE-id detection; needs
-            semantic SQL analysis or the behavioral watch-doctor layer.
+resolved    tautological always-true predicates and IN SELECT identity scopes
+            are RED in the static diff gate.
 ```
 
 Proof:
 
 ```text
-uv run --extra dev mnemos pai-import review-gate --base-ref HEAD --intent docs/u3c-step3-launch-intent.md
-Verdict: GREEN
-
 uv run --extra dev pytest -q tests/test_u3c_pai_review_gate.py tests/test_u3c_pai_review_gate_attacks.py
-147 passed, 7 xfailed
+161 passed in 0.44s
 
 uv run --extra dev --extra mcp pytest -q
-484 passed, 2 skipped, 7 xfailed
+498 passed, 2 skipped
 
-uv run --extra dev ruff check mnemos/importer/review_gate.py tests/test_u3c_pai_review_gate.py tests/test_u3c_pai_review_gate_attacks.py
+uv run --extra dev ruff check mnemos/importer/review_gate.py mnemos/cli.py tests/test_u3c_pai_review_gate.py tests/test_u3c_pai_review_gate_attacks.py
 All checks passed!
 
 git diff --check
@@ -374,17 +369,16 @@ Patched:
 The rule-signature pin fired again; digest is now:
 
 ```text
-4a3939e4556d004f80816be7dfca6ea10328fa9f2ae2eb0d586228fa882ff1fe
+ab6827850961e7254a0506c31f749b02ae1589b6f84a8c25b25732ab598bc632
 ```
 
 Current proof:
 
 ```text
 uv run --extra dev pytest -q tests/test_u3c_pai_review_gate.py tests/test_u3c_pai_review_gate_attacks.py
-154 passed in 0.55s
+161 passed in 0.44s
 
-uv run --extra dev mnemos pai-import review-gate --base-ref HEAD --intent docs/u3c-step3-launch-intent.md
-Verdict: GREEN
+Review-gate CLI regressions cover explicit branch-point GREEN and HEAD-equivalent RED.
 ```
 
 Enforcement links:

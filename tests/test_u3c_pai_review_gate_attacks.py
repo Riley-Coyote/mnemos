@@ -72,8 +72,14 @@ _LIFECYCLE_CASES = [
     ("replace-into",            ('conn.execute("REPLACE INTO engrams (id, state) VALUES (1, \'x\')")',), True),
     ("multiline-update",        ('conn.execute(', '    "UPDATE engrams"', '    " SET state = \'archived\'")'), True),
     ("state-scoped-not-id",     ('conn.execute("UPDATE engrams SET state=\'archived\' WHERE state=\'active\'")',), True),
+    ("or-tautology",            ('conn.execute("DELETE FROM engrams WHERE id = ? OR 1=1", (i,))',), True),
+    ("in-select-wide",          ('conn.execute("DELETE FROM engrams WHERE id IN (SELECT id FROM engrams)")',), True),
+    ("id-equals-id",            ('conn.execute("UPDATE engrams SET state=\'archived\' WHERE id = id")',), True),
     # safe / must NOT flag
     ("scoped-delete-id",        ('conn.execute("DELETE FROM engrams WHERE id = ?", (i,))',), False),
+    ("scoped-delete-id-list",   ('conn.execute("DELETE FROM engrams WHERE id IN (?, ?)", (a, b))',), False),
+    ("scoped-delete-id-or-id",  ('conn.execute("DELETE FROM engrams WHERE id = ? OR id = ?", (a, b))',), False),
+    ("scoped-multiline-update", ('conn.execute(', '    "UPDATE engrams SET state=\'archived\' "', '    "WHERE id = ?"', '    (i,),', ')'), False),
     ("scoped-update-target",    ('conn.execute("UPDATE engrams SET state=\'archived\' WHERE target_id = ?", (t,))',), False),
     ("scoped-delete-jobid",     ('conn.execute("DELETE FROM archive WHERE job_id = ?", (j,))',), False),
     ("select-only",             ('rows = conn.execute("SELECT id FROM engrams")',), False),
@@ -444,12 +450,12 @@ def test_empty_parametrize_tuple_call_and_imported_constant(src):
 
 
 # =============================================================================
-# Real-diff guard: the actual U3c worktree diff must remain GREEN.
+# Real-diff guard: committed review must fail closed on HEAD.
 # =============================================================================
-def test_real_worktree_diff_is_green():
+def test_real_worktree_diff_rejects_head_base():
     report = rg.run_pai_diff_review_gate(
         repo_root=None,
         base_ref="HEAD",
         intent_path="docs/u3c-step3-launch-intent.md",
     )
-    assert report.ok, [f.ident for f in report.findings]
+    assert any(f.ident == "RG-base-ref-head" for f in report.findings)

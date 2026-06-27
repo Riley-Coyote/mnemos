@@ -19,6 +19,8 @@ _LIFECYCLE_TABLES = (
     "archive",
     "engrams_fts",
 )
+_IDENTITY_COLUMNS = ("id", "target_id", "job_id", "source_path")
+_IDENTITY_COLUMN_PATTERN = "|".join(_IDENTITY_COLUMNS)
 _PERSISTENCE_ALIASES = {"state_path", "plist_path", "target_path", "output_file"}
 _SAFE_WATCHER_WRITE_RECEIVERS = {"tmp", "source", "manifest", "probe"}
 
@@ -61,7 +63,7 @@ class _ProofRequirement:
 def run_pai_diff_review_gate(
     *,
     repo_root: str | Path | None = None,
-    base_ref: str = "HEAD",
+    base_ref: str | None = None,
     intent_path: str | Path = DEFAULT_U3C_INTENT_PATH,
 ) -> PaiReviewReport:
     """Review the current diff against the U3c launch intent.
@@ -73,8 +75,29 @@ def run_pai_diff_review_gate(
     intent = Path(intent_path).expanduser()
     if not intent.is_absolute():
         intent = root / intent
-    changed_files = _git_changed_files(root, base_ref)
-    diff_text = _git_diff(root, base_ref)
+    display_base_ref = str(base_ref or "").strip()
+    if display_base_ref:
+        changed_files = _git_changed_files(root, display_base_ref)
+        diff_text = _git_diff(root, display_base_ref)
+        committed_review_findings = _committed_review_findings(
+            repo_root=root,
+            base_ref=display_base_ref,
+            changed_files=changed_files,
+        )
+    else:
+        changed_files = []
+        diff_text = ""
+        committed_review_findings = [
+            PaiReviewFinding(
+                ident="RG-base-ref-required",
+                severity="critical",
+                file="mnemos/importer/review_gate.py",
+                description="Committed diff review requires an explicit non-HEAD base ref",
+                required_proof="pass --base-ref as the merge-base or branch point, not HEAD",
+                status="missing",
+                action="must-fix",
+            )
+        ]
     file_texts = {
         rel: _read_repo_file(root, rel)
         for rel in _files_needed_for_review(changed_files)
@@ -86,8 +109,9 @@ def run_pai_diff_review_gate(
         diff_text=diff_text,
         intent_text=intent_text,
     )
+    findings = [*committed_review_findings, *findings]
     return PaiReviewReport(
-        base_ref=base_ref,
+        base_ref=display_base_ref or "(missing)",
         intent_path=intent,
         changed_files=tuple(changed_files),
         findings=tuple(findings),
@@ -108,6 +132,40 @@ def evaluate_pai_diff_review(
     findings.extend(_proof_surface_findings(changed))
     findings.extend(_forbidden_diff_findings(diff_text))
     findings.extend(_repository_content_findings(changed, file_texts))
+    return findings
+
+
+def _committed_review_findings(
+    *,
+    repo_root: Path,
+    base_ref: str,
+    changed_files: Sequence[str],
+) -> list[PaiReviewFinding]:
+    findings: list[PaiReviewFinding] = []
+    if _git_commit(repo_root, base_ref) == _git_commit(repo_root, "HEAD"):
+        findings.append(
+            PaiReviewFinding(
+                ident="RG-base-ref-head",
+                severity="critical",
+                file="mnemos/importer/review_gate.py",
+                description="Committed diff review cannot use HEAD as its base ref",
+                required_proof="compare against the merge-base or branch point, not the target commit",
+                status="violated",
+                action="must-fix",
+            )
+        )
+    if not changed_files:
+        findings.append(
+            PaiReviewFinding(
+                ident="RG-empty-diff",
+                severity="critical",
+                file="mnemos/importer/review_gate.py",
+                description="Committed diff review found no changed files to review",
+                required_proof="changed-file diff against an explicit non-HEAD base",
+                status="missing",
+                action="must-fix",
+            )
+        )
     return findings
 
 
@@ -257,7 +315,9 @@ def _forbidden_diff_findings(diff_text: str) -> list[PaiReviewFinding]:
                 required_proof="no runtime diff may make live DB writes the default",
             )
         if _is_runtime_source_file(current_file):
-            mutation_description = _lifecycle_mutation_violation(line)
+            mutation_description = _lifecycle_mutation_violation(
+                _lifecycle_review_text_for_added_line(line, diff_lines, index)
+            )
             if mutation_description:
                 add_finding(
                     severity="critical",
@@ -362,6 +422,33 @@ def _forbidden_diff_findings(diff_text: str) -> list[PaiReviewFinding]:
                 required_proof="lifecycle mutations must remain explicit and identity-scoped after string composition",
             )
     return findings
+
+
+def _lifecycle_review_text_for_added_line(
+    line: str,
+    diff_lines: Sequence[str],
+    index: int,
+) -> str:
+    if (
+        re.search(r"\b(delete\s+from|update|replace\s+into)\b", line, re.IGNORECASE)
+        and "execute(" not in line
+        and "executescript(" not in line
+    ):
+        return _added_diff_line_window(diff_lines, index)
+    return line
+
+
+def _added_diff_line_window(
+    diff_lines: Sequence[str],
+    index: int,
+    *,
+    radius: int = 4,
+) -> str:
+    return "\n".join(
+        raw_line[1:]
+        for raw_line in diff_lines[max(0, index - radius): index + radius + 1]
+        if raw_line.startswith("+") and not raw_line.startswith("+++")
+    )
 
 
 def _repository_content_findings(
@@ -951,21 +1038,57 @@ def _has_identity_scope(text: str) -> bool:
     if not where_match:
         return False
     where = where_match.group("where")
-    if re.search(
-        r"(?<![\w.])(?:id|target_id|job_id|source_path)\b\s*(?:=|\bin\b)",
-        where,
+    target_qualifiers = _lifecycle_target_qualifiers(text)
+    return _where_clause_is_identity_scoped(where, target_qualifiers)
+
+
+def _where_clause_is_identity_scoped(where: str, target_qualifiers: set[str]) -> bool:
+    if _where_has_always_true_predicate(where):
+        return False
+    disjuncts = re.split(r"\bor\b", where, flags=re.IGNORECASE)
+    return all(
+        _where_disjunct_has_identity_scope(disjunct, target_qualifiers)
+        for disjunct in disjuncts
+    )
+
+
+def _where_disjunct_has_identity_scope(disjunct: str, target_qualifiers: set[str]) -> bool:
+    for match in re.finditer(
+        rf"(?<![\w.])(?:(?P<qualifier>[A-Za-z_][A-Za-z0-9_]*)\.)?"
+        rf"(?P<column>{_IDENTITY_COLUMN_PATTERN})\b\s*"
+        r"(?P<operator>=|\bin\b)\s*"
+        r"(?P<rhs>\([^)]*\)|[^\s;)]+)",
+        disjunct,
         flags=re.IGNORECASE,
     ):
-        return True
-    target_qualifiers = _lifecycle_target_qualifiers(text)
-    if not target_qualifiers:
+        qualifier = (match.group("qualifier") or "").lower()
+        if qualifier and qualifier not in target_qualifiers:
+            continue
+        if _identity_scope_rhs_is_bounded(match.group("operator"), match.group("rhs")):
+            return True
+    return False
+
+
+def _identity_scope_rhs_is_bounded(operator: str, rhs: str) -> bool:
+    lowered = rhs.strip().strip("\"'").lower()
+    if "select" in lowered:
         return False
-    qualified = re.findall(
-        r"\b([A-Za-z_][A-Za-z0-9_]*)\.(id|target_id|job_id|source_path)\b\s*(?:=|\bin\b)",
-        where,
+    if re.fullmatch(
+        rf"(?:[A-Za-z_][A-Za-z0-9_]*\.)?(?:{_IDENTITY_COLUMN_PATTERN})",
+        lowered,
         flags=re.IGNORECASE,
+    ):
+        return False
+    if operator.lower() == "in" and lowered in {"()", "( )"}:
+        return False
+    return True
+
+
+def _where_has_always_true_predicate(where: str) -> bool:
+    return bool(
+        re.search(r"(?<![\w.])1\s*=\s*1(?![\w.])", where)
+        or re.search(r"\btrue\b", where, flags=re.IGNORECASE)
     )
-    return any(qualifier.lower() in target_qualifiers for qualifier, _ in qualified)
 
 
 def _lifecycle_target_qualifiers(text: str) -> set[str]:
@@ -1275,6 +1398,20 @@ def _read_repo_file(repo_root: Path, rel: str) -> str:
     if not path.exists() or not path.is_file():
         return ""
     return path.read_text(encoding="utf-8")
+
+
+def _git_commit(repo_root: Path, ref: str) -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        raise RuntimeError(f"git rev-parse failed for {ref!r}: {detail}")
+    return completed.stdout.strip()
 
 
 def _git_changed_files(repo_root: Path, base_ref: str) -> list[str]:

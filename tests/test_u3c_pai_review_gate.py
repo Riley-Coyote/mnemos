@@ -117,6 +117,8 @@ def test_u3c_review_gate_fails_last_seen_lifecycle_selection_in_diff():
     assert True
 def test_u3c_review_gate_cli_reports_green():
     assert True
+def test_u3c_review_gate_cli_rejects_head_base_ref():
+    assert True
 def test_u3c_review_gate_rule_signature():
     assert True
 """
@@ -168,6 +170,36 @@ def _findings(*, changed_files, file_texts=None, diff_text="", intent_text=GOOD_
     )
 
 
+def _git(repo: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return completed.stdout.strip()
+
+
+def _make_committed_review_repo(tmp_path: Path) -> str:
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "a@b.c")
+    _git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "u3c-step3-launch-intent.md").write_text(
+        GOOD_INTENT,
+        encoding="utf-8",
+    )
+    (tmp_path / "README.md").write_text("# Mnemos\n", encoding="utf-8")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    base_ref = _git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "README.md").write_text("# Mnemos\n\nNarrow docs edit.\n", encoding="utf-8")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "target")
+    return base_ref
+
+
 def test_u3c_review_gate_accepts_diff_with_matching_proof_surfaces():
     findings = _findings(
         changed_files=[
@@ -205,7 +237,7 @@ def test_u3c_review_gate_rule_signature():
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
-    assert digest == "4a3939e4556d004f80816be7dfca6ea10328fa9f2ae2eb0d586228fa882ff1fe"
+    assert digest == "ab6827850961e7254a0506c31f749b02ae1589b6f84a8c25b25732ab598bc632"
 
 
 def test_u3c_review_gate_fails_watcher_change_without_test_diff():
@@ -712,9 +744,30 @@ def test_u3c_review_gate_after_refactor():
     assert any(finding.ident == "RG-review-gate-rule-signature" for finding in findings)
 
 
-def test_u3c_review_gate_cli_reports_green(tmp_path, capsys):
-    intent_path = tmp_path / "intent.md"
-    intent_path.write_text(GOOD_INTENT, encoding="utf-8")
+def test_u3c_review_gate_cli_reports_green(tmp_path, monkeypatch, capsys):
+    base_ref = _make_committed_review_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = main(
+        [
+            "pai-import",
+            "review-gate",
+            "--base-ref",
+            base_ref,
+            "--intent",
+            "docs/u3c-step3-launch-intent.md",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert result == 0
+    assert "PAI diff review gate" in out
+    assert "Verdict: GREEN" in out
+
+
+def test_u3c_review_gate_cli_rejects_head_base_ref(tmp_path, monkeypatch, capsys):
+    _make_committed_review_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
 
     result = main(
         [
@@ -723,14 +776,14 @@ def test_u3c_review_gate_cli_reports_green(tmp_path, capsys):
             "--base-ref",
             "HEAD",
             "--intent",
-            str(intent_path),
+            "docs/u3c-step3-launch-intent.md",
         ]
     )
     out = capsys.readouterr().out
 
-    assert result == 0
-    assert "PAI diff review gate" in out
-    assert "Verdict: GREEN" in out
+    assert result == 1
+    assert "RG-base-ref-head" in out
+    assert "Verdict: RED" in out
 
 
 def test_u3c_review_gate_cli_red_output_is_review_shaped(capsys):

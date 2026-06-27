@@ -14,7 +14,7 @@ Diff-focused review gate:
 
 ```bash
 uv run --extra dev mnemos pai-import review-gate \
-  --base-ref HEAD \
+  --base-ref "$(git merge-base HEAD origin/main)" \
   --intent docs/u3c-step3-launch-intent.md
 ```
 
@@ -135,7 +135,7 @@ CLI smoke:
 
 ```bash
 uv run --extra dev mnemos pai-import review-gate \
-  --base-ref HEAD \
+  --base-ref "$(git merge-base HEAD origin/main)" \
   --intent docs/u3c-step3-launch-intent.md
 
 uv run --extra dev mnemos pai-import watch-doctor \

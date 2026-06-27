@@ -482,8 +482,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_pai_review_gate.add_argument(
         "--base-ref",
-        default="HEAD",
-        help="Git ref to compare against for changed-file review",
+        required=True,
+        help="Explicit non-HEAD git ref to compare against for changed-file review",
     )
     p_pai_review_gate.add_argument(
         "--intent",
@@ -962,7 +962,7 @@ def _cmd_pai_import(args: argparse.Namespace) -> int:
             from .importer import DEFAULT_U3C_INTENT_PATH, run_pai_diff_review_gate
 
             report = run_pai_diff_review_gate(
-                repo_root=Path(__file__).resolve().parents[1],
+                repo_root=Path.cwd(),
                 base_ref=args.base_ref,
                 intent_path=args.intent or DEFAULT_U3C_INTENT_PATH,
             )

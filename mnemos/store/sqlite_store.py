@@ -691,7 +691,8 @@ class EngramStore:
 
     def update_connection(self, source_id: str, connection) -> None:
         """Update an existing connection's relation, strength, or formed_by."""
-        self._conn.execute(
+        conn = self._get_conn()
+        conn.execute(
             """UPDATE connections
                SET relation = ?, strength = ?, formed_by = ?
                WHERE source_id = ? AND target_id = ?""",
@@ -703,15 +704,16 @@ class EngramStore:
                 connection.target_id,
             ),
         )
-        self._conn.commit()
+        conn.commit()
 
     def remove_connection(self, source_id: str, target_id: str) -> None:
         """Remove a connection between two engrams."""
-        self._conn.execute(
+        conn = self._get_conn()
+        conn.execute(
             "DELETE FROM connections WHERE source_id = ? AND target_id = ?",
             (source_id, target_id),
         )
-        self._conn.commit()
+        conn.commit()
 
     def get_recent_engrams(
         self,
@@ -749,7 +751,8 @@ class EngramStore:
         query += " ORDER BY created_at DESC LIMIT ?"
         params.append(limit)
 
-        rows = self._conn.execute(query, params).fetchall()
+        conn = self._get_conn()
+        rows = conn.execute(query, params).fetchall()
         return [Engram.from_dict(dict(r)) for r in rows]
 
 

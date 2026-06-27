@@ -242,6 +242,7 @@ def test_u3b_changed_source_updates_same_target(tmp_path):
         engram = store.get_engram(target_id)
         assert engram is not None
         assert engram.content == "# Core\nI am Oliver, David's agent."
+        assert engram.content_at_encoding == "# Core\nI am Oliver."
 
         row_map = store._get_conn().execute(
             """

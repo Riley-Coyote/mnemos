@@ -761,7 +761,6 @@ def _write_pai_engram_no_commit(
         """
         UPDATE engrams
         SET content = ?,
-            content_at_encoding = ?,
             impact = ?,
             kind = ?,
             tags = ?,
@@ -780,7 +779,6 @@ def _write_pai_engram_no_commit(
         WHERE id = ?
         """,
         (
-            row.content,
             row.content,
             engram.impact,
             EngramKind.SEMANTIC.value,

@@ -108,6 +108,21 @@ class TestEngramStore:
         count = store.count_engrams()
         assert count >= 2
 
+    def test_read_only_get_recent_opens_lazy_connection(self, tmp_db):
+        writable = EngramStore(tmp_db)
+        engram = Engram(content="Read-only recent memory")
+        writable.save_engram(engram)
+        writable.close()
+
+        read_only = EngramStore(tmp_db, read_only=True)
+        try:
+            assert read_only._conn is None
+            recent = read_only.get_recent_engrams(limit=10)
+        finally:
+            read_only.close()
+
+        assert engram.id in {item.id for item in recent}
+
     def test_delete_engram(self, store):
         """Verify delete removes the engram."""
         engram = Engram(content="Temporary memory to delete")

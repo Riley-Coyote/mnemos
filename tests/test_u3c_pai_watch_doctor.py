@@ -100,6 +100,57 @@ def test_u3c_watch_doctor_passes_with_representative_db_and_plist(tmp_path, caps
     assert not paths["state_path"].exists()
 
 
+def test_u3c_watch_doctor_without_plist_is_not_green(tmp_path):
+    manifest, _source = _write_manifest(tmp_path)
+    db_path = tmp_path / "representative.db"
+    EngramStore(db_path).close()
+    paths = _doctor_paths(tmp_path)
+
+    report = run_pai_watch_doctor(
+        manifest_path=manifest,
+        db_path=db_path,
+        backup_keep=2,
+        python_executable=sys.executable,
+        **paths,
+    )
+
+    assert report.ok is False
+    assert _check_status(report, "D5") == "SKIP"
+    assert "required" in next(check.evidence for check in report.checks if check.ident == "D5")
+
+
+def test_u3c_watch_doctor_cli_requires_plist(tmp_path, capsys):
+    manifest, _source = _write_manifest(tmp_path)
+    db_path = tmp_path / "representative.db"
+    EngramStore(db_path).close()
+    paths = _doctor_paths(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        main(
+            [
+                "pai-import",
+                "watch-doctor",
+                "--manifest",
+                str(manifest),
+                "--db-path",
+                str(db_path),
+                "--state",
+                str(paths["state_path"]),
+                "--artifact-dir",
+                str(paths["artifact_dir"]),
+                "--backup-dir",
+                str(paths["backup_dir"]),
+                "--backup-keep",
+                "2",
+                "--python",
+                sys.executable,
+            ]
+        )
+
+    assert exc.value.code == 2
+    assert "--plist" in capsys.readouterr().err
+
+
 def test_u3c_watch_doctor_fails_stale_clone_plist(tmp_path):
     manifest, _source = _write_manifest(tmp_path)
     db_path = tmp_path / "representative.db"

@@ -468,7 +468,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Required bounded backup retention count for launch readiness",
     )
     p_pai_watch_doctor.add_argument(
-        "--plist", default=None, help="Existing launchd plist to lint"
+        "--plist", required=True, help="Existing launchd plist to lint"
     )
     p_pai_watch_doctor.add_argument("--python", default=None, help="Python executable")
     p_pai_watch_doctor.add_argument(

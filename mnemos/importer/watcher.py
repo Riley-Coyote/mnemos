@@ -22,7 +22,6 @@ from .operator import (
     PaiManifest,
     PaiOperatorRun,
     _checked_operator_db_path,
-    apply_pai_manifest,
     apply_pai_watch_manifest,
     load_pai_manifest,
     preview_pai_watch_manifest,
@@ -66,7 +65,7 @@ class PaiWatchDoctorReport:
 
     @property
     def ok(self) -> bool:
-        return all(check.status != "FAIL" for check in self.checks)
+        return bool(self.checks) and all(check.status == "PASS" for check in self.checks)
 
 
 def pai_watch_once(
@@ -272,7 +271,7 @@ def run_pai_watch_doctor(
         lambda: _doctor_python_check(python_executable, repo_root=repo_root),
     )
     if plist_path is None:
-        harness.skip("D5", "launchd plist static readiness", "no plist supplied")
+        harness.skip("D5", "launchd plist static readiness", "launchd plist is required")
     else:
         harness.check(
             "D5",

@@ -1,0 +1,131 @@
+# Gated Inner Life
+
+U6.6 adds a private, low-stakes inner-life layer for pre-soak testing. It is
+code and representative-DB tooling only. Live `~/.mnemos` writes, launchd jobs,
+and autonomous scheduled writes still require explicit David authorization.
+
+## Boundaries
+
+- Session and turn finalizers write private provenance rows below memory.
+- Activity gates decide whether a process has enough recent grounded activity
+  before LLM work.
+- Generated reflection, wandering, and dream output must pass the narrative
+  gate before persistence.
+- Passed generated records are written only through the low-stakes writer.
+- Generated records are private, low confidence, low stability/accessibility,
+  rollout-tagged, source-grounded, not voice exemplars, and not consolidation
+  authorized.
+- The layer never writes beliefs, identity patches, hypomnema promotions, or
+  shared-pool publications.
+
+## Components
+
+| Component | Role |
+| --- | --- |
+| `inner_life_events` | Private ledger for turn/session provenance, gate decisions, skips, drops, and generated-write telemetry. |
+| `activity_gate.py` | Zero-LLM process preflight with cooldowns and signal counts. |
+| `hypomnema_challenge.py` | Revises or retires stale continuity without deleting audit history. |
+| `observer_panel.py` | Writes bounded observer-source findings with reviewer provenance. |
+| `emotional_driver.py` | Computes private affect weather from real events; does not journal affect prose. |
+| `narrative_gate.py` | Drops null, ungrounded, manufactured, rejected, or metrics-only generated candidates. |
+| `low_stakes.py` | Writes private low-confidence generated engrams with rollout tags and source IDs. |
+| `consolidation/reflection.py` | Gates generated reflection thoughts while preserving graph-derived `IdentityProfile`. |
+| `substrate/handlers/wandering.py` | Keeps authorized source filtering and writes passed wandering only as low-stakes memory. |
+| `substrate/handlers/dreaming.py` | Recombines real engrams only; metrics-only dream output is dropped. |
+
+## CLI
+
+All `inner-life` commands require `--db-path`. They refuse `~/.mnemos`
+databases unless `--allow-live-db` is supplied, and live use of that override is
+reserved for explicit David authorization.
+
+```bash
+mnemos inner-life session-finalize \
+  --db-path /tmp/mnemos-copy.db \
+  --transcript /tmp/session.jsonl \
+  --session-id session-1 \
+  --agent-id oliver \
+  --person-id david \
+  --project-scope pai
+```
+
+```bash
+mnemos inner-life turn-finalize \
+  --db-path /tmp/mnemos-copy.db \
+  --session-id session-1 \
+  --user-text "..." \
+  --assistant-text "..." \
+  --agent-id oliver \
+  --person-id david \
+  --project-scope pai
+```
+
+```bash
+mnemos inner-life activity-gate \
+  --db-path /tmp/mnemos-copy.db \
+  --process reflect \
+  --agent-id oliver \
+  --person-id david \
+  --project-scope pai
+```
+
+```bash
+mnemos inner-life status \
+  --db-path /tmp/mnemos-copy.db \
+  --agent-id oliver \
+  --person-id david \
+  --project-scope pai \
+  --rollout-tag u6.6
+```
+
+## Rollback Inspection
+
+Use `inner-life status` to inspect rows by process and gate decision. The
+important counters are generated memory writes, belief writes, identity
+patches, and shared-pool writes. For U6.6, belief writes, identity patches, and
+shared-pool writes should remain zero.
+
+Generated memory writes should be:
+
+- tagged `u6.6`, `generated`, `low-stakes`, and `rollout:<tag>`;
+- sourced from `dream`, `reflection`, or `observer`;
+- `visibility=private`;
+- `voice_exemplar_eligible=false`;
+- `consolidation_authorized=false`;
+- traceable to source session, turn, engram, or hypomnema IDs.
+
+Backout order for U7/U8 remains disable-first:
+
+1. Disable config and unload any launchd jobs.
+2. Verify scheduled writes stop.
+3. Inspect rollout-tagged rows and generated records.
+4. Restore the pre-soak DB snapshot only if generated low-stakes records
+   contaminate retrieval or identity behavior.
+
+## Validation
+
+The focused U6.6 suite covers:
+
+- private/idempotent event ledger migration;
+- representative live-copy schema migration;
+- activity gate run/skip/cooldown behavior;
+- challenge, observer, and affect safety boundaries;
+- narrative gate null, source, manufactured, introspection, and metrics-only
+  drops;
+- low-stakes writer privacy, idempotency, and non-promotion invariants;
+- gated reflection, wandering, and dream persistence;
+- CLI live DB refusal, activity-gate preflight, and telemetry status;
+- existing dream journal separation.
+
+## Enforcement Links
+
+Enforcement lives in the implementation and tests, not in this document:
+
+- `mnemos/inner_life/narrative_gate.py` with `tests/test_narrative_gate.py`;
+- `mnemos/inner_life/low_stakes.py` with `tests/test_low_stakes_writer.py`;
+- `mnemos/consolidation/reflection.py` with `tests/test_gated_reflection.py`;
+- `mnemos/substrate/handlers/wandering.py` with `tests/test_gated_wandering.py`;
+- `mnemos/substrate/handlers/dreaming.py` with `tests/test_gated_dreaming.py`;
+- `mnemos/cli.py` with `tests/test_cli_simple.py`;
+- `mnemos/store/migrations.py` and `mnemos/store/sqlite_store.py` with
+  `tests/test_inner_life_ledger.py` and `tests/test_u3a_schema_migrations.py`.

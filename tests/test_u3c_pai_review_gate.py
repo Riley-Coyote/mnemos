@@ -132,6 +132,17 @@ def test_inner_life_cli_refuses_default_live_db_without_override():
     assert True
 """
 
+GOOD_ACTIVITY_GATE_TESTS = """
+def test_activity_gate_allows_recent_turn_signal_and_records_run_without_memory():
+    assert True
+def test_activity_gate_skips_without_recent_signal_and_records_reason():
+    assert True
+def test_activity_gate_enforces_process_cooldown():
+    assert True
+def test_activity_gate_uses_consolidation_log_as_existing_mnemos_signal():
+    assert True
+"""
+
 GOOD_INNER_LIFE_LEDGER_TESTS = """
 def test_inner_life_ledger_schema_is_private_and_idempotent():
     assert True
@@ -183,6 +194,7 @@ def _file_texts(**overrides):
         "docs/u3c-step3-launch-gate.md": GOOD_LAUNCH_DOC,
         "mnemos/importer/watcher.py": GOOD_WATCHER,
         "tests/test_cli_simple.py": GOOD_CLI_SIMPLE_TESTS,
+        "tests/test_inner_life_activity_gate.py": GOOD_ACTIVITY_GATE_TESTS,
         "tests/test_inner_life_ledger.py": GOOD_INNER_LIFE_LEDGER_TESTS,
         "tests/test_u3b_pai_importer.py": GOOD_IMPORTER_TESTS,
         "tests/test_u3b_pai_operator.py": GOOD_OPERATOR_TESTS,
@@ -353,6 +365,59 @@ def test_inner_life_cli_requires_representative_db():
     )
 
 
+def test_u3c_review_gate_accepts_u66_activity_gate_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/activity_gate.py",
+            "tests/test_inner_life_activity_gate.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/activity_gate.py": "U6.6 activity_gate",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/activity_gate.py b/mnemos/inner_life/activity_gate.py\n"
+            "@@\n"
+            "+# U6.6 activity_gate\n"
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u66_activity_gate_without_cooldown_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/activity_gate.py",
+            "tests/test_inner_life_activity_gate.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/activity_gate.py": "U6.6 activity_gate",
+                "tests/test_inner_life_activity_gate.py": """
+def test_activity_gate_allows_recent_turn_signal_and_records_run_without_memory():
+    assert True
+def test_activity_gate_skips_without_recent_signal_and_records_reason():
+    assert True
+def test_activity_gate_uses_consolidation_log_as_existing_mnemos_signal():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/activity_gate.py b/mnemos/inner_life/activity_gate.py\n"
+            "@@\n"
+            "+# U6.6 activity_gate\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-activity-gate-cooldown"
+        for finding in findings
+    )
+
+
 def test_u3c_review_gate_rule_signature():
     helpers = [
         (name, obj)
@@ -365,7 +430,7 @@ def test_u3c_review_gate_rule_signature():
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
-    assert digest == "529ca4e5e5a56c9d818f14ecc23147920c461e306146d4562645d9cef75c9882"
+    assert digest == "5449b62f76aea6dfd76151b23efad2391224b66d9bfc456dc5beb05e3d2fbbdd"
 
 
 def test_u3c_review_gate_fails_watcher_change_without_test_diff():

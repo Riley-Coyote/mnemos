@@ -40,10 +40,17 @@ _U6_6_INNER_LIFE_SCHEMA_TEST_FILES = {
     "tests/test_inner_life_ledger.py",
     "tests/test_u3a_schema_migrations.py",
 }
+_U6_6_INNER_LIFE_FINALIZER_FILES = {
+    "mnemos/inner_life/session_finalizer.py",
+    "mnemos/inner_life/turn_finalizer.py",
+}
 _U6_6_INNER_LIFE_FINALIZER_TEST_FILES = {
     "tests/test_inner_life_ledger.py",
     "tests/test_session_finalizer.py",
     "tests/test_turn_finalizer.py",
+}
+_U6_6_INNER_LIFE_ACTIVITY_TEST_FILES = {
+    "tests/test_inner_life_activity_gate.py",
 }
 
 
@@ -311,9 +318,8 @@ def _proof_surface_findings(
                 "mnemos/store/sqlite_store.py",
             }
         )
-        finalizer_touched = any(
-            path.startswith("mnemos/inner_life/") for path in changed
-        )
+        finalizer_touched = bool(changed & _U6_6_INNER_LIFE_FINALIZER_FILES)
+        activity_gate_touched = "mnemos/inner_life/activity_gate.py" in changed
         if schema_touched and not (
             _U6_6_INNER_LIFE_SCHEMA_TEST_FILES <= changed
         ):
@@ -352,6 +358,20 @@ def _proof_surface_findings(
                     ),
                     description="U6.6 inner-life finalizer changed without finalizer regression tests in the diff",
                     required_proof="inner-life finalizer regression file appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if activity_gate_touched and not (
+            changed & _U6_6_INNER_LIFE_ACTIVITY_TEST_FILES
+        ):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/inner_life/activity_gate.py",
+                    description="U6.6 activity gate changed without activity-gate regression tests in the diff",
+                    required_proof="tests/test_inner_life_activity_gate.py appears in this diff",
                     status="missing",
                     action="must-test",
                 )
@@ -681,6 +701,7 @@ def _repository_content_findings(
     operator_u3c_tests = file_texts.get("tests/test_u3c_pai_operator.py", "")
     review_gate_tests = file_texts.get("tests/test_u3c_pai_review_gate.py", "")
     cli_simple_tests = file_texts.get("tests/test_cli_simple.py", "")
+    activity_gate_tests = file_texts.get("tests/test_inner_life_activity_gate.py", "")
     inner_life_ledger_tests = file_texts.get("tests/test_inner_life_ledger.py", "")
     schema_migration_tests = file_texts.get("tests/test_u3a_schema_migrations.py", "")
     session_finalizer_tests = file_texts.get("tests/test_session_finalizer.py", "")
@@ -842,6 +863,60 @@ def _repository_content_findings(
                             (
                                 "test_turn_finalizer_writes_one_idempotent_provenance_row_only",
                                 turn_finalizer_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u66_inner_life and "mnemos/inner_life/activity_gate.py" in changed:
+        findings.extend(
+            _missing_required_proofs(
+                surface="U6.6 activity gate",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u66-activity-gate-recent-signal",
+                        "recent turn signal allows a run without memory writes",
+                        "tests/test_inner_life_activity_gate.py",
+                        (
+                            (
+                                "test_activity_gate_allows_recent_turn_signal_and_records_run_without_memory",
+                                activity_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-activity-gate-no-signal",
+                        "no recent signal records a skip reason",
+                        "tests/test_inner_life_activity_gate.py",
+                        (
+                            (
+                                "test_activity_gate_skips_without_recent_signal_and_records_reason",
+                                activity_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-activity-gate-cooldown",
+                        "per-process cooldown",
+                        "tests/test_inner_life_activity_gate.py",
+                        (
+                            (
+                                "test_activity_gate_enforces_process_cooldown",
+                                activity_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-activity-gate-consolidation-signal",
+                        "existing Mnemos consolidation activity counts as signal",
+                        "tests/test_inner_life_activity_gate.py",
+                        (
+                            (
+                                "test_activity_gate_uses_consolidation_log_as_existing_mnemos_signal",
+                                activity_gate_tests,
                             ),
                         ),
                     ),
@@ -2085,6 +2160,7 @@ def _files_needed_for_review(changed_files: Sequence[str]) -> set[str]:
             "mnemos/cli.py",
             "mnemos/importer/watcher.py",
             "tests/test_cli_simple.py",
+            "tests/test_inner_life_activity_gate.py",
             "tests/test_inner_life_ledger.py",
             "tests/test_u3b_pai_importer.py",
             "tests/test_u3b_pai_operator.py",

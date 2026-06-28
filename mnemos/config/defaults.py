@@ -135,6 +135,27 @@ DEFAULT_CONFIG: dict = {
         "dreaming_enabled": False,
     },
 
+    # ── Gated inner-life layer (U6.6, scheduled only after DAVID-AUTH) ──
+    "inner_life": {
+        "activity_gate": {
+            "enabled": True,
+            "default_cooldown_minutes": 240,
+            "default_signal_window_minutes": 1440,
+            "default_min_signals": 1,
+            "max_event_scan": 500,
+            "max_consolidation_scan": 20,
+            "consolidation_passes": ["cycle"],
+            "processes": {
+                "challenge": {"cooldown_minutes": 720},
+                "observe": {"cooldown_minutes": 720},
+                "affect": {"cooldown_minutes": 360},
+                "reflect": {"cooldown_minutes": 240},
+                "wander": {"cooldown_minutes": 480},
+                "dream": {"cooldown_minutes": 1440},
+            },
+        },
+    },
+
     # ── Multi-agent ──
     "multiagent": {
         "shared_pool_enabled": False,

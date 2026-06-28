@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from ..events import SubstrateEvent
 from ..config import SubstrateConfig
 from ..modulators import ModulatorState
+from ...inner_life.low_stakes import write_low_stakes_record
+from ...inner_life.narrative_gate import gate_narrative_candidate
 
 log = logging.getLogger("mnemos.substrate.dreaming")
 
@@ -59,7 +61,6 @@ def handle(
         SELECT COUNT(*) FROM engrams
         WHERE state='active' AND content LIKE '%[dream]%'
         AND owner_agent_id = ?
-        AND consolidation_authorized = 1
         AND created_at > datetime('now', '-7 days')
     """, (agent_id,)).fetchone()[0]
 
@@ -75,7 +76,6 @@ def handle(
         SELECT created_at FROM engrams
         WHERE state='active' AND content LIKE '%[dream]%'
         AND owner_agent_id = ?
-        AND consolidation_authorized = 1
         ORDER BY created_at DESC LIMIT 1
     """, (agent_id,)).fetchone()
 
@@ -169,10 +169,17 @@ If something does emerge, respond with:
     if not dream_content:
         log.debug(f"Dream collision between {softened_id} and {vivid_id} "
                   f"dissolved — nothing emerged")
+        gate_narrative_candidate(
+            content="",
+            source_ids=[softened_id, vivid_id],
+            process_name="dream",
+            store=store,
+            agent_id=agent_id,
+            candidate_kind="dream",
+        )
         return produced_events
 
     full_content = f"[dream] {dream_content}"
-    significance = result.get("significance", "")
 
     # ── Gate 2: Embedding similarity ──
     try:
@@ -188,7 +195,6 @@ If something does emerge, respond with:
                         SELECT content FROM engrams
                         WHERE id = ?
                           AND owner_agent_id = ?
-                          AND consolidation_authorized = 1
                         """,
                         (engram_id, agent_id),
                     ).fetchone()
@@ -201,21 +207,24 @@ If something does emerge, respond with:
     except Exception as e:
         log.debug(f"Embedding dedup check failed (non-fatal): {e}")
 
-    # ── All gates passed — encode the dream ──
-    log.info(f"Dream formed (all gates passed): {dream_content[:80]}...")
-
-    from mnemos.encoding.encoder import Encoder
-    from mnemos.store.embedding_index import EmbeddingIndex as EI
-    ei = EI(db_path=db_path)
-    encoder = Encoder(store, embedding_index=ei, llm_client=llm_client)
-
-    encoder.encode(
+    # ── Final U6.6 gate: only private low-stakes memory may persist ──
+    log.info(f"Dream formed (gated): {dream_content[:80]}...")
+    gate_result = gate_narrative_candidate(
         content=full_content,
-        impact=significance,
-        kind="episodic",
-        tags=["dream", "collision"],
+        source_ids=[softened_id, vivid_id],
+        process_name="dream",
+        store=store,
         agent_id=agent_id,
-        skip_surprise_detection=True,
+        candidate_kind="dream",
+    )
+    if not gate_result["allowed"]:
+        return produced_events
+
+    write_low_stakes_record(
+        store,
+        gate_result=gate_result,
+        candidate_kind="dream",
+        agent_id=agent_id,
     )
 
     return produced_events

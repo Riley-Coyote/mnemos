@@ -20,6 +20,17 @@ _MANUFACTURE_PATTERNS = (
     "it feels like i",
 )
 
+_METRICS_ONLY_DREAM_PATTERNS = (
+    "connections_created",
+    "connections reclassified",
+    "engrams_softened",
+    "engrams softened",
+    "passes_run",
+    "consolidation metrics",
+    "decay pass",
+    "softening pass",
+)
+
 
 def gate_narrative_candidate(
     *,
@@ -44,6 +55,8 @@ def gate_narrative_candidate(
         decision = _decision(False, "missing_source_ids", "drop:missing_source_ids", clean, sources)
     elif _looks_manufactured(clean):
         decision = _decision(False, "manufactured_inner_state", "drop:manufactured_inner_state", clean, sources)
+    elif candidate_kind in {"dream", "dreaming"} and _looks_metrics_only_dream(clean):
+        decision = _decision(False, "metrics_only_dream", "drop:metrics_only_dream", clean, sources)
     else:
         report, error = _run_introspection(clean, introspector)
         if error:
@@ -117,6 +130,11 @@ def _source_ids(value: list[str] | tuple[str, ...] | None) -> list[str]:
 def _looks_manufactured(content: str) -> bool:
     lowered = content.lower()
     return any(pattern in lowered for pattern in _MANUFACTURE_PATTERNS)
+
+
+def _looks_metrics_only_dream(content: str) -> bool:
+    lowered = content.lower()
+    return any(pattern in lowered for pattern in _METRICS_ONLY_DREAM_PATTERNS)
 
 
 def _run_introspection(

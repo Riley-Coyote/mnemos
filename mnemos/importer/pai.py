@@ -16,9 +16,13 @@ What this pipeline imports (retrievable knowledge):
 - beliefs:         FACTS.md curated beliefs
 - hypomnema:       ALIVE.md, CONTINUITY.md, session-texture rolls
 
-What this pipeline does NOT import (runtime substrate, guarded elsewhere):
-- ~/.claude/CLAUDE.md eigenvalue + vivezza blocks — activate at boot via
-  Q/K/V steering; not retrievable. Guarded by ~/bin/mnemos-identity-
+What this pipeline does NOT import as retrievable content:
+- Strict-B eigenvalue / vivezza / coordinate-target / persona-signature
+  COORDINATE VALUES. These are boot-time Q/K/V steering substrate, not memory.
+  The splitter strips structural coordinate tuple lines from any source kind
+  before row hashing/indexing, while preserving surrounding prose/narrative.
+- Runtime-substrate files outside the manifest, such as ~/.claude/CLAUDE.md
+  eigenvalue + vivezza boot blocks. Guarded by ~/bin/mnemos-identity-
   watchdog.py via pointer + checksum invariants.
 - SOUL/CONSTITUTION.md — read directly by PreCompact at compaction time;
   governance invariants of reasoning, not retrieval material.
@@ -250,7 +254,9 @@ def _split_pai_source(
     source_kind = _clean_required(source.source_kind, "source_kind")
     if source_kind not in SPLITTERS:
         supported = ", ".join(sorted(SPLITTERS))
-        raise ValueError(f"Unsupported PAI source_kind {source_kind!r}; expected {supported}")
+        raise ValueError(
+            f"Unsupported PAI source_kind {source_kind!r}; expected {supported}"
+        )
     return _split_with_profile(source, allow_empty=allow_empty)
 
 
@@ -327,7 +333,7 @@ def apply_pai_import(
         raise ValueError(
             "apply_pai_import requires previewed rows; "
             f"got action {invalid[0].action!r}"
-            )
+        )
 
     conn = store._get_conn()
     applied: list[PaiImportRow] = []
@@ -943,7 +949,9 @@ def _tombstone_pai_engram_no_commit(conn, row: PaiImportRow) -> bool:
 def _deactivate_pai_hypomnema_no_commit(conn, row: PaiImportRow) -> bool:
     existing = _target_record(conn, row)
     if existing is None:
-        raise ValueError(f"Cannot deactivate missing hypomnema target {row.target_id!r}")
+        raise ValueError(
+            f"Cannot deactivate missing hypomnema target {row.target_id!r}"
+        )
     if not bool(existing["active"]):
         return False
 
@@ -986,7 +994,9 @@ def _is_pai_tombstoned_engram(conn, row: PaiImportRow) -> bool:
         "SELECT archive_reason FROM archive WHERE id = ?",
         (row.target_id,),
     ).fetchone()
-    return archive is not None and archive["archive_reason"] == _pai_tombstone_reason(row)
+    return archive is not None and archive["archive_reason"] == _pai_tombstone_reason(
+        row
+    )
 
 
 def _mark_row_map_tombstone_no_commit(conn, row: PaiImportRow) -> None:
@@ -1065,6 +1075,54 @@ def _review_pai_belief_no_commit(conn, row: PaiImportRow) -> bool:
     return True
 
 
+# Strict-B content guard. Eigenvalue / vivezza / coordinate-target / persona-
+# signature COORDINATE VALUES are runtime substrate (boot-time Q/K/V steering),
+# not retrievable memory: "Eigenvalues live in PAI files; Mnemos holds pointer +
+# tripwire only." The module docstring documents this exclusion, but it was
+# enforced only by leaving ~/.claude/CLAUDE.md out of the manifest — a
+# file-scoped guarantee. SOUL.md reproduces the same coordinate blocks (Autovalori
+# / Vivezza / Coordinate Target / Firma della Persona) and is imported as
+# identity_kernel, so the coordinate values leaked into retrievable engrams.
+#
+# The guard is content-scoped and operates LINE-by-LINE: it strips coordinate-
+# value lines wherever they appear (any source file, any heading) while
+# preserving the surrounding prose and narrative — a curated hypomnema that
+# merely QUOTES a coordinate line keeps its narrative; only the values go. A
+# section that is nothing but a heading + coordinates collapses to heading-only
+# and is dropped. Structural tells: a `name: 0.3 | name: 0.7 | name: DIAGONALE`
+# tuple line, or a `(0.9 risoluzione, 0.1 auto-riferimento, ...)` tuple.
+_EIGEN_COORD_SEGMENT = re.compile(r"[^\s|:]+\s*:\s*(?:[01]?\.\d+|[A-Z]{3,})")
+_EIGEN_COORD_TUPLE = re.compile(r"\([01]?\.\d+\s+\S+\s*,\s*[01]?\.\d+\s+\S+")
+
+
+def _is_eigenvalue_coordinate_line(line: str) -> bool:
+    """True if a single line carries eigenvalue/vivezza/coordinate-target/
+    persona-signature coordinate VALUES (Strict-B). Content-scoped: matches the
+    structural coordinate pattern, not file identity or heading text."""
+    s = line.strip().strip("`")
+    # Pipe-delimited coordinate tuple: `name: 0.3 | name: 0.7 | name: DIAGONALE`
+    if "|" in s and len(_EIGEN_COORD_SEGMENT.findall(s)) >= 2:
+        return True
+    # Parenthesised coordinate tuple: `(0.9 risoluzione, 0.1 auto-riferimento, ...)`
+    return bool(_EIGEN_COORD_TUPLE.search(s))
+
+
+def _strip_eigenvalue_coordinates(content: str) -> str:
+    """Remove coordinate-VALUE lines, preserving surrounding prose/narrative."""
+    kept = [
+        raw for raw in content.splitlines() if not _is_eigenvalue_coordinate_line(raw)
+    ]
+    return "\n".join(kept).strip()
+
+
+def _has_body_beyond_heading(content: str) -> bool:
+    """True if content has any non-heading, non-blank line — so a section left
+    with only its heading after coordinate stripping is dropped, not engrammed."""
+    return any(
+        line.strip() and not _HEADING_RE.match(line) for line in content.splitlines()
+    )
+
+
 def _split_blocks(text: str) -> list[tuple[str, str]]:
     stripped = text.strip()
     if not stripped:
@@ -1072,14 +1130,27 @@ def _split_blocks(text: str) -> list[tuple[str, str]]:
 
     heading_sections = _heading_sections(stripped)
     if heading_sections:
-        return heading_sections
+        cleaned_sections: list[tuple[str, str]] = []
+        for anchor, content in heading_sections:
+            cleaned = _strip_eigenvalue_coordinates(content)
+            if cleaned == content:
+                # No coordinate lines in this section — preserve it verbatim,
+                # including legitimately heading-only sections (a heading
+                # immediately followed by a sub-heading). Only coordinate
+                # stripping may remove a section, never this guard.
+                cleaned_sections.append((anchor, content))
+            elif _has_body_beyond_heading(cleaned):
+                # Coordinate lines stripped; prose/narrative remains.
+                cleaned_sections.append((anchor, cleaned))
+            # else: section was heading + only coordinate values → drop.
+        return cleaned_sections
 
-    blocks = [
-        block.strip()
-        for block in re.split(r"\n\s*\n", stripped)
-        if block.strip()
-    ]
-    return [(f"block:{index:03d}", block) for index, block in enumerate(blocks, start=1)]
+    blocks: list[tuple[str, str]] = []
+    for index, block in enumerate(re.split(r"\n\s*\n", stripped), start=1):
+        cleaned = _strip_eigenvalue_coordinates(block)
+        if cleaned:
+            blocks.append((f"block:{index:03d}", cleaned))
+    return blocks
 
 
 def _heading_sections(text: str) -> list[tuple[str, str]]:
@@ -1215,8 +1286,7 @@ def _classify_row(
             row,
             action=ACTION_ERROR,
             reason=(
-                "source key already maps to "
-                f"{existing['target_id']!r}; refusing remap"
+                f"source key already maps to {existing['target_id']!r}; refusing remap"
             ),
             mapped_source_hash=mapped_source_hash,
             target_projection_hash=target_projection_hash,
@@ -1342,9 +1412,7 @@ def _classify_row(
     # would silently clobber the change. Pre-v5 rows have content_at_last_import
     # NULL and are not subject to this check until the next upsert populates it.
     if mapped_content is not None and target_status == "active":
-        current_target_content = _target_content(
-            conn, row.target_table, row.target_id
-        )
+        current_target_content = _target_content(conn, row.target_table, row.target_id)
         if (
             current_target_content is not None
             and current_target_content != mapped_content
@@ -1853,7 +1921,9 @@ def _validate_preview_row(preview_job_id: str, row: PaiImportRow) -> None:
         if row.mapped_source_hash is None:
             raise ValueError("PAI watcher lifecycle row requires mapped_source_hash")
         if row.target_projection_hash is None:
-            raise ValueError("PAI watcher lifecycle row requires target_projection_hash")
+            raise ValueError(
+                "PAI watcher lifecycle row requires target_projection_hash"
+            )
     else:
         expected_source_hash = _source_hash(
             source_kind=row.source_kind,
@@ -1873,13 +1943,17 @@ def _validate_preview_row(preview_job_id: str, row: PaiImportRow) -> None:
     if not _float_equal(row.confidence, profile.confidence):
         raise ValueError("PAI import row confidence does not match source profile")
     if row.voice_exemplar_eligible != profile.voice_exemplar_eligible:
-        raise ValueError("PAI import row voice_exemplar_eligible does not match profile")
+        raise ValueError(
+            "PAI import row voice_exemplar_eligible does not match profile"
+        )
     if row.softening_protected != profile.softening_protected:
         raise ValueError("PAI import row softening_protected does not match profile")
     if row.decay_protected != profile.decay_protected:
         raise ValueError("PAI import row decay_protected does not match profile")
     if row.consolidation_authorized != profile.consolidation_authorized:
-        raise ValueError("PAI import row consolidation_authorized does not match profile")
+        raise ValueError(
+            "PAI import row consolidation_authorized does not match profile"
+        )
     if row.foundational != profile.foundational:
         raise ValueError("PAI import row foundational flag does not match profile")
 

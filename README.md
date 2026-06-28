@@ -475,6 +475,15 @@ blank-line blocks otherwise. `--artifact` writes a preview/apply JSON artifact;
 `watch-once` writes artifacts under `--artifact-dir`. `watch-once --force`
 polls even when source fingerprints are unchanged.
 
+Before target rows are hashed or indexed, the splitter strips Strict-B
+coordinate-value lines from any source kind: eigenvalue, vivezza,
+coordinate-target, and persona-signature tuple lines such as
+`name: 0.3 | other: 0.7` or `(0.9 risoluzione, ...)`. Surrounding prose and
+narrative stay in the imported row. A heading section is dropped only when
+coordinate stripping leaves no non-heading body; dropped coordinate-only
+blank-line blocks leave their original `block:NNN` ordinal unused so later
+block anchors do not renumber.
+
 Every DB-using PAI import command refuses the default live database
 (`~/.mnemos/memory.db`) and other databases under `~/.mnemos` unless
 `--allow-live-db` is passed. `apply` and `watch-apply` take an integrity-checked

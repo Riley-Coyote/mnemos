@@ -46,6 +46,8 @@ proof says the lifecycle is safe.
 - Silent clobber of operator-edited imported content.
 - Manual archive resurrection.
 - False source reactivation after a deleted/tombstoned section.
+- Strict-B coordinate values becoming retrievable memory through PAI import
+  rows.
 - Duplicate lifecycle events hiding row-map divergence.
 - Unbounded backup growth.
 - Backup retention deleting another job's backups.

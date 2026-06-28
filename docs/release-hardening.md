@@ -82,6 +82,11 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Manifest source paths must stay inside the manifest directory (path
   resolution + `relative_to` guard); absolute paths are allowed only inside
   that directory, and `..`-escaping paths are rejected at load.
+- Source splitting enforces the Strict-B coordinate guard content-wise:
+  eigenvalue, vivezza, coordinate-target, and persona-signature tuple lines are
+  stripped from any source kind before row hashing/indexing. Surrounding prose
+  is preserved, and pure coordinate sections/blocks are omitted without
+  renumbering later blank-line block anchors.
 - `watch-once` advances state only after a successful apply. Preview mode
   leaves state untouched so an operator can inspect a change and still apply
   it later.

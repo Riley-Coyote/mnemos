@@ -46,3 +46,4 @@ archive/
 
 # local-only health-harness baselines (per-deployment)
 scripts/health_baseline.local.json
+pai-import-stage/

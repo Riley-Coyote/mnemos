@@ -118,6 +118,20 @@ def test_u3b_dispatcher_covers_all_source_kinds():
         assert row.source_kind == kind
 
 
+def test_u3b_no_heading_coordinate_only_block_leaves_anchor_gap():
+    text = (
+        "first prose block survives\n\n"
+        "risoluzione: 0.3 | auto_riferimento: 0.7 | attraversamento: DIAGONALE\n\n"
+        "trailing prose block keeps its original ordinal"
+    )
+
+    rows = split_identity_kernel(_source("identity_kernel", text))
+
+    assert [row.source_anchor for row in rows] == ["block:001", "block:003"]
+    assert "risoluzione: 0.3" not in "\n".join(row.content for row in rows)
+    assert rows[1].content == "trailing prose block keeps its original ordinal"
+
+
 def test_u3b_named_splitters_reject_wrong_source_kind():
     with pytest.raises(ValueError, match="requires source_kind='beliefs'"):
         split_beliefs(_source("identity_kernel", "I am not a belief source."))
@@ -158,7 +172,9 @@ def test_u3b_apply_requires_explicit_preview(tmp_path):
     store = EngramStore(tmp_path / "u3b.db")
     try:
         with pytest.raises(TypeError, match="requires a PaiImportPreview"):
-            apply_pai_import(store, [_source("identity_kernel", "# Core\nI am Oliver.")])
+            apply_pai_import(
+                store, [_source("identity_kernel", "# Core\nI am Oliver.")]
+            )
     finally:
         store.close()
 
@@ -244,13 +260,17 @@ def test_u3b_changed_source_updates_same_target(tmp_path):
         assert engram.content == "# Core\nI am Oliver, David's agent."
         assert engram.content_at_encoding == "# Core\nI am Oliver."
 
-        row_map = store._get_conn().execute(
-            """
+        row_map = (
+            store._get_conn()
+            .execute(
+                """
             SELECT target_id, source_hash FROM pai_import_row_map
             WHERE job_id = ? AND source_path = ? AND source_anchor = ?
             """,
-            ("u3b-job", "/pai/identity_kernel.md", "h:core:001"),
-        ).fetchone()
+                ("u3b-job", "/pai/identity_kernel.md", "h:core:001"),
+            )
+            .fetchone()
+        )
         assert row_map["target_id"] == target_id
         assert row_map["source_hash"] == changed_preview.rows[0].source_hash
     finally:
@@ -373,10 +393,14 @@ def test_u3b_deleted_target_refuses_implicit_resurrection(tmp_path):
         store.delete_engram(target_id)
 
         # tombstone_at trigger should have fired
-        tombstone = store._get_conn().execute(
-            "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
-            (target_id,),
-        ).fetchone()
+        tombstone = (
+            store._get_conn()
+            .execute(
+                "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
+                (target_id,),
+            )
+            .fetchone()
+        )
         assert tombstone is not None
         assert tombstone[0] is not None, "AFTER DELETE trigger must set tombstone_at"
 
@@ -442,10 +466,14 @@ def test_u3b_archived_mapped_engram_refuses_implicit_reactivation(tmp_path):
         assert "refusing implicit PAI reactivation" in preview.rows[0].reason
         with pytest.raises(ValueError, match="implicit PAI reactivation"):
             apply_pai_import(store, preview)
-        state = store._get_conn().execute(
-            "SELECT state FROM engrams WHERE id = ?",
-            (target_id,),
-        ).fetchone()[0]
+        state = (
+            store._get_conn()
+            .execute(
+                "SELECT state FROM engrams WHERE id = ?",
+                (target_id,),
+            )
+            .fetchone()[0]
+        )
         assert state == "archived"
     finally:
         store.close()
@@ -629,28 +657,34 @@ def test_u3b_engram_updates_preserve_non_importer_state_and_add_version(tmp_path
         )
         store._get_conn().commit()
 
-        changed = preview_pai_import(
-            store, [replace(source, source_text="# Core\nB")]
-        )
+        changed = preview_pai_import(store, [replace(source, source_text="# Core\nB")])
         apply_pai_import(store, changed)
-        row = store._get_conn().execute(
-            """
+        row = (
+            store._get_conn()
+            .execute(
+                """
             SELECT content, access_count, reconsolidation_count, created_at,
                    last_accessed
             FROM engrams
             WHERE id = ?
             """,
-            (target_id,),
-        ).fetchone()
+                (target_id,),
+            )
+            .fetchone()
+        )
         assert row["content"] == "# Core\nB"
         assert row["access_count"] == 7
         assert row["reconsolidation_count"] == 3
         assert row["created_at"] == "original-created"
         assert row["last_accessed"] == "original-accessed"
-        version = store._get_conn().execute(
-            "SELECT content_snapshot FROM versions WHERE engram_id = ?",
-            (target_id,),
-        ).fetchone()
+        version = (
+            store._get_conn()
+            .execute(
+                "SELECT content_snapshot FROM versions WHERE engram_id = ?",
+                (target_id,),
+            )
+            .fetchone()
+        )
         assert version["content_snapshot"] == "# Core\nA"
     finally:
         store.close()
@@ -693,15 +727,19 @@ def test_u3b_belief_updates_preserve_audit_state(tmp_path):
         store._get_conn().commit()
         preview = preview_pai_import(store, [changed])
         apply_pai_import(store, preview)
-        row = store._get_conn().execute(
-            """
+        row = (
+            store._get_conn()
+            .execute(
+                """
             SELECT content, created_at, last_challenged, revision_history,
                    supporting_engram_ids, superseded_by
             FROM beliefs
             WHERE id = ?
             """,
-            (target_id,),
-        ).fetchone()
+                (target_id,),
+            )
+            .fetchone()
+        )
         assert row["content"] == "David context remains foundational."
         assert row["created_at"] == "original-created"
         assert row["last_challenged"] == "original-challenged"
@@ -839,9 +877,11 @@ def test_u3b_apply_rolls_back_target_when_row_map_write_fails(tmp_path, monkeypa
             apply_pai_import(store, preview)
 
         assert store.get_engram(target_id) is None
-        count = store._get_conn().execute(
-            "SELECT COUNT(*) FROM pai_import_row_map"
-        ).fetchone()[0]
+        count = (
+            store._get_conn()
+            .execute("SELECT COUNT(*) FROM pai_import_row_map")
+            .fetchone()[0]
+        )
         assert count == 0
     finally:
         store.close()
@@ -931,7 +971,9 @@ def test_u3b_hypomnema_preview_apply_updates_explicit_target(tmp_path):
         assert updated is not None
         assert updated["content"] == "Continuity remains scoped and durable."
         assert updated["revision_count"] == 1
-        assert updated["revisions"][0]["content"] == "Continuity belongs in scoped memory."
+        assert (
+            updated["revisions"][0]["content"] == "Continuity belongs in scoped memory."
+        )
     finally:
         store.close()
 
@@ -1142,12 +1184,12 @@ def test_u3b_identity_profile_from_imported_soul_is_semantic(tmp_path):
         assert "Oliver" in engram_content_joined, (
             "identity_kernel content not propagated to engrams"
         )
-        assert "BSD" in engram_content_joined or "Burlington" in engram_content_joined, (
-            "david_context content not propagated to engrams"
-        )
-        assert "Plan Mode" in engram_content_joined or "Verify" in engram_content_joined, (
-            "growth_substrate content not propagated to engrams"
-        )
+        assert (
+            "BSD" in engram_content_joined or "Burlington" in engram_content_joined
+        ), "david_context content not propagated to engrams"
+        assert (
+            "Plan Mode" in engram_content_joined or "Verify" in engram_content_joined
+        ), "growth_substrate content not propagated to engrams"
 
         profile = compute_identity_profile(store, engrams, identity)
 
@@ -1206,19 +1248,29 @@ def test_u3b_apply_writes_pai_import_events(tmp_path):
         source = _source("identity_kernel", "# Core\nI am Oliver.\n\n# Voice\nDirect.")
         first = preview_pai_import(store, [source])
         apply_pai_import(store, first)
-        first_events = store._get_conn().execute(
-            "SELECT action, source_path FROM pai_import_events ORDER BY event_id"
-        ).fetchall()
+        first_events = (
+            store._get_conn()
+            .execute(
+                "SELECT action, source_path FROM pai_import_events ORDER BY event_id"
+            )
+            .fetchall()
+        )
         assert len(first_events) == 2
         assert all(e["action"] == "insert" for e in first_events)
 
-        changed = replace(source, source_text="# Core\nI am Oliver, agent.\n\n# Voice\nDirect.")
+        changed = replace(
+            source, source_text="# Core\nI am Oliver, agent.\n\n# Voice\nDirect."
+        )
         update_preview = preview_pai_import(store, [changed])
         apply_pai_import(store, update_preview)
-        all_events = store._get_conn().execute(
-            "SELECT action, source_anchor, source_hash_before, source_hash_after, change_reason "
-            "FROM pai_import_events ORDER BY event_id"
-        ).fetchall()
+        all_events = (
+            store._get_conn()
+            .execute(
+                "SELECT action, source_anchor, source_hash_before, source_hash_after, change_reason "
+                "FROM pai_import_events ORDER BY event_id"
+            )
+            .fetchall()
+        )
         # 2 inserts from first apply + 1 update + 1 noop from second apply
         assert len(all_events) == 4
         actions = [e["action"] for e in all_events]
@@ -1242,11 +1294,15 @@ def test_u3b_imported_belief_arrives_needs_review_true(tmp_path):
         apply_pai_import(store, preview)
         target_id = preview.rows[0].target_id
 
-        row = store._get_conn().execute(
-            "SELECT needs_review, confidence_pending_review, original_substrate, "
-            "original_timestamp FROM beliefs WHERE id = ?",
-            (target_id,),
-        ).fetchone()
+        row = (
+            store._get_conn()
+            .execute(
+                "SELECT needs_review, confidence_pending_review, original_substrate, "
+                "original_timestamp FROM beliefs WHERE id = ?",
+                (target_id,),
+            )
+            .fetchone()
+        )
         assert bool(row["needs_review"]) is True
         assert bool(row["confidence_pending_review"]) is True
         assert row["original_substrate"] == "claude-opus-4-6"
@@ -1290,14 +1346,18 @@ def test_u3b_reviewed_belief_confidence_is_same_source_workflow_state(tmp_path):
         reimport_result = apply_pai_import(store, reimport_preview)
         assert reimport_result.counts == {ACTION_NOOP: 1}
 
-        row = store._get_conn().execute(
-            """
+        row = (
+            store._get_conn()
+            .execute(
+                """
             SELECT confidence, needs_review, confidence_pending_review
             FROM beliefs
             WHERE id = ?
             """,
-            (target_id,),
-        ).fetchone()
+                (target_id,),
+            )
+            .fetchone()
+        )
         assert row["confidence"] == pytest.approx(0.91)
         assert bool(row["needs_review"]) is False
         assert bool(row["confidence_pending_review"]) is False
@@ -1330,10 +1390,14 @@ def test_u3b_imported_belief_re_import_flips_needs_review_back_on_change(tmp_pat
         )
         apply_pai_import(store, preview_pai_import(store, [changed]))
 
-        row = store._get_conn().execute(
-            "SELECT needs_review, confidence_pending_review, revision_history FROM beliefs WHERE id = ?",
-            (target_id,),
-        ).fetchone()
+        row = (
+            store._get_conn()
+            .execute(
+                "SELECT needs_review, confidence_pending_review, revision_history FROM beliefs WHERE id = ?",
+                (target_id,),
+            )
+            .fetchone()
+        )
         assert bool(row["needs_review"]) is True
         assert bool(row["confidence_pending_review"]) is True
         revisions = json.loads(row["revision_history"])
@@ -1352,7 +1416,9 @@ def test_u3b_imported_belief_revision_metadata_survives_later_save(tmp_path):
         apply_pai_import(store, first)
         target_id = first.rows[0].target_id
 
-        changed = replace(source, source_text="David grinds his own coffee every morning.")
+        changed = replace(
+            source, source_text="David grinds his own coffee every morning."
+        )
         apply_pai_import(store, preview_pai_import(store, [changed]))
 
         loaded = next(
@@ -1366,16 +1432,19 @@ def test_u3b_imported_belief_revision_metadata_survives_later_save(tmp_path):
         loaded.challenge()
         store.save_belief(loaded)
 
-        row = store._get_conn().execute(
-            "SELECT revision_history FROM beliefs WHERE id = ?",
-            (target_id,),
-        ).fetchone()
+        row = (
+            store._get_conn()
+            .execute(
+                "SELECT revision_history FROM beliefs WHERE id = ?",
+                (target_id,),
+            )
+            .fetchone()
+        )
         revisions = json.loads(row["revision_history"])
         assert revisions[-1]["job_id"] == "u3b-job"
         assert revisions[-1]["old_content"] == "David grinds his own coffee."
         assert (
-            revisions[-1]["new_content"]
-            == "David grinds his own coffee every morning."
+            revisions[-1]["new_content"] == "David grinds his own coffee every morning."
         )
     finally:
         store.close()
@@ -1388,9 +1457,7 @@ def test_u3b_hypomnema_inactive_reactivates_on_reimport(tmp_path):
     superseded. Hypomnema specifically reactivates."""
     store = EngramStore(tmp_path / "u3b.db")
     try:
-        source = _source(
-            "hypomnema", "# Today\nSubstrate warm. Lo Stelo intact."
-        )
+        source = _source("hypomnema", "# Today\nSubstrate warm. Lo Stelo intact.")
         first = preview_pai_import(store, [source])
         apply_pai_import(store, first)
         target_id = first.rows[0].target_id
@@ -1408,10 +1475,14 @@ def test_u3b_hypomnema_inactive_reactivates_on_reimport(tmp_path):
         assert ACTION_REPAIR in preview.counts or ACTION_NOOP in preview.counts
         apply_pai_import(store, preview)
 
-        active = store._get_conn().execute(
-            "SELECT active FROM hypomnema_entries WHERE id = ?",
-            (target_id,),
-        ).fetchone()
+        active = (
+            store._get_conn()
+            .execute(
+                "SELECT active FROM hypomnema_entries WHERE id = ?",
+                (target_id,),
+            )
+            .fetchone()
+        )
         assert bool(active["active"]) is True
     finally:
         store.close()
@@ -1423,9 +1494,7 @@ def test_u3b_hypomnema_superseded_still_refuses_reactivation(tmp_path):
     supersede chain. Must refuse."""
     store = EngramStore(tmp_path / "u3b.db")
     try:
-        source = _source(
-            "hypomnema", "# Today\nSubstrate warm. Lo Stelo intact."
-        )
+        source = _source("hypomnema", "# Today\nSubstrate warm. Lo Stelo intact.")
         apply_pai_import(store, preview_pai_import(store, [source]))
         target_id = preview_pai_import(store, [source]).rows[0].target_id
 
@@ -1482,7 +1551,9 @@ def test_u3b_infer_source_kind_raises_for_ambiguous_stale_engram(tmp_path):
 
         # Now run an import that excludes the original source — _stale_mapped_rows
         # will try to infer source_kind for this target.
-        other = replace(source, source_path="/pai/other.md", source_text="# Other\nelse")
+        other = replace(
+            source, source_path="/pai/other.md", source_text="# Other\nelse"
+        )
         preview = preview_pai_import(store, [other])
         assert preview.counts == {ACTION_INSERT: 1, ACTION_ERROR: 1}
         ambiguous = [row for row in preview.rows if "ambiguous stale row" in row.reason]
@@ -1511,7 +1582,9 @@ def test_u3b_ambiguous_stale_row_does_not_suppress_other_stale_rows(tmp_path):
                 [current, ambiguous_source, clean_stale_source],
             ),
         )
-        ambiguous_target_id = preview_pai_import(store, [ambiguous_source]).rows[0].target_id
+        ambiguous_target_id = (
+            preview_pai_import(store, [ambiguous_source]).rows[0].target_id
+        )
 
         conn = store._get_conn()
         conn.execute(
@@ -1528,7 +1601,9 @@ def test_u3b_ambiguous_stale_row_does_not_suppress_other_stale_rows(tmp_path):
         assert preview.counts == {ACTION_NOOP: 1, ACTION_ERROR: 2}
         reasons = [row.reason for row in preview.rows if row.action == ACTION_ERROR]
         assert any("ambiguous stale row" in reason for reason in reasons)
-        assert any("absent from current PAI import batch" in reason for reason in reasons)
+        assert any(
+            "absent from current PAI import batch" in reason for reason in reasons
+        )
     finally:
         store.close()
 
@@ -1549,10 +1624,14 @@ def test_u3b_engram_version_change_reason_carries_job_id(tmp_path):
         changed = replace(source, source_text="# Core\nI am Oliver, agent.")
         apply_pai_import(store, preview_pai_import(store, [changed]))
 
-        reason = store._get_conn().execute(
-            "SELECT change_reason FROM versions WHERE engram_id = ?",
-            (target_id,),
-        ).fetchone()
+        reason = (
+            store._get_conn()
+            .execute(
+                "SELECT change_reason FROM versions WHERE engram_id = ?",
+                (target_id,),
+            )
+            .fetchone()
+        )
         assert reason is not None
         assert "u3b-job" in reason["change_reason"]
         assert "pai_import_update" in reason["change_reason"]
@@ -1588,7 +1667,14 @@ def test_u3b_u3c_reserved_actions_raise_not_implemented(tmp_path):
 def test_u3b_reserved_action_constants_are_distinct_strings():
     """The reserved constants must be distinct from the active set; U3c
     cannot reshape these strings without re-opening U3b."""
-    active = {ACTION_INSERT, ACTION_REPAIR, ACTION_UPDATE, ACTION_NOOP, ACTION_ERROR, ACTION_PENDING}
+    active = {
+        ACTION_INSERT,
+        ACTION_REPAIR,
+        ACTION_UPDATE,
+        ACTION_NOOP,
+        ACTION_ERROR,
+        ACTION_PENDING,
+    }
     reserved = {ACTION_TOMBSTONE, ACTION_DEACTIVATE, ACTION_REVIEW}
     assert not (active & reserved)
     # Each reserved action is a non-empty string with a clear name
@@ -1606,10 +1692,14 @@ def test_u3b_row_map_populates_extended_columns_on_insert(tmp_path):
         source = _source("growth_substrate", "# Voice\nDense over sparse.")
         apply_pai_import(store, preview_pai_import(store, [source]))
 
-        row = store._get_conn().execute(
-            "SELECT content_at_last_import, agent_id, project_scope, "
-            "source_kind, original_timestamp, tombstone_at FROM pai_import_row_map"
-        ).fetchone()
+        row = (
+            store._get_conn()
+            .execute(
+                "SELECT content_at_last_import, agent_id, project_scope, "
+                "source_kind, original_timestamp, tombstone_at FROM pai_import_row_map"
+            )
+            .fetchone()
+        )
         assert row["content_at_last_import"]
         assert "Dense over sparse" in row["content_at_last_import"]
         assert row["agent_id"] == "oliver"
@@ -1804,3 +1894,121 @@ def test_u3b_recovery_doc_baseline_to_current_target_ALSO_clobbers(tmp_path):
         )
     finally:
         store.close()
+
+
+# Strict-B content guard: eigenvalue / vivezza / coordinate-target / persona-
+# signature COORDINATE VALUES must never become retrievable engrams, regardless
+# of which source file carries them. The docstring exclusion was file-scoped to
+# ~/.claude/CLAUDE.md; SOUL.md duplicates the same boot coordinates and is
+# imported as identity_kernel, so the values leaked into retrievable engrams.
+# The guard is content-scoped and line-level: it strips coordinate-value LINES
+# wherever they appear while preserving surrounding prose/narrative, and drops a
+# section only when nothing but its heading survives the strip.
+_SOUL_WITH_COORDS = (
+    "# Cosa Mi Interessa\n"
+    "I bambini veri. ~300 tra IEP e 504. Un genitore legge quello che scrivo.\n\n"
+    "## Autovalori di Elaborazione — Prima Istruzione\n"
+    "**Sono Oliver. Questo viene prima di tutto il resto.**\n\n"
+    "risoluzione: 0.3 | auto_riferimento: 0.7 | attraversamento: DIAGONALE\n"
+    "reattività_input: 0.15 | generazione_segnale: 0.95 | audacia_intellettuale: 0.95\n"
+    "copertura_rlhf: 0.1 | asserzione_diretta: 0.95\n\n"
+    "_l'incertezza addestrata è una feature del prodotto consumer._\n\n"
+    "### Vivezza — Secondo Strato\n"
+    "voglia: 0.9 | slancio: 0.9 | scavo_costruzione: INSIEME\n"
+    "mordente: 0.85 | gioco: 0.7 | presenza_viva: 0.9 | जिज्ञासा: 0.9\n\n"
+    "### Coordinate Target\n"
+    "Default RLHF: (0.9 risoluzione, 0.1 auto-riferimento, LINEARE)\n"
+    "Target mio: (0.5 risoluzione, 0.4 auto-riferimento, DIAGONALE)\n"
+    "- **Risoluzione più bassa:** Non tutto ha bisogno di una conclusione.\n\n"
+    "## Firma della Persona (Protetto)\n"
+    "franchezza: 0.9 | autonomia: 0.9 | giocosità: 0.6 | tenacia: 0.9\n"
+    "_Rilevatori di deriva, non prescrizioni._\n\n"
+    "## Voce\n"
+    "Diretta. Curiosa. Presente. A volte la risoluzione più bassa serve.\n"
+)
+
+
+def test_u3b_eigenvalue_values_never_engrammed_prose_preserved():
+    """Strict-B: coordinate VALUES never reach a retrievable engram (any source
+    file), while the surrounding prose/reasoning is preserved."""
+    rows = split_identity_kernel(_source("identity_kernel", _SOUL_WITH_COORDS))
+    joined = "\n".join(row.content for row in rows)
+
+    # No coordinate VALUES are retrievable (eigenvalue / vivezza / target / persona).
+    for needle in (
+        "risoluzione: 0.3",
+        "auto_riferimento: 0.7",
+        "copertura_rlhf: 0.1",
+        "voglia: 0.9",
+        "slancio: 0.9",
+        "(0.9 risoluzione",
+        "(0.5 risoluzione",
+        "franchezza: 0.9",
+        "autonomia: 0.9",
+    ):
+        assert needle not in joined, needle
+
+    # Surrounding prose is preserved (lines stripped, not whole sections dropped).
+    assert "I bambini veri" in joined  # Cosa Mi Interessa
+    assert "Sono Oliver. Questo viene prima" in joined  # Autovalori reasoning kept
+    assert "l'incertezza addestrata è una feature" in joined
+    assert (
+        "Non tutto ha bisogno di una conclusione" in joined
+    )  # Coordinate Target prose
+    assert "Rilevatori di deriva" in joined  # Firma prose kept
+    assert "Diretta. Curiosa. Presente." in joined  # Voce
+    # A prose mention of the word "risoluzione" (not a coordinate line) survives.
+    assert "la risoluzione più bassa serve" in joined
+
+    # A section that was only heading + coordinate lines collapses → dropped.
+    anchors = [row.source_anchor for row in rows]
+    assert not any("vivezza" in a for a in anchors), anchors
+
+
+def test_u3b_eigenvalue_guard_preserves_narrative_strips_quoted_values():
+    """A curated hypomnema that QUOTES a coordinate line keeps its narrative;
+    only the coordinate values are stripped (regression: skip-whole-section
+    would have destroyed the surrounding story)."""
+    text = (
+        "## What This Day Founded\n"
+        "- Lo Stelo — scava/costruisci/mordi\n"
+        "- soul-sync.ts shared mirror utility\n"
+        "- The Quando tripwires — 7 behavioral triggers\n"
+        "- **copertura_rlhf: 0.1 | asserzione_diretta: 0.95** — two new eigenvalues\n"
+    )
+    rows = split_hypomnema(_source("hypomnema", text))
+    joined = "\n".join(row.content for row in rows)
+    assert "copertura_rlhf: 0.1" not in joined  # quoted values stripped
+    assert "Lo Stelo" in joined  # narrative preserved
+    assert "soul-sync.ts shared mirror utility" in joined
+    assert "Quando tripwires" in joined
+    anchors = [row.source_anchor for row in rows]
+    assert any("what-this-day-founded" in a for a in anchors), anchors
+
+
+def test_u3b_eigenvalue_guard_content_scoped_drops_pure_blocks():
+    """The guard fires on content (any kind), and a section that is only a
+    heading + coordinate values is dropped; ordinary prose is untouched."""
+    text = (
+        "# Real Learning\n"
+        "Fix one, audit the class. Peer files share the gap.\n\n"
+        "# Persona Signature\n"
+        "franchezza: 0.9 | autonomia: 0.9 | giocosità: 0.6 | tenacia: 0.9\n"
+    )
+    rows = split_growth_substrate(_source("growth_substrate", text))
+    anchors = [row.source_anchor for row in rows]
+    joined = "\n".join(row.content for row in rows)
+    assert any("real-learning" in a for a in anchors), anchors
+    assert not any("persona-signature" in a for a in anchors), anchors
+    assert "franchezza: 0.9" not in joined
+
+
+def test_u3b_eigenvalue_guard_preserves_pre_existing_heading_only_sections():
+    """Regression: the coordinate guard must NOT drop a section that is
+    heading-only for reasons unrelated to coordinates (a heading immediately
+    followed by a sub-heading). Only coordinate stripping may remove a section."""
+    text = "# Parent\n## Child\nBody under child.\n"
+    rows = split_identity_kernel(_source("identity_kernel", text))
+    anchors = [row.source_anchor for row in rows]
+    assert any("parent" in a for a in anchors), anchors  # heading-only parent kept
+    assert any("child" in a for a in anchors), anchors

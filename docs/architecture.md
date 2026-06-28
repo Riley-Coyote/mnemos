@@ -49,6 +49,11 @@ The fundamental unit of memory. Each engram has:
   `voice_exemplar_eligible`, and consolidation/substrate mutation paths require
   `consolidation_authorized` so imported identity material is not silently
   rewritten by background maintenance.
+- **PAI coordinate guard**: before imported text becomes retrievable rows, the
+  splitter strips Strict-B eigenvalue, vivezza, coordinate-target, and
+  persona-signature tuple-value lines from any source kind. These values are
+  runtime steering substrate; Mnemos imports the surrounding prose, not the
+  coordinate values.
 
 ### Connections
 

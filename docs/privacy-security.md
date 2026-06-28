@@ -96,6 +96,10 @@ Safety boundaries enforced by the importer:
 - Manifest source paths must stay inside the manifest directory after
   resolution; absolute paths are allowed only when they still resolve inside
   that directory, and `..`-escaping paths are rejected at load.
+- Source splitting strips Strict-B coordinate-value lines from any source kind
+  before row hashing/indexing. Eigenvalue, vivezza, coordinate-target, and
+  persona-signature tuple values are runtime substrate rather than retrievable
+  memory; prose around those lines is preserved.
 - The dual-life watcher (`watch-once` / `watch-plist`) advances its state only
   after a successful apply. Preview mode leaves state untouched. Missing source
   files are treated as an empty current snapshot so removed sections become

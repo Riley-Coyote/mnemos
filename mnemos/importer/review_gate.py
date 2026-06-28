@@ -55,6 +55,9 @@ _U6_6_INNER_LIFE_ACTIVITY_TEST_FILES = {
 _U6_6_INNER_LIFE_CHALLENGE_TEST_FILES = {
     "tests/test_hypomnema_challenge.py",
 }
+_U6_6_INNER_LIFE_OBSERVER_TEST_FILES = {
+    "tests/test_observer_panel.py",
+}
 
 
 @dataclass(frozen=True)
@@ -324,6 +327,7 @@ def _proof_surface_findings(
         finalizer_touched = bool(changed & _U6_6_INNER_LIFE_FINALIZER_FILES)
         activity_gate_touched = "mnemos/inner_life/activity_gate.py" in changed
         challenge_touched = "mnemos/inner_life/hypomnema_challenge.py" in changed
+        observer_touched = "mnemos/inner_life/observer_panel.py" in changed
         if schema_touched and not (
             _U6_6_INNER_LIFE_SCHEMA_TEST_FILES <= changed
         ):
@@ -390,6 +394,20 @@ def _proof_surface_findings(
                     file="mnemos/inner_life/hypomnema_challenge.py",
                     description="U6.6 hypomnema challenge changed without challenge regression tests in the diff",
                     required_proof="tests/test_hypomnema_challenge.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if observer_touched and not (
+            changed & _U6_6_INNER_LIFE_OBSERVER_TEST_FILES
+        ):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/inner_life/observer_panel.py",
+                    description="U6.6 observer panel changed without observer-panel regression tests in the diff",
+                    required_proof="tests/test_observer_panel.py appears in this diff",
                     status="missing",
                     action="must-test",
                 )
@@ -721,6 +739,7 @@ def _repository_content_findings(
     cli_simple_tests = file_texts.get("tests/test_cli_simple.py", "")
     activity_gate_tests = file_texts.get("tests/test_inner_life_activity_gate.py", "")
     hypomnema_challenge_tests = file_texts.get("tests/test_hypomnema_challenge.py", "")
+    observer_panel_tests = file_texts.get("tests/test_observer_panel.py", "")
     inner_life_ledger_tests = file_texts.get("tests/test_inner_life_ledger.py", "")
     schema_migration_tests = file_texts.get("tests/test_u3a_schema_migrations.py", "")
     session_finalizer_tests = file_texts.get("tests/test_session_finalizer.py", "")
@@ -990,6 +1009,60 @@ def _repository_content_findings(
                             (
                                 "test_hypomnema_challenge_duplicate_key_does_not_reapply_revision",
                                 hypomnema_challenge_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u66_inner_life and "mnemos/inner_life/observer_panel.py" in changed:
+        findings.extend(
+            _missing_required_proofs(
+                surface="U6.6 observer panel",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u66-observer-panel-no-reviewers",
+                        "no reviewers records a clean skip",
+                        "tests/test_observer_panel.py",
+                        (
+                            (
+                                "test_observer_panel_no_reviewers_records_clean_skip",
+                                observer_panel_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-observer-panel-source-required",
+                        "missing source ids skip before client call",
+                        "tests/test_observer_panel.py",
+                        (
+                            (
+                                "test_observer_panel_missing_source_ids_skips_before_client_call",
+                                observer_panel_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-observer-panel-failure-isolation",
+                        "failed reviewer does not discard successful findings",
+                        "tests/test_observer_panel.py",
+                        (
+                            (
+                                "test_observer_panel_failed_reviewer_does_not_discard_successful_finding",
+                                observer_panel_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-observer-panel-bounds",
+                        "findings and excerpts are bounded",
+                        "tests/test_observer_panel.py",
+                        (
+                            (
+                                "test_observer_panel_bounds_findings_and_excerpts",
+                                observer_panel_tests,
                             ),
                         ),
                     ),
@@ -2236,6 +2309,7 @@ def _files_needed_for_review(changed_files: Sequence[str]) -> set[str]:
             "tests/test_cli_simple.py",
             "tests/test_inner_life_activity_gate.py",
             "tests/test_inner_life_ledger.py",
+            "tests/test_observer_panel.py",
             "tests/test_u3b_pai_importer.py",
             "tests/test_u3b_pai_operator.py",
             "tests/test_u3a_schema_migrations.py",

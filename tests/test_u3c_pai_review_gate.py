@@ -154,6 +154,17 @@ def test_hypomnema_challenge_duplicate_key_does_not_reapply_revision():
     assert True
 """
 
+GOOD_OBSERVER_PANEL_TESTS = """
+def test_observer_panel_no_reviewers_records_clean_skip():
+    assert True
+def test_observer_panel_missing_source_ids_skips_before_client_call():
+    assert True
+def test_observer_panel_failed_reviewer_does_not_discard_successful_finding():
+    assert True
+def test_observer_panel_bounds_findings_and_excerpts():
+    assert True
+"""
+
 GOOD_INNER_LIFE_LEDGER_TESTS = """
 def test_inner_life_ledger_schema_is_private_and_idempotent():
     assert True
@@ -216,6 +227,7 @@ def _file_texts(**overrides):
         "tests/test_u3c_pai_watch.py": GOOD_WATCH_TESTS,
         "tests/test_u3c_pai_watch_doctor.py": GOOD_DOCTOR_TESTS,
         "tests/test_u3c_pai_watcher.py": GOOD_WATCHER_TESTS,
+        "tests/test_observer_panel.py": GOOD_OBSERVER_PANEL_TESTS,
         "tests/test_session_finalizer.py": GOOD_SESSION_FINALIZER_TESTS,
         "tests/test_turn_finalizer.py": GOOD_TURN_FINALIZER_TESTS,
     }
@@ -483,6 +495,59 @@ def test_hypomnema_challenge_duplicate_key_does_not_reapply_revision():
     )
 
 
+def test_u3c_review_gate_accepts_u66_observer_panel_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/observer_panel.py",
+            "tests/test_observer_panel.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/observer_panel.py": "U6.6 observer_panel",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/observer_panel.py b/mnemos/inner_life/observer_panel.py\n"
+            "@@\n"
+            "+# U6.6 observer_panel\n"
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u66_observer_panel_without_source_id_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/observer_panel.py",
+            "tests/test_observer_panel.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/observer_panel.py": "U6.6 observer_panel",
+                "tests/test_observer_panel.py": """
+def test_observer_panel_no_reviewers_records_clean_skip():
+    assert True
+def test_observer_panel_failed_reviewer_does_not_discard_successful_finding():
+    assert True
+def test_observer_panel_bounds_findings_and_excerpts():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/observer_panel.py b/mnemos/inner_life/observer_panel.py\n"
+            "@@\n"
+            "+# U6.6 observer_panel\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-observer-panel-source-required"
+        for finding in findings
+    )
+
+
 def test_u3c_review_gate_rule_signature():
     helpers = [
         (name, obj)
@@ -495,7 +560,7 @@ def test_u3c_review_gate_rule_signature():
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
-    assert digest == "629cfaa25c6954ef4468da42b9dba6d727ef0a13398824c2267648631ea289de"
+    assert digest == "ebf6ac1ae3b25694ea6192c5b5d28c910f95e9a7fda2627dc28002f14e328242"
 
 
 def test_u3c_review_gate_fails_watcher_change_without_test_diff():

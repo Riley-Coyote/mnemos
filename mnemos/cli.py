@@ -24,6 +24,8 @@ Commands:
     mnemos pai-import review-gate    Run diff-focused adversarial U3c gate
     mnemos inner-life session-finalize  Finalize transcript provenance below memory
     mnemos inner-life turn-finalize     Finalize one turn provenance row below memory
+    mnemos inner-life activity-gate     Preflight one gated process on a DB copy
+    mnemos inner-life status            Summarize gated inner-life telemetry
     mnemos remember CONTENT      Capture durable continuity from the CLI
     mnemos hermes install        Install Mnemos for Hermes Agent
     mnemos hermes quickstart     Safely install Mnemos for Hermes Agent
@@ -533,6 +535,41 @@ def main(argv: list[str] | None = None) -> int:
     p_inner_turn.add_argument("--rollout-tag", default="u6.6", help="Rollout tag for written provenance rows")
     p_inner_turn.add_argument("--max-excerpt-chars", type=int, default=480)
     p_inner_turn.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos databases; requires explicit David authorization in live use",
+    )
+    p_inner_activity = inner_sub.add_parser(
+        "activity-gate",
+        help="Evaluate one U6.6 activity gate without generated memory writes",
+    )
+    p_inner_activity.add_argument(
+        "--process",
+        required=True,
+        choices=("challenge", "observe", "affect", "reflect", "wander", "dream"),
+        help="Inner-life process family to preflight",
+    )
+    p_inner_activity.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
+    p_inner_activity.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_inner_activity.add_argument("--person-id", default=None, help="Person/user scope")
+    p_inner_activity.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_inner_activity.add_argument("--rollout-tag", default="u6.6", help="Rollout tag for written gate rows")
+    p_inner_activity.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos databases; requires explicit David authorization in live use",
+    )
+    p_inner_status = inner_sub.add_parser(
+        "status",
+        help="Summarize U6.6 private inner-life telemetry",
+    )
+    p_inner_status.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
+    p_inner_status.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_inner_status.add_argument("--person-id", default=None, help="Person/user scope")
+    p_inner_status.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_inner_status.add_argument("--rollout-tag", default=None, help="Optional rollout tag filter")
+    p_inner_status.add_argument("--limit", type=int, default=200, help="Max ledger rows to summarize")
+    p_inner_status.add_argument(
         "--allow-live-db",
         action="store_true",
         help="Allow ~/.mnemos databases; requires explicit David authorization in live use",
@@ -1137,9 +1174,10 @@ def _cmd_pai_import(args: argparse.Namespace) -> int:
 def _cmd_inner_life(args: argparse.Namespace) -> int:
     """Gated inner-life private-operation CLI."""
     command = getattr(args, "inner_life_command", None)
-    if command not in {"session-finalize", "turn-finalize"}:
+    if command not in {"session-finalize", "turn-finalize", "activity-gate", "status"}:
         print(
-            "Usage: mnemos inner-life {session-finalize|turn-finalize}",
+            "Usage: mnemos inner-life "
+            "{session-finalize|turn-finalize|activity-gate|status}",
             file=sys.stderr,
         )
         return 1
@@ -1164,6 +1202,9 @@ def _cmd_inner_life(args: argparse.Namespace) -> int:
 
         store = _get_store(args)
         try:
+            agent_id = _resolve_agent_id(args)
+            person_id = args.person_id or "user"
+            project_scope = args.project_scope or "global"
             if command == "session-finalize":
                 from .inner_life.session_finalizer import finalize_session_transcript
 
@@ -1172,9 +1213,9 @@ def _cmd_inner_life(args: argparse.Namespace) -> int:
                     args.transcript,
                     session_id=args.session_id,
                     thread_id=args.thread_id,
-                    agent_id=_resolve_agent_id(args),
-                    person_id=args.person_id or "user",
-                    project_scope=args.project_scope or "global",
+                    agent_id=agent_id,
+                    person_id=person_id,
+                    project_scope=project_scope,
                     rollout_tag=args.rollout_tag,
                     max_turn_events=args.max_turn_events,
                     max_excerpt_chars=args.max_excerpt_chars,
@@ -1190,31 +1231,90 @@ def _cmd_inner_life(args: argparse.Namespace) -> int:
                 print("Memory writes: 0")
                 return 0
 
-            from .inner_life.turn_finalizer import finalize_turn_event
+            if command == "turn-finalize":
+                from .inner_life.turn_finalizer import finalize_turn_event
 
-            result = finalize_turn_event(
-                store,
-                session_id=args.session_id,
-                turn_id=args.turn_id,
-                thread_id=args.thread_id,
-                agent_id=_resolve_agent_id(args),
-                person_id=args.person_id or "user",
-                project_scope=args.project_scope or "global",
-                user_text=args.user_text,
-                assistant_text=args.assistant_text,
-                source_message_ids=args.source_message_id,
-                source_timestamp=args.source_timestamp,
+                result = finalize_turn_event(
+                    store,
+                    session_id=args.session_id,
+                    turn_id=args.turn_id,
+                    thread_id=args.thread_id,
+                    agent_id=agent_id,
+                    person_id=person_id,
+                    project_scope=project_scope,
+                    user_text=args.user_text,
+                    assistant_text=args.assistant_text,
+                    source_message_ids=args.source_message_id,
+                    source_timestamp=args.source_timestamp,
+                    rollout_tag=args.rollout_tag,
+                    max_excerpt_chars=args.max_excerpt_chars,
+                )
+                print("Inner-life turn finalize")
+                print("------------------------")
+                print(f"Session:       {args.session_id}")
+                print(f"DB:            {Path(db_path).expanduser()}")
+                print(f"Written:       {result.get('written', 0)}")
+                print(f"Duplicates:    {result.get('duplicates', 0)}")
+                print(f"Skipped:       {result.get('skipped', 0)}")
+                print("Memory writes: 0")
+                return 0
+            if command == "activity-gate":
+                from .inner_life.activity_gate import evaluate_activity_gate
+
+                decision = evaluate_activity_gate(
+                    store,
+                    process_name=args.process,
+                    agent_id=agent_id,
+                    person_id=person_id,
+                    project_scope=project_scope,
+                    rollout_tag=args.rollout_tag,
+                )
+                print("Inner-life activity gate")
+                print("------------------------")
+                print(f"Process:       {args.process}")
+                print(f"DB:            {Path(db_path).expanduser()}")
+                print(f"Decision:      {decision.get('gate_decision')}")
+                print(f"Reason:        {decision.get('reason')}")
+                print(f"Signals:       {decision.get('signal_count', 0)}")
+                print(f"Sources:       {len(decision.get('source_ids', []))}")
+                print(f"Cooldown until: {decision.get('cooldown_until') or ''}")
+                print("Memory writes: 0")
+                return 0
+
+            rows = store.get_inner_life_events(
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
                 rollout_tag=args.rollout_tag,
-                max_excerpt_chars=args.max_excerpt_chars,
+                limit=args.limit,
             )
-            print("Inner-life turn finalize")
-            print("------------------------")
-            print(f"Session:       {args.session_id}")
-            print(f"DB:            {Path(db_path).expanduser()}")
-            print(f"Written:       {result.get('written', 0)}")
-            print(f"Duplicates:    {result.get('duplicates', 0)}")
-            print(f"Skipped:       {result.get('skipped', 0)}")
-            print("Memory writes: 0")
+            by_process: dict[str, int] = {}
+            by_decision: dict[str, int] = {}
+            generated_memory_writes = 0
+            belief_writes = 0
+            identity_patches = 0
+            shared_pool_writes = 0
+            for row in rows:
+                by_process[row["process_name"]] = by_process.get(row["process_name"], 0) + 1
+                by_decision[row["gate_decision"]] = by_decision.get(row["gate_decision"], 0) + 1
+                metadata = row.get("metadata", {})
+                generated_memory_writes += int(metadata.get("generated_memory_writes", 0) or 0)
+                belief_writes += int(metadata.get("belief_writes", 0) or 0)
+                identity_patches += int(metadata.get("identity_patches", 0) or 0)
+                shared_pool_writes += int(metadata.get("shared_pool_writes", 0) or 0)
+
+            print("Inner-life status")
+            print("-----------------")
+            print(f"DB:                    {Path(db_path).expanduser()}")
+            print(f"Rows:                  {len(rows)}")
+            print(f"Generated memory writes: {generated_memory_writes}")
+            print(f"Belief writes:          {belief_writes}")
+            print(f"Identity patches:       {identity_patches}")
+            print(f"Shared-pool writes:     {shared_pool_writes}")
+            for process, count in sorted(by_process.items()):
+                print(f"Process {process}: {count}")
+            for decision, count in sorted(by_decision.items()):
+                print(f"Decision {decision}: {count}")
             return 0
         finally:
             store.close()

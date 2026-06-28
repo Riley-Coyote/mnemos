@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from mnemos.cli import main
+from mnemos.store.sqlite_store import EngramStore
 
 
 def test_doctor_smoke_with_temp_db(tmp_path, capsys):
@@ -166,3 +167,132 @@ def test_inner_life_cli_refuses_default_live_db_without_override(capsys):
 
     assert result == 1
     assert "refuses live Mnemos databases" in err
+
+
+def test_inner_life_activity_gate_cli_records_preflight_without_memory(tmp_path, capsys):
+    db = tmp_path / "inner-life-activity.db"
+    store = EngramStore(db)
+    try:
+        store.upsert_inner_life_event(
+            idempotency_key="turn:session-cli:1",
+            event_type="turn_finalized",
+            process_name="turn-finalizer",
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            session_id="session-cli",
+            turn_id="1",
+            content_hash="hash",
+            content_excerpt="USER: go\nASSISTANT: verified",
+            event_tags=["u6.6", "turn-event"],
+            rollout_tag="u6.6-test",
+            gate_decision="ledger_only",
+            metadata={"writes_memory": False},
+        )
+    finally:
+        store.close()
+
+    result = main(
+        [
+            "inner-life",
+            "activity-gate",
+            "--process",
+            "reflect",
+            "--db-path",
+            str(db),
+            "--agent-id",
+            "oliver",
+            "--person-id",
+            "david",
+            "--project-scope",
+            "pai",
+            "--rollout-tag",
+            "u6.6-test",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert result == 0
+    assert "Inner-life activity gate" in out
+    assert "Decision:      run" in out
+    assert "Memory writes: 0" in out
+
+    store = EngramStore(db)
+    try:
+        rows = store.get_inner_life_events(
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            event_type="tool_event",
+            rollout_tag="u6.6-test",
+        )
+        assert len(rows) == 1
+        assert rows[0]["process_name"] == "activity-gate"
+        assert rows[0]["metadata"]["target_process"] == "reflect"
+        assert store.count_engrams(agent_id="oliver") == 0
+    finally:
+        store.close()
+
+
+def test_inner_life_status_cli_summarizes_rollout_telemetry(tmp_path, capsys):
+    db = tmp_path / "inner-life-status.db"
+    store = EngramStore(db)
+    try:
+        store.upsert_inner_life_event(
+            idempotency_key="gate:reflect:1",
+            event_type="tool_event",
+            process_name="narrative-gate",
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            content_hash="hash",
+            content_excerpt="passed",
+            rollout_tag="u6.6-test",
+            gate_decision="pass",
+            metadata={"generated_memory_writes": 0},
+        )
+        store.upsert_inner_life_event(
+            idempotency_key="write:reflect:1",
+            event_type="tool_event",
+            process_name="low-stakes-writer",
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            content_hash="hash",
+            content_excerpt="written",
+            rollout_tag="u6.6-test",
+            gate_decision="written:low_stakes",
+            metadata={
+                "generated_memory_writes": 1,
+                "belief_writes": 0,
+                "identity_patches": 0,
+                "shared_pool_writes": 0,
+            },
+        )
+    finally:
+        store.close()
+
+    result = main(
+        [
+            "inner-life",
+            "status",
+            "--db-path",
+            str(db),
+            "--agent-id",
+            "oliver",
+            "--person-id",
+            "david",
+            "--project-scope",
+            "pai",
+            "--rollout-tag",
+            "u6.6-test",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert result == 0
+    assert "Inner-life status" in out
+    assert "Rows:                  2" in out
+    assert "Generated memory writes: 1" in out
+    assert "Process low-stakes-writer: 1" in out
+    assert "Decision written:low_stakes: 1" in out

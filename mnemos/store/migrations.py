@@ -402,6 +402,70 @@ def migrate_v5_u3b_hardening(conn: sqlite3.Connection) -> None:
     apply_u3b_hardening_schema_migration(conn)
 
 
+INNER_LIFE_EVENT_TYPES = {
+    "session_finalized",
+    "turn_finalized",
+    "turn_message",
+    "tool_event",
+    "file_event",
+    "test_outcome",
+    "skip",
+    "error",
+}
+
+
+def apply_u6_6_inner_life_schema_migration(conn: sqlite3.Connection) -> None:
+    """Apply the U6.6 private inner-life provenance ledger schema."""
+    event_types = "', '".join(sorted(INNER_LIFE_EVENT_TYPES))
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS inner_life_events (
+            id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            event_type TEXT NOT NULL
+                CHECK (event_type IN ('{event_types}')),
+            process_name TEXT NOT NULL,
+            agent_id TEXT NOT NULL DEFAULT 'default',
+            person_id TEXT NOT NULL DEFAULT 'user',
+            project_scope TEXT NOT NULL DEFAULT 'global',
+            session_id TEXT,
+            thread_id TEXT,
+            turn_id TEXT,
+            role TEXT,
+            source_message_id TEXT,
+            source_path TEXT,
+            source_timestamp TEXT,
+            content_hash TEXT NOT NULL DEFAULT '',
+            content_excerpt TEXT NOT NULL DEFAULT '',
+            event_tags_json TEXT NOT NULL DEFAULT '[]',
+            source_ids_json TEXT NOT NULL DEFAULT '[]',
+            metadata_json TEXT NOT NULL DEFAULT '{{}}',
+            rollout_tag TEXT NOT NULL DEFAULT '',
+            gate_decision TEXT NOT NULL DEFAULT 'ledger_only',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inner_life_events_scope "
+        "ON inner_life_events(agent_id, person_id, project_scope, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inner_life_events_session "
+        "ON inner_life_events(session_id, event_type, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inner_life_events_rollout "
+        "ON inner_life_events(rollout_tag, event_type, created_at)"
+    )
+
+
+@register_migration(6, "U6.6 private inner-life event ledger")
+def migrate_v6_inner_life_events(conn: sqlite3.Connection) -> None:
+    apply_u6_6_inner_life_schema_migration(conn)
+
+
 def insert_pai_import_event(
     conn: sqlite3.Connection,
     *,

@@ -123,6 +123,39 @@ def test_u3c_review_gate_rule_signature():
     assert True
 """
 
+GOOD_CLI_SIMPLE_TESTS = """
+def test_inner_life_session_finalize_cli_writes_private_ledger():
+    assert True
+def test_inner_life_cli_requires_representative_db():
+    assert True
+def test_inner_life_cli_refuses_default_live_db_without_override():
+    assert True
+"""
+
+GOOD_INNER_LIFE_LEDGER_TESTS = """
+def test_inner_life_ledger_schema_is_private_and_idempotent():
+    assert True
+def test_inner_life_ledger_migrates_schema_five_copy_without_touching_memory():
+    assert True
+"""
+
+GOOD_U3A_SCHEMA_TESTS = """
+SCHEMA_VERSION = 6
+def test_migration_version_guards():
+    assert "inner_life_events"
+    assert SCHEMA_VERSION
+"""
+
+GOOD_SESSION_FINALIZER_TESTS = """
+def test_session_finalizer_writes_bounded_provenance_below_memory():
+    assert True
+"""
+
+GOOD_TURN_FINALIZER_TESTS = """
+def test_turn_finalizer_writes_one_idempotent_provenance_row_only():
+    assert True
+"""
+
 GOOD_LAUNCH_DOC = """
 ## Anti-Criteria
 ## Riley/Daniel Test Taxonomy Crosswalk
@@ -149,13 +182,18 @@ def _file_texts(**overrides):
         ".github/workflows/release-hardening.yml": GOOD_WORKFLOW,
         "docs/u3c-step3-launch-gate.md": GOOD_LAUNCH_DOC,
         "mnemos/importer/watcher.py": GOOD_WATCHER,
+        "tests/test_cli_simple.py": GOOD_CLI_SIMPLE_TESTS,
+        "tests/test_inner_life_ledger.py": GOOD_INNER_LIFE_LEDGER_TESTS,
         "tests/test_u3b_pai_importer.py": GOOD_IMPORTER_TESTS,
         "tests/test_u3b_pai_operator.py": GOOD_OPERATOR_TESTS,
+        "tests/test_u3a_schema_migrations.py": GOOD_U3A_SCHEMA_TESTS,
         "tests/test_u3c_pai_operator.py": GOOD_OPERATOR_U3C_TESTS,
         "tests/test_u3c_pai_review_gate.py": GOOD_REVIEW_GATE_TESTS,
         "tests/test_u3c_pai_watch.py": GOOD_WATCH_TESTS,
         "tests/test_u3c_pai_watch_doctor.py": GOOD_DOCTOR_TESTS,
         "tests/test_u3c_pai_watcher.py": GOOD_WATCHER_TESTS,
+        "tests/test_session_finalizer.py": GOOD_SESSION_FINALIZER_TESTS,
+        "tests/test_turn_finalizer.py": GOOD_TURN_FINALIZER_TESTS,
     }
     base.update(overrides)
     return base
@@ -225,6 +263,96 @@ def test_u3c_review_gate_accepts_diff_with_matching_proof_surfaces():
     assert findings == []
 
 
+def test_u3c_review_gate_accepts_u66_inner_life_schema_and_cli_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/cli.py",
+            "mnemos/inner_life/session_finalizer.py",
+            "mnemos/inner_life/turn_finalizer.py",
+            "mnemos/store/migrations.py",
+            "mnemos/store/sqlite_store.py",
+            "tests/test_cli_simple.py",
+            "tests/test_inner_life_ledger.py",
+            "tests/test_session_finalizer.py",
+            "tests/test_turn_finalizer.py",
+            "tests/test_u3a_schema_migrations.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/cli.py": "inner-life session-finalize turn-finalize",
+                "mnemos/store/migrations.py": "U6.6 inner_life_events",
+                "mnemos/store/sqlite_store.py": "inner_life_events",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/store/migrations.py b/mnemos/store/migrations.py\n"
+            "@@\n"
+            "+# U6.6 private inner_life_events ledger\n"
+            "diff --git a/mnemos/cli.py b/mnemos/cli.py\n"
+            "@@\n"
+            '+p_inner = sub.add_parser("inner-life")\n'
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u66_schema_without_schema_five_copy_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/store/migrations.py",
+            "tests/test_inner_life_ledger.py",
+            "tests/test_u3a_schema_migrations.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/store/migrations.py": "U6.6 inner_life_events",
+                "tests/test_inner_life_ledger.py": """
+def test_inner_life_ledger_schema_is_private_and_idempotent():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/store/migrations.py b/mnemos/store/migrations.py\n"
+            "@@\n"
+            "+# U6.6 private inner_life_events ledger\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-inner-life-schema-five-copy"
+        for finding in findings
+    )
+
+
+def test_u3c_review_gate_fails_u66_cli_without_live_db_refusal_proof():
+    findings = _findings(
+        changed_files=["mnemos/cli.py", "tests/test_cli_simple.py"],
+        file_texts=_file_texts(
+            **{
+                "mnemos/cli.py": "inner-life session-finalize turn-finalize",
+                "tests/test_cli_simple.py": """
+def test_inner_life_session_finalize_cli_writes_private_ledger():
+    assert True
+def test_inner_life_cli_requires_representative_db():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/cli.py b/mnemos/cli.py\n"
+            "@@\n"
+            '+p_inner = sub.add_parser("inner-life")\n'
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-inner-life-cli-live-refusal"
+        for finding in findings
+    )
+
+
 def test_u3c_review_gate_rule_signature():
     helpers = [
         (name, obj)
@@ -237,7 +365,7 @@ def test_u3c_review_gate_rule_signature():
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
-    assert digest == "6a4b44e98161bb022b7438a4dd4c80a0ea0bc6bf1e7d45ceb4364cfed2262432"
+    assert digest == "529ca4e5e5a56c9d818f14ecc23147920c461e306146d4562645d9cef75c9882"
 
 
 def test_u3c_review_gate_fails_watcher_change_without_test_diff():

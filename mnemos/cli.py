@@ -22,6 +22,8 @@ Commands:
     mnemos pai-import watch-plist    Write a launchd plist for watch-once
     mnemos pai-import watch-doctor   Run the Step 3 launch-readiness gate
     mnemos pai-import review-gate    Run diff-focused adversarial U3c gate
+    mnemos inner-life session-finalize  Finalize transcript provenance below memory
+    mnemos inner-life turn-finalize     Finalize one turn provenance row below memory
     mnemos remember CONTENT      Capture durable continuity from the CLI
     mnemos hermes install        Install Mnemos for Hermes Agent
     mnemos hermes quickstart     Safely install Mnemos for Hermes Agent
@@ -491,6 +493,51 @@ def main(argv: list[str] | None = None) -> int:
         help="Intent artifact path for the U3c launch diff",
     )
 
+    # ── inner-life ──
+    p_inner = sub.add_parser("inner-life", help="Gated inner-life private operations")
+    inner_sub = p_inner.add_subparsers(dest="inner_life_command")
+    p_inner_session = inner_sub.add_parser(
+        "session-finalize",
+        help="Finalize JSONL/checkpoint transcript provenance below memory",
+    )
+    p_inner_session.add_argument("--transcript", required=True, help="JSONL transcript/checkpoint path")
+    p_inner_session.add_argument("--session-id", required=True, help="Session identifier")
+    p_inner_session.add_argument("--thread-id", default=None, help="Optional thread identifier")
+    p_inner_session.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
+    p_inner_session.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_inner_session.add_argument("--person-id", default=None, help="Person/user scope")
+    p_inner_session.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_inner_session.add_argument("--rollout-tag", default="u6.6", help="Rollout tag for written provenance rows")
+    p_inner_session.add_argument("--max-turn-events", type=int, default=25)
+    p_inner_session.add_argument("--max-excerpt-chars", type=int, default=480)
+    p_inner_session.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos databases; requires explicit David authorization in live use",
+    )
+    p_inner_turn = inner_sub.add_parser(
+        "turn-finalize",
+        help="Finalize one completed turn provenance row below memory",
+    )
+    p_inner_turn.add_argument("--session-id", required=True, help="Session identifier")
+    p_inner_turn.add_argument("--turn-id", default=None, help="Optional turn identifier")
+    p_inner_turn.add_argument("--thread-id", default=None, help="Optional thread identifier")
+    p_inner_turn.add_argument("--user-text", default="", help="User side of completed exchange")
+    p_inner_turn.add_argument("--assistant-text", default="", help="Assistant side of completed exchange")
+    p_inner_turn.add_argument("--source-message-id", action="append", default=[])
+    p_inner_turn.add_argument("--source-timestamp", default=None)
+    p_inner_turn.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
+    p_inner_turn.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_inner_turn.add_argument("--person-id", default=None, help="Person/user scope")
+    p_inner_turn.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_inner_turn.add_argument("--rollout-tag", default="u6.6", help="Rollout tag for written provenance rows")
+    p_inner_turn.add_argument("--max-excerpt-chars", type=int, default=480)
+    p_inner_turn.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos databases; requires explicit David authorization in live use",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -517,6 +564,7 @@ def main(argv: list[str] | None = None) -> int:
         "identity": _cmd_identity,
         "mcp": _cmd_mcp,
         "pai-import": _cmd_pai_import,
+        "inner-life": _cmd_inner_life,
     }
 
     handler = handlers.get(args.command)
@@ -1083,6 +1131,95 @@ def _cmd_pai_import(args: argparse.Namespace) -> int:
         return 0
     except Exception as exc:
         print(f"PAI import {command} failed: {exc}", file=sys.stderr)
+        return 1
+
+
+def _cmd_inner_life(args: argparse.Namespace) -> int:
+    """Gated inner-life private-operation CLI."""
+    command = getattr(args, "inner_life_command", None)
+    if command not in {"session-finalize", "turn-finalize"}:
+        print(
+            "Usage: mnemos inner-life {session-finalize|turn-finalize}",
+            file=sys.stderr,
+        )
+        return 1
+
+    db_path = getattr(args, "db_path", None)
+    if not db_path:
+        print(
+            "mnemos inner-life requires --db-path; use a representative DB copy",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        from .importer.operator import _db_path_requires_live_override
+
+        if _db_path_requires_live_override(db_path) and not args.allow_live_db:
+            print(
+                "mnemos inner-life refuses live Mnemos databases without "
+                "--allow-live-db and explicit David authorization",
+                file=sys.stderr,
+            )
+            return 1
+
+        store = _get_store(args)
+        try:
+            if command == "session-finalize":
+                from .inner_life.session_finalizer import finalize_session_transcript
+
+                result = finalize_session_transcript(
+                    store,
+                    args.transcript,
+                    session_id=args.session_id,
+                    thread_id=args.thread_id,
+                    agent_id=_resolve_agent_id(args),
+                    person_id=args.person_id or "user",
+                    project_scope=args.project_scope or "global",
+                    rollout_tag=args.rollout_tag,
+                    max_turn_events=args.max_turn_events,
+                    max_excerpt_chars=args.max_excerpt_chars,
+                )
+                print("Inner-life session finalize")
+                print("---------------------------")
+                print(f"Session:       {args.session_id}")
+                print(f"DB:            {Path(db_path).expanduser()}")
+                print(f"Session row:   {result.get('session_written', 0)}")
+                print(f"Turn events:   {result.get('turn_events_written', 0)}")
+                print(f"Dropped:       {result.get('events_dropped', 0)}")
+                print(f"Malformed:     {result.get('malformed_lines', 0)}")
+                print("Memory writes: 0")
+                return 0
+
+            from .inner_life.turn_finalizer import finalize_turn_event
+
+            result = finalize_turn_event(
+                store,
+                session_id=args.session_id,
+                turn_id=args.turn_id,
+                thread_id=args.thread_id,
+                agent_id=_resolve_agent_id(args),
+                person_id=args.person_id or "user",
+                project_scope=args.project_scope or "global",
+                user_text=args.user_text,
+                assistant_text=args.assistant_text,
+                source_message_ids=args.source_message_id,
+                source_timestamp=args.source_timestamp,
+                rollout_tag=args.rollout_tag,
+                max_excerpt_chars=args.max_excerpt_chars,
+            )
+            print("Inner-life turn finalize")
+            print("------------------------")
+            print(f"Session:       {args.session_id}")
+            print(f"DB:            {Path(db_path).expanduser()}")
+            print(f"Written:       {result.get('written', 0)}")
+            print(f"Duplicates:    {result.get('duplicates', 0)}")
+            print(f"Skipped:       {result.get('skipped', 0)}")
+            print("Memory writes: 0")
+            return 0
+        finally:
+            store.close()
+    except Exception as exc:
+        print(f"inner-life {command} failed: {exc}", file=sys.stderr)
         return 1
 
 

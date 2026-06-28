@@ -23,6 +23,28 @@ _IDENTITY_COLUMNS = ("id", "target_id", "job_id", "source_path")
 _IDENTITY_COLUMN_PATTERN = "|".join(_IDENTITY_COLUMNS)
 _PERSISTENCE_ALIASES = {"state_path", "plist_path", "target_path", "output_file"}
 _SAFE_WATCHER_WRITE_RECEIVERS = {"tmp", "source", "manifest", "probe"}
+_U6_6_INNER_LIFE_MARKERS = (
+    "inner-life",
+    "inner_life",
+    "inner_life_events",
+    "session-finalize",
+    "turn-finalize",
+    "u6.6",
+)
+_U6_6_INNER_LIFE_SURFACE_FILES = {
+    "mnemos/cli.py",
+    "mnemos/store/migrations.py",
+    "mnemos/store/sqlite_store.py",
+}
+_U6_6_INNER_LIFE_SCHEMA_TEST_FILES = {
+    "tests/test_inner_life_ledger.py",
+    "tests/test_u3a_schema_migrations.py",
+}
+_U6_6_INNER_LIFE_FINALIZER_TEST_FILES = {
+    "tests/test_inner_life_ledger.py",
+    "tests/test_session_finalizer.py",
+    "tests/test_turn_finalizer.py",
+}
 
 
 @dataclass(frozen=True)
@@ -131,7 +153,13 @@ def evaluate_pai_diff_review(
     changed = set(changed_files)
     findings: list[PaiReviewFinding] = []
     findings.extend(_intent_findings(intent_text))
-    findings.extend(_proof_surface_findings(changed))
+    findings.extend(
+        _proof_surface_findings(
+            changed,
+            file_texts=file_texts,
+            diff_text=diff_text,
+        )
+    )
     findings.extend(_forbidden_diff_findings(diff_text))
     findings.extend(
         _repository_content_findings(
@@ -206,8 +234,18 @@ def _intent_findings(intent_text: str) -> list[PaiReviewFinding]:
     ]
 
 
-def _proof_surface_findings(changed: set[str]) -> list[PaiReviewFinding]:
+def _proof_surface_findings(
+    changed: set[str],
+    *,
+    file_texts: Mapping[str, str] | None = None,
+    diff_text: str = "",
+) -> list[PaiReviewFinding]:
     findings: list[PaiReviewFinding] = []
+    u66_inner_life = _is_u6_6_inner_life_diff(
+        changed,
+        file_texts=file_texts,
+        diff_text=diff_text,
+    )
     rules = [
         (
             _is_watcher_surface_file,
@@ -226,7 +264,8 @@ def _proof_surface_findings(changed: set[str]) -> list[PaiReviewFinding]:
             "operator backup/live-DB behavior changed without an operator/doctor regression test in the diff",
         ),
         (
-            lambda path: path in {"mnemos/importer/pai.py", "mnemos/store/migrations.py"},
+            lambda path: path == "mnemos/importer/pai.py"
+            or (path == "mnemos/store/migrations.py" and not u66_inner_life),
             {
                 "tests/test_u3b_pai_importer.py",
                 "tests/test_u3c_pai_watch.py",
@@ -235,7 +274,7 @@ def _proof_surface_findings(changed: set[str]) -> list[PaiReviewFinding]:
             "schema or lifecycle behavior changed without row-map/lifecycle regression coverage in the diff",
         ),
         (
-            lambda path: path == "mnemos/cli.py",
+            lambda path: path == "mnemos/cli.py" and not u66_inner_life,
             {
                 "tests/test_u3b_pai_operator.py",
                 "tests/test_u3c_pai_operator.py",
@@ -264,7 +303,101 @@ def _proof_surface_findings(changed: set[str]) -> list[PaiReviewFinding]:
                     action="must-test",
                 )
             )
+    if u66_inner_life:
+        schema_touched = bool(
+            changed
+            & {
+                "mnemos/store/migrations.py",
+                "mnemos/store/sqlite_store.py",
+            }
+        )
+        finalizer_touched = any(
+            path.startswith("mnemos/inner_life/") for path in changed
+        )
+        if schema_touched and not (
+            _U6_6_INNER_LIFE_SCHEMA_TEST_FILES <= changed
+        ):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file=", ".join(
+                        sorted(
+                            changed
+                            & {
+                                "mnemos/store/migrations.py",
+                                "mnemos/store/sqlite_store.py",
+                            }
+                        )
+                    ),
+                    description="U6.6 inner-life schema changed without ledger/schema regression tests in the diff",
+                    required_proof="tests/test_inner_life_ledger.py and tests/test_u3a_schema_migrations.py appear in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if finalizer_touched and not (
+            changed & _U6_6_INNER_LIFE_FINALIZER_TEST_FILES
+        ):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file=", ".join(
+                        sorted(
+                            path
+                            for path in changed
+                            if path.startswith("mnemos/inner_life/")
+                        )
+                    ),
+                    description="U6.6 inner-life finalizer changed without finalizer regression tests in the diff",
+                    required_proof="inner-life finalizer regression file appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if "mnemos/cli.py" in changed and "tests/test_cli_simple.py" not in changed:
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/cli.py",
+                    description="U6.6 inner-life CLI changed without command-level regression tests in the diff",
+                    required_proof="tests/test_cli_simple.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
     return findings
+
+
+def _is_u6_6_inner_life_diff(
+    changed: set[str],
+    *,
+    file_texts: Mapping[str, str] | None = None,
+    diff_text: str = "",
+) -> bool:
+    """True for the U6.6 private-ledger lane, not PAI lifecycle work."""
+    if changed & {"mnemos/importer/pai.py", "mnemos/importer/operator.py"}:
+        return False
+    if any(_is_watcher_surface_file(path) for path in changed):
+        return False
+    has_u66_surface = bool(changed & _U6_6_INNER_LIFE_SURFACE_FILES) or any(
+        path.startswith("mnemos/inner_life/") for path in changed
+    )
+    if not has_u66_surface:
+        return False
+
+    marker_text = diff_text
+    if not marker_text and file_texts:
+        marker_text = "\n".join(
+            file_texts.get(path, "") for path in sorted(changed)
+        )
+    if not marker_text:
+        marker_text = "\n".join(sorted(changed))
+
+    lowered = marker_text.lower()
+    return any(marker in lowered for marker in _U6_6_INNER_LIFE_MARKERS)
 
 
 def _forbidden_diff_findings(diff_text: str) -> list[PaiReviewFinding]:
@@ -547,6 +680,11 @@ def _repository_content_findings(
     operator_tests = file_texts.get("tests/test_u3b_pai_operator.py", "")
     operator_u3c_tests = file_texts.get("tests/test_u3c_pai_operator.py", "")
     review_gate_tests = file_texts.get("tests/test_u3c_pai_review_gate.py", "")
+    cli_simple_tests = file_texts.get("tests/test_cli_simple.py", "")
+    inner_life_ledger_tests = file_texts.get("tests/test_inner_life_ledger.py", "")
+    schema_migration_tests = file_texts.get("tests/test_u3a_schema_migrations.py", "")
+    session_finalizer_tests = file_texts.get("tests/test_session_finalizer.py", "")
+    turn_finalizer_tests = file_texts.get("tests/test_turn_finalizer.py", "")
     watcher = file_texts.get("mnemos/importer/watcher.py", "")
     launch_doc = file_texts.get("docs/u3c-step3-launch-gate.md", "")
     changed_workflows = sorted(path for path in changed if path.startswith(".github/workflows/"))
@@ -555,6 +693,11 @@ def _repository_content_findings(
     workflow_effective = _non_comment_text(workflow)
     workflow_proofs = _workflow_proof_statuses(workflow)
     watcher_changed = any(_is_watcher_surface_file(path) for path in changed)
+    u66_inner_life = _is_u6_6_inner_life_diff(
+        changed,
+        file_texts=file_texts,
+        diff_text=diff_text,
+    )
 
     if watcher_changed:
         findings.extend(
@@ -573,11 +716,12 @@ def _repository_content_findings(
             )
         )
 
-    if watcher_changed or changed & {
-        "mnemos/importer/operator.py",
-        "mnemos/cli.py",
-        "tests/test_u3c_pai_watch_doctor.py",
-    }:
+    if (
+        watcher_changed
+        or "mnemos/importer/operator.py" in changed
+        or ("mnemos/cli.py" in changed and not u66_inner_life)
+        or "tests/test_u3c_pai_watch_doctor.py" in changed
+    ):
         findings.extend(
             _missing_required_proofs(
                 surface="Step 3 launch gate",
@@ -611,34 +755,157 @@ def _repository_content_findings(
         )
 
     if changed & {"mnemos/importer/pai.py", "mnemos/store/migrations.py"}:
+        if (
+            u66_inner_life
+            and "mnemos/store/migrations.py" in changed
+            and "mnemos/importer/pai.py" not in changed
+        ):
+            findings.extend(
+                _missing_required_proofs(
+                    surface="U6.6 inner-life schema",
+                    severity="high",
+                    requirements=[
+                        _ProofRequirement(
+                            "u66-inner-life-private-ledger",
+                            "private/idempotent ledger coverage",
+                            "tests/test_inner_life_ledger.py",
+                            (
+                                (
+                                    "test_inner_life_ledger_schema_is_private_and_idempotent",
+                                    inner_life_ledger_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u66-inner-life-schema-five-copy",
+                            "schema-five copy migration preserving memory rows",
+                            "tests/test_inner_life_ledger.py",
+                            (
+                                (
+                                    "test_inner_life_ledger_migrates_schema_five_copy_without_touching_memory",
+                                    inner_life_ledger_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u66-inner-life-bootstrap",
+                            "current schema bootstrap includes inner_life_events",
+                            "tests/test_u3a_schema_migrations.py",
+                            (
+                                ("test_migration_version_guards", schema_migration_tests),
+                                ("inner_life_events", schema_migration_tests),
+                                ("SCHEMA_VERSION", schema_migration_tests),
+                            ),
+                        ),
+                    ],
+                )
+            )
+        else:
+            findings.extend(
+                _missing_required_proofs(
+                    surface="PAI lifecycle/schema",
+                    severity="high",
+                    requirements=[
+                        _ProofRequirement("pai-row-map", "row-map coherence", "tests/test_u3c_pai_watch_doctor.py", (("row_map_targets_are_coherent", tests),)),
+                        _ProofRequirement("pai-manual-archive", "manual archive non-resurrection", "tests/test_u3c_pai_watch.py", (("test_u3c_manually_archived_engram_still_refuses_reactivation", watch_tests),)),
+                        _ProofRequirement("pai-null-carveout", "pre-v5 NULL carve-out", "tests/test_u3c_pai_watch.py", (("test_u3c_legacy_pai_tombstoned_engram_reactivates_without_row_map_tombstone", watch_tests),)),
+                        _ProofRequirement("pai-tombstone-reactivation", "tombstone/reactivation path", "tests/test_u3c_pai_watch.py", (("test_u3c_returned_pai_tombstoned_engram_reactivates", watch_tests), ("test_u3c_removed_engram_section_tombstones_target_idempotently", watch_tests))),
+                        _ProofRequirement("pai-no-clobber", "no silent clobber", "tests/test_u3b_pai_importer.py", (("test_u3b_target_content_drift_refuses_clobber_on_operator_edit", importer_tests),)),
+                    ],
+                )
+            )
+
+    if u66_inner_life and (
+        changed & {"mnemos/inner_life/session_finalizer.py", "mnemos/inner_life/turn_finalizer.py"}
+    ):
         findings.extend(
             _missing_required_proofs(
-                surface="PAI lifecycle/schema",
+                surface="U6.6 inner-life finalizers",
                 severity="high",
                 requirements=[
-                    _ProofRequirement("pai-row-map", "row-map coherence", "tests/test_u3c_pai_watch_doctor.py", (("row_map_targets_are_coherent", tests),)),
-                    _ProofRequirement("pai-manual-archive", "manual archive non-resurrection", "tests/test_u3c_pai_watch.py", (("test_u3c_manually_archived_engram_still_refuses_reactivation", watch_tests),)),
-                    _ProofRequirement("pai-null-carveout", "pre-v5 NULL carve-out", "tests/test_u3c_pai_watch.py", (("test_u3c_legacy_pai_tombstoned_engram_reactivates_without_row_map_tombstone", watch_tests),)),
-                    _ProofRequirement("pai-tombstone-reactivation", "tombstone/reactivation path", "tests/test_u3c_pai_watch.py", (("test_u3c_returned_pai_tombstoned_engram_reactivates", watch_tests), ("test_u3c_removed_engram_section_tombstones_target_idempotently", watch_tests))),
-                    _ProofRequirement("pai-no-clobber", "no silent clobber", "tests/test_u3b_pai_importer.py", (("test_u3b_target_content_drift_refuses_clobber_on_operator_edit", importer_tests),)),
+                    _ProofRequirement(
+                        "u66-inner-life-session-finalizer",
+                        "bounded transcript finalizer writes no memory",
+                        "tests/test_session_finalizer.py",
+                        (
+                            (
+                                "test_session_finalizer_writes_bounded_provenance_below_memory",
+                                session_finalizer_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-inner-life-turn-finalizer",
+                        "turn finalizer writes one idempotent ledger row",
+                        "tests/test_turn_finalizer.py",
+                        (
+                            (
+                                "test_turn_finalizer_writes_one_idempotent_provenance_row_only",
+                                turn_finalizer_tests,
+                            ),
+                        ),
+                    ),
                 ],
             )
         )
 
     if "mnemos/cli.py" in changed:
-        findings.extend(
-            _missing_required_proofs(
-                surface="mnemos/cli.py",
-                severity="high",
-                requirements=[
-                    _ProofRequirement("cli-smoke", "CLI smoke", "tests/test_u3c_pai_operator.py", (("test_u3c_cli_watch_preview_and_apply", operator_u3c_tests),)),
-                    _ProofRequirement("cli-missing-arg", "missing-arg failure", "tests/test_u3b_pai_operator.py", (("requires --db-path", operator_tests),)),
-                    _ProofRequirement("cli-bad-arg", "bad-arg failure", "tests/test_u3c_pai_watch_doctor.py", (("invalid --backup-keep", watcher), ("test_u3c_watch_doctor_requires_backup_keep_in_plist", tests))),
-                    _ProofRequirement("cli-live-db", "no live DB default path", "tests/test_u3b_pai_operator.py", (("test_u3b_cli_refuses_default_live_db_without_override", operator_tests),)),
-                    _ProofRequirement("cli-review-gate", "review-gate CLI smoke", "tests/test_u3c_pai_review_gate.py", (("test_u3c_review_gate_cli_reports_green", review_gate_tests),)),
-                ],
+        if u66_inner_life:
+            findings.extend(
+                _missing_required_proofs(
+                    surface="U6.6 inner-life CLI",
+                    severity="high",
+                    requirements=[
+                        _ProofRequirement(
+                            "u66-inner-life-cli-session",
+                            "session-finalize CLI writes private ledger",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_inner_life_session_finalize_cli_writes_private_ledger",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u66-inner-life-cli-db-required",
+                            "representative DB required",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_inner_life_cli_requires_representative_db",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u66-inner-life-cli-live-refusal",
+                            "live DB refusal",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_inner_life_cli_refuses_default_live_db_without_override",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                    ],
+                )
             )
-        )
+        else:
+            findings.extend(
+                _missing_required_proofs(
+                    surface="mnemos/cli.py",
+                    severity="high",
+                    requirements=[
+                        _ProofRequirement("cli-smoke", "CLI smoke", "tests/test_u3c_pai_operator.py", (("test_u3c_cli_watch_preview_and_apply", operator_u3c_tests),)),
+                        _ProofRequirement("cli-missing-arg", "missing-arg failure", "tests/test_u3b_pai_operator.py", (("requires --db-path", operator_tests),)),
+                        _ProofRequirement("cli-bad-arg", "bad-arg failure", "tests/test_u3c_pai_watch_doctor.py", (("invalid --backup-keep", watcher), ("test_u3c_watch_doctor_requires_backup_keep_in_plist", tests))),
+                        _ProofRequirement("cli-live-db", "no live DB default path", "tests/test_u3b_pai_operator.py", (("test_u3b_cli_refuses_default_live_db_without_override", operator_tests),)),
+                        _ProofRequirement("cli-review-gate", "review-gate CLI smoke", "tests/test_u3c_pai_review_gate.py", (("test_u3c_review_gate_cli_reports_green", review_gate_tests),)),
+                    ],
+                )
+            )
 
     if "docs/u3c-step3-launch-gate.md" in changed:
         for marker in ("Anti-Criteria", "Riley/Daniel Test Taxonomy Crosswalk", "Code Graders"):
@@ -1817,13 +2084,18 @@ def _files_needed_for_review(changed_files: Sequence[str]) -> set[str]:
             "docs/u3c-step3-launch-gate.md",
             "mnemos/cli.py",
             "mnemos/importer/watcher.py",
+            "tests/test_cli_simple.py",
+            "tests/test_inner_life_ledger.py",
             "tests/test_u3b_pai_importer.py",
             "tests/test_u3b_pai_operator.py",
+            "tests/test_u3a_schema_migrations.py",
             "tests/test_u3c_pai_operator.py",
             "tests/test_u3c_pai_review_gate.py",
             "tests/test_u3c_pai_watch.py",
             "tests/test_u3c_pai_watch_doctor.py",
             "tests/test_u3c_pai_watcher.py",
+            "tests/test_session_finalizer.py",
+            "tests/test_turn_finalizer.py",
         }
     )
     return files

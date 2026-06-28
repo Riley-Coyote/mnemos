@@ -1,6 +1,7 @@
 """Gated inner-life helpers for private pre-soak provenance and low-stakes work."""
 
 from .activity_gate import evaluate_activity_gate
+from .emotional_driver import update_event_grounded_affect
 from .hypomnema_challenge import apply_hypomnema_challenge
 from .observer_panel import run_observer_panel
 from .session_finalizer import finalize_session_transcript
@@ -12,4 +13,5 @@ __all__ = [
     "finalize_session_transcript",
     "run_observer_panel",
     "finalize_turn_event",
+    "update_event_grounded_affect",
 ]

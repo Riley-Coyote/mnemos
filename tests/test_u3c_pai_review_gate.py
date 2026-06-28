@@ -165,6 +165,17 @@ def test_observer_panel_bounds_findings_and_excerpts():
     assert True
 """
 
+GOOD_EMOTIONAL_DRIVER_TESTS = """
+def test_emotional_driver_updates_from_real_turn_and_verification_events():
+    assert True
+def test_emotional_driver_skips_without_recent_events():
+    assert True
+def test_emotional_driver_skips_below_meaningful_movement_threshold():
+    assert True
+def test_emotional_driver_error_event_increases_restlessness():
+    assert True
+"""
+
 GOOD_INNER_LIFE_LEDGER_TESTS = """
 def test_inner_life_ledger_schema_is_private_and_idempotent():
     assert True
@@ -216,6 +227,7 @@ def _file_texts(**overrides):
         "docs/u3c-step3-launch-gate.md": GOOD_LAUNCH_DOC,
         "mnemos/importer/watcher.py": GOOD_WATCHER,
         "tests/test_cli_simple.py": GOOD_CLI_SIMPLE_TESTS,
+        "tests/test_emotional_driver.py": GOOD_EMOTIONAL_DRIVER_TESTS,
         "tests/test_hypomnema_challenge.py": GOOD_HYPO_CHALLENGE_TESTS,
         "tests/test_inner_life_activity_gate.py": GOOD_ACTIVITY_GATE_TESTS,
         "tests/test_inner_life_ledger.py": GOOD_INNER_LIFE_LEDGER_TESTS,
@@ -548,6 +560,59 @@ def test_observer_panel_bounds_findings_and_excerpts():
     )
 
 
+def test_u3c_review_gate_accepts_u66_emotional_driver_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/emotional_driver.py",
+            "tests/test_emotional_driver.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/emotional_driver.py": "U6.6 emotional_driver",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/emotional_driver.py b/mnemos/inner_life/emotional_driver.py\n"
+            "@@\n"
+            "+# U6.6 emotional_driver\n"
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u66_emotional_driver_without_threshold_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/emotional_driver.py",
+            "tests/test_emotional_driver.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/emotional_driver.py": "U6.6 emotional_driver",
+                "tests/test_emotional_driver.py": """
+def test_emotional_driver_updates_from_real_turn_and_verification_events():
+    assert True
+def test_emotional_driver_skips_without_recent_events():
+    assert True
+def test_emotional_driver_error_event_increases_restlessness():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/emotional_driver.py b/mnemos/inner_life/emotional_driver.py\n"
+            "@@\n"
+            "+# U6.6 emotional_driver\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-emotional-driver-threshold"
+        for finding in findings
+    )
+
+
 def test_u3c_review_gate_rule_signature():
     helpers = [
         (name, obj)
@@ -560,7 +625,7 @@ def test_u3c_review_gate_rule_signature():
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
-    assert digest == "ebf6ac1ae3b25694ea6192c5b5d28c910f95e9a7fda2627dc28002f14e328242"
+    assert digest == "ffaf8c6f546b3af8ce1526ad1c993344799729c973e7608b3c182c7eacf65927"
 
 
 def test_u3c_review_gate_fails_watcher_change_without_test_diff():

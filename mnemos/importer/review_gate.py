@@ -61,6 +61,9 @@ _U6_6_INNER_LIFE_OBSERVER_TEST_FILES = {
 _U6_6_INNER_LIFE_EMOTIONAL_TEST_FILES = {
     "tests/test_emotional_driver.py",
 }
+_U6_6_INNER_LIFE_NARRATIVE_TEST_FILES = {
+    "tests/test_narrative_gate.py",
+}
 
 
 @dataclass(frozen=True)
@@ -332,6 +335,7 @@ def _proof_surface_findings(
         challenge_touched = "mnemos/inner_life/hypomnema_challenge.py" in changed
         observer_touched = "mnemos/inner_life/observer_panel.py" in changed
         emotional_touched = "mnemos/inner_life/emotional_driver.py" in changed
+        narrative_touched = "mnemos/inner_life/narrative_gate.py" in changed
         if schema_touched and not (
             _U6_6_INNER_LIFE_SCHEMA_TEST_FILES <= changed
         ):
@@ -426,6 +430,20 @@ def _proof_surface_findings(
                     file="mnemos/inner_life/emotional_driver.py",
                     description="U6.6 emotional driver changed without emotional-driver regression tests in the diff",
                     required_proof="tests/test_emotional_driver.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if narrative_touched and not (
+            changed & _U6_6_INNER_LIFE_NARRATIVE_TEST_FILES
+        ):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/inner_life/narrative_gate.py",
+                    description="U6.6 narrative gate changed without narrative-gate regression tests in the diff",
+                    required_proof="tests/test_narrative_gate.py appears in this diff",
                     status="missing",
                     action="must-test",
                 )
@@ -759,6 +777,7 @@ def _repository_content_findings(
     hypomnema_challenge_tests = file_texts.get("tests/test_hypomnema_challenge.py", "")
     observer_panel_tests = file_texts.get("tests/test_observer_panel.py", "")
     emotional_driver_tests = file_texts.get("tests/test_emotional_driver.py", "")
+    narrative_gate_tests = file_texts.get("tests/test_narrative_gate.py", "")
     inner_life_ledger_tests = file_texts.get("tests/test_inner_life_ledger.py", "")
     schema_migration_tests = file_texts.get("tests/test_u3a_schema_migrations.py", "")
     session_finalizer_tests = file_texts.get("tests/test_session_finalizer.py", "")
@@ -1136,6 +1155,71 @@ def _repository_content_findings(
                             (
                                 "test_emotional_driver_error_event_increases_restlessness",
                                 emotional_driver_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u66_inner_life and "mnemos/inner_life/narrative_gate.py" in changed:
+        findings.extend(
+            _missing_required_proofs(
+                surface="U6.6 narrative gate",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u66-narrative-gate-null-output",
+                        "null output records skip without memory",
+                        "tests/test_narrative_gate.py",
+                        (
+                            (
+                                "test_narrative_gate_null_output_records_skip_without_memory",
+                                narrative_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-narrative-gate-source-required",
+                        "missing source ids drop before introspection",
+                        "tests/test_narrative_gate.py",
+                        (
+                            (
+                                "test_narrative_gate_missing_source_ids_drops_before_introspection",
+                                narrative_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-narrative-gate-manufacture",
+                        "manufactured inner state is dropped",
+                        "tests/test_narrative_gate.py",
+                        (
+                            (
+                                "test_narrative_gate_drops_manufactured_inner_state",
+                                narrative_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-narrative-gate-introspection",
+                        "introspection reject is dropped",
+                        "tests/test_narrative_gate.py",
+                        (
+                            (
+                                "test_narrative_gate_drops_introspection_reject",
+                                narrative_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-narrative-gate-pass",
+                        "grounded candidate passes with source ids",
+                        "tests/test_narrative_gate.py",
+                        (
+                            (
+                                "test_narrative_gate_passes_grounded_candidate_with_introspection",
+                                narrative_gate_tests,
                             ),
                         ),
                     ),
@@ -2383,6 +2467,7 @@ def _files_needed_for_review(changed_files: Sequence[str]) -> set[str]:
             "tests/test_cli_simple.py",
             "tests/test_inner_life_activity_gate.py",
             "tests/test_inner_life_ledger.py",
+            "tests/test_narrative_gate.py",
             "tests/test_observer_panel.py",
             "tests/test_u3b_pai_importer.py",
             "tests/test_u3b_pai_operator.py",

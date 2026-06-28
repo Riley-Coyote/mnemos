@@ -176,6 +176,19 @@ def test_emotional_driver_error_event_increases_restlessness():
     assert True
 """
 
+GOOD_NARRATIVE_GATE_TESTS = """
+def test_narrative_gate_null_output_records_skip_without_memory():
+    assert True
+def test_narrative_gate_missing_source_ids_drops_before_introspection():
+    assert True
+def test_narrative_gate_drops_manufactured_inner_state():
+    assert True
+def test_narrative_gate_drops_introspection_reject():
+    assert True
+def test_narrative_gate_passes_grounded_candidate_with_introspection():
+    assert True
+"""
+
 GOOD_INNER_LIFE_LEDGER_TESTS = """
 def test_inner_life_ledger_schema_is_private_and_idempotent():
     assert True
@@ -231,6 +244,7 @@ def _file_texts(**overrides):
         "tests/test_hypomnema_challenge.py": GOOD_HYPO_CHALLENGE_TESTS,
         "tests/test_inner_life_activity_gate.py": GOOD_ACTIVITY_GATE_TESTS,
         "tests/test_inner_life_ledger.py": GOOD_INNER_LIFE_LEDGER_TESTS,
+        "tests/test_narrative_gate.py": GOOD_NARRATIVE_GATE_TESTS,
         "tests/test_u3b_pai_importer.py": GOOD_IMPORTER_TESTS,
         "tests/test_u3b_pai_operator.py": GOOD_OPERATOR_TESTS,
         "tests/test_u3a_schema_migrations.py": GOOD_U3A_SCHEMA_TESTS,
@@ -613,6 +627,61 @@ def test_emotional_driver_error_event_increases_restlessness():
     )
 
 
+def test_u3c_review_gate_accepts_u66_narrative_gate_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/narrative_gate.py",
+            "tests/test_narrative_gate.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/narrative_gate.py": "U6.6 narrative_gate",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/narrative_gate.py b/mnemos/inner_life/narrative_gate.py\n"
+            "@@\n"
+            "+# U6.6 narrative_gate\n"
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u66_narrative_gate_without_introspection_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/narrative_gate.py",
+            "tests/test_narrative_gate.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/narrative_gate.py": "U6.6 narrative_gate",
+                "tests/test_narrative_gate.py": """
+def test_narrative_gate_null_output_records_skip_without_memory():
+    assert True
+def test_narrative_gate_missing_source_ids_drops_before_introspection():
+    assert True
+def test_narrative_gate_drops_manufactured_inner_state():
+    assert True
+def test_narrative_gate_passes_grounded_candidate_with_introspection():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/narrative_gate.py b/mnemos/inner_life/narrative_gate.py\n"
+            "@@\n"
+            "+# U6.6 narrative_gate\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-narrative-gate-introspection"
+        for finding in findings
+    )
+
+
 def test_u3c_review_gate_rule_signature():
     helpers = [
         (name, obj)
@@ -625,7 +694,7 @@ def test_u3c_review_gate_rule_signature():
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
-    assert digest == "ffaf8c6f546b3af8ce1526ad1c993344799729c973e7608b3c182c7eacf65927"
+    assert digest == "750a8192309633e8c6d0d325d114031f2fba2a6e85a8ac71346955e941f80614"
 
 
 def test_u3c_review_gate_fails_watcher_change_without_test_diff():

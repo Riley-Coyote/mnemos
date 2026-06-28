@@ -122,6 +122,11 @@ or:
 MNEMOS_AGENT_ID=nova MNEMOS_PERSON_ID=alex MNEMOS_PROJECT_SCOPE=mnemos mnemos serve
 ```
 
+For generated MCP client snippets, add `MNEMOS_PERSON_ID` and
+`MNEMOS_PROJECT_SCOPE` to the client environment or add `--person-id` and
+`--project-scope` to the printed server args if the helper does not include
+them.
+
 ---
 
 ## 5. Maintenance and Models
@@ -169,6 +174,11 @@ mnemos serve --mode advanced
 Advanced mode preserves the full tool surface: explicit remember/ingest/recall,
 hypomnema management, beliefs, shared memory, inspect, forget, and explicit
 consolidation.
+
+Scope-taking advanced tools inherit the server scope when their `agent_id`,
+`person_id`, and `project_scope` args are left at defaults. Launch with
+`--agent-id`, `--person-id`, and `--project-scope` (or the matching
+environment variables) once, then omit those args in normal advanced tool calls.
 
 OpenClaw, crons, Forge, substrate ticks, and full agent workspaces are advanced
 integrations. They are no longer part of the baseline setup.
@@ -220,16 +230,20 @@ work.
 
 ### Multiple agents share a machine
 
-Give each agent a scope:
+Give each agent/person/project combination a scope:
 
 ```bash
-MNEMOS_AGENT_ID=nova mnemos serve
-MNEMOS_AGENT_ID=vektor mnemos serve
+MNEMOS_AGENT_ID=nova MNEMOS_PERSON_ID=alex \
+  MNEMOS_PROJECT_SCOPE=research mnemos serve
+MNEMOS_AGENT_ID=vektor MNEMOS_PERSON_ID=alex \
+  MNEMOS_PROJECT_SCOPE=ops mnemos serve
 ```
 
 or separate DBs:
 
 ```bash
-mnemos serve --agent-id nova --db-path ~/.mnemos/nova.db
-mnemos serve --agent-id vektor --db-path ~/.mnemos/vektor.db
+mnemos serve --agent-id nova --person-id alex \
+  --project-scope research --db-path ~/.mnemos/nova.db
+mnemos serve --agent-id vektor --person-id alex \
+  --project-scope ops --db-path ~/.mnemos/vektor.db
 ```

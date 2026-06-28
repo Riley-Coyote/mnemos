@@ -677,7 +677,7 @@
       <div class="shell">
         <div class="section-head">
           <div class="kicker">MCP surface</div>
-          <p class="section-copy">The new Mnemos MCP tools expose the layer directly. Agents can write continuity, search it, improve it, replace it, inspect promotion candidates, and explicitly graduate stable entries into Mnemos.</p>
+          <p class="section-copy">The new Mnemos MCP tools expose the layer directly. Agents can write continuity, search it, improve it, replace it, inspect promotion candidates, and explicitly graduate stable entries into Mnemos. When scope args are omitted, these tools inherit the configured MCP server scope.</p>
         </div>
         <div class="tools">
           <article class="tool-card">
@@ -723,7 +723,7 @@
         <div class="schema-strip">
           <article class="schema-card">
             <div class="metric-label">Scope</div>
-            <p>agent_id, person_id, project_scope</p>
+            <p>agent_id, person_id, project_scope; defaults inherit the server scope</p>
           </article>
           <article class="schema-card">
             <div class="metric-label">Content</div>
@@ -778,7 +778,7 @@
       },
       scope: {
         title: "Scope",
-        copy: "The entry is bound to an agent, a person, and a project. That prevents private relationship context from becoming generic memory by accident.",
+        copy: "The entry is bound to an agent, a person, and a project. Tool calls inherit the server scope unless a non-default scope value is passed.",
         code: `agent_id="vektor"
 person_id="alex"
 project_scope="codex-test"`,
@@ -798,11 +798,9 @@ project_scope="codex-test"`,
       },
       retrieve: {
         title: "Retrieve",
-        copy: "At prompt time, hypomnema returns the strongest scoped entries by relevance, confidence, salience, and foundational weight.",
+        copy: "At prompt time, hypomnema returns the strongest entries from the inherited or explicitly supplied scope by relevance, confidence, salience, and foundational weight.",
         code: `mnemos_hypomnema_search(
-  query="memory layers",
-  agent_id="vektor",
-  person_id="alex"
+  query="memory layers"
 )`,
         nodes: ["retrieve", "scope"],
         wires: ["w-scope-hypo", "w-session-hypo"]

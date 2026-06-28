@@ -63,6 +63,8 @@ _shared_pool = None
 _llm_client = None
 _config: dict | None = None
 _default_agent_id = "default"
+_default_person_id = "user"
+_default_project_scope = "global"
 
 mcp = FastMCP("mnemos")
 register_simple_tools(mcp, include_recall=False)
@@ -141,6 +143,78 @@ def _effective_agent_id(agent_id: str = "default") -> str:
     config = _get_config()
     configured = config.get("agent_id") or os.environ.get("MNEMOS_AGENT_ID")
     return str(configured or _default_agent_id or "default")
+
+
+def _effective_person_id(person_id: str = "user") -> str:
+    """Resolve advanced tools to the configured server person by default.
+
+    Mirrors _effective_agent_id: the literal default sentinel ("user") means
+    "unspecified — inherit the server's configured --person-id". An explicit
+    non-default value is respected.
+    """
+    if person_id and person_id != "user":
+        return person_id
+    config = _get_config()
+    configured = config.get("person_id") or os.environ.get("MNEMOS_PERSON_ID")
+    return str(configured or _default_person_id or "user")
+
+
+def _effective_project_scope(project_scope: str = "global") -> str:
+    """Resolve advanced tools to the configured server project by default.
+
+    Mirrors _effective_agent_id: the literal default sentinel ("global") means
+    "unspecified — inherit the server's configured --project-scope". An explicit
+    non-default value is respected.
+    """
+    if project_scope and project_scope != "global":
+        return project_scope
+    config = _get_config()
+    configured = config.get("project_scope") or os.environ.get("MNEMOS_PROJECT_SCOPE")
+    return str(configured or _default_project_scope or "global")
+
+
+def _effective_scope(
+    agent_id: str = "default",
+    person_id: str = "user",
+    project_scope: str = "global",
+) -> tuple[str, str, str]:
+    """Resolve all three scope dimensions to the configured server scope.
+
+    Advanced tools default their scope params to the literal sentinels
+    ("default"/"user"/"global"); unless the caller passes an explicit override,
+    each dimension inherits the server's configured --agent-id/--person-id/
+    --project-scope (the same scope the simple runtime already inherits). Without
+    this, scoped reads/writes silently miss data stored under the server scope.
+    """
+    return (
+        _effective_agent_id(agent_id),
+        _effective_person_id(person_id),
+        _effective_project_scope(project_scope),
+    )
+
+
+def _set_server_defaults(
+    agent_id: str | None = None,
+    person_id: str | None = None,
+    project_scope: str | None = None,
+) -> None:
+    """Persist the server's configured scope so advanced tools inherit it.
+
+    The advanced tools resolve their scope via _effective_* against these
+    module globals / env vars. Before this ran, only agent_id was persisted, so
+    --person-id/--project-scope were dropped and scoped reads/writes silently
+    fell back to the user/global defaults.
+    """
+    global _default_agent_id, _default_person_id, _default_project_scope
+    if agent_id:
+        _default_agent_id = agent_id
+        os.environ["MNEMOS_AGENT_ID"] = agent_id
+    if person_id:
+        _default_person_id = person_id
+        os.environ["MNEMOS_PERSON_ID"] = person_id
+    if project_scope:
+        _default_project_scope = project_scope
+        os.environ["MNEMOS_PROJECT_SCOPE"] = project_scope
 
 
 def _init_store(db_path: str = "~/.mnemos/memory.db") -> None:
@@ -735,11 +809,13 @@ def mnemos_session_start(
 
     Call this near the beginning of a conversation, task, or work block. The
     returned session_id is the live working-memory scope for the agent.
+    Default scope args inherit the server's configured scope.
     """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
     session = _store.start_memory_session(  # type: ignore
         session_id=session_id or None,
         title=title,
@@ -776,12 +852,14 @@ def mnemos_functional_update(
 
     Use this for live task state, active preferences, open questions,
     corrections, commitments, and other context the agent should not lose
-    during the current work block.
+    during the current work block. Default scope args inherit the server's
+    configured scope.
     """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
     try:
         entry = _store.write_functional_memory(  # type: ignore
@@ -816,11 +894,15 @@ def mnemos_functional_list(
     project_scope: str = "global",
     needs_confirmation_only: bool = False,
 ) -> str:
-    """List or search functional memory for a session/person/project scope."""
+    """List or search functional memory for a session/person/project scope.
+
+    Default scope args inherit the server's configured scope.
+    """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
     try:
         entries = _store.load_functional_memories(  # type: ignore
             query,
@@ -855,12 +937,14 @@ def mnemos_session_close(
     """Close a functional-memory session.
 
     By default, active functional memories are compressed into one hypomnema
-    continuity note and removed from the live working set.
+    continuity note and removed from the live working set. Default scope args
+    inherit the server's configured scope.
     """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
     try:
         if promote_to_hypomnema:
             result = _store.close_session_to_hypomnema(  # type: ignore
@@ -900,12 +984,14 @@ def mnemos_context_packet(
 
     This is the turnkey call for agent integrations: it combines functional
     memory, hypomnema, long-term Mnemos recall, beliefs, and review cues in
-    the order an agent should reason over them.
+    the order an agent should reason over them. Default scope args inherit the
+    server's configured scope.
     """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
     packet = build_context_packet(
         _store,  # type: ignore
         query,
@@ -928,11 +1014,15 @@ def mnemos_review_queue(
     project_scope: str = "global",
     max_results: int = 8,
 ) -> str:
-    """Show memory items that need human review or promotion decisions."""
+    """Show memory items that need human review or promotion decisions.
+
+    Default scope args inherit the server's configured scope.
+    """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
     functional = _store.load_functional_memories(  # type: ignore
         "",
         agent_id=agent_id,
@@ -970,11 +1060,15 @@ def mnemos_visual_snapshot(
     session_id: str = "",
     max_items: int = 6,
 ) -> str:
-    """Generate an inline Markdown/Mermaid visual snapshot of memory state."""
+    """Generate an inline Markdown/Mermaid visual snapshot of memory state.
+
+    Default scope args inherit the server's configured scope.
+    """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
     return build_memory_visual_snapshot(
         _store,  # type: ignore
         agent_id=agent_id,
@@ -1007,6 +1101,7 @@ def mnemos_hypomnema_write(
     memory and Mnemos engrams. Use it for what an agent is "sitting with":
     stable-enough context that should survive sessions, stay scoped to a
     person/project relationship, and remain revisable before promotion.
+    Default scope args inherit the server's configured scope.
 
     Args:
         content: Continuity note to preserve.
@@ -1014,9 +1109,9 @@ def mnemos_hypomnema_write(
         domain: "foundational", "identity", "recurring", "long-arc",
             "topical", or "situational".
         tags: Comma-separated tags.
-        agent_id: Agent this continuity belongs to.
-        person_id: Person/relationship scope.
-        project_scope: Project or workspace scope.
+        agent_id: Agent scope; default inherits the configured server agent.
+        person_id: Person/relationship scope; default inherits the configured server person.
+        project_scope: Project or workspace scope; default inherits the configured server project.
         density: How compressed the entry is (0.0 sparse, 1.0 dense).
         confidence: How reliable the entry is.
         salience: How important it is for future continuity.
@@ -1028,7 +1123,7 @@ def mnemos_hypomnema_write(
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
     try:
         entry_id = _store.write_hypomnema_entry(  # type: ignore
             content,
@@ -1069,19 +1164,21 @@ def mnemos_hypomnema_search(
 ) -> str:
     """Search scoped hypomnema continuity entries.
 
+    Default scope args inherit the server's configured scope.
+
     Args:
         query: Optional natural-language query. Empty returns strongest entries.
         max_results: Maximum entries to return.
-        agent_id: Agent this continuity belongs to.
-        person_id: Person/relationship scope.
-        project_scope: Project or workspace scope.
+        agent_id: Agent scope; default inherits the configured server agent.
+        person_id: Person/relationship scope; default inherits the configured server person.
+        project_scope: Project or workspace scope; default inherits the configured server project.
         include_inactive: Include superseded entries if true.
     """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
     entries = _store.search_hypomnema(  # type: ignore
         query,
         agent_id=agent_id,
@@ -1113,13 +1210,14 @@ def mnemos_hypomnema_revise(
     """Revise a hypomnema entry while preserving its prior version.
 
     Use this when scoped continuity is still true but needs sharper wording,
-    corrected evidence, or a better compression.
+    corrected evidence, or a better compression. Default scope args inherit the
+    server's configured scope.
     """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
     try:
         _store.revise_hypomnema_entry(  # type: ignore
             entry_id,
@@ -1149,13 +1247,14 @@ def mnemos_hypomnema_supersede(
     """Supersede a hypomnema entry with a replacement entry.
 
     Use this when an old continuity note should stop participating in active
-    retrieval but its audit trail should remain visible.
+    retrieval but its audit trail should remain visible. Default scope args
+    inherit the server's configured scope.
     """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
     try:
         new_id = _store.supersede_hypomnema_entry(  # type: ignore
             entry_id,
@@ -1183,13 +1282,14 @@ def mnemos_hypomnema_promote(
 
     Promotion is explicit and dry-run by default because hypomnema is scoped
     continuity. The promoted engram is lightly de-identified and tagged as
-    hypomnema/promoted/continuity.
+    hypomnema/promoted/continuity. Default scope args inherit the server's
+    configured scope.
     """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
     entry = _store.get_hypomnema_entry(  # type: ignore
         entry_id,
         agent_id=agent_id,
@@ -1232,12 +1332,15 @@ def mnemos_hypomnema_candidates(
     person_id: str = "user",
     project_scope: str = "global",
 ) -> str:
-    """List hypomnema entries that meet promotion thresholds."""
+    """List hypomnema entries that meet promotion thresholds.
+
+    Default scope args inherit the server's configured scope.
+    """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
     entries = _store.get_hypomnema_promotion_candidates(  # type: ignore
         agent_id=agent_id,
         person_id=person_id,
@@ -1523,11 +1626,12 @@ def run_server(
     person_id: str | None = None,
     project_scope: str | None = None,
 ) -> None:
-    """Start the MCP server in stdio mode."""
-    global _default_agent_id
-    if agent_id:
-        _default_agent_id = agent_id
-        os.environ["MNEMOS_AGENT_ID"] = agent_id
+    """Start the MCP server in stdio mode.
+
+    Persist the configured scope so advanced tools can inherit it when callers
+    leave their scope args at defaults.
+    """
+    _set_server_defaults(agent_id, person_id, project_scope)
     configure_runtime(
         db_path=db_path,
         agent_id=agent_id,

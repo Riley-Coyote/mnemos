@@ -185,3 +185,37 @@ def test_simple_stdio_context_can_return_identity_graph(tmp_path):
                 assert graph["edges"]
 
     anyio.run(run_smoke)
+
+
+def test_advanced_tools_inherit_server_scope(monkeypatch):
+    """Advanced tools must inherit the server's configured person_id/project_scope,
+    not just agent_id.
+
+    Regression: run_server persisted only _default_agent_id, so the CLI's
+    --person-id/--project-scope were dropped. Default-arg scoped reads/writes then
+    silently queried (user, global) and missed data stored under the configured
+    scope — e.g. 0 of 1245 hypomnema at (oliver, david, pai).
+    """
+    import mnemos.mcp_server as srv
+
+    # Hermetic: no config-file or env influence.
+    monkeypatch.setattr(srv, "_config", {})
+    monkeypatch.setattr(srv, "_default_agent_id", "default")
+    monkeypatch.setattr(srv, "_default_person_id", "user")
+    monkeypatch.setattr(srv, "_default_project_scope", "global")
+    for var in ("MNEMOS_AGENT_ID", "MNEMOS_PERSON_ID", "MNEMOS_PROJECT_SCOPE"):
+        monkeypatch.delenv(var, raising=False)
+
+    # Before any server config, sentinel defaults resolve to the bare defaults.
+    assert srv._effective_scope() == ("default", "user", "global")
+
+    # Server launches configured with a specific scope (the run_server path).
+    srv._set_server_defaults(agent_id="oliver", person_id="david", project_scope="pai")
+
+    # The fix: default-arg tool calls now inherit ALL THREE dimensions.
+    assert srv._effective_scope() == ("oliver", "david", "pai")
+    assert srv._effective_person_id() == "david"
+    assert srv._effective_project_scope() == "pai"
+
+    # Explicit non-default overrides are still respected.
+    assert srv._effective_scope("a", "b", "c") == ("a", "b", "c")

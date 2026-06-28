@@ -38,7 +38,17 @@ Add your agent to OpenClaw's configuration:
       "mcpServers": {
         "mnemos": {
           "command": "mnemos",
-          "args": ["serve", "--db-path", "~/.mnemos/nova.db", "--agent-id", "nova"]
+          "args": [
+            "serve",
+            "--db-path",
+            "~/.mnemos/nova.db",
+            "--agent-id",
+            "nova",
+            "--person-id",
+            "alex",
+            "--project-scope",
+            "nova"
+          ]
         }
       },
       "files": [
@@ -146,6 +156,8 @@ Set these in your agent's `.env` file or system environment:
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `MNEMOS_AGENT_ID` | Agent identifier | Yes |
+| `MNEMOS_PERSON_ID` | Person/user scope | Recommended |
+| `MNEMOS_PROJECT_SCOPE` | Project/workspace scope | Recommended |
 | `MNEMOS_DB_PATH` | Path to Mnemos database | Yes |
 | `MNEMOS_LLM_PROVIDER` | LLM provider (openrouter/anthropic/openai) | For consolidation |
 | `OPENROUTER_API_KEY` | OpenRouter API key | If using OpenRouter |

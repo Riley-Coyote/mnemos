@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### MCP Server
+- Advanced MCP tools now inherit the server's configured `agent_id`,
+  `person_id`, and `project_scope` when callers leave scope args at their
+  default sentinels, so default-arg functional-memory and hypomnema operations
+  reach the same scoped continuity as the simple MCP runtime.
+
 ### PAI Importer (U3a / U3b / U3c)
 - Schema v4 (U3a) — adds `voice_exemplar_eligible`, `softening_protected`, `decay_protected`, `consolidation_authorized`, `original_substrate`, `original_timestamp` to `engrams`; `tier`, `needs_review`, `confidence_pending_review` to `beliefs`; `original_timestamp` to `hypomnema_entries`; new `pai_import_row_map` table for idempotent re-runs and repair
 - Schema v5 (U3b hardening) — extends `pai_import_row_map` with `content_at_last_import`, `tombstone_at`, source metadata; adds `original_substrate` / `original_timestamp` to beliefs; adds `pai_import_events` audit table and AFTER DELETE tombstone triggers

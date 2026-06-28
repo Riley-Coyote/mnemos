@@ -13,6 +13,8 @@ Use this checklist before publishing Mnemos or opening a release PR.
   - `mnemos_introduce`
   - `mnemos_health`
 - Advanced mode preserves the existing admin tools.
+- Scope-taking advanced tools inherit configured agent/person/project scope
+  when callers leave scope args at their default sentinels.
 - Injected FastMCP context parameters are not exposed in public tool schemas.
 - Sampling is optional and occurs only inside an active client request.
 - Sampling failures, denials, or unsupported clients fall back cleanly.

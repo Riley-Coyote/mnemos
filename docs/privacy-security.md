@@ -69,6 +69,11 @@ This prevents multiple agents on the same machine from accidentally sharing
 continuity through the same database. Shared memory and federation are advanced
 features and should stay opt-in.
 
+In advanced MCP mode, scope-taking tools inherit the server's configured
+agent/person/project scope when callers leave the scope args at their default
+sentinels. Pass non-default scope args only for an intentional per-call
+override.
+
 ## Visual Artifacts
 
 Identity graph artifacts are generated from the same scoped local memory data
@@ -132,6 +137,7 @@ Before a release:
 - verify simple mode works with no provider keys
 - verify simple mode exposes only seven tools
 - verify advanced mode preserves admin tools
+- verify advanced tools inherit configured agent/person/project scope
 - verify `mnemos doctor` does not leak secrets
 - verify package artifacts include templates and simple-mode modules
 - verify MCP sampling failures do not break tool calls

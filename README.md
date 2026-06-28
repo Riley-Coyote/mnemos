@@ -150,6 +150,10 @@ fields:
 mnemos mcp install generic --agent-id nova --db-path ~/.mnemos/nova.db
 ```
 
+If the generated client config also needs person/project scope, add
+`MNEMOS_PERSON_ID` and `MNEMOS_PROJECT_SCOPE` to that client's environment, or
+add `--person-id` and `--project-scope` to the printed server args.
+
 ### Prompt For A Simple MCP Agent
 
 Paste this into an agent after Mnemos MCP is connected:
@@ -177,6 +181,12 @@ Use it for debugging, migration, research, direct control, and hypomnema work.
 ```bash
 mnemos serve --mode advanced
 ```
+
+When advanced mode is launched with explicit scope, its scope-taking tools
+inherit that server scope by default. Leave `agent_id`, `person_id`, and
+`project_scope` at their default values for the configured
+`--agent-id`/`--person-id`/`--project-scope` to apply, or pass non-default
+values to intentionally override one call.
 
 Install advanced mode into a client:
 
@@ -504,7 +514,9 @@ mnemos --db-path ~/.mnemos/nova.db --agent-id nova stats
 For `serve`, options can also appear after the command:
 
 ```bash
-mnemos serve --mode simple --agent-id nova --db-path ~/.mnemos/nova.db
+mnemos serve --mode simple \
+  --agent-id nova --person-id alex --project-scope mnemos \
+  --db-path ~/.mnemos/nova.db
 ```
 
 ---

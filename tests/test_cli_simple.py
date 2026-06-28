@@ -296,3 +296,52 @@ def test_inner_life_status_cli_summarizes_rollout_telemetry(tmp_path, capsys):
     assert "Generated memory writes: 1" in out
     assert "Process low-stakes-writer: 1" in out
     assert "Decision written:low_stakes: 1" in out
+
+
+def test_inner_life_preflight_cli_blocks_default_schedules(tmp_path, capsys):
+    db = tmp_path / "inner-life-preflight.db"
+    store = EngramStore(db)
+    store.close()
+
+    result = main(
+        [
+            "inner-life",
+            "preflight",
+            "--db-path",
+            str(db),
+            "--agent-id",
+            "oliver",
+            "--person-id",
+            "david",
+            "--project-scope",
+            "pai",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert result == 2
+    assert "Inner-life preflight" in out
+    assert "Full scheduled activation: blocked" in out
+    assert "Blocker: inner_life_schedules_disabled" in out
+    assert "Process reflect: scheduled=False activity_gate=True" in out
+
+
+def test_inner_life_preflight_cli_does_not_create_missing_db(tmp_path, capsys):
+    db = tmp_path / "missing-preflight.db"
+
+    result = main(
+        [
+            "inner-life",
+            "preflight",
+            "--db-path",
+            str(db),
+            "--agent-id",
+            "oliver",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert result == 2
+    assert "DB exists:             False" in out
+    assert "Blocker: db_missing" in out
+    assert not db.exists()

@@ -70,6 +70,14 @@ mnemos inner-life activity-gate \
 ```
 
 ```bash
+mnemos inner-life preflight \
+  --db-path /tmp/mnemos-copy.db \
+  --agent-id oliver \
+  --person-id david \
+  --project-scope pai
+```
+
+```bash
 mnemos inner-life status \
   --db-path /tmp/mnemos-copy.db \
   --agent-id oliver \
@@ -84,6 +92,12 @@ Use `inner-life status` to inspect rows by process and gate decision. The
 important counters are generated memory writes, belief writes, identity
 patches, and shared-pool writes. For U6.6, belief writes, identity patches, and
 shared-pool writes should remain zero.
+
+Full scheduled activation remains blocked by default. The config carries a
+global `inner_life.schedules.enabled` switch plus per-family schedule switches
+for `challenge`, `observe`, `affect`, `reflect`, `wander`, and `dream`. The
+activity gate also carries per-family `enabled` switches. `inner-life preflight`
+reports missing or disabled switches before U7 can load schedules.
 
 Generated memory writes should be:
 
@@ -114,7 +128,8 @@ The focused U6.6 suite covers:
   drops;
 - low-stakes writer privacy, idempotency, and non-promotion invariants;
 - gated reflection, wandering, and dream persistence;
-- CLI live DB refusal, activity-gate preflight, and telemetry status;
+- CLI live DB refusal, activity-gate preflight, activation preflight, and
+  telemetry status;
 - existing dream journal separation.
 
 ## Enforcement Links
@@ -127,5 +142,6 @@ Enforcement lives in the implementation and tests, not in this document:
 - `mnemos/substrate/handlers/wandering.py` with `tests/test_gated_wandering.py`;
 - `mnemos/substrate/handlers/dreaming.py` with `tests/test_gated_dreaming.py`;
 - `mnemos/cli.py` with `tests/test_cli_simple.py`;
+- `mnemos/inner_life/preflight.py` with `tests/test_inner_life_preflight.py`;
 - `mnemos/store/migrations.py` and `mnemos/store/sqlite_store.py` with
   `tests/test_inner_life_ledger.py` and `tests/test_u3a_schema_migrations.py`.

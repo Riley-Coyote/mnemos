@@ -25,6 +25,7 @@ Commands:
     mnemos inner-life session-finalize  Finalize transcript provenance below memory
     mnemos inner-life turn-finalize     Finalize one turn provenance row below memory
     mnemos inner-life activity-gate     Preflight one gated process on a DB copy
+    mnemos inner-life preflight         Inspect full scheduled activation blockers
     mnemos inner-life status            Summarize gated inner-life telemetry
     mnemos remember CONTENT      Capture durable continuity from the CLI
     mnemos hermes install        Install Mnemos for Hermes Agent
@@ -570,6 +571,19 @@ def main(argv: list[str] | None = None) -> int:
     p_inner_status.add_argument("--rollout-tag", default=None, help="Optional rollout tag filter")
     p_inner_status.add_argument("--limit", type=int, default=200, help="Max ledger rows to summarize")
     p_inner_status.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos databases; requires explicit David authorization in live use",
+    )
+    p_inner_preflight = inner_sub.add_parser(
+        "preflight",
+        help="Inspect U7 gated inner-life activation readiness without loading schedules",
+    )
+    p_inner_preflight.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
+    p_inner_preflight.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_inner_preflight.add_argument("--person-id", default=None, help="Person/user scope")
+    p_inner_preflight.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_inner_preflight.add_argument(
         "--allow-live-db",
         action="store_true",
         help="Allow ~/.mnemos databases; requires explicit David authorization in live use",
@@ -1174,10 +1188,16 @@ def _cmd_pai_import(args: argparse.Namespace) -> int:
 def _cmd_inner_life(args: argparse.Namespace) -> int:
     """Gated inner-life private-operation CLI."""
     command = getattr(args, "inner_life_command", None)
-    if command not in {"session-finalize", "turn-finalize", "activity-gate", "status"}:
+    if command not in {
+        "session-finalize",
+        "turn-finalize",
+        "activity-gate",
+        "preflight",
+        "status",
+    }:
         print(
             "Usage: mnemos inner-life "
-            "{session-finalize|turn-finalize|activity-gate|status}",
+            "{session-finalize|turn-finalize|activity-gate|preflight|status}",
             file=sys.stderr,
         )
         return 1
@@ -1199,6 +1219,34 @@ def _cmd_inner_life(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
+
+        if command == "preflight":
+            from .inner_life.preflight import build_inner_life_preflight
+
+            preflight = build_inner_life_preflight(
+                config=load_config(),
+                db_path=db_path,
+            )
+            print("Inner-life preflight")
+            print("--------------------")
+            print(f"DB:                    {preflight['db_path']}")
+            print(f"DB exists:             {preflight['db_exists']}")
+            print(f"Schedules enabled:     {preflight['schedules_enabled']}")
+            print(
+                "Full scheduled activation: "
+                f"{'ready' if preflight['ready_for_full_scheduled_activation'] else 'blocked'}"
+            )
+            for blocker in preflight["blockers"]:
+                print(f"Blocker: {blocker}")
+            for process, details in preflight["processes"].items():
+                print(
+                    f"Process {process}: "
+                    f"scheduled={details['scheduled']} "
+                    f"activity_gate={details['activity_gate']} "
+                    f"cadence={details['cadence_minutes']} "
+                    f"cooldown={details['cooldown_minutes']}"
+                )
+            return 0 if preflight["ready_for_full_scheduled_activation"] else 2
 
         store = _get_store(args)
         try:
@@ -1280,7 +1328,6 @@ def _cmd_inner_life(args: argparse.Namespace) -> int:
                 print(f"Cooldown until: {decision.get('cooldown_until') or ''}")
                 print("Memory writes: 0")
                 return 0
-
             rows = store.get_inner_life_events(
                 agent_id=agent_id,
                 person_id=person_id,

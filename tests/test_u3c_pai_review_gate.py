@@ -143,6 +143,17 @@ def test_activity_gate_uses_consolidation_log_as_existing_mnemos_signal():
     assert True
 """
 
+GOOD_HYPO_CHALLENGE_TESTS = """
+def test_hypomnema_challenge_revise_down_lowers_confidence_and_preserves_history():
+    assert True
+def test_hypomnema_challenge_retire_archives_without_deleting():
+    assert True
+def test_hypomnema_challenge_malformed_output_records_error_without_change():
+    assert True
+def test_hypomnema_challenge_duplicate_key_does_not_reapply_revision():
+    assert True
+"""
+
 GOOD_INNER_LIFE_LEDGER_TESTS = """
 def test_inner_life_ledger_schema_is_private_and_idempotent():
     assert True
@@ -194,6 +205,7 @@ def _file_texts(**overrides):
         "docs/u3c-step3-launch-gate.md": GOOD_LAUNCH_DOC,
         "mnemos/importer/watcher.py": GOOD_WATCHER,
         "tests/test_cli_simple.py": GOOD_CLI_SIMPLE_TESTS,
+        "tests/test_hypomnema_challenge.py": GOOD_HYPO_CHALLENGE_TESTS,
         "tests/test_inner_life_activity_gate.py": GOOD_ACTIVITY_GATE_TESTS,
         "tests/test_inner_life_ledger.py": GOOD_INNER_LIFE_LEDGER_TESTS,
         "tests/test_u3b_pai_importer.py": GOOD_IMPORTER_TESTS,
@@ -418,6 +430,59 @@ def test_activity_gate_uses_consolidation_log_as_existing_mnemos_signal():
     )
 
 
+def test_u3c_review_gate_accepts_u66_hypomnema_challenge_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/hypomnema_challenge.py",
+            "tests/test_hypomnema_challenge.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/hypomnema_challenge.py": "U6.6 hypomnema_challenge",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/hypomnema_challenge.py b/mnemos/inner_life/hypomnema_challenge.py\n"
+            "@@\n"
+            "+# U6.6 hypomnema_challenge\n"
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u66_hypomnema_challenge_without_malformed_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/hypomnema_challenge.py",
+            "tests/test_hypomnema_challenge.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/hypomnema_challenge.py": "U6.6 hypomnema_challenge",
+                "tests/test_hypomnema_challenge.py": """
+def test_hypomnema_challenge_revise_down_lowers_confidence_and_preserves_history():
+    assert True
+def test_hypomnema_challenge_retire_archives_without_deleting():
+    assert True
+def test_hypomnema_challenge_duplicate_key_does_not_reapply_revision():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/hypomnema_challenge.py b/mnemos/inner_life/hypomnema_challenge.py\n"
+            "@@\n"
+            "+# U6.6 hypomnema_challenge\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-hypomnema-challenge-malformed"
+        for finding in findings
+    )
+
+
 def test_u3c_review_gate_rule_signature():
     helpers = [
         (name, obj)
@@ -430,7 +495,7 @@ def test_u3c_review_gate_rule_signature():
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
-    assert digest == "5449b62f76aea6dfd76151b23efad2391224b66d9bfc456dc5beb05e3d2fbbdd"
+    assert digest == "629cfaa25c6954ef4468da42b9dba6d727ef0a13398824c2267648631ea289de"
 
 
 def test_u3c_review_gate_fails_watcher_change_without_test_diff():

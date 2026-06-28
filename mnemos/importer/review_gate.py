@@ -52,6 +52,9 @@ _U6_6_INNER_LIFE_FINALIZER_TEST_FILES = {
 _U6_6_INNER_LIFE_ACTIVITY_TEST_FILES = {
     "tests/test_inner_life_activity_gate.py",
 }
+_U6_6_INNER_LIFE_CHALLENGE_TEST_FILES = {
+    "tests/test_hypomnema_challenge.py",
+}
 
 
 @dataclass(frozen=True)
@@ -320,6 +323,7 @@ def _proof_surface_findings(
         )
         finalizer_touched = bool(changed & _U6_6_INNER_LIFE_FINALIZER_FILES)
         activity_gate_touched = "mnemos/inner_life/activity_gate.py" in changed
+        challenge_touched = "mnemos/inner_life/hypomnema_challenge.py" in changed
         if schema_touched and not (
             _U6_6_INNER_LIFE_SCHEMA_TEST_FILES <= changed
         ):
@@ -372,6 +376,20 @@ def _proof_surface_findings(
                     file="mnemos/inner_life/activity_gate.py",
                     description="U6.6 activity gate changed without activity-gate regression tests in the diff",
                     required_proof="tests/test_inner_life_activity_gate.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if challenge_touched and not (
+            changed & _U6_6_INNER_LIFE_CHALLENGE_TEST_FILES
+        ):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/inner_life/hypomnema_challenge.py",
+                    description="U6.6 hypomnema challenge changed without challenge regression tests in the diff",
+                    required_proof="tests/test_hypomnema_challenge.py appears in this diff",
                     status="missing",
                     action="must-test",
                 )
@@ -702,6 +720,7 @@ def _repository_content_findings(
     review_gate_tests = file_texts.get("tests/test_u3c_pai_review_gate.py", "")
     cli_simple_tests = file_texts.get("tests/test_cli_simple.py", "")
     activity_gate_tests = file_texts.get("tests/test_inner_life_activity_gate.py", "")
+    hypomnema_challenge_tests = file_texts.get("tests/test_hypomnema_challenge.py", "")
     inner_life_ledger_tests = file_texts.get("tests/test_inner_life_ledger.py", "")
     schema_migration_tests = file_texts.get("tests/test_u3a_schema_migrations.py", "")
     session_finalizer_tests = file_texts.get("tests/test_session_finalizer.py", "")
@@ -917,6 +936,60 @@ def _repository_content_findings(
                             (
                                 "test_activity_gate_uses_consolidation_log_as_existing_mnemos_signal",
                                 activity_gate_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u66_inner_life and "mnemos/inner_life/hypomnema_challenge.py" in changed:
+        findings.extend(
+            _missing_required_proofs(
+                surface="U6.6 hypomnema challenge",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u66-hypomnema-challenge-revise-down",
+                        "revise_down lowers confidence and preserves history",
+                        "tests/test_hypomnema_challenge.py",
+                        (
+                            (
+                                "test_hypomnema_challenge_revise_down_lowers_confidence_and_preserves_history",
+                                hypomnema_challenge_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-hypomnema-challenge-retire",
+                        "retire archives without deleting",
+                        "tests/test_hypomnema_challenge.py",
+                        (
+                            (
+                                "test_hypomnema_challenge_retire_archives_without_deleting",
+                                hypomnema_challenge_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-hypomnema-challenge-malformed",
+                        "malformed critic output records error without change",
+                        "tests/test_hypomnema_challenge.py",
+                        (
+                            (
+                                "test_hypomnema_challenge_malformed_output_records_error_without_change",
+                                hypomnema_challenge_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-hypomnema-challenge-idempotent",
+                        "duplicate key does not reapply revision",
+                        "tests/test_hypomnema_challenge.py",
+                        (
+                            (
+                                "test_hypomnema_challenge_duplicate_key_does_not_reapply_revision",
+                                hypomnema_challenge_tests,
                             ),
                         ),
                     ),
@@ -2159,6 +2232,7 @@ def _files_needed_for_review(changed_files: Sequence[str]) -> set[str]:
             "docs/u3c-step3-launch-gate.md",
             "mnemos/cli.py",
             "mnemos/importer/watcher.py",
+            "tests/test_hypomnema_challenge.py",
             "tests/test_cli_simple.py",
             "tests/test_inner_life_activity_gate.py",
             "tests/test_inner_life_ledger.py",

@@ -142,6 +142,8 @@ def test_soak_tick_cli_reports_disabled_tick_without_memory():
     assert True
 def test_soak_plist_cli_writes_orchestrator_without_loading():
     assert True
+def test_soak_preflight_cli_writes_artifact_without_live_activation():
+    assert True
 """
 
 GOOD_ACTIVITY_GATE_TESTS = """
@@ -237,6 +239,10 @@ def test_soak_tick_runs_shallow_consolidation_family_without_deep_passes():
 def test_soak_tick_fans_out_inner_life_family_through_existing_gate():
     assert True
 def test_soak_tick_launchd_plist_invokes_orchestrator_without_loading():
+    assert True
+def test_soak_activation_preflight_blocks_without_watcher_plist_or_dry_run():
+    assert True
+def test_soak_activation_preflight_ready_after_watch_plist_launchd_and_copy_tick():
     assert True
 """
 
@@ -896,7 +902,7 @@ def test_u3c_review_gate_rule_signature():
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
-    assert digest == "32dbeb25a678c009a5fbef8752c60ebd27a17cf4af384b31ab184accdae38986"
+    assert digest == "bc82a18296a5c483a1967850fdaafcc8602fc3151df0eee8d9269e410336fc87"
 
 
 def test_u3c_review_gate_fails_watcher_change_without_test_diff():

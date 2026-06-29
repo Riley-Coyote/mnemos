@@ -31,6 +31,7 @@ Commands:
     mnemos inner-life status            Summarize gated inner-life telemetry
     mnemos soak tick                    Run one full-soak scheduled tick
     mnemos soak plist                   Write, but do not load, the soak tick plist
+    mnemos soak preflight               Build the U7 activation preflight artifact
     mnemos remember CONTENT      Capture durable continuity from the CLI
     mnemos hermes install        Install Mnemos for Hermes Agent
     mnemos hermes quickstart     Safely install Mnemos for Hermes Agent
@@ -536,6 +537,35 @@ def main(argv: list[str] | None = None) -> int:
         "--allow-live-db",
         action="store_true",
         help="Include --allow-live-db in generated ProgramArguments; requires David authorization in live use",
+    )
+    p_soak_preflight = soak_sub.add_parser(
+        "preflight",
+        help="Build the U7 activation preflight without loading launchd",
+    )
+    p_soak_preflight.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
+    p_soak_preflight.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_soak_preflight.add_argument("--person-id", default=None, help="Person/user scope")
+    p_soak_preflight.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_soak_preflight.add_argument("--rollout-tag", default="u7-soak", help="Rollout tag for dry-run rows")
+    p_soak_preflight.add_argument("--artifact", default=None, help="Optional JSON artifact path")
+    p_soak_preflight.add_argument("--soak-plist", default=None, help="Existing soak tick launchd plist to lint")
+    p_soak_preflight.add_argument("--watch-manifest", default=None, help="PAI watch manifest for watch-doctor")
+    p_soak_preflight.add_argument("--watch-state", default=None, help="PAI watch state path for watch-doctor")
+    p_soak_preflight.add_argument("--watch-artifact-dir", default=None, help="PAI watch artifact dir for watch-doctor")
+    p_soak_preflight.add_argument("--watch-backup-dir", default=None, help="PAI watch backup dir for watch-doctor")
+    p_soak_preflight.add_argument("--watch-backup-keep", type=int, default=None)
+    p_soak_preflight.add_argument("--watch-plist", default=None, help="Existing PAI watch launchd plist to lint")
+    p_soak_preflight.add_argument("--watch-label", default=None, help="PAI watch launchd label")
+    p_soak_preflight.add_argument("--watch-python", default=None, help="Python executable for watch-doctor")
+    p_soak_preflight.add_argument(
+        "--dry-run-tick",
+        action="store_true",
+        help="Run the soak tick against a SQLite backup copy of --db-path",
+    )
+    p_soak_preflight.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos databases; requires explicit David authorization in live use",
     )
 
     # ── inner-life ──
@@ -1277,8 +1307,8 @@ def _cmd_pai_import(args: argparse.Namespace) -> int:
 def _cmd_soak(args: argparse.Namespace) -> int:
     """Full-soak scheduled tick CLI."""
     command = getattr(args, "soak_command", None)
-    if command not in {"tick", "plist"}:
-        print("Usage: mnemos soak {tick|plist}", file=sys.stderr)
+    if command not in {"tick", "plist", "preflight"}:
+        print("Usage: mnemos soak {tick|plist|preflight}", file=sys.stderr)
         return 1
 
     db_path = getattr(args, "db_path", None)
@@ -1303,6 +1333,76 @@ def _cmd_soak(args: argparse.Namespace) -> int:
         agent_id = _resolve_agent_id(args)
         person_id = args.person_id or "user"
         project_scope = args.project_scope or "global"
+
+        if command == "preflight":
+            from .importer import DEFAULT_WATCH_LABEL, run_pai_watch_doctor
+            from .soak.preflight import build_soak_activation_preflight
+
+            watch_label = args.watch_label or DEFAULT_WATCH_LABEL
+            watch_report = None
+            watch_inputs = {
+                "manifest_path": args.watch_manifest,
+                "state_path": args.watch_state,
+                "artifact_dir": args.watch_artifact_dir,
+                "backup_dir": args.watch_backup_dir,
+                "backup_keep": args.watch_backup_keep,
+                "plist_path": args.watch_plist,
+            }
+            if all(value is not None for value in watch_inputs.values()):
+                watch_report = run_pai_watch_doctor(
+                    manifest_path=watch_inputs["manifest_path"],
+                    db_path=db_path,
+                    state_path=watch_inputs["state_path"],
+                    artifact_dir=watch_inputs["artifact_dir"],
+                    backup_dir=watch_inputs["backup_dir"],
+                    backup_keep=watch_inputs["backup_keep"],
+                    plist_path=watch_inputs["plist_path"],
+                    python_executable=args.watch_python,
+                    allow_live_db=args.allow_live_db,
+                )
+
+            preflight = build_soak_activation_preflight(
+                config=config,
+                db_path=db_path,
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+                rollout_tag=args.rollout_tag,
+                soak_plist_path=args.soak_plist,
+                watch_doctor_report=watch_report,
+                watch_label=watch_label,
+                run_tick_dry_run=args.dry_run_tick,
+            )
+            artifact = Path(args.artifact).expanduser() if args.artifact else None
+            if artifact is not None:
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                tmp = artifact.with_name(f".{artifact.name}.tmp")
+                tmp.write_text(
+                    json.dumps(preflight, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                tmp.replace(artifact)
+
+            print("Soak activation preflight")
+            print("-------------------------")
+            print(f"DB:                 {preflight['db']['path']}")
+            print(f"DB exists:          {preflight['db']['exists']}")
+            print(f"Watcher doctor:     {'GREEN' if preflight['watcher']['doctor']['ok'] else 'missing/blocked'}")
+            print(f"Soak tick plist:    {'ready' if preflight['soak_tick_plist']['ok'] else 'blocked'}")
+            print(f"Tick dry run:       {'ok' if preflight['tick_dry_run']['ok'] else preflight['tick_dry_run']['reason']}")
+            print(
+                "Launchd loaded:     "
+                f"{preflight['launchd'].get('pre_authorization_loaded')}"
+            )
+            print(
+                "U7 activation:      "
+                f"{'ready' if preflight['ready_for_u7_activation'] else 'blocked'}"
+            )
+            if artifact is not None:
+                print(f"Artifact:           {artifact}")
+            for blocker in preflight["blockers"]:
+                print(f"Blocker: {blocker}")
+            return 0 if preflight["ready_for_u7_activation"] else 2
 
         if command == "plist":
             from .soak.tick import write_soak_tick_launchd_plist

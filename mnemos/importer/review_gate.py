@@ -1516,6 +1516,28 @@ def _repository_content_findings(
                             ),
                         ),
                     ),
+                    _ProofRequirement(
+                        "u7-soak-preflight-blocked",
+                        "activation preflight blocks without watcher, plist, and copy tick proof",
+                        "tests/test_soak_tick.py",
+                        (
+                            (
+                                "test_soak_activation_preflight_blocks_without_watcher_plist_or_dry_run",
+                                soak_tick_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u7-soak-preflight-ready",
+                        "activation preflight requires watcher proof, plist lint, launchd not-loaded, and copy tick",
+                        "tests/test_soak_tick.py",
+                        (
+                            (
+                                "test_soak_activation_preflight_ready_after_watch_plist_launchd_and_copy_tick",
+                                soak_tick_tests,
+                            ),
+                        ),
+                    ),
                 ],
             )
         )
@@ -1662,6 +1684,17 @@ def _repository_content_findings(
                             (
                                 (
                                     "test_soak_plist_cli_writes_orchestrator_without_loading",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u7-soak-cli-preflight-artifact",
+                            "preflight CLI writes artifact without activation",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_soak_preflight_cli_writes_artifact_without_live_activation",
                                     cli_simple_tests,
                                 ),
                             ),

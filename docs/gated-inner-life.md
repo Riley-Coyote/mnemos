@@ -112,6 +112,23 @@ mnemos inner-life preflight \
 ```
 
 ```bash
+mnemos soak preflight \
+  --db-path /tmp/mnemos-copy.db \
+  --agent-id oliver \
+  --person-id david \
+  --project-scope pai \
+  --soak-plist /tmp/com.davidef.mnemos.soak.tick.plist \
+  --watch-manifest /tmp/pai-watch/manifest.json \
+  --watch-state /tmp/pai-watch/state.json \
+  --watch-artifact-dir /tmp/pai-watch/artifacts \
+  --watch-backup-dir /tmp/pai-watch/backups \
+  --watch-backup-keep 5 \
+  --watch-plist /tmp/com.davidef.mnemos.duallife.plist \
+  --dry-run-tick \
+  --artifact /tmp/u7-soak-preflight.json
+```
+
+```bash
 mnemos inner-life status \
   --db-path /tmp/mnemos-copy.db \
   --agent-id oliver \
@@ -143,6 +160,12 @@ When schedules are enabled, preflight also blocks on:
 It also reports the launchd artifact directory, plist directory, halt marker,
 per-process plist path, and rollback commands so U7 can review the exact
 activation and backout surface before anything is loaded.
+
+`soak preflight` is the U7 activation artifact. It composes `watch-doctor`,
+soak tick plist lint, launchd not-loaded status, provider/snapshot/family
+readiness, and an optional copy-DB tick dry run. It writes a JSON artifact when
+`--artifact` is provided, but it does not call `launchctl` and does not mutate
+the supplied DB.
 
 `inner-life plist` only writes plist files. It does not call `launchctl`, does
 not bootstrap schedules, and prints `Loaded: false`. U7 live launch remains a
@@ -177,6 +200,7 @@ The focused U6.6 suite covers:
   drops;
 - scheduled runner activity-gate skip/run behavior and launchd plist static
   readiness;
+- soak activation preflight blocking/ready behavior and copy-DB tick proof;
 - low-stakes writer privacy, idempotency, and non-promotion invariants;
 - gated reflection, wandering, and dream persistence;
 - CLI live DB refusal, activity-gate preflight, scheduled run, plist writing,
@@ -195,5 +219,7 @@ Enforcement lives in the implementation and tests, not in this document:
 - `mnemos/cli.py` with `tests/test_cli_simple.py`;
 - `mnemos/inner_life/preflight.py` with `tests/test_inner_life_preflight.py`;
 - `mnemos/inner_life/scheduler.py` with `tests/test_inner_life_scheduler.py`;
+- `mnemos/soak/preflight.py` and `mnemos/soak/tick.py` with
+  `tests/test_soak_tick.py`;
 - `mnemos/store/migrations.py` and `mnemos/store/sqlite_store.py` with
   `tests/test_inner_life_ledger.py` and `tests/test_u3a_schema_migrations.py`.

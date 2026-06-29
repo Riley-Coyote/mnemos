@@ -566,3 +566,38 @@ def test_soak_plist_cli_writes_orchestrator_without_loading(tmp_path, capsys):
     ]
     assert "--allow-live-db" not in args
     assert payload["StartInterval"] == 900
+
+
+def test_soak_preflight_cli_writes_artifact_without_live_activation(tmp_path, capsys):
+    db = tmp_path / "soak-preflight-cli.db"
+    EngramStore(db).close()
+    artifact = tmp_path / "u7-preflight.json"
+
+    result = main(
+        [
+            "soak",
+            "preflight",
+            "--db-path",
+            str(db),
+            "--agent-id",
+            "oliver",
+            "--person-id",
+            "david",
+            "--project-scope",
+            "pai",
+            "--artifact",
+            str(artifact),
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert result == 2
+    assert "Soak activation preflight" in out
+    assert "U7 activation:      blocked" in out
+    assert "Blocker: watch_doctor_missing" in out
+    assert artifact.exists()
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert payload["schema"] == "mnemos.u7_soak_preflight.v1"
+    assert payload["db"]["exists"] is True
+    assert payload["ready_for_u7_activation"] is False
+    assert "soak_tick_disabled" in payload["blockers"]

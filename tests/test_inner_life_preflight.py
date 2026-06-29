@@ -7,6 +7,8 @@ from mnemos.store.sqlite_store import EngramStore
 
 def _enabled_schedule_config(tmp_path):
     config = deepcopy(DEFAULT_CONFIG)
+    config["soak"]["tick"]["enabled"] = True
+    config["soak"]["families"]["shallow_consolidation"]["enabled"] = True
     schedules = config["inner_life"]["schedules"]
     schedules["enabled"] = True
     for process in PROCESS_FAMILIES:
@@ -30,6 +32,9 @@ def test_inner_life_preflight_defaults_block_full_scheduled_activation(tmp_path)
     assert result["ready_for_full_scheduled_activation"] is False
     assert result["db_exists"] is True
     assert result["schedules_enabled"] is False
+    assert result["soak_tick_enabled"] is False
+    assert "soak_tick_disabled" in result["blockers"]
+    assert "soak_family_disabled" in result["blockers"]
     assert "inner_life_schedules_disabled" in result["blockers"]
     assert "scheduled_process_disabled" in result["blockers"]
     assert result["missing_schedule_switches"] == []
@@ -37,6 +42,7 @@ def test_inner_life_preflight_defaults_block_full_scheduled_activation(tmp_path)
     for process in PROCESS_FAMILIES:
         assert result["processes"][process]["scheduled"] is False
         assert result["processes"][process]["activity_gate"] is True
+    assert result["soak_families"]["shallow_consolidation"]["scheduled"] is False
 
 
 def test_inner_life_preflight_missing_activity_kill_switch_blocks_activation(tmp_path):
@@ -98,3 +104,5 @@ def test_preflight_ready_when_enabled_snapshot_provider_and_kill_switches_exist(
     assert result["pre_soak_snapshot"]["exists"] is True
     assert result["provider_readiness"]["observer_reviewer_count"] == 3
     assert result["rollback"]["disable_first"] is True
+    assert result["soak_tick_enabled"] is True
+    assert result["soak_families"]["shallow_consolidation"]["scheduled"] is True

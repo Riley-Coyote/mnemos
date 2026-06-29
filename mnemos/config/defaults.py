@@ -183,6 +183,30 @@ DEFAULT_CONFIG: dict = {
         },
     },
 
+    # ── Full-soak scheduled tick (U7, DAVID-AUTH before live load) ──
+    "soak": {
+        "tick": {
+            "enabled": False,
+            "cadence_minutes": 15,
+            "artifact_dir": "~/.mnemos/soak",
+            "plist_dir": "~/Library/LaunchAgents",
+            "label": "com.davidef.mnemos.soak.tick",
+            "halt_marker_path": "~/.mnemos/full-soak.halt",
+            "rollback_commands": [
+                "set soak.tick.enabled=false",
+                "launchctl bootout gui/$UID ~/Library/LaunchAgents/com.davidef.mnemos.soak.tick.plist",
+                "verify mnemos soak tick reports soak_tick_disabled",
+                "restore pre-soak DB snapshot only if rollout-tagged writes contaminate retrieval or identity",
+            ],
+        },
+        "families": {
+            "shallow_consolidation": {
+                "enabled": False,
+                "cadence_minutes": 240,
+            },
+        },
+    },
+
     # ── Multi-agent ──
     "multiagent": {
         "shared_pool_enabled": False,

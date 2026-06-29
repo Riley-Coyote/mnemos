@@ -75,6 +75,23 @@ _U6_6_INNER_LIFE_PREFLIGHT_TEST_FILES = {
 _U6_6_INNER_LIFE_SCHEDULER_TEST_FILES = {
     "tests/test_inner_life_scheduler.py",
 }
+_U7_SOAK_TICK_MARKERS = (
+    "soak",
+    "soak_tick",
+    "scheduled tick",
+    "tick orchestrator",
+    "shallow_consolidation",
+    "u7",
+)
+_U7_SOAK_TICK_SURFACE_FILES = {
+    "mnemos/soak/tick.py",
+    "mnemos/config/defaults.py",
+    "mnemos/inner_life/preflight.py",
+    "mnemos/cli.py",
+}
+_U7_SOAK_TICK_TEST_FILES = {
+    "tests/test_soak_tick.py",
+}
 
 
 @dataclass(frozen=True)
@@ -276,6 +293,11 @@ def _proof_surface_findings(
         file_texts=file_texts,
         diff_text=diff_text,
     )
+    u7_soak_tick = _is_u7_soak_tick_diff(
+        changed,
+        file_texts=file_texts,
+        diff_text=diff_text,
+    )
     rules = [
         (
             _is_watcher_surface_file,
@@ -304,7 +326,7 @@ def _proof_surface_findings(
             "schema or lifecycle behavior changed without row-map/lifecycle regression coverage in the diff",
         ),
         (
-            lambda path: path == "mnemos/cli.py" and not u66_inner_life,
+            lambda path: path == "mnemos/cli.py" and not (u66_inner_life or u7_soak_tick),
             {
                 "tests/test_u3b_pai_operator.py",
                 "tests/test_u3c_pai_operator.py",
@@ -501,6 +523,53 @@ def _proof_surface_findings(
                     action="must-test",
                 )
             )
+    if u7_soak_tick:
+        soak_tick_touched = any(path.startswith("mnemos/soak/") for path in changed)
+        preflight_touched = bool(
+            changed & {"mnemos/config/defaults.py", "mnemos/inner_life/preflight.py"}
+        )
+        cli_touched = "mnemos/cli.py" in changed
+        if soak_tick_touched and not (changed & _U7_SOAK_TICK_TEST_FILES):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file=", ".join(sorted(path for path in changed if path.startswith("mnemos/soak/"))),
+                    description="U7 soak tick orchestrator changed without soak tick regression tests in the diff",
+                    required_proof="tests/test_soak_tick.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if preflight_touched and "tests/test_inner_life_preflight.py" not in changed:
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file=", ".join(
+                        sorted(
+                            changed
+                            & {"mnemos/config/defaults.py", "mnemos/inner_life/preflight.py"}
+                        )
+                    ),
+                    description="U7 soak tick preflight/config changed without preflight regression tests in the diff",
+                    required_proof="tests/test_inner_life_preflight.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if cli_touched and "tests/test_cli_simple.py" not in changed:
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/cli.py",
+                    description="U7 soak tick CLI changed without command-level regression tests in the diff",
+                    required_proof="tests/test_cli_simple.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
     return findings
 
 
@@ -531,6 +600,41 @@ def _is_u6_6_inner_life_diff(
 
     lowered = marker_text.lower()
     return any(marker in lowered for marker in _U6_6_INNER_LIFE_MARKERS)
+
+
+def _is_u7_soak_tick_diff(
+    changed: set[str],
+    *,
+    file_texts: Mapping[str, str] | None = None,
+    diff_text: str = "",
+) -> bool:
+    """True for the U7 scheduled tick/fanout lane."""
+    has_surface = any(path.startswith("mnemos/soak/") for path in changed) or bool(
+        changed & _U7_SOAK_TICK_SURFACE_FILES
+    )
+    if not has_surface:
+        return False
+
+    source_paths = sorted(
+        path
+        for path in changed
+        if path.startswith("mnemos/soak/") or path in _U7_SOAK_TICK_SURFACE_FILES
+    )
+    marker_text = ""
+    if diff_text:
+        added = _added_text_by_file(diff_text)
+        marker_text = "\n".join(added.get(path, "") for path in source_paths)
+    if not marker_text and file_texts:
+        marker_text = "\n".join(
+            file_texts.get(path, "") for path in source_paths
+        )
+    if not marker_text:
+        marker_text = "\n".join(source_paths)
+
+    lowered = marker_text.lower()
+    return "soak" in lowered and any(
+        marker in lowered for marker in _U7_SOAK_TICK_MARKERS
+    )
 
 
 def _forbidden_diff_findings(diff_text: str) -> list[PaiReviewFinding]:
@@ -817,6 +921,7 @@ def _repository_content_findings(
     activity_gate_tests = file_texts.get("tests/test_inner_life_activity_gate.py", "")
     preflight_tests = file_texts.get("tests/test_inner_life_preflight.py", "")
     scheduler_tests = file_texts.get("tests/test_inner_life_scheduler.py", "")
+    soak_tick_tests = file_texts.get("tests/test_soak_tick.py", "")
     hypomnema_challenge_tests = file_texts.get("tests/test_hypomnema_challenge.py", "")
     observer_panel_tests = file_texts.get("tests/test_observer_panel.py", "")
     emotional_driver_tests = file_texts.get("tests/test_emotional_driver.py", "")
@@ -834,6 +939,11 @@ def _repository_content_findings(
     workflow_proofs = _workflow_proof_statuses(workflow)
     watcher_changed = any(_is_watcher_surface_file(path) for path in changed)
     u66_inner_life = _is_u6_6_inner_life_diff(
+        changed,
+        file_texts=file_texts,
+        diff_text=diff_text,
+    )
+    u7_soak_tick = _is_u7_soak_tick_diff(
         changed,
         file_texts=file_texts,
         diff_text=diff_text,
@@ -859,7 +969,7 @@ def _repository_content_findings(
     if (
         watcher_changed
         or "mnemos/importer/operator.py" in changed
-        or ("mnemos/cli.py" in changed and not u66_inner_life)
+        or ("mnemos/cli.py" in changed and not (u66_inner_life or u7_soak_tick))
         or "tests/test_u3c_pai_watch_doctor.py" in changed
     ):
         findings.extend(
@@ -1356,6 +1466,91 @@ def _repository_content_findings(
             )
         )
 
+    if u7_soak_tick and any(path.startswith("mnemos/soak/") for path in changed):
+        findings.extend(
+            _missing_required_proofs(
+                surface="U7 soak tick orchestrator",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u7-soak-tick-disabled",
+                        "disabled tick skips without memory or beliefs",
+                        "tests/test_soak_tick.py",
+                        (
+                            (
+                                "test_soak_tick_disabled_skips_without_memory_or_beliefs",
+                                soak_tick_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u7-soak-tick-shallow-only",
+                        "shallow consolidation family excludes deep passes",
+                        "tests/test_soak_tick.py",
+                        (
+                            (
+                                "test_soak_tick_runs_shallow_consolidation_family_without_deep_passes",
+                                soak_tick_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u7-soak-tick-inner-life-fanout",
+                        "inner-life family fanout runs through existing gate",
+                        "tests/test_soak_tick.py",
+                        (
+                            (
+                                "test_soak_tick_fans_out_inner_life_family_through_existing_gate",
+                                soak_tick_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u7-soak-tick-launchd-plist",
+                        "launchd plist invokes soak tick without loading",
+                        "tests/test_soak_tick.py",
+                        (
+                            (
+                                "test_soak_tick_launchd_plist_invokes_orchestrator_without_loading",
+                                soak_tick_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u7_soak_tick and (
+        changed & {"mnemos/config/defaults.py", "mnemos/inner_life/preflight.py"}
+    ):
+        findings.extend(
+            _missing_required_proofs(
+                surface="U7 soak tick preflight/config",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u7-soak-preflight-tick-disabled",
+                        "preflight blocks when the soak tick is disabled",
+                        "tests/test_inner_life_preflight.py",
+                        (("soak_tick_disabled", preflight_tests),),
+                    ),
+                    _ProofRequirement(
+                        "u7-soak-preflight-ready",
+                        "preflight ready requires enabled tick and shallow family",
+                        "tests/test_inner_life_preflight.py",
+                        (
+                            (
+                                "test_preflight_ready_when_enabled_snapshot_provider_and_kill_switches_exist",
+                                preflight_tests,
+                            ),
+                            ("soak_tick_enabled", preflight_tests),
+                            ("shallow_consolidation", preflight_tests),
+                        ),
+                    ),
+                ],
+            )
+        )
+
     if "mnemos/cli.py" in changed:
         if u66_inner_life:
             findings.extend(
@@ -1421,7 +1616,60 @@ def _repository_content_findings(
                     ],
                 )
             )
-        else:
+        if u7_soak_tick:
+            findings.extend(
+                _missing_required_proofs(
+                    surface="U7 soak tick CLI",
+                    severity="high",
+                    requirements=[
+                        _ProofRequirement(
+                            "u7-soak-cli-db-required",
+                            "representative DB required",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_soak_tick_cli_requires_representative_db",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u7-soak-cli-live-refusal",
+                            "live DB refusal",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_soak_tick_cli_refuses_default_live_db_without_override",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u7-soak-cli-disabled-tick",
+                            "disabled tick reports no memory writes",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_soak_tick_cli_reports_disabled_tick_without_memory",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u7-soak-cli-plist",
+                            "plist CLI writes orchestrator artifact without loading",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_soak_plist_cli_writes_orchestrator_without_loading",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                    ],
+                )
+            )
+        if not (u66_inner_life or u7_soak_tick):
             findings.extend(
                 _missing_required_proofs(
                     surface="mnemos/cli.py",
@@ -2631,6 +2879,7 @@ def _files_needed_for_review(changed_files: Sequence[str]) -> set[str]:
             "tests/test_u3c_pai_watch_doctor.py",
             "tests/test_u3c_pai_watcher.py",
             "tests/test_session_finalizer.py",
+            "tests/test_soak_tick.py",
             "tests/test_turn_finalizer.py",
         }
     )

@@ -456,3 +456,113 @@ def test_inner_life_preflight_cli_does_not_create_missing_db(tmp_path, capsys):
     assert "DB exists:             False" in out
     assert "Blocker: db_missing" in out
     assert not db.exists()
+
+
+def test_soak_tick_cli_requires_representative_db(capsys):
+    result = main(["soak", "tick", "--agent-id", "oliver"])
+    err = capsys.readouterr().err
+
+    assert result == 1
+    assert "mnemos soak requires --db-path" in err
+
+
+def test_soak_tick_cli_refuses_default_live_db_without_override(capsys):
+    result = main(
+        [
+            "soak",
+            "tick",
+            "--db-path",
+            str(Path("~/.mnemos/memory.db").expanduser()),
+            "--agent-id",
+            "oliver",
+        ]
+    )
+    err = capsys.readouterr().err
+
+    assert result == 1
+    assert "mnemos soak refuses live Mnemos databases" in err
+
+
+def test_soak_tick_cli_reports_disabled_tick_without_memory(tmp_path, capsys):
+    db = tmp_path / "soak-cli.db"
+    EngramStore(db).close()
+
+    result = main(
+        [
+            "soak",
+            "tick",
+            "--db-path",
+            str(db),
+            "--agent-id",
+            "oliver",
+            "--person-id",
+            "david",
+            "--project-scope",
+            "pai",
+            "--rollout-tag",
+            "u7-test",
+            "--run-id",
+            "cli-disabled",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert result == 0
+    assert "Soak scheduled tick" in out
+    assert "Status:        skipped" in out
+    assert "Reason:        soak_tick_disabled" in out
+    assert "Families ran:  0" in out
+
+    store = EngramStore(db)
+    try:
+        assert store.count_engrams(agent_id="oliver") == 0
+        assert store.get_beliefs(agent_id="oliver") == []
+    finally:
+        store.close()
+
+
+def test_soak_plist_cli_writes_orchestrator_without_loading(tmp_path, capsys):
+    db = tmp_path / "soak-plist-cli.db"
+    EngramStore(db).close()
+    plist = tmp_path / "com.davidef.mnemos.soak.tick.plist"
+    artifact_dir = tmp_path / "artifacts"
+
+    result = main(
+        [
+            "soak",
+            "plist",
+            "--plist",
+            str(plist),
+            "--db-path",
+            str(db),
+            "--agent-id",
+            "oliver",
+            "--person-id",
+            "david",
+            "--project-scope",
+            "pai",
+            "--rollout-tag",
+            "u7-test",
+            "--interval-seconds",
+            "900",
+            "--artifact-dir",
+            str(artifact_dir),
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert result == 0
+    assert "Soak tick launchd plist" in out
+    assert "Loaded:        false" in out
+    assert plist.exists()
+    payload = plistlib.loads(plist.read_bytes())
+    args = payload["ProgramArguments"]
+    assert args[:5] == [
+        str(Path.cwd() / ".venv" / "bin" / "python3"),
+        "-m",
+        "mnemos.cli",
+        "soak",
+        "tick",
+    ]
+    assert "--allow-live-db" not in args
+    assert payload["StartInterval"] == 900

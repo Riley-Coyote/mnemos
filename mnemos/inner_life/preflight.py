@@ -7,6 +7,7 @@ from typing import Any
 
 
 PROCESS_FAMILIES = ("challenge", "observe", "affect", "reflect", "wander", "dream")
+SOAK_FAMILIES = ("shallow_consolidation",)
 
 
 def build_inner_life_preflight(
@@ -17,6 +18,9 @@ def build_inner_life_preflight(
 ) -> dict[str, Any]:
     """Summarize whether full scheduled inner-life activation is configured."""
     inner_life = config.get("inner_life", {})
+    soak = config.get("soak", {})
+    soak_tick = soak.get("tick", {})
+    soak_families = soak.get("families", {})
     schedules = inner_life.get("schedules", {})
     schedule_processes = schedules.get("processes", {})
     activity_gate = inner_life.get("activity_gate", {})
@@ -29,10 +33,20 @@ def build_inner_life_preflight(
         for process in PROCESS_FAMILIES
         if process not in schedule_processes or "enabled" not in schedule_processes[process]
     ]
+    missing_soak_family_switches = [
+        family
+        for family in SOAK_FAMILIES
+        if family not in soak_families or "enabled" not in soak_families[family]
+    ]
     disabled_schedule_processes = [
         process
         for process in PROCESS_FAMILIES
         if not bool(schedule_processes.get(process, {}).get("enabled", False))
+    ]
+    disabled_soak_families = [
+        family
+        for family in SOAK_FAMILIES
+        if not bool(soak_families.get(family, {}).get("enabled", False))
     ]
     missing_activity_switches = [
         process
@@ -48,9 +62,18 @@ def build_inner_life_preflight(
     expanded_db_path = Path(db_path).expanduser()
     snapshot_path = _expand_optional_path(activation.get("pre_soak_snapshot_path"))
     schedules_enabled = bool(schedules.get("enabled", False))
+    soak_tick_enabled = bool(soak_tick.get("enabled", False))
     blockers: list[str] = []
     if not expanded_db_path.exists():
         blockers.append("db_missing")
+    if "enabled" not in soak_tick:
+        blockers.append("missing_soak_tick_kill_switch")
+    if not soak_tick_enabled:
+        blockers.append("soak_tick_disabled")
+    if missing_soak_family_switches:
+        blockers.append("missing_soak_family_kill_switch")
+    if disabled_soak_families:
+        blockers.append("soak_family_disabled")
     if not schedules_enabled:
         blockers.append("inner_life_schedules_disabled")
     if missing_schedule_switches:
@@ -79,8 +102,17 @@ def build_inner_life_preflight(
     label_prefix = str(
         activation.get("label_prefix") or "com.davidef.mnemos.innerlife"
     )
+    soak_artifact_dir = Path(
+        soak_tick.get("artifact_dir") or "~/.mnemos/soak"
+    ).expanduser()
+    soak_plist_dir = Path(
+        soak_tick.get("plist_dir") or "~/Library/LaunchAgents"
+    ).expanduser()
+    soak_label = str(soak_tick.get("label") or "com.davidef.mnemos.soak.tick")
     halt_marker = Path(
-        activation.get("halt_marker_path") or "~/.mnemos/full-soak.halt"
+        soak_tick.get("halt_marker_path")
+        or activation.get("halt_marker_path")
+        or "~/.mnemos/full-soak.halt"
     ).expanduser()
 
     return {
@@ -88,6 +120,7 @@ def build_inner_life_preflight(
         "blockers": blockers,
         "db_path": str(expanded_db_path),
         "db_exists": expanded_db_path.exists(),
+        "soak_tick_enabled": soak_tick_enabled,
         "schedules_enabled": schedules_enabled,
         "provider_readiness": provider,
         "pre_soak_snapshot": {
@@ -98,6 +131,10 @@ def build_inner_life_preflight(
             "artifact_dir": str(artifact_dir),
             "plist_dir": str(plist_dir),
             "label_prefix": label_prefix,
+            "soak_tick_artifact_dir": str(soak_artifact_dir),
+            "soak_tick_plist_dir": str(soak_plist_dir),
+            "soak_tick_label": soak_label,
+            "soak_tick_plist_path": str(soak_plist_dir / f"{soak_label}.plist"),
             "halt_marker_path": str(halt_marker),
         },
         "rollback": {
@@ -106,6 +143,19 @@ def build_inner_life_preflight(
         },
         "missing_schedule_switches": missing_schedule_switches,
         "disabled_schedule_processes": disabled_schedule_processes,
+        "missing_soak_family_switches": missing_soak_family_switches,
+        "disabled_soak_families": disabled_soak_families,
+        "soak_families": {
+            family: {
+                "scheduled": bool(soak_families.get(family, {}).get("enabled", False)),
+                "cadence_minutes": soak_families.get(family, {}).get("cadence_minutes"),
+                "kill_switches": [
+                    "soak.tick.enabled",
+                    f"soak.families.{family}.enabled",
+                ],
+            }
+            for family in SOAK_FAMILIES
+        },
         "missing_activity_switches": missing_activity_switches,
         "disabled_activity_processes": disabled_activity_processes,
         "processes": {

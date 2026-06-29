@@ -134,6 +134,14 @@ def test_inner_life_run_cli_executes_scheduled_affect_without_memory():
     assert True
 def test_inner_life_plist_cli_writes_without_loading():
     assert True
+def test_soak_tick_cli_requires_representative_db():
+    assert True
+def test_soak_tick_cli_refuses_default_live_db_without_override():
+    assert True
+def test_soak_tick_cli_reports_disabled_tick_without_memory():
+    assert True
+def test_soak_plist_cli_writes_orchestrator_without_loading():
+    assert True
 """
 
 GOOD_ACTIVITY_GATE_TESTS = """
@@ -203,8 +211,11 @@ def test_inner_life_ledger_migrates_schema_five_copy_without_touching_memory():
 GOOD_INNER_LIFE_PREFLIGHT_TESTS = """
 def test_preflight_enabled_schedules_require_snapshot_and_provider_readiness():
     assert True
+    assert "soak_tick_disabled"
 def test_preflight_ready_when_enabled_snapshot_provider_and_kill_switches_exist():
     assert True
+    assert "soak_tick_enabled"
+    assert "shallow_consolidation"
 """
 
 GOOD_INNER_LIFE_SCHEDULER_TESTS = """
@@ -215,6 +226,17 @@ def test_scheduled_runner_affect_runs_after_activity_gate_without_memory_write()
 def test_scheduled_runner_observe_skips_without_reviewers_or_memory_write():
     assert True
 def test_inner_life_launchd_plist_invokes_scheduled_runner_without_loading():
+    assert True
+"""
+
+GOOD_SOAK_TICK_TESTS = """
+def test_soak_tick_disabled_skips_without_memory_or_beliefs():
+    assert True
+def test_soak_tick_runs_shallow_consolidation_family_without_deep_passes():
+    assert True
+def test_soak_tick_fans_out_inner_life_family_through_existing_gate():
+    assert True
+def test_soak_tick_launchd_plist_invokes_orchestrator_without_loading():
     assert True
 """
 
@@ -279,6 +301,7 @@ def _file_texts(**overrides):
         "tests/test_u3c_pai_watcher.py": GOOD_WATCHER_TESTS,
         "tests/test_observer_panel.py": GOOD_OBSERVER_PANEL_TESTS,
         "tests/test_session_finalizer.py": GOOD_SESSION_FINALIZER_TESTS,
+        "tests/test_soak_tick.py": GOOD_SOAK_TICK_TESTS,
         "tests/test_turn_finalizer.py": GOOD_TURN_FINALIZER_TESTS,
     }
     base.update(overrides)
@@ -735,6 +758,74 @@ def test_u3c_review_gate_accepts_u66_preflight_scheduler_with_matching_proofs():
     assert findings == []
 
 
+def test_u3c_review_gate_accepts_u7_soak_tick_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/cli.py",
+            "mnemos/config/defaults.py",
+            "mnemos/importer/review_gate.py",
+            "mnemos/inner_life/preflight.py",
+            "mnemos/soak/__init__.py",
+            "mnemos/soak/tick.py",
+            "tests/test_cli_simple.py",
+            "tests/test_inner_life_preflight.py",
+            "tests/test_soak_tick.py",
+            "tests/test_u3c_pai_review_gate.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/cli.py": "soak tick inner-life u6.6 u7",
+                "mnemos/config/defaults.py": "soak tick inner_life activation u6.6 u7",
+                "mnemos/importer/review_gate.py": "u7-soak-tick",
+                "mnemos/inner_life/preflight.py": "scheduled tick orchestrator U7 inner_life preflight",
+                "mnemos/soak/tick.py": "U7 soak scheduled tick orchestrator inner_life",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/soak/tick.py b/mnemos/soak/tick.py\n"
+            "@@\n"
+            "+# U7 soak scheduled tick orchestrator\n"
+            "diff --git a/mnemos/cli.py b/mnemos/cli.py\n"
+            "@@\n"
+            '+p_soak = sub.add_parser("soak")\n'
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u7_soak_tick_without_launchd_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/soak/tick.py",
+            "tests/test_soak_tick.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/soak/tick.py": "U7 soak scheduled tick orchestrator inner_life",
+                "tests/test_soak_tick.py": """
+def test_soak_tick_disabled_skips_without_memory_or_beliefs():
+    assert True
+def test_soak_tick_runs_shallow_consolidation_family_without_deep_passes():
+    assert True
+def test_soak_tick_fans_out_inner_life_family_through_existing_gate():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/soak/tick.py b/mnemos/soak/tick.py\n"
+            "@@\n"
+            "+# U7 soak scheduled tick orchestrator\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u7-soak-tick-launchd-plist"
+        for finding in findings
+    )
+
+
 def test_u3c_review_gate_fails_u66_scheduler_without_plist_proof():
     findings = _findings(
         changed_files=[
@@ -805,7 +896,7 @@ def test_u3c_review_gate_rule_signature():
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
-    assert digest == "9493eb6c31f26011e4a3ad84e701fee49bb2c71dd2a45eff9c266b7e0e52c3ba"
+    assert digest == "32dbeb25a678c009a5fbef8752c60ebd27a17cf4af384b31ab184accdae38986"
 
 
 def test_u3c_review_gate_fails_watcher_change_without_test_diff():

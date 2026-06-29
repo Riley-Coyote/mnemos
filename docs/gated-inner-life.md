@@ -29,6 +29,8 @@ and autonomous scheduled writes still require explicit David authorization.
 | `emotional_driver.py` | Computes private affect weather from real events; does not journal affect prose. |
 | `narrative_gate.py` | Drops null, ungrounded, manufactured, rejected, or metrics-only generated candidates. |
 | `low_stakes.py` | Writes private low-confidence generated engrams with rollout tags and source IDs. |
+| `scheduler.py` | Runs one process behind the activity gate and writes launchd plists without loading them. |
+| `preflight.py` | Reports DB, schedule, provider, snapshot, launchd, kill-switch, and rollback readiness. |
 | `consolidation/reflection.py` | Gates generated reflection thoughts while preserving graph-derived `IdentityProfile`. |
 | `substrate/handlers/wandering.py` | Keeps authorized source filtering and writes passed wandering only as low-stakes memory. |
 | `substrate/handlers/dreaming.py` | Recombines real engrams only; metrics-only dream output is dropped. |
@@ -38,6 +40,16 @@ and autonomous scheduled writes still require explicit David authorization.
 All `inner-life` commands require `--db-path`. They refuse `~/.mnemos`
 databases unless `--allow-live-db` is supplied, and live use of that override is
 reserved for explicit David authorization.
+
+During branch validation, use the repo-local command:
+
+```bash
+uv run --extra dev mnemos inner-life ...
+```
+
+Do not rely on a globally installed `mnemos`; it can be stale relative to this
+branch. Generated launchd plists pin this repository's `.venv/bin/python3` and
+invoke `-m mnemos.cli inner-life run`.
 
 ```bash
 mnemos inner-life session-finalize \
@@ -64,6 +76,28 @@ mnemos inner-life turn-finalize \
 mnemos inner-life activity-gate \
   --db-path /tmp/mnemos-copy.db \
   --process reflect \
+  --agent-id oliver \
+  --person-id david \
+  --project-scope pai
+```
+
+```bash
+mnemos inner-life run \
+  --db-path /tmp/mnemos-copy.db \
+  --process affect \
+  --agent-id oliver \
+  --person-id david \
+  --project-scope pai \
+  --rollout-tag u6.6
+```
+
+```bash
+mnemos inner-life plist \
+  --db-path /tmp/mnemos-copy.db \
+  --process affect \
+  --plist /tmp/com.davidef.mnemos.innerlife.affect.plist \
+  --interval-seconds 3600 \
+  --artifact-dir /tmp/mnemos-inner-life \
   --agent-id oliver \
   --person-id david \
   --project-scope pai
@@ -99,6 +133,21 @@ for `challenge`, `observe`, `affect`, `reflect`, `wander`, and `dream`. The
 activity gate also carries per-family `enabled` switches. `inner-life preflight`
 reports missing or disabled switches before U7 can load schedules.
 
+When schedules are enabled, preflight also blocks on:
+
+- missing pre-soak DB snapshot path or file;
+- unavailable LLM provider when provider-backed processes are required;
+- missing observer reviewer count when observer review is required;
+- missing per-family kill switches.
+
+It also reports the launchd artifact directory, plist directory, halt marker,
+per-process plist path, and rollback commands so U7 can review the exact
+activation and backout surface before anything is loaded.
+
+`inner-life plist` only writes plist files. It does not call `launchctl`, does
+not bootstrap schedules, and prints `Loaded: false`. U7 live launch remains a
+DAVID-AUTH gate.
+
 Generated memory writes should be:
 
 - tagged `u6.6`, `generated`, `low-stakes`, and `rollout:<tag>`;
@@ -126,10 +175,12 @@ The focused U6.6 suite covers:
 - challenge, observer, and affect safety boundaries;
 - narrative gate null, source, manufactured, introspection, and metrics-only
   drops;
+- scheduled runner activity-gate skip/run behavior and launchd plist static
+  readiness;
 - low-stakes writer privacy, idempotency, and non-promotion invariants;
 - gated reflection, wandering, and dream persistence;
-- CLI live DB refusal, activity-gate preflight, activation preflight, and
-  telemetry status;
+- CLI live DB refusal, activity-gate preflight, scheduled run, plist writing,
+  activation preflight, and telemetry status;
 - existing dream journal separation.
 
 ## Enforcement Links
@@ -143,5 +194,6 @@ Enforcement lives in the implementation and tests, not in this document:
 - `mnemos/substrate/handlers/dreaming.py` with `tests/test_gated_dreaming.py`;
 - `mnemos/cli.py` with `tests/test_cli_simple.py`;
 - `mnemos/inner_life/preflight.py` with `tests/test_inner_life_preflight.py`;
+- `mnemos/inner_life/scheduler.py` with `tests/test_inner_life_scheduler.py`;
 - `mnemos/store/migrations.py` and `mnemos/store/sqlite_store.py` with
   `tests/test_inner_life_ledger.py` and `tests/test_u3a_schema_migrations.py`.

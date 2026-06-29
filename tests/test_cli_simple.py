@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import plistlib
 
 from mnemos.cli import main
 from mnemos.store.sqlite_store import EngramStore
@@ -232,6 +233,116 @@ def test_inner_life_activity_gate_cli_records_preflight_without_memory(tmp_path,
         assert store.count_engrams(agent_id="oliver") == 0
     finally:
         store.close()
+
+
+def test_inner_life_run_cli_executes_scheduled_affect_without_memory(tmp_path, capsys):
+    db = tmp_path / "inner-life-run.db"
+    store = EngramStore(db)
+    try:
+        store.upsert_inner_life_event(
+            idempotency_key="turn:session-cli:run",
+            event_type="turn_finalized",
+            process_name="turn-finalizer",
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            session_id="session-cli",
+            turn_id="run",
+            content_hash="hash",
+            content_excerpt="USER: continue\nASSISTANT: verified",
+            event_tags=["u6.6", "turn-event"],
+            rollout_tag="u6.6-test",
+            gate_decision="ledger_only",
+            metadata={"writes_memory": False},
+        )
+    finally:
+        store.close()
+
+    result = main(
+        [
+            "inner-life",
+            "run",
+            "--process",
+            "affect",
+            "--db-path",
+            str(db),
+            "--agent-id",
+            "oliver",
+            "--person-id",
+            "david",
+            "--project-scope",
+            "pai",
+            "--rollout-tag",
+            "u6.6-test",
+            "--run-id",
+            "cli-affect",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert result == 0
+    assert "Inner-life scheduled run" in out
+    assert "Status:        ran" in out
+    assert "Gate:          run" in out
+    assert "Memory writes: 0" in out
+
+    store = EngramStore(db)
+    try:
+        assert store.get_latest_emotional_state("oliver") is not None
+        assert store.count_engrams(agent_id="oliver") == 0
+        assert store.get_beliefs(agent_id="oliver") == []
+    finally:
+        store.close()
+
+
+def test_inner_life_plist_cli_writes_without_loading(tmp_path, capsys):
+    db = tmp_path / "inner-life-plist.db"
+    EngramStore(db).close()
+    plist = tmp_path / "com.davidef.mnemos.innerlife.affect.plist"
+    artifact_dir = tmp_path / "artifacts"
+
+    result = main(
+        [
+            "inner-life",
+            "plist",
+            "--process",
+            "affect",
+            "--plist",
+            str(plist),
+            "--db-path",
+            str(db),
+            "--agent-id",
+            "oliver",
+            "--person-id",
+            "david",
+            "--project-scope",
+            "pai",
+            "--rollout-tag",
+            "u6.6-test",
+            "--interval-seconds",
+            "3600",
+            "--artifact-dir",
+            str(artifact_dir),
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert result == 0
+    assert "Inner-life launchd plist" in out
+    assert "Loaded:        false" in out
+    assert plist.exists()
+    payload = plistlib.loads(plist.read_bytes())
+    args = payload["ProgramArguments"]
+    assert args[:5] == [
+        str(Path.cwd() / ".venv" / "bin" / "python3"),
+        "-m",
+        "mnemos.cli",
+        "inner-life",
+        "run",
+    ]
+    assert "--allow-live-db" not in args
+    assert payload["StartInterval"] == 3600
+    assert payload["RunAtLoad"] is True
 
 
 def test_inner_life_status_cli_summarizes_rollout_telemetry(tmp_path, capsys):

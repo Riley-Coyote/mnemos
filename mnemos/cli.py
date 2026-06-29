@@ -25,6 +25,8 @@ Commands:
     mnemos inner-life session-finalize  Finalize transcript provenance below memory
     mnemos inner-life turn-finalize     Finalize one turn provenance row below memory
     mnemos inner-life activity-gate     Preflight one gated process on a DB copy
+    mnemos inner-life run               Run one scheduled process behind gates
+    mnemos inner-life plist             Write, but do not load, one launchd plist
     mnemos inner-life preflight         Inspect full scheduled activation blockers
     mnemos inner-life status            Summarize gated inner-life telemetry
     mnemos remember CONTENT      Capture durable continuity from the CLI
@@ -559,6 +561,52 @@ def main(argv: list[str] | None = None) -> int:
         "--allow-live-db",
         action="store_true",
         help="Allow ~/.mnemos databases; requires explicit David authorization in live use",
+    )
+    p_inner_run = inner_sub.add_parser(
+        "run",
+        help="Run one scheduled U6.6 process behind the activity gate",
+    )
+    p_inner_run.add_argument(
+        "--process",
+        required=True,
+        choices=("challenge", "observe", "affect", "reflect", "wander", "dream"),
+        help="Inner-life process family to run",
+    )
+    p_inner_run.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
+    p_inner_run.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_inner_run.add_argument("--person-id", default=None, help="Person/user scope")
+    p_inner_run.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_inner_run.add_argument("--rollout-tag", default="u6.6", help="Rollout tag for written rows")
+    p_inner_run.add_argument("--run-id", default=None, help="Optional idempotency key suffix")
+    p_inner_run.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos databases; requires explicit David authorization in live use",
+    )
+    p_inner_plist = inner_sub.add_parser(
+        "plist",
+        help="Write a launchd plist for one scheduled U6.6 process without loading it",
+    )
+    p_inner_plist.add_argument(
+        "--process",
+        required=True,
+        choices=("challenge", "observe", "affect", "reflect", "wander", "dream"),
+        help="Inner-life process family to schedule",
+    )
+    p_inner_plist.add_argument("--plist", required=True, help="Output launchd plist path")
+    p_inner_plist.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
+    p_inner_plist.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_inner_plist.add_argument("--person-id", default=None, help="Person/user scope")
+    p_inner_plist.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_inner_plist.add_argument("--rollout-tag", default="u6.6", help="Rollout tag for scheduled rows")
+    p_inner_plist.add_argument("--interval-seconds", type=int, default=None)
+    p_inner_plist.add_argument("--artifact-dir", default=None, help="Directory for launchd logs")
+    p_inner_plist.add_argument("--label", default=None, help="launchd label")
+    p_inner_plist.add_argument("--python", default=None, help="Python executable for launchd")
+    p_inner_plist.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Include --allow-live-db in generated ProgramArguments; requires David authorization in live use",
     )
     p_inner_status = inner_sub.add_parser(
         "status",
@@ -1192,12 +1240,14 @@ def _cmd_inner_life(args: argparse.Namespace) -> int:
         "session-finalize",
         "turn-finalize",
         "activity-gate",
+        "run",
+        "plist",
         "preflight",
         "status",
     }:
         print(
             "Usage: mnemos inner-life "
-            "{session-finalize|turn-finalize|activity-gate|preflight|status}",
+            "{session-finalize|turn-finalize|activity-gate|run|plist|preflight|status}",
             file=sys.stderr,
         )
         return 1
@@ -1233,6 +1283,22 @@ def _cmd_inner_life(args: argparse.Namespace) -> int:
             print(f"DB exists:             {preflight['db_exists']}")
             print(f"Schedules enabled:     {preflight['schedules_enabled']}")
             print(
+                "LLM provider:          "
+                f"{preflight['provider_readiness']['llm_provider'] or '(none)'}"
+            )
+            print(
+                "Observer reviewers:    "
+                f"{preflight['provider_readiness']['observer_reviewer_count']}"
+            )
+            print(
+                "Pre-soak snapshot:     "
+                f"{preflight['pre_soak_snapshot']['path'] or '(unset)'} "
+                f"exists={preflight['pre_soak_snapshot']['exists']}"
+            )
+            print(f"Launchd artifact dir:  {preflight['launchd']['artifact_dir']}")
+            print(f"Launchd plist dir:     {preflight['launchd']['plist_dir']}")
+            print(f"Halt marker:           {preflight['launchd']['halt_marker_path']}")
+            print(
                 "Full scheduled activation: "
                 f"{'ready' if preflight['ready_for_full_scheduled_activation'] else 'blocked'}"
             )
@@ -1244,9 +1310,49 @@ def _cmd_inner_life(args: argparse.Namespace) -> int:
                     f"scheduled={details['scheduled']} "
                     f"activity_gate={details['activity_gate']} "
                     f"cadence={details['cadence_minutes']} "
-                    f"cooldown={details['cooldown_minutes']}"
+                    f"cooldown={details['cooldown_minutes']} "
+                    f"plist={details['plist_path']}"
                 )
             return 0 if preflight["ready_for_full_scheduled_activation"] else 2
+
+        if command == "plist":
+            from .inner_life.scheduler import write_inner_life_launchd_plist
+
+            config = load_config()
+            activation = config.get("inner_life", {}).get("activation", {})
+            schedules = config.get("inner_life", {}).get("schedules", {}).get(
+                "processes",
+                {},
+            )
+            interval_seconds = args.interval_seconds
+            if interval_seconds is None:
+                cadence = schedules.get(args.process, {}).get("cadence_minutes", 60)
+                interval_seconds = int(cadence) * 60
+            artifact_dir = args.artifact_dir or activation.get(
+                "artifact_dir",
+                "~/.mnemos/inner-life",
+            )
+            plist = write_inner_life_launchd_plist(
+                plist_path=args.plist,
+                process_name=args.process,
+                db_path=db_path,
+                agent_id=getattr(args, "agent_id", None) or _resolve_agent_id(args),
+                person_id=args.person_id or "user",
+                project_scope=args.project_scope or "global",
+                rollout_tag=args.rollout_tag,
+                interval_seconds=interval_seconds,
+                artifact_dir=artifact_dir,
+                label=args.label,
+                python_executable=args.python,
+                allow_live_db=args.allow_live_db,
+            )
+            print("Inner-life launchd plist")
+            print("------------------------")
+            print(f"Process:       {args.process}")
+            print(f"Plist:         {plist}")
+            print(f"Interval:      {interval_seconds}s")
+            print("Loaded:        false")
+            return 0
 
         store = _get_store(args)
         try:
@@ -1327,6 +1433,35 @@ def _cmd_inner_life(args: argparse.Namespace) -> int:
                 print(f"Sources:       {len(decision.get('source_ids', []))}")
                 print(f"Cooldown until: {decision.get('cooldown_until') or ''}")
                 print("Memory writes: 0")
+                return 0
+            if command == "run":
+                from .inner_life.scheduler import run_scheduled_inner_life_process
+                from .llm import create_client
+
+                llm_client = create_client() if args.process in {"reflect", "wander", "dream"} else None
+                result = run_scheduled_inner_life_process(
+                    store,
+                    process_name=args.process,
+                    config=load_config(),
+                    agent_id=agent_id,
+                    person_id=person_id,
+                    project_scope=project_scope,
+                    rollout_tag=args.rollout_tag,
+                    run_id=args.run_id,
+                    llm_client=llm_client,
+                )
+                print("Inner-life scheduled run")
+                print("------------------------")
+                print(f"Process:       {args.process}")
+                print(f"DB:            {Path(db_path).expanduser()}")
+                print(f"Status:        {result.get('status')}")
+                print(f"Gate:          {result.get('gate_decision')}")
+                print(f"Reason:        {result.get('reason')}")
+                print(f"Signals:       {result.get('signal_count', 0)}")
+                print(f"Memory writes: {result.get('generated_memory_writes', 0)}")
+                print(f"Belief writes: {result.get('belief_writes', 0)}")
+                print(f"Identity patches: {result.get('identity_patches', 0)}")
+                print(f"Shared-pool writes: {result.get('shared_pool_writes', 0)}")
                 return 0
             rows = store.get_inner_life_events(
                 agent_id=agent_id,

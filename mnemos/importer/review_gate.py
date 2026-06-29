@@ -33,6 +33,7 @@ _U6_6_INNER_LIFE_MARKERS = (
 )
 _U6_6_INNER_LIFE_SURFACE_FILES = {
     "mnemos/cli.py",
+    "mnemos/config/defaults.py",
     "mnemos/store/migrations.py",
     "mnemos/store/sqlite_store.py",
 }
@@ -63,6 +64,16 @@ _U6_6_INNER_LIFE_EMOTIONAL_TEST_FILES = {
 }
 _U6_6_INNER_LIFE_NARRATIVE_TEST_FILES = {
     "tests/test_narrative_gate.py",
+}
+_U6_6_INNER_LIFE_PREFLIGHT_FILES = {
+    "mnemos/config/defaults.py",
+    "mnemos/inner_life/preflight.py",
+}
+_U6_6_INNER_LIFE_PREFLIGHT_TEST_FILES = {
+    "tests/test_inner_life_preflight.py",
+}
+_U6_6_INNER_LIFE_SCHEDULER_TEST_FILES = {
+    "tests/test_inner_life_scheduler.py",
 }
 
 
@@ -336,6 +347,8 @@ def _proof_surface_findings(
         observer_touched = "mnemos/inner_life/observer_panel.py" in changed
         emotional_touched = "mnemos/inner_life/emotional_driver.py" in changed
         narrative_touched = "mnemos/inner_life/narrative_gate.py" in changed
+        preflight_touched = bool(changed & _U6_6_INNER_LIFE_PREFLIGHT_FILES)
+        scheduler_touched = "mnemos/inner_life/scheduler.py" in changed
         if schema_touched and not (
             _U6_6_INNER_LIFE_SCHEMA_TEST_FILES <= changed
         ):
@@ -444,6 +457,34 @@ def _proof_surface_findings(
                     file="mnemos/inner_life/narrative_gate.py",
                     description="U6.6 narrative gate changed without narrative-gate regression tests in the diff",
                     required_proof="tests/test_narrative_gate.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if preflight_touched and not (
+            changed & _U6_6_INNER_LIFE_PREFLIGHT_TEST_FILES
+        ):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file=", ".join(sorted(changed & _U6_6_INNER_LIFE_PREFLIGHT_FILES)),
+                    description="U6.6 inner-life preflight/config changed without preflight regression tests in the diff",
+                    required_proof="tests/test_inner_life_preflight.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if scheduler_touched and not (
+            changed & _U6_6_INNER_LIFE_SCHEDULER_TEST_FILES
+        ):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/inner_life/scheduler.py",
+                    description="U6.6 inner-life scheduled runner changed without scheduler regression tests in the diff",
+                    required_proof="tests/test_inner_life_scheduler.py appears in this diff",
                     status="missing",
                     action="must-test",
                 )
@@ -774,6 +815,8 @@ def _repository_content_findings(
     review_gate_tests = file_texts.get("tests/test_u3c_pai_review_gate.py", "")
     cli_simple_tests = file_texts.get("tests/test_cli_simple.py", "")
     activity_gate_tests = file_texts.get("tests/test_inner_life_activity_gate.py", "")
+    preflight_tests = file_texts.get("tests/test_inner_life_preflight.py", "")
+    scheduler_tests = file_texts.get("tests/test_inner_life_scheduler.py", "")
     hypomnema_challenge_tests = file_texts.get("tests/test_hypomnema_challenge.py", "")
     observer_panel_tests = file_texts.get("tests/test_observer_panel.py", "")
     emotional_driver_tests = file_texts.get("tests/test_emotional_driver.py", "")
@@ -1227,6 +1270,92 @@ def _repository_content_findings(
             )
         )
 
+    if u66_inner_life and (changed & _U6_6_INNER_LIFE_PREFLIGHT_FILES):
+        findings.extend(
+            _missing_required_proofs(
+                surface="U6.6 full-scheduled preflight",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u66-preflight-provider-snapshot-blockers",
+                        "enabled schedules require snapshot and provider readiness",
+                        "tests/test_inner_life_preflight.py",
+                        (
+                            (
+                                "test_preflight_enabled_schedules_require_snapshot_and_provider_readiness",
+                                preflight_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-preflight-ready-with-snapshot-provider",
+                        "preflight goes green only with snapshot, provider, and kill switches",
+                        "tests/test_inner_life_preflight.py",
+                        (
+                            (
+                                "test_preflight_ready_when_enabled_snapshot_provider_and_kill_switches_exist",
+                                preflight_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u66_inner_life and "mnemos/inner_life/scheduler.py" in changed:
+        findings.extend(
+            _missing_required_proofs(
+                surface="U6.6 scheduled inner-life runner",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u66-scheduler-activity-skip",
+                        "scheduled runner records activity-gate skips without memory",
+                        "tests/test_inner_life_scheduler.py",
+                        (
+                            (
+                                "test_scheduled_runner_activity_gate_skip_writes_no_memory",
+                                scheduler_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-scheduler-affect-run",
+                        "scheduled affect runs after activity gate without memory writes",
+                        "tests/test_inner_life_scheduler.py",
+                        (
+                            (
+                                "test_scheduled_runner_affect_runs_after_activity_gate_without_memory_write",
+                                scheduler_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-scheduler-reviewer-backed-skip",
+                        "reviewer-backed scheduled families skip without memory when reviewers are absent",
+                        "tests/test_inner_life_scheduler.py",
+                        (
+                            (
+                                "test_scheduled_runner_observe_skips_without_reviewers_or_memory_write",
+                                scheduler_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-scheduler-launchd-plist",
+                        "launchd plist invokes inner-life run without loading",
+                        "tests/test_inner_life_scheduler.py",
+                        (
+                            (
+                                "test_inner_life_launchd_plist_invokes_scheduled_runner_without_loading",
+                                scheduler_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
     if "mnemos/cli.py" in changed:
         if u66_inner_life:
             findings.extend(
@@ -1263,6 +1392,28 @@ def _repository_content_findings(
                             (
                                 (
                                     "test_inner_life_cli_refuses_default_live_db_without_override",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u66-inner-life-cli-run",
+                            "scheduled run CLI exercises a gated process without memory writes",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_inner_life_run_cli_executes_scheduled_affect_without_memory",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u66-inner-life-cli-plist",
+                            "plist CLI writes launchd artifact without loading",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_inner_life_plist_cli_writes_without_loading",
                                     cli_simple_tests,
                                 ),
                             ),
@@ -2467,6 +2618,8 @@ def _files_needed_for_review(changed_files: Sequence[str]) -> set[str]:
             "tests/test_cli_simple.py",
             "tests/test_inner_life_activity_gate.py",
             "tests/test_inner_life_ledger.py",
+            "tests/test_inner_life_preflight.py",
+            "tests/test_inner_life_scheduler.py",
             "tests/test_narrative_gate.py",
             "tests/test_observer_panel.py",
             "tests/test_u3b_pai_importer.py",

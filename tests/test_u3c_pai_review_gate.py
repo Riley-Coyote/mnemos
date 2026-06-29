@@ -130,6 +130,10 @@ def test_inner_life_cli_requires_representative_db():
     assert True
 def test_inner_life_cli_refuses_default_live_db_without_override():
     assert True
+def test_inner_life_run_cli_executes_scheduled_affect_without_memory():
+    assert True
+def test_inner_life_plist_cli_writes_without_loading():
+    assert True
 """
 
 GOOD_ACTIVITY_GATE_TESTS = """
@@ -196,6 +200,24 @@ def test_inner_life_ledger_migrates_schema_five_copy_without_touching_memory():
     assert True
 """
 
+GOOD_INNER_LIFE_PREFLIGHT_TESTS = """
+def test_preflight_enabled_schedules_require_snapshot_and_provider_readiness():
+    assert True
+def test_preflight_ready_when_enabled_snapshot_provider_and_kill_switches_exist():
+    assert True
+"""
+
+GOOD_INNER_LIFE_SCHEDULER_TESTS = """
+def test_scheduled_runner_activity_gate_skip_writes_no_memory():
+    assert True
+def test_scheduled_runner_affect_runs_after_activity_gate_without_memory_write():
+    assert True
+def test_scheduled_runner_observe_skips_without_reviewers_or_memory_write():
+    assert True
+def test_inner_life_launchd_plist_invokes_scheduled_runner_without_loading():
+    assert True
+"""
+
 GOOD_U3A_SCHEMA_TESTS = """
 SCHEMA_VERSION = 6
 def test_migration_version_guards():
@@ -244,6 +266,8 @@ def _file_texts(**overrides):
         "tests/test_hypomnema_challenge.py": GOOD_HYPO_CHALLENGE_TESTS,
         "tests/test_inner_life_activity_gate.py": GOOD_ACTIVITY_GATE_TESTS,
         "tests/test_inner_life_ledger.py": GOOD_INNER_LIFE_LEDGER_TESTS,
+        "tests/test_inner_life_preflight.py": GOOD_INNER_LIFE_PREFLIGHT_TESTS,
+        "tests/test_inner_life_scheduler.py": GOOD_INNER_LIFE_SCHEDULER_TESTS,
         "tests/test_narrative_gate.py": GOOD_NARRATIVE_GATE_TESTS,
         "tests/test_u3b_pai_importer.py": GOOD_IMPORTER_TESTS,
         "tests/test_u3b_pai_operator.py": GOOD_OPERATOR_TESTS,
@@ -682,6 +706,93 @@ def test_narrative_gate_passes_grounded_candidate_with_introspection():
     )
 
 
+def test_u3c_review_gate_accepts_u66_preflight_scheduler_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/config/defaults.py",
+            "mnemos/inner_life/preflight.py",
+            "mnemos/inner_life/scheduler.py",
+            "tests/test_inner_life_preflight.py",
+            "tests/test_inner_life_scheduler.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/config/defaults.py": "inner_life activation u6.6",
+                "mnemos/inner_life/preflight.py": "U6.6 inner_life preflight",
+                "mnemos/inner_life/scheduler.py": "U6.6 scheduled inner_life runner",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/preflight.py b/mnemos/inner_life/preflight.py\n"
+            "@@\n"
+            "+# U6.6 full scheduled activation preflight\n"
+            "diff --git a/mnemos/inner_life/scheduler.py b/mnemos/inner_life/scheduler.py\n"
+            "@@\n"
+            "+# U6.6 scheduled inner_life runner\n"
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u66_scheduler_without_plist_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/scheduler.py",
+            "tests/test_inner_life_scheduler.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/scheduler.py": "U6.6 scheduled inner_life runner",
+                "tests/test_inner_life_scheduler.py": """
+def test_scheduled_runner_activity_gate_skip_writes_no_memory():
+    assert True
+def test_scheduled_runner_affect_runs_after_activity_gate_without_memory_write():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/scheduler.py b/mnemos/inner_life/scheduler.py\n"
+            "@@\n"
+            "+# U6.6 scheduled inner_life runner\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-scheduler-launchd-plist"
+        for finding in findings
+    )
+
+
+def test_u3c_review_gate_fails_u66_preflight_without_provider_snapshot_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/preflight.py",
+            "tests/test_inner_life_preflight.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/preflight.py": "U6.6 inner_life preflight",
+                "tests/test_inner_life_preflight.py": """
+def test_preflight_ready_when_enabled_snapshot_provider_and_kill_switches_exist():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/preflight.py b/mnemos/inner_life/preflight.py\n"
+            "@@\n"
+            "+# U6.6 full scheduled activation preflight\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-preflight-provider-snapshot-blockers"
+        for finding in findings
+    )
+
+
 def test_u3c_review_gate_rule_signature():
     helpers = [
         (name, obj)
@@ -694,7 +805,7 @@ def test_u3c_review_gate_rule_signature():
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
-    assert digest == "750a8192309633e8c6d0d325d114031f2fba2a6e85a8ac71346955e941f80614"
+    assert digest == "9493eb6c31f26011e4a3ad84e701fee49bb2c71dd2a45eff9c266b7e0e52c3ba"
 
 
 def test_u3c_review_gate_fails_watcher_change_without_test_diff():

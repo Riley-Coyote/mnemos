@@ -165,6 +165,22 @@ DEFAULT_CONFIG: dict = {
                 "dream": {"enabled": False, "cadence_minutes": 1440},
             },
         },
+        "activation": {
+            "artifact_dir": "~/.mnemos/inner-life",
+            "plist_dir": "~/Library/LaunchAgents",
+            "label_prefix": "com.davidef.mnemos.innerlife",
+            "pre_soak_snapshot_path": "",
+            "halt_marker_path": "~/.mnemos/full-soak.halt",
+            "require_llm_provider": True,
+            "require_observer_reviewers": True,
+            "observer_reviewer_count": 0,
+            "rollback_commands": [
+                "set inner_life.schedules.enabled=false",
+                "launchctl bootout gui/$UID ~/Library/LaunchAgents/com.davidef.mnemos.innerlife.<process>.plist",
+                "verify mnemos inner-life status stops changing",
+                "restore pre-soak DB snapshot only if rollout-tagged writes contaminate retrieval or identity",
+            ],
+        },
     },
 
     # ── Multi-agent ──

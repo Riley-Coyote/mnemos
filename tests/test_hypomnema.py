@@ -101,6 +101,76 @@ class TestHypomnemaStore:
         assert inactive["active"] is False
         assert inactive["superseded_by"] == replacement_id
 
+    def test_supersede_hypomnema_preserves_read_visibility(self, store):
+        entry_id = store.write_hypomnema_entry(
+            "Review-only continuity claim",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            read_visibility="review_only",
+        )
+
+        replacement_id = store.supersede_hypomnema_entry(
+            entry_id,
+            "Replacement review-only continuity claim",
+            reason="better evidence",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+        )
+
+        replacement = store.get_hypomnema_entry(
+            replacement_id,
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+        )
+        operational = store.search_hypomnema(
+            "",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+        )
+        review = store.search_hypomnema(
+            "",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            read_visibility="review_only",
+        )
+
+        assert replacement["read_visibility"] == "review_only"
+        assert replacement_id not in [entry["id"] for entry in operational]
+        assert [entry["id"] for entry in review] == [replacement_id]
+
+    def test_hypomnema_upsert_preserves_existing_visibility_when_omitted(self, store):
+        entry_id = store.write_hypomnema_entry(
+            "Audit-only continuity claim",
+            entry_id="audit-continuity",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            read_visibility="audit_only",
+        )
+
+        store.write_hypomnema_entry(
+            "Updated audit-only continuity claim",
+            entry_id=entry_id,
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+        )
+
+        updated = store.get_hypomnema_entry(
+            entry_id,
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+        )
+
+        assert updated["read_visibility"] == "audit_only"
+        assert updated["revision_count"] == 1
+
     def test_promotion_candidates_require_stability_thresholds(self, store):
         low_id = store.write_hypomnema_entry(
             "Interesting but weak continuity",

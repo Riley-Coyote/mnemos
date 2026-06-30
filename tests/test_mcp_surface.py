@@ -173,6 +173,56 @@ def test_review_queue_opts_into_review_candidate_prose(monkeypatch, store):
     assert "Review queue must not disclose audit-only" not in output
 
 
+def test_functional_review_tools_exclude_audit_only_confirmation_prose(
+    monkeypatch,
+    store,
+):
+    from mnemos import mcp_server
+
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_ensure_store", lambda: store)
+    monkeypatch.setattr(mcp_server, "_setup_gate", lambda: None)
+    store.write_functional_memory(
+        "Functional tools may disclose review-only confirmation prose.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        memory_type="open_question",
+        needs_confirmation=True,
+        read_visibility="review_only",
+    )
+    store.write_functional_memory(
+        "Functional tools must not disclose audit-only confirmation prose.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        memory_type="open_question",
+        needs_confirmation=True,
+        read_visibility="audit_only",
+    )
+
+    list_output = mcp_server.mnemos_functional_list(
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        needs_confirmation_only=True,
+    )
+    queue_output = mcp_server.mnemos_review_queue(
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    assert (
+        "Functional tools may disclose review-only confirmation prose." in list_output
+    )
+    assert (
+        "Functional tools may disclose review-only confirmation prose." in queue_output
+    )
+    assert "Functional tools must not disclose audit-only" not in list_output
+    assert "Functional tools must not disclose audit-only" not in queue_output
+
+
 def test_simple_stdio_server_lists_and_calls_context(tmp_path):
     from mcp.client.session import ClientSession
     from mcp.client.stdio import StdioServerParameters, stdio_client

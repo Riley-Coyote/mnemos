@@ -89,6 +89,7 @@ def build_context_packet(
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
     )["functional_needs_confirmation"]
     review_hypomnema_count = store.get_hypomnema_stats(
         agent_id=agent_id,

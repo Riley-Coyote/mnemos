@@ -1525,7 +1525,7 @@ class EngramStore:
         exclude_needs_confirmation: bool = False,
         include_deleted: bool = False,
         limit: int = 12,
-        read_visibility: str | None | object = _READ_VISIBILITY_DEFAULT,
+        read_visibility: str | Sequence[str] | None | object = _READ_VISIBILITY_DEFAULT,
     ) -> list[dict[str, Any]]:
         """Search functional memories for the current scope/session."""
         if memory_type and memory_type not in VALID_FUNCTIONAL_TYPES:
@@ -1541,11 +1541,13 @@ class EngramStore:
         )
         params: list[Any] = [agent_id, person_id, project_scope]
         if read_visibility is _READ_VISIBILITY_DEFAULT:
-            normalized_visibility = (
-                None if needs_confirmation_only else READ_VISIBILITY_OPERATIONAL
+            visibility_values = (
+                (READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW)
+                if needs_confirmation_only
+                else (READ_VISIBILITY_OPERATIONAL,)
             )
         else:
-            normalized_visibility = _normalize_read_visibility(read_visibility)  # type: ignore[arg-type]
+            visibility_values = _normalize_read_visibility_values(read_visibility)  # type: ignore[arg-type]
         if session_id:
             sql += " AND session_id = ?"
             params.append(session_id)
@@ -1558,9 +1560,12 @@ class EngramStore:
             sql += " AND needs_confirmation = 0"
         if not include_deleted:
             sql += " AND is_deleted = 0"
-        if normalized_visibility is not None:
-            sql += " AND read_visibility = ?"
-            params.append(normalized_visibility)
+        sql = _append_read_visibility_filter(
+            sql,
+            params,
+            "read_visibility",
+            visibility_values,
+        )
         sql += " ORDER BY pinned DESC, updated_at DESC LIMIT 200"
 
         rows = self._get_conn().execute(sql, params).fetchall()
@@ -1686,17 +1691,30 @@ class EngramStore:
         agent_id: str = "default",
         person_id: str | None = None,
         project_scope: str | None = None,
+        read_visibility: str | Sequence[str] | None = None,
     ) -> dict[str, int]:
         """Count active functional memory and session state."""
-        where = ["agent_id = ?"]
-        params: list[Any] = [agent_id]
+        functional_where = ["agent_id = ?"]
+        session_where = ["agent_id = ?"]
+        functional_params: list[Any] = [agent_id]
+        session_params: list[Any] = [agent_id]
         if person_id is not None:
-            where.append("person_id = ?")
-            params.append(person_id)
+            functional_where.append("person_id = ?")
+            session_where.append("person_id = ?")
+            functional_params.append(person_id)
+            session_params.append(person_id)
         if project_scope is not None:
-            where.append("project_scope = ?")
-            params.append(project_scope)
-        where_sql = " AND ".join(where)
+            functional_where.append("project_scope = ?")
+            session_where.append("project_scope = ?")
+            functional_params.append(project_scope)
+            session_params.append(project_scope)
+        visibility_values = _normalize_read_visibility_values(read_visibility)
+        if visibility_values is not None:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            functional_where.append(f"read_visibility IN ({placeholders})")
+            functional_params.extend(visibility_values)
+        functional_where_sql = " AND ".join(functional_where)
+        session_where_sql = " AND ".join(session_where)
         conn = self._get_conn()
         row = conn.execute(
             f"""
@@ -1706,9 +1724,9 @@ class EngramStore:
               SUM(CASE WHEN is_deleted = 0 AND pinned = 1 THEN 1 ELSE 0 END) AS pinned,
               SUM(CASE WHEN is_deleted = 0 AND needs_confirmation = 1 THEN 1 ELSE 0 END) AS needs_confirmation
             FROM functional_memories
-            WHERE {where_sql}
+            WHERE {functional_where_sql}
             """,
-            params,
+            functional_params,
         ).fetchone()
         session_row = conn.execute(
             f"""
@@ -1716,9 +1734,9 @@ class EngramStore:
               SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
               SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) AS closed
             FROM memory_sessions
-            WHERE {where_sql}
+            WHERE {session_where_sql}
             """,
-            params,
+            session_params,
         ).fetchone()
         return {
             "functional_total": int(row["total"] or 0),
@@ -1817,15 +1835,10 @@ class EngramStore:
 
         now = _utc_now()
         entry_id = (entry_id or "").strip() or _new_id()
-        normalized_visibility = _normalize_read_visibility(
-            read_visibility,
-            allow_all=False,
-            default=READ_VISIBILITY_OPERATIONAL,
-        )
         existing = conn.execute(
             """
             SELECT agent_id, person_id, project_scope, content, revision_count,
-                   revisions_json
+                   revisions_json, read_visibility
             FROM hypomnema_entries
             WHERE id = ?
             """,
@@ -1839,6 +1852,16 @@ class EngramStore:
             raise ValueError(
                 "Hypomnema entry ID already exists outside the requested scope"
             )
+        default_visibility = (
+            existing["read_visibility"]
+            if existing is not None and read_visibility is None
+            else READ_VISIBILITY_OPERATIONAL
+        )
+        normalized_visibility = _normalize_read_visibility(
+            read_visibility,
+            allow_all=False,
+            default=default_visibility,
+        )
         revision_count = 0
         revisions_json = "[]"
         if existing is not None:
@@ -2110,6 +2133,7 @@ class EngramStore:
             confidence=row["confidence"],
             salience=row["salience"],
             foundational=row["foundational"],
+            read_visibility=row["read_visibility"],
             original_timestamp=row["original_timestamp"],
             related_session_id=row["related_session_id"],
             related_engram_id=row["related_engram_id"],

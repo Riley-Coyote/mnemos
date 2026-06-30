@@ -73,6 +73,73 @@ class TestFunctionalMemoryStore:
         assert queue[0]["memory_type"] == "open_question"
         assert queue[0]["needs_confirmation"] is True
 
+    def test_confirmation_queue_excludes_audit_only_by_default(self, store):
+        operational = store.write_functional_memory(
+            "Operational confirmation can enter the default review queue.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            needs_confirmation=True,
+            read_visibility="operational_context",
+        )
+        review = store.write_functional_memory(
+            "Review-only confirmation can enter the default review queue.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            needs_confirmation=True,
+            read_visibility="review_only",
+        )
+        audit = store.write_functional_memory(
+            "Audit-only confirmation requires an explicit audit read.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            needs_confirmation=True,
+            read_visibility="audit_only",
+        )
+
+        default_ids = {
+            item["id"]
+            for item in store.load_functional_memories(
+                agent_id="vektor",
+                person_id="riley",
+                project_scope="mnemos",
+                needs_confirmation_only=True,
+            )
+        }
+        audit_ids = {
+            item["id"]
+            for item in store.load_functional_memories(
+                agent_id="vektor",
+                person_id="riley",
+                project_scope="mnemos",
+                needs_confirmation_only=True,
+                read_visibility="audit_only",
+            )
+        }
+        all_ids = {
+            item["id"]
+            for item in store.load_functional_memories(
+                agent_id="vektor",
+                person_id="riley",
+                project_scope="mnemos",
+                needs_confirmation_only=True,
+                read_visibility=None,
+            )
+        }
+        default_stats = store.get_functional_stats(
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            read_visibility=("operational_context", "review_only"),
+        )
+
+        assert default_ids == {operational["id"], review["id"]}
+        assert audit_ids == {audit["id"]}
+        assert all_ids == {operational["id"], review["id"], audit["id"]}
+        assert default_stats["functional_needs_confirmation"] == 2
+
     def test_close_session_promotes_functional_context_to_hypomnema(self, store):
         store.start_memory_session(
             session_id="session-2",

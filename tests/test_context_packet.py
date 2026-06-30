@@ -183,6 +183,49 @@ def test_review_context_packet_excludes_audit_only_hypomnema_candidates(store):
     assert packet["review_queue"]["hypomnema_promotion_candidate_count"] == 1
 
 
+def test_review_context_packet_excludes_audit_only_functional_confirmations(store):
+    review = store.write_functional_memory(
+        "Review packet may disclose review-only functional confirmation.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        memory_type="open_question",
+        needs_confirmation=True,
+        read_visibility="review_only",
+    )
+    audit = store.write_functional_memory(
+        "Review packet must not disclose audit-only functional confirmation.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        memory_type="open_question",
+        needs_confirmation=True,
+        read_visibility="audit_only",
+    )
+
+    packet = build_context_packet(
+        store,
+        "functional confirmation",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        packet_mode="review",
+    )
+
+    review_ids = {
+        item["id"] for item in packet["review_queue"]["functional_needs_confirmation"]
+    }
+
+    assert (
+        "Review packet may disclose review-only functional confirmation."
+        in packet["prompt"]
+    )
+    assert "Review packet must not disclose audit-only" not in packet["prompt"]
+    assert review_ids == {review["id"]}
+    assert audit["id"] not in str(packet)
+    assert packet["review_queue"]["functional_needs_confirmation_count"] == 1
+
+
 def test_operational_context_packet_redacts_candidates_outside_review_queue(store):
     for index in range(6):
         store.write_hypomnema_entry(
@@ -554,3 +597,25 @@ def test_visual_snapshot_redacts_review_queue_prose(store):
         "hypomnema promotion candidate(s) need review (review-only; prose withheld)"
         in snapshot
     )
+
+
+def test_visual_snapshot_excludes_audit_only_functional_review_ids(store):
+    audit = store.write_functional_memory(
+        "Visual snapshot audit-only functional prose must be absent.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        memory_type="open_question",
+        needs_confirmation=True,
+        read_visibility="audit_only",
+    )
+
+    snapshot = build_memory_visual_snapshot(
+        store,
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    assert "Visual snapshot audit-only functional prose" not in snapshot
+    assert audit["id"] not in snapshot

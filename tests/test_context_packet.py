@@ -270,6 +270,87 @@ def test_formatter_operational_override_redacts_existing_review_packet(store):
     assert hypomnema_id in prompt
 
 
+def test_formatter_review_override_rejects_redacted_operational_packet(store):
+    store.write_functional_memory(
+        "Redacted functional prose cannot be recovered by formatter override.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        memory_type="open_question",
+        needs_confirmation=True,
+        confidence=0.9,
+        salience=0.9,
+    )
+    packet = build_context_packet(
+        store,
+        "redacted formatter escalation",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        packet_mode="operational",
+        include_prompt=False,
+    )
+
+    try:
+        format_context_packet(packet, packet_mode="review")
+    except ValueError as exc:
+        assert "redacted operational references" in str(exc)
+    else:
+        raise AssertionError("redacted operational packet should not escalate to review")
+
+
+def test_operational_review_cues_survive_low_token_budget(store):
+    functional = store.write_functional_memory(
+        "Pending low-budget functional prose must stay withheld.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        memory_type="open_question",
+        needs_confirmation=True,
+        confidence=0.9,
+        salience=0.9,
+    )
+    hypomnema_id = store.write_hypomnema_entry(
+        "Pending low-budget hypomnema prose must stay withheld.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.95,
+        salience=0.9,
+        foundational=True,
+    )
+    store.write_functional_memory(
+        "Operational filler " + ("x" * 5000),
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        memory_type="working",
+        needs_confirmation=False,
+        confidence=0.8,
+        salience=0.8,
+    )
+
+    packet = build_context_packet(
+        store,
+        "low-budget cue boundary",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        packet_mode="operational",
+        token_budget=20,
+    )
+
+    prompt = packet["prompt"]
+
+    assert "[context packet truncated to token budget]" in prompt
+    assert "1 functional memory item(s) need confirmation" in prompt
+    assert "1 hypomnema promotion candidate(s) need review" in prompt
+    assert functional["id"] in prompt
+    assert hypomnema_id in prompt
+    assert "Pending low-budget functional prose" not in prompt
+    assert "Pending low-budget hypomnema prose" not in prompt
+
+
 def test_review_context_packet_exposes_review_prose_with_labels(store):
     functional = store.write_functional_memory(
         "Review functional prose should be visible only in review mode.",

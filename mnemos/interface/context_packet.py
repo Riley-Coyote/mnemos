@@ -153,6 +153,22 @@ def format_context_packet(
     else:
         mode = normalize_packet_mode(packet.get("packet_mode", PACKET_MODE_OPERATIONAL))
         packet = _normalize_packet_visibility(packet, mode)
+    if mode == PACKET_MODE_OPERATIONAL:
+        return _format_sections_preserving_prefix(
+            [
+                "## Mnemos Context Packet",
+                _format_scope(packet),
+                _format_review(packet),
+            ],
+            [
+                _format_operating_instructions(),
+                _format_identity(packet),
+                _format_functional(packet),
+                _format_hypomnema(packet),
+                _format_engrams(packet),
+            ],
+            max(800, token_budget * _CHARS_PER_TOKEN),
+        )
     sections = [
         "## Mnemos Context Packet",
         _format_scope(packet),
@@ -163,11 +179,38 @@ def format_context_packet(
         _format_engrams(packet),
         _format_review(packet),
     ]
-    text = "\n\n".join(section for section in sections if section.strip())
+    text = _join_sections(sections)
     max_chars = max(800, token_budget * _CHARS_PER_TOKEN)
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 80].rstrip() + "\n\n[context packet truncated to token budget]"
+
+
+def _join_sections(sections: list[str]) -> str:
+    return "\n\n".join(section for section in sections if section.strip())
+
+
+def _format_sections_preserving_prefix(
+    protected_sections: list[str],
+    truncatable_sections: list[str],
+    max_chars: int,
+) -> str:
+    protected_text = _join_sections(protected_sections)
+    truncatable_text = _join_sections(truncatable_sections)
+    text = _join_sections([protected_text, truncatable_text])
+    if len(text) <= max_chars:
+        return text
+
+    suffix = "\n\n[context packet truncated to token budget]"
+    separator_chars = 2 if protected_text and truncatable_text else 0
+    available = max_chars - len(protected_text) - separator_chars - len(suffix)
+    if available <= 0 or not truncatable_text:
+        return protected_text.rstrip() + suffix
+
+    truncated = truncatable_text[:available].rstrip()
+    if not truncated:
+        return protected_text.rstrip() + suffix
+    return _join_sections([protected_text, truncated]) + suffix
 
 
 def _normalize_packet_visibility(
@@ -403,6 +446,14 @@ def _format_review(packet: dict[str, Any]) -> str:
                     f"source={item['source']}"
                 )
         return "\n".join(lines)
+
+    if mode == PACKET_MODE_REVIEW and any(
+        "content" not in item for item in [*functional, *candidates]
+    ):
+        raise ValueError(
+            "review packet cannot be formatted from redacted operational references; "
+            "rebuild context packet with packet_mode='review'"
+        )
 
     for item in functional:
         lines.append(

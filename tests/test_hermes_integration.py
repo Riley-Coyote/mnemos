@@ -335,6 +335,27 @@ def test_uncertain_capture_goes_to_review_inbox(tmp_path):
                 "review": True,
             },
         ))
+        provider._runtime._store.write_hypomnema_entry(
+            "Audit-only Hermes inbox prose must not leave audit visibility.",
+            agent_id=provider.scope.agent_id,
+            person_id=provider.scope.person_id,
+            project_scope=provider.scope.project_scope,
+            source="observed",
+            tags=["review", "inbox", "uncertain"],
+            confidence=0.2,
+            salience=0.2,
+            read_visibility="audit_only",
+        )
+        entry = provider._runtime._store.get_hypomnema_entry(
+            queued["continuity_note_id"],
+            agent_id=provider.scope.agent_id,
+            person_id=provider.scope.person_id,
+            project_scope=provider.scope.project_scope,
+        )
+        recalled = json.loads(provider.handle_tool_call(
+            "mnemos_identity_recall",
+            {"query": "Night Glass"},
+        ))
         inbox = json.loads(provider.handle_tool_call(
             "mnemos_identity_report",
             {"kind": "inbox"},
@@ -343,9 +364,12 @@ def test_uncertain_capture_goes_to_review_inbox(tmp_path):
         provider.shutdown()
 
     assert queued["status"] == "queued_for_review"
+    assert entry["read_visibility"] == "review_only"
+    assert "Night Glass" not in recalled["result"]
     assert inbox["inbox"]
     assert inbox["inbox"][0]["confidence"] < 0.62
     assert "Night Glass" in inbox["inbox"][0]["content"]
+    assert "Audit-only Hermes inbox prose" not in json.dumps(inbox)
 
 
 def test_pre_compression_preserves_identity_critical_facts(tmp_path):

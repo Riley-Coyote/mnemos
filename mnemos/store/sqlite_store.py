@@ -526,13 +526,10 @@ def _apply_read_visibility_filter(
     sql: str,
     params: list[Any],
     column: str,
-    read_visibility: str | None,
+    read_visibility: str | Sequence[str] | None,
 ) -> str:
-    normalized = _normalize_read_visibility(read_visibility)
-    if normalized is None:
-        return sql
-    params.append(normalized)
-    return f"{sql} AND {column} = ?"
+    normalized = _normalize_read_visibility_values(read_visibility)
+    return _append_read_visibility_filter(sql, params, column, normalized)
 
 
 def _clean_choice(value: str, allowed: set[str], label: str) -> str:
@@ -729,7 +726,7 @@ class EngramStore:
         load_connections: bool = True,
         include_decay_protected: bool = True,
         require_consolidation_authorized: bool = False,
-        read_visibility: str | None = READ_VISIBILITY_OPERATIONAL,
+        read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
     ) -> list[Engram]:
         """Get all active engrams for an agent, sorted by accessibility.
 
@@ -1984,12 +1981,15 @@ class EngramStore:
             "WHERE agent_id = ? AND person_id = ? AND project_scope = ?"
         )
         params: list[Any] = [agent_id, person_id, project_scope]
-        normalized_visibility = _normalize_read_visibility(read_visibility)
+        visibility_values = _normalize_read_visibility_values(read_visibility)
         if not include_inactive:
             sql += " AND active = 1"
-        if normalized_visibility is not None:
-            sql += " AND read_visibility = ?"
-            params.append(normalized_visibility)
+        sql = _append_read_visibility_filter(
+            sql,
+            params,
+            "read_visibility",
+            visibility_values,
+        )
         if exclude_promotion_candidates:
             sql += (
                 " AND NOT (active = 1 "
@@ -2063,6 +2063,7 @@ class EngramStore:
         project_scope: str = "global",
         confidence: float | None = None,
         salience: float | None = None,
+        read_visibility: str | Sequence[str] | None = None,
     ) -> str:
         """Revise an existing hypomnema entry while preserving the old version."""
         if not new_content.strip():
@@ -2072,13 +2073,18 @@ class EngramStore:
 
         now = _utc_now()
         conn = self._get_conn()
-        row = conn.execute(
-            """
-            SELECT * FROM hypomnema_entries
-            WHERE id = ? AND agent_id = ? AND person_id = ? AND project_scope = ?
-            """,
-            (entry_id, agent_id, person_id, project_scope),
-        ).fetchone()
+        sql = (
+            "SELECT * FROM hypomnema_entries "
+            "WHERE id = ? AND agent_id = ? AND person_id = ? AND project_scope = ?"
+        )
+        params: list[Any] = [entry_id, agent_id, person_id, project_scope]
+        sql = _apply_read_visibility_filter(
+            sql,
+            params,
+            "read_visibility",
+            read_visibility,
+        )
+        row = conn.execute(sql, params).fetchone()
         if row is None:
             raise KeyError(f"Hypomnema entry not found for scope: {entry_id}")
 
@@ -2122,6 +2128,7 @@ class EngramStore:
         agent_id: str = "default",
         person_id: str = "user",
         project_scope: str = "global",
+        read_visibility: str | Sequence[str] | None = None,
     ) -> str:
         """Replace an active hypomnema entry with a new entry and audit link."""
         row = self.get_hypomnema_entry(
@@ -2130,6 +2137,7 @@ class EngramStore:
             person_id=person_id,
             project_scope=project_scope,
             active_only=True,
+            read_visibility=read_visibility,
         )
         if row is None:
             raise KeyError(f"Active hypomnema entry not found for scope: {entry_id}")
@@ -2185,6 +2193,7 @@ class EngramStore:
         agent_id: str = "default",
         person_id: str = "user",
         project_scope: str = "global",
+        read_visibility: str | Sequence[str] | None = None,
     ) -> str:
         """Deactivate a scoped hypomnema entry while preserving its revision trail."""
         if not reason.strip():
@@ -2196,6 +2205,7 @@ class EngramStore:
             person_id=person_id,
             project_scope=project_scope,
             active_only=True,
+            read_visibility=read_visibility,
         )
         if row is None:
             raise KeyError(f"Active hypomnema entry not found for scope: {entry_id}")

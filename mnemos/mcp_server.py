@@ -1239,6 +1239,7 @@ def mnemos_hypomnema_revise(
             project_scope=project_scope,
             confidence=confidence if confidence >= 0 else None,
             salience=salience if salience >= 0 else None,
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
         )
     except (KeyError, ValueError) as exc:
         return f"Hypomnema revision failed: {exc}"
@@ -1274,6 +1275,7 @@ def mnemos_hypomnema_supersede(
             agent_id=agent_id,
             person_id=person_id,
             project_scope=project_scope,
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
         )
     except (KeyError, ValueError) as exc:
         return f"Hypomnema supersession failed: {exc}"

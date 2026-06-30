@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ...simple_runtime import MnemosRuntime
+from ...store.sqlite_store import READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW
 from .scope import (
     HermesMnemosConfig,
     HermesScope,
@@ -535,6 +536,7 @@ class MnemosMemoryProviderCore:
             salience=0.42,
             foundational=False,
             related_session_id=self._session_id,
+            read_visibility=READ_VISIBILITY_REVIEW,
         )
 
     def _review_inbox(self, limit: int = 10) -> list[dict[str, Any]]:
@@ -548,6 +550,7 @@ class MnemosMemoryProviderCore:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=max(1, min(50, limit * 3)),
+            read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
         )
         review = [
             entry for entry in entries

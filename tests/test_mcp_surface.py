@@ -199,6 +199,83 @@ def test_hypomnema_promote_rejects_non_operational_entries(monkeypatch, store):
     assert audit_entry["graduated_to_engram_id"] is None
 
 
+def test_hypomnema_revise_and_supersede_reject_non_operational_entries(
+    monkeypatch,
+    store,
+):
+    from mnemos import mcp_server
+
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_ensure_store", lambda: store)
+    monkeypatch.setattr(mcp_server, "_setup_gate", lambda: None)
+    review_id = store.write_hypomnema_entry(
+        "Review-only hypomnema prose must not be revised by MCP.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.75,
+        salience=0.7,
+        read_visibility="review_only",
+    )
+    audit_id = store.write_hypomnema_entry(
+        "Audit-only hypomnema prose must not be superseded by MCP.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.8,
+        salience=0.75,
+        read_visibility="audit_only",
+    )
+
+    review_revise = mcp_server.mnemos_hypomnema_revise(
+        review_id,
+        "Leaked review-only revision content.",
+        "ordinary MCP revise",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+    audit_supersede = mcp_server.mnemos_hypomnema_supersede(
+        audit_id,
+        "Leaked audit-only replacement content.",
+        "ordinary MCP supersede",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    review_entry = store.get_hypomnema_entry(
+        review_id,
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+    audit_entry = store.get_hypomnema_entry(
+        audit_id,
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+    leaked_replacements = store.search_hypomnema(
+        "Leaked",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        read_visibility=None,
+    )
+
+    assert "Hypomnema revision failed" in review_revise
+    assert "Hypomnema supersession failed" in audit_supersede
+    assert "Review-only hypomnema prose" not in review_revise
+    assert "Audit-only hypomnema prose" not in audit_supersede
+    assert review_entry["content"] == "Review-only hypomnema prose must not be revised by MCP."
+    assert review_entry["revision_count"] == 0
+    assert audit_entry["content"] == "Audit-only hypomnema prose must not be superseded by MCP."
+    assert audit_entry["active"] is True
+    assert audit_entry["superseded_by"] is None
+    assert all("Leaked" not in entry["content"] for entry in leaked_replacements)
+
+
 def test_inspect_and_forget_reject_non_operational_engrams(monkeypatch, store):
     from mnemos import mcp_server
     from mnemos.core.engram import Engram

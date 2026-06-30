@@ -758,6 +758,7 @@ class MnemosRuntime:
                         agent_id=self.scope.agent_id,
                         person_id=self.scope.person_id,
                         project_scope=self.scope.project_scope,
+                        read_visibility=READ_VISIBILITY_OPERATIONAL,
                     )
                     related_engram_id = hypo.get("related_engram_id") or hypo.get("graduated_to_engram_id")
                     if related_engram_id:
@@ -778,6 +779,7 @@ class MnemosRuntime:
                     project_scope=self.scope.project_scope,
                     confidence=0.92,
                     salience=0.75,
+                    read_visibility=READ_VISIBILITY_OPERATIONAL,
                 )
                 return f"Updated continuity note {target}."
 
@@ -823,6 +825,7 @@ class MnemosRuntime:
                         agent_id=self.scope.agent_id,
                         person_id=self.scope.person_id,
                         project_scope=self.scope.project_scope,
+                        read_visibility=READ_VISIBILITY_OPERATIONAL,
                     )
                     related_engram_id = match.get("related_engram_id") or match.get("graduated_to_engram_id")
                     if related_engram_id:
@@ -848,6 +851,7 @@ class MnemosRuntime:
                         agent_id=self.scope.agent_id,
                         person_id=self.scope.person_id,
                         project_scope=self.scope.project_scope,
+                        read_visibility=READ_VISIBILITY_OPERATIONAL,
                     )
                 else:
                     self._store.revise_hypomnema_entry(
@@ -859,6 +863,7 @@ class MnemosRuntime:
                         project_scope=self.scope.project_scope,
                         confidence=0.92,
                         salience=0.75,
+                        read_visibility=READ_VISIBILITY_OPERATIONAL,
                     )
 
                 related_engram_id = match.get("related_engram_id") or match.get("graduated_to_engram_id")

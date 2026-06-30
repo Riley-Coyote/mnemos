@@ -140,6 +140,58 @@ class TestFunctionalMemoryStore:
         assert all_ids == {operational["id"], review["id"], audit["id"]}
         assert default_stats["functional_needs_confirmation"] == 2
 
+    def test_functional_upsert_preserves_existing_visibility_when_omitted(self, store):
+        review = store.write_functional_memory(
+            "Review-only functional memory before ordinary update.",
+            memory_id="review-functional",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            needs_confirmation=True,
+            read_visibility="review_only",
+        )
+        audit = store.write_functional_memory(
+            "Audit-only functional memory before ordinary update.",
+            memory_id="audit-functional",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            read_visibility="audit_only",
+        )
+
+        store.write_functional_memory(
+            "Review-only functional memory after ordinary update.",
+            memory_id=review["id"],
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            needs_confirmation=False,
+        )
+        store.write_functional_memory(
+            "Audit-only functional memory after ordinary update.",
+            memory_id=audit["id"],
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+        )
+
+        updated_review = store.get_functional_memory(review["id"])
+        updated_audit = store.get_functional_memory(audit["id"])
+        operational_ids = {
+            item["id"]
+            for item in store.load_functional_memories(
+                "ordinary update",
+                agent_id="vektor",
+                person_id="riley",
+                project_scope="mnemos",
+            )
+        }
+
+        assert updated_review["read_visibility"] == "review_only"
+        assert updated_audit["read_visibility"] == "audit_only"
+        assert review["id"] not in operational_ids
+        assert audit["id"] not in operational_ids
+
     def test_close_session_promotes_functional_context_to_hypomnema(self, store):
         store.start_memory_session(
             session_id="session-2",

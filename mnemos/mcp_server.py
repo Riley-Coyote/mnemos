@@ -1307,9 +1307,10 @@ def mnemos_hypomnema_promote(
         person_id=person_id,
         project_scope=project_scope,
         active_only=True,
+        read_visibility=READ_VISIBILITY_OPERATIONAL,
     )
     if entry is None:
-        return f"Active hypomnema entry not found: {entry_id}"
+        return f"Active operational hypomnema entry not found: {entry_id}"
 
     deidentified = entry["content"].replace(person_id, "the collaborator")
     content = "[promoted from hypomnema; de-identified] " + deidentified

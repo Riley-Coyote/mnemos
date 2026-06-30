@@ -136,6 +136,69 @@ def test_hypomnema_candidates_tool_excludes_non_operational_prose(
     assert "Audit-only MCP candidate must stay out" not in output
 
 
+def test_hypomnema_promote_rejects_non_operational_entries(monkeypatch, store):
+    from mnemos import mcp_server
+
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_ensure_store", lambda: store)
+    monkeypatch.setattr(mcp_server, "_setup_gate", lambda: None)
+    review_id = store.write_hypomnema_entry(
+        "Review-only promotion prose must not be disclosed.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.95,
+        salience=0.9,
+        foundational=True,
+        read_visibility="review_only",
+    )
+    audit_id = store.write_hypomnema_entry(
+        "Audit-only promotion prose must never be disclosed.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.99,
+        salience=0.95,
+        foundational=True,
+        read_visibility="audit_only",
+    )
+
+    review_dry_run = mcp_server.mnemos_hypomnema_promote(
+        review_id,
+        dry_run=True,
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+    audit_promote = mcp_server.mnemos_hypomnema_promote(
+        audit_id,
+        dry_run=False,
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    review_entry = store.get_hypomnema_entry(
+        review_id,
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+    audit_entry = store.get_hypomnema_entry(
+        audit_id,
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    assert "Active operational hypomnema entry not found" in review_dry_run
+    assert "Active operational hypomnema entry not found" in audit_promote
+    assert "Review-only promotion prose" not in review_dry_run
+    assert "Audit-only promotion prose" not in audit_promote
+    assert review_entry["graduated_to_engram_id"] is None
+    assert audit_entry["graduated_to_engram_id"] is None
+
+
 def test_review_queue_opts_into_review_candidate_prose(monkeypatch, store):
     from mnemos import mcp_server
 

@@ -1417,14 +1417,20 @@ class EngramStore:
         now = _utc_now()
         fid = (memory_id or "").strip() or _new_id()
         session = (session_id or "").strip() or None
-        normalized_visibility = _normalize_read_visibility(
-            read_visibility,
-            allow_all=False,
-            default=(
+        existing = self.get_functional_memory(fid, include_deleted=True)
+        default_visibility = (
+            existing["read_visibility"]
+            if existing is not None and read_visibility is None
+            else (
                 READ_VISIBILITY_REVIEW
                 if needs_confirmation
                 else READ_VISIBILITY_OPERATIONAL
-            ),
+            )
+        )
+        normalized_visibility = _normalize_read_visibility(
+            read_visibility,
+            allow_all=False,
+            default=default_visibility,
         )
         conn = self._get_conn()
         if session and self.get_memory_session(session) is None:
@@ -1937,6 +1943,7 @@ class EngramStore:
         person_id: str = "user",
         project_scope: str = "global",
         active_only: bool = False,
+        read_visibility: str | None = None,
     ) -> dict[str, Any] | None:
         """Load a hypomnema entry by scoped ID."""
         conn = self._get_conn()
@@ -1947,6 +1954,12 @@ class EngramStore:
         params: list[Any] = [entry_id, agent_id, person_id, project_scope]
         if active_only:
             query += " AND active = 1"
+        query = _apply_read_visibility_filter(
+            query,
+            params,
+            "read_visibility",
+            read_visibility,
+        )
         row = conn.execute(query, params).fetchone()
         if row is None:
             return None

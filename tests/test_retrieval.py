@@ -1,5 +1,4 @@
 """Tests for reactive retrieval."""
-import pytest
 
 from mnemos.core.belief import Belief
 from mnemos.core.engram import Engram

@@ -116,6 +116,68 @@ class TestFunctionalMemoryStore:
         assert entry["related_session_id"] == "session-2"
         assert remaining == []
 
+    def test_close_session_preserves_review_only_functional_memories(self, store):
+        store.start_memory_session(
+            session_id="session-review",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            title="Functional memory review test",
+        )
+        operational = store.write_functional_memory(
+            "Operational session memory can be promoted.",
+            session_id="session-review",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            confidence=0.9,
+            salience=0.85,
+            read_visibility="operational_context",
+        )
+        review = store.write_functional_memory(
+            "Review-only session memory must remain active.",
+            session_id="session-review",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            needs_confirmation=True,
+            confidence=0.95,
+            salience=0.9,
+            read_visibility="review_only",
+        )
+
+        result = store.close_session_to_hypomnema(
+            "session-review",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+        )
+        remaining_review = store.load_functional_memories(
+            session_id="session-review",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            read_visibility="review_only",
+            limit=10,
+        )
+        all_rows = store.load_functional_memories(
+            session_id="session-review",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            include_deleted=True,
+            read_visibility=None,
+            limit=10,
+        )
+
+        by_id = {item["id"]: item for item in all_rows}
+        assert result["functional_memories"] == 1
+        assert [item["id"] for item in remaining_review] == [review["id"]]
+        assert by_id[operational["id"]]["is_deleted"] is True
+        assert by_id[operational["id"]]["promoted_to_hypomnema_id"] == result["hypomnema_id"]
+        assert by_id[review["id"]]["is_deleted"] is False
+        assert by_id[review["id"]]["promoted_to_hypomnema_id"] is None
+
     def test_invalid_functional_memory_type_fails(self, store):
         with pytest.raises(ValueError):
             store.write_functional_memory(

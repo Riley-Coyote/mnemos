@@ -1180,6 +1180,55 @@ def test_connection_discovery_skips_unauthorized_sources_and_targets(tmp_path):
         store.close()
 
 
+def test_connection_discovery_excludes_review_only_embedding_candidates(tmp_path):
+    class StubEmbeddingIndex:
+        available = True
+
+        def __init__(self, hits):
+            self.hits = hits
+
+        def search(self, _query, k=10, exclude_ids=None):
+            excluded = exclude_ids or set()
+            return [(eid, score) for eid, score in self.hits if eid not in excluded][:k]
+
+    store = EngramStore(tmp_path / "connections-visibility.db")
+    source = _old_engram(
+        "operational source for embedding discovery",
+        owner_agent_id="oliver",
+        accessibility=0.95,
+    )
+    review_candidate = _old_engram(
+        "review only embedding candidate hidden from producers",
+        owner_agent_id="oliver",
+        read_visibility="review_only",
+    )
+    operational_candidate = _old_engram(
+        "operational embedding candidate can connect",
+        owner_agent_id="oliver",
+        read_visibility="operational_context",
+    )
+    for engram in (source, review_candidate, operational_candidate):
+        store.save_engram(engram)
+
+    try:
+        stats = run_connection_discovery(
+            store,
+            embedding_index=StubEmbeddingIndex([
+                (review_candidate.id, 0.95),
+                (operational_candidate.id, 0.95),
+            ]),
+            config={"max_engrams_per_discovery_pass": 1},
+            llm_client=None,
+            agent_id="oliver",
+        )
+        targets = {connection.target_id for connection in store.get_connections(source.id)}
+        assert stats["embedding_candidates"] == 1
+        assert operational_candidate.id in targets
+        assert review_candidate.id not in targets
+    finally:
+        store.close()
+
+
 def test_reflection_skips_unauthorized_imports_for_prompts_and_identity(tmp_path):
     store = EngramStore(tmp_path / "reflection.db")
     authorized = [

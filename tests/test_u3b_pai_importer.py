@@ -1300,13 +1300,14 @@ def test_u3b_imported_belief_arrives_needs_review_true(tmp_path):
             store._get_conn()
             .execute(
                 "SELECT needs_review, confidence_pending_review, original_substrate, "
-                "original_timestamp FROM beliefs WHERE id = ?",
+                "original_timestamp, read_visibility FROM beliefs WHERE id = ?",
                 (target_id,),
             )
             .fetchone()
         )
         assert bool(row["needs_review"]) is True
         assert bool(row["confidence_pending_review"]) is True
+        assert row["read_visibility"] == "review_only"
         assert row["original_substrate"] == "claude-opus-4-6"
         assert row["original_timestamp"] == 1710000000
 
@@ -1410,13 +1411,15 @@ def test_u3b_imported_belief_re_import_flips_needs_review_back_on_change(tmp_pat
         row = (
             store._get_conn()
             .execute(
-                "SELECT needs_review, confidence_pending_review, revision_history FROM beliefs WHERE id = ?",
+                "SELECT needs_review, confidence_pending_review, read_visibility, "
+                "revision_history FROM beliefs WHERE id = ?",
                 (target_id,),
             )
             .fetchone()
         )
         assert bool(row["needs_review"]) is True
         assert bool(row["confidence_pending_review"]) is True
+        assert row["read_visibility"] == "review_only"
         revisions = json.loads(row["revision_history"])
         assert revisions
         # Hardening MEDIUM 15: revision entries carry job_id

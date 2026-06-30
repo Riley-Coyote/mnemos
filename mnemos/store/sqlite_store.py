@@ -1147,6 +1147,8 @@ class EngramStore:
         pid = (proposal_id or "").strip() or _new_id()
         provenance = [str(item).strip() for item in (provenance_ids or []) if str(item).strip()]
         payload_json = _encode_json(payload or {})
+        decided_at = now if status in {"approved", "rejected", "superseded"} else None
+        applied_at = now if status == "applied" else None
         conn = self._get_conn()
         conn.execute(
             """
@@ -1155,7 +1157,7 @@ class EngramStore:
                 domain, target_surface, transition, blast_radius, read_visibility,
                 status, reason, gate_version, target_id, provenance_ids_json,
                 payload_json, created_at, updated_at, decided_at, applied_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 agent_id = excluded.agent_id,
                 person_id = excluded.person_id,
@@ -1205,6 +1207,8 @@ class EngramStore:
                 payload_json,
                 now,
                 now,
+                decided_at,
+                applied_at,
             ),
         )
         conn.commit()
@@ -1608,16 +1612,19 @@ class EngramStore:
 
         now = _utc_now()
         conn = self._get_conn()
-        if hypomnema_id:
+        promoted_memory_ids = [m["id"] for m in memories]
+        if hypomnema_id and promoted_memory_ids:
+            placeholders = ", ".join("?" for _ in promoted_memory_ids)
             conn.execute(
-                """
+                f"""
                 UPDATE functional_memories
                 SET is_deleted = 1,
                     promoted_to_hypomnema_id = ?,
                     updated_at = ?
                 WHERE session_id = ? AND is_deleted = 0
+                  AND id IN ({placeholders})
                 """,
-                (hypomnema_id, now, session_id),
+                (hypomnema_id, now, session_id, *promoted_memory_ids),
             )
         conn.execute(
             """

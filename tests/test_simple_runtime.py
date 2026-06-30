@@ -106,6 +106,48 @@ def test_context_and_recall_hide_review_only_prose(tmp_path):
     assert "Review-only runtime continuity phrase" not in recall
 
 
+def test_context_and_recall_hide_operational_promotion_candidates(tmp_path, monkeypatch):
+    from mnemos.store.sqlite_store import EngramStore
+
+    db_path = str(tmp_path / "simple.db")
+    seed = EngramStore(db_path)
+    try:
+        seed.write_hypomnema_entry(
+            "Promotion candidate runtime phrase should stay quarantined.",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            confidence=0.95,
+            salience=0.9,
+            foundational=True,
+            read_visibility="operational_context",
+        )
+    finally:
+        seed.close()
+
+    runtime = MnemosRuntime(
+        db_path=db_path,
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "maintain",
+        lambda deep=False, auto=False: "maintenance skipped",
+    )
+
+    try:
+        context = runtime.context("promotion candidate runtime", max_results=6)
+        recall = runtime.recall("promotion candidate runtime", max_results=6)
+    finally:
+        runtime.close()
+
+    assert "Promotion candidate runtime phrase" not in context
+    assert "Promotion candidate runtime phrase" not in recall
+
+
 def test_identity_scope_does_not_leak_between_agents(tmp_path):
     db_path = str(tmp_path / "shared.db")
     nova = MnemosRuntime(

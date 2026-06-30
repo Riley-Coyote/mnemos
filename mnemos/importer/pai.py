@@ -48,7 +48,7 @@ from ..core.belief import Belief
 from ..core.engram import Engram, MemorySource
 from ..core.types import ConfidenceSource, EngramKind, SourceType
 from ..store.migrations import insert_pai_import_event, upsert_pai_import_row
-from ..store.sqlite_store import EngramStore
+from ..store.sqlite_store import EngramStore, READ_VISIBILITY_REVIEW
 
 
 TARGET_ENGRAMS = "engrams"
@@ -856,6 +856,7 @@ def _write_pai_belief_no_commit(store: EngramStore, conn, row: PaiImportRow) -> 
             tier = ?,
             needs_review = 1,
             confidence_pending_review = 1,
+            read_visibility = ?,
             revision_history = ?,
             last_revised = ?,
             original_substrate = ?,
@@ -867,6 +868,7 @@ def _write_pai_belief_no_commit(store: EngramStore, conn, row: PaiImportRow) -> 
             row.confidence,
             row.domain,
             row.tier,
+            READ_VISIBILITY_REVIEW,
             json.dumps(revisions),
             _now_iso(),
             row.original_substrate,
@@ -1045,7 +1047,11 @@ def _review_pai_belief_no_commit(conn, row: PaiImportRow) -> bool:
     existing = _target_record(conn, row)
     if existing is None:
         raise ValueError(f"Cannot review missing belief target {row.target_id!r}")
-    if bool(existing["needs_review"]) and bool(existing["confidence_pending_review"]):
+    if (
+        bool(existing["needs_review"])
+        and bool(existing["confidence_pending_review"])
+        and existing["read_visibility"] == READ_VISIBILITY_REVIEW
+    ):
         return False
 
     revisions = _safe_json_loads(existing["revision_history"], [])
@@ -1066,11 +1072,12 @@ def _review_pai_belief_no_commit(conn, row: PaiImportRow) -> bool:
         UPDATE beliefs
         SET needs_review = 1,
             confidence_pending_review = 1,
+            read_visibility = ?,
             revision_history = ?,
             last_revised = ?
         WHERE id = ?
         """,
-        (json.dumps(revisions), now, row.target_id),
+        (READ_VISIBILITY_REVIEW, json.dumps(revisions), now, row.target_id),
     )
     return True
 

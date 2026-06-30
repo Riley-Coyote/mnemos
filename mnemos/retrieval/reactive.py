@@ -166,6 +166,20 @@ class ReactiveRetriever:
 
         # 2. PROPAGATE: Spreading activation through connection graph
         activation: dict[str, float] = {}
+        visible_engrams: dict[str, Engram] = dict(seeds)
+        hidden_engram_ids: set[str] = set()
+
+        def visible_engram(eid: str) -> Engram | None:
+            if eid in visible_engrams:
+                return visible_engrams[eid]
+            if eid in hidden_engram_ids:
+                return None
+            engram = self._load_visible_engram(eid, agent_id, read_visibility)
+            if engram is None:
+                hidden_engram_ids.add(eid)
+                return None
+            visible_engrams[eid] = engram
+            return engram
 
         # Seeds start at activation 1.0
         for seed_id in seeds:
@@ -178,6 +192,8 @@ class ReactiveRetriever:
 
             for engram_id, current_act in list(activation.items()):
                 if current_act < self._threshold:
+                    continue
+                if visible_engram(engram_id) is None:
                     continue
 
                 connections = self._store.get_connections(engram_id)
@@ -193,6 +209,9 @@ class ReactiveRetriever:
                     propagated = current_act * hop_decay * conn.strength * relation_weight
 
                     if propagated > self._threshold * 0.5:
+                        target = visible_engram(conn.target_id)
+                        if target is None:
+                            continue
                         new_activation[conn.target_id] += propagated
 
             # Merge new activations (additive — multiple paths reinforce)
@@ -204,10 +223,7 @@ class ReactiveRetriever:
             bias = emotional_state.get_retrieval_bias()
             if bias:
                 for eid in list(activation.keys()):
-                    engram = seeds.get(eid) or self._store.get_engram(
-                        eid,
-                        read_visibility=read_visibility,
-                    )
+                    engram = visible_engram(eid)
                     if engram and engram.tags:
                         overlap = sum(bias.get(tag, 0.0) for tag in engram.tags)
                         if overlap > 0:
@@ -219,23 +235,8 @@ class ReactiveRetriever:
             if act_level < self._threshold:
                 continue
 
-            engram = seeds.get(eid)
+            engram = visible_engram(eid)
             if not engram:
-                engram = self._store.get_engram(
-                    eid,
-                    read_visibility=read_visibility,
-                )
-            # Cross-DB: check shared store if not found in private
-            if not engram and self._shared_store:
-                engram = self._shared_store.get_engram(
-                    eid,
-                    read_visibility=read_visibility,
-                )
-
-            if not engram or engram.state != "active":
-                continue
-            # Allow own engrams + shared/public from other agents
-            if engram.owner_agent_id != agent_id and engram.visibility == "private":
                 continue
 
             if engram.source.confidence < self._confidence_floor:
@@ -279,6 +280,33 @@ class ReactiveRetriever:
                 )
 
         return top_results
+
+    def _load_visible_engram(
+        self,
+        eid: str,
+        agent_id: str,
+        read_visibility: str | None,
+    ) -> Engram | None:
+        engram = self._store.get_engram(eid, read_visibility=read_visibility)
+        if engram and self._can_retrieve(engram, agent_id):
+            return engram
+        if self._shared_store:
+            try:
+                engram = self._shared_store.get_engram(
+                    eid,
+                    read_visibility=read_visibility,
+                )
+            except Exception:
+                engram = None
+            if engram and self._can_retrieve(engram, agent_id):
+                return engram
+        return None
+
+    @staticmethod
+    def _can_retrieve(engram: Engram, agent_id: str) -> bool:
+        if engram.state != "active":
+            return False
+        return engram.owner_agent_id == agent_id or engram.visibility != "private"
 
 
 def _to_fts_query(cue: str) -> str:

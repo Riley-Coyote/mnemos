@@ -452,6 +452,7 @@ class MnemosRuntime:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=max_results + 1,
+            exclude_promotion_candidates=True,
         )
         continuity = _filter_continuity(query, continuity)
         continuity = [
@@ -520,6 +521,7 @@ class MnemosRuntime:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=max_nodes,
+            exclude_promotion_candidates=True,
         )
         engrams = self._store.get_active_engrams(
             agent_id=self.scope.agent_id,
@@ -704,6 +706,7 @@ class MnemosRuntime:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=max_results,
+            exclude_promotion_candidates=True,
         )
         continuity = _filter_continuity(query, continuity)
         memories = self._retrieve(query, max_results=max_results)

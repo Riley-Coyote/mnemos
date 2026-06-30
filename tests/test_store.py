@@ -191,6 +191,31 @@ class TestEngramStore:
                 transition="bad_surface",
             )
 
+    def test_initial_terminal_proposals_set_lifecycle_timestamps(self, store):
+        for status in ("approved", "rejected", "superseded"):
+            proposal = store.write_proposal(
+                source_authority="operator_review",
+                kind="belief",
+                target_surface="beliefs",
+                transition=f"{status}_proposal",
+                status=status,
+                proposal_id=f"proposal-{status}",
+            )
+            assert proposal["decided_at"] == proposal["updated_at"]
+            assert proposal["applied_at"] is None
+
+        applied = store.write_proposal(
+            source_authority="operator_review",
+            kind="belief",
+            target_surface="beliefs",
+            transition="applied_proposal",
+            status="applied",
+            proposal_id="proposal-applied",
+        )
+
+        assert applied["decided_at"] is None
+        assert applied["applied_at"] == applied["updated_at"]
+
     def test_store_reads_filter_read_visibility_before_scoring(self, store):
         """Operational store reads exclude review-only rows before ranking/limits."""
         operational = Engram(

@@ -89,7 +89,10 @@ def run_connection_discovery(
             )
             for eid, score in emb_results:
                 if eid not in existing_target_ids and score > 0.3:
-                    candidate = store.get_engram(eid)
+                    candidate = store.get_engram(
+                        eid,
+                        read_visibility="operational_context",
+                    )
                     if _same_mutable_scope(engram, candidate):
                         candidates.append(candidate)
                         stats["embedding_candidates"] += 1
@@ -205,7 +208,10 @@ def _reclassify_old_connections(
         # Load the target engrams
         targets = []
         for conn in raw_connections:
-            target = store.get_engram(conn.target_id)
+            target = store.get_engram(
+                conn.target_id,
+                read_visibility="operational_context",
+            )
             if _same_mutable_scope(engram, target):
                 targets.append(target)
 
@@ -243,6 +249,8 @@ def _same_mutable_scope(source: Any, candidate: Any | None) -> bool:
     if candidate is None:
         return False
     return (
-        bool(candidate.consolidation_authorized)
+        getattr(source, "read_visibility", "operational_context") == "operational_context"
+        and getattr(candidate, "read_visibility", "operational_context") == "operational_context"
+        and bool(candidate.consolidation_authorized)
         and candidate.owner_agent_id == source.owner_agent_id
     )

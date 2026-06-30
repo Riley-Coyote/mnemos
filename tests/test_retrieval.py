@@ -109,6 +109,51 @@ class TestReactiveRetriever:
         )
         assert [result.engram.id for result in review_results] == [review_seed.id]
 
+    def test_retrieval_does_not_bridge_through_review_only_engram(
+        self, store, retriever
+    ):
+        operational_seed = Engram(
+            content="Operational membrane bridge seed",
+            owner_agent_id="default",
+            read_visibility="operational_context",
+        )
+        review_bridge = Engram(
+            content="Review-only membrane bridge hidden middle",
+            owner_agent_id="default",
+            read_visibility="review_only",
+        )
+        operational_downstream = Engram(
+            content="Operational downstream should not rank",
+            owner_agent_id="default",
+            read_visibility="operational_context",
+        )
+        operational_seed.add_connection(
+            review_bridge.id,
+            ConnectionRelation.SUPPORTS,
+            strength=1.0,
+            formed_by="test",
+        )
+        review_bridge.add_connection(
+            operational_downstream.id,
+            ConnectionRelation.SUPPORTS,
+            strength=1.0,
+            formed_by="test",
+        )
+        store.save_engram(operational_downstream)
+        store.save_engram(review_bridge)
+        store.save_engram(operational_seed)
+
+        results = retriever.retrieve(
+            "membrane bridge seed",
+            agent_id="default",
+            max_results=10,
+        )
+        result_ids = {result.engram.id for result in results}
+
+        assert operational_seed.id in result_ids
+        assert review_bridge.id not in result_ids
+        assert operational_downstream.id not in result_ids
+
     def test_prompt_builder_hides_review_only_beliefs_and_engrams(self, store):
         """PromptBuilder inherits operational visibility for all producer reads."""
         store.save_belief(

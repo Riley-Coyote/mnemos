@@ -20,6 +20,12 @@
 - Functional memories needing confirmation and hypomnema promotion candidates
   are quarantined from operational packet bodies and simple runtime recall
   until they are reviewed or promoted through an explicit surface.
+- Direct-ID advanced MCP tools (`mnemos_inspect`, `mnemos_forget`, and the
+  hypomnema revise/supersede/promote mutators), shared-pool connect helpers,
+  and substrate handlers (insight, reflection, surprise, wandering, dreaming,
+  initiation) now look up engrams with `read_visibility="operational_context"`
+  so review-only and audit-only rows cannot be mutated, dreamt over, or
+  reflected on through an operational call path.
 
 ### MCP Server
 - Advanced MCP tools now inherit the server's configured `agent_id`,

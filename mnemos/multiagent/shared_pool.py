@@ -195,8 +195,8 @@ class SharedPool:
         """
         from ..core.engram import Connection
 
-        a = self._store.get_engram(engram_a_id)
-        b = self._store.get_engram(engram_b_id)
+        a = self._store.get_engram(engram_a_id, read_visibility="operational_context")
+        b = self._store.get_engram(engram_b_id, read_visibility="operational_context")
 
         if a is None or b is None:
             missing = engram_a_id if a is None else engram_b_id

@@ -63,6 +63,12 @@ Use this checklist before publishing Mnemos or opening a release PR.
   substrate producers, consolidation producers, shared-pool reads, and
   modulators filter to `operational_context` before scoring, ranking, or
   generation.
+- Direct-ID advanced tools (`mnemos_inspect`, `mnemos_forget`, hypomnema
+  revise/supersede/promote) and substrate handlers
+  (insight/reflection/surprise/wandering/dreaming/initiation) refuse to mutate
+  or reflect over non-operational rows: a review-only or audit-only ID returns
+  a "not found" response instead of leaking review prose into operating
+  surfaces.
 - Schema v6 migration defaults existing pending beliefs, confirmation-needed
   functional memories, and hypomnema promotion candidates to review visibility.
 - Correction/forget behavior is documented.

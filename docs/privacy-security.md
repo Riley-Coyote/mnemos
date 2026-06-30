@@ -81,7 +81,8 @@ Schema v6 separates ordinary operating context from review and audit material:
 - `read_visibility="operational_context"` is the default surface for retrieval,
   context packets, simple runtime context/recall, prompt building, visual
   snapshots, shared-pool reads, consolidation producers, substrate producers,
-  and modulators.
+  modulators, and direct-ID advanced lookups (`mnemos_inspect`,
+  `mnemos_forget`, and the hypomnema revise/supersede/promote mutators).
 - `read_visibility="review_only"` keeps pending functional confirmations,
   hypomnema promotion candidates, and other review-shaped material out of
   operating context while leaving it visible to explicit review tools.

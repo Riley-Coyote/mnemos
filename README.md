@@ -233,6 +233,12 @@ counts and source IDs, but not pending prose. Use
 human/operator intentionally needs review-only content. Audit-only rows stay
 out of both ordinary operational packets and ordinary review queues.
 
+Direct-ID advanced tools (`mnemos_inspect`, `mnemos_forget`, and the
+`mnemos_hypomnema_revise` / `mnemos_hypomnema_supersede` /
+`mnemos_hypomnema_promote` mutators) operate only on operational rows: a
+review-only or audit-only ID returns a "not found" response so review prose is
+never mutated through an operational tool call.
+
 ### Prompt For An Advanced MCP Agent
 
 ```text

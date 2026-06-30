@@ -66,6 +66,7 @@ def build_context_packet(
         person_id=person_id,
         project_scope=project_scope,
         limit=max_hypomnema,
+        exclude_promotion_candidates=mode == PACKET_MODE_OPERATIONAL,
     )
     review_functional = store.load_functional_memories(
         "",
@@ -81,17 +82,16 @@ def build_context_packet(
         project_scope=project_scope,
         limit=6,
     )
-    if mode == PACKET_MODE_OPERATIONAL:
-        review_hypomnema_ids = {entry["id"] for entry in review_hypomnema}
-        functional = [
-            item for item in functional
-            if not item.get("needs_confirmation")
-        ]
-        hypomnema = [
-            entry for entry in hypomnema
-            if entry.get("id") not in review_hypomnema_ids
-        ]
-
+    review_functional_count = store.get_functional_stats(
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+    )["functional_needs_confirmation"]
+    review_hypomnema_count = store.get_hypomnema_stats(
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+    )["hypomnema_promotion_candidates"]
     engrams: list[dict[str, Any]] = []
     if query.strip():
         retriever = ReactiveRetriever(store)
@@ -120,9 +120,16 @@ def build_context_packet(
         "functional_memory": functional,
         "hypomnema": hypomnema,
         "mnemos_engrams": engrams,
-        "review_queue": _build_review_queue(mode, review_functional, review_hypomnema),
+        "review_queue": _build_review_queue(
+            mode,
+            review_functional,
+            review_hypomnema,
+            functional_count=review_functional_count,
+            candidate_count=review_hypomnema_count,
+        ),
         "stats": stats,
     }
+    packet = _normalize_packet_visibility(packet, mode)
     if include_prompt:
         packet["prompt"] = format_context_packet(
             packet,
@@ -141,10 +148,10 @@ def format_context_packet(
     """Format a context packet as an agent-readable prompt section."""
     if packet_mode is not None:
         mode = normalize_packet_mode(packet_mode)
-        packet = dict(packet)
-        packet["packet_mode"] = mode
+        packet = _normalize_packet_visibility(packet, mode)
     else:
-        normalize_packet_mode(packet.get("packet_mode", PACKET_MODE_OPERATIONAL))
+        mode = normalize_packet_mode(packet.get("packet_mode", PACKET_MODE_OPERATIONAL))
+        packet = _normalize_packet_visibility(packet, mode)
     sections = [
         "## Mnemos Context Packet",
         _format_scope(packet),
@@ -160,6 +167,47 @@ def format_context_packet(
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 80].rstrip() + "\n\n[context packet truncated to token budget]"
+
+
+def _normalize_packet_visibility(
+    packet: dict[str, Any],
+    packet_mode: PacketMode,
+) -> dict[str, Any]:
+    packet = dict(packet)
+    packet["packet_mode"] = packet_mode
+    if packet_mode == PACKET_MODE_REVIEW:
+        review_queue = dict(packet.get("review_queue") or {})
+        review_queue["packet_mode"] = packet_mode
+        packet["review_queue"] = review_queue
+        return packet
+
+    packet["functional_memory"] = [
+        item for item in packet.get("functional_memory") or []
+        if not item.get("needs_confirmation")
+    ]
+    packet["hypomnema"] = [
+        entry for entry in packet.get("hypomnema") or []
+        if not _is_hypomnema_promotion_candidate(entry)
+    ]
+
+    review = packet.get("review_queue") or {}
+    review_functional = review.get("functional_needs_confirmation") or []
+    review_candidates = review.get("hypomnema_promotion_candidates") or []
+    review_queue = _build_review_queue(
+        PACKET_MODE_OPERATIONAL,
+        review_functional,
+        review_candidates,
+    )
+    if "functional_needs_confirmation_count" in review:
+        review_queue["functional_needs_confirmation_count"] = int(
+            review.get("functional_needs_confirmation_count") or 0
+        )
+    if "hypomnema_promotion_candidate_count" in review:
+        review_queue["hypomnema_promotion_candidate_count"] = int(
+            review.get("hypomnema_promotion_candidate_count") or 0
+        )
+    packet["review_queue"] = review_queue
+    return packet
 
 
 def _format_scope(packet: dict[str, Any]) -> str:
@@ -251,15 +299,32 @@ def _format_engrams(packet: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _is_hypomnema_promotion_candidate(entry: dict[str, Any]) -> bool:
+    return (
+        bool(entry.get("active", True))
+        and entry.get("graduated_to_engram_id") is None
+        and float(entry.get("confidence", 0)) >= 0.82
+        and float(entry.get("salience", 0)) >= 0.65
+        and (int(entry.get("revision_count") or 0) >= 1 or bool(entry.get("foundational")))
+    )
+
+
 def _build_review_queue(
     packet_mode: PacketMode,
     functional: list[dict[str, Any]],
     candidates: list[dict[str, Any]],
+    *,
+    functional_count: int | None = None,
+    candidate_count: int | None = None,
 ) -> dict[str, Any]:
     queue: dict[str, Any] = {
         "packet_mode": packet_mode,
-        "functional_needs_confirmation_count": len(functional),
-        "hypomnema_promotion_candidate_count": len(candidates),
+        "functional_needs_confirmation_count": (
+            len(functional) if functional_count is None else functional_count
+        ),
+        "hypomnema_promotion_candidate_count": (
+            len(candidates) if candidate_count is None else candidate_count
+        ),
     }
     if packet_mode == PACKET_MODE_REVIEW:
         queue["functional_needs_confirmation"] = functional
@@ -317,7 +382,7 @@ def _format_review(packet: dict[str, Any]) -> str:
     candidate_count = int(
         review.get("hypomnema_promotion_candidate_count", len(candidates)) or 0
     )
-    if not functional and not candidates:
+    if not functional_count and not candidate_count:
         return "### Review Queue\n- Nothing needs review right now."
     lines = ["### Review Queue"]
     if mode == PACKET_MODE_OPERATIONAL:

@@ -1507,6 +1507,7 @@ class EngramStore:
         project_scope: str = "global",
         limit: int = 8,
         include_inactive: bool = False,
+        exclude_promotion_candidates: bool = False,
     ) -> list[dict[str, Any]]:
         """Search scoped hypomnema entries by text, confidence, and salience."""
         conn = self._get_conn()
@@ -1517,6 +1518,14 @@ class EngramStore:
         params: list[Any] = [agent_id, person_id, project_scope]
         if not include_inactive:
             sql += " AND active = 1"
+        if exclude_promotion_candidates:
+            sql += (
+                " AND NOT (active = 1 "
+                "AND graduated_to_engram_id IS NULL "
+                "AND confidence >= 0.82 "
+                "AND salience >= 0.65 "
+                "AND (revision_count >= 1 OR foundational = 1))"
+            )
         sql += " ORDER BY foundational DESC, last_revised_at DESC LIMIT 100"
         rows = conn.execute(sql, params).fetchall()
 

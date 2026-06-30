@@ -199,6 +199,46 @@ def test_hypomnema_promote_rejects_non_operational_entries(monkeypatch, store):
     assert audit_entry["graduated_to_engram_id"] is None
 
 
+def test_inspect_and_forget_reject_non_operational_engrams(monkeypatch, store):
+    from mnemos import mcp_server
+    from mnemos.core.engram import Engram
+
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_ensure_store", lambda: store)
+    monkeypatch.setattr(mcp_server, "_setup_gate", lambda: None)
+    review = Engram(
+        content="Review-only engram prose must not be disclosed by inspect.",
+        read_visibility="review_only",
+    )
+    audit = Engram(
+        content="Audit-only engram prose must not be archived or disclosed.",
+        read_visibility="audit_only",
+    )
+    store.save_engram(review)
+    store.save_engram(audit)
+
+    review_inspect = mcp_server.mnemos_inspect(review.id)
+    audit_inspect = mcp_server.mnemos_inspect(audit.id)
+    review_forget = mcp_server.mnemos_forget(review.id)
+    audit_forget = mcp_server.mnemos_forget(audit.id)
+
+    loaded_review = store.get_engram(review.id)
+    loaded_audit = store.get_engram(audit.id)
+
+    assert "Memory not found" in review_inspect
+    assert "Memory not found" in audit_inspect
+    assert "Memory not found" in review_forget
+    assert "Memory not found" in audit_forget
+    assert "Review-only engram prose" not in review_inspect
+    assert "Audit-only engram prose" not in audit_inspect
+    assert "Review-only engram prose" not in review_forget
+    assert "Audit-only engram prose" not in audit_forget
+    assert loaded_review is not None
+    assert loaded_audit is not None
+    assert loaded_review.state == "active"
+    assert loaded_audit.state == "active"
+
+
 def test_review_queue_opts_into_review_candidate_prose(monkeypatch, store):
     from mnemos import mcp_server
 

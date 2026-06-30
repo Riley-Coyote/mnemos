@@ -148,6 +148,121 @@ def test_context_and_recall_hide_operational_promotion_candidates(tmp_path, monk
     assert "Promotion candidate runtime phrase" not in recall
 
 
+def test_direct_id_correction_does_not_mutate_non_operational_hypomnema(tmp_path):
+    from mnemos.store.sqlite_store import EngramStore
+
+    db_path = str(tmp_path / "simple.db")
+    seed = EngramStore(db_path)
+    try:
+        review_id = seed.write_hypomnema_entry(
+            "Review-only correction target must not be mutated.",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            confidence=0.95,
+            salience=0.9,
+            read_visibility="review_only",
+        )
+        audit_id = seed.write_hypomnema_entry(
+            "Audit-only correction target must not be mutated.",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            confidence=0.95,
+            salience=0.9,
+            read_visibility="audit_only",
+        )
+    finally:
+        seed.close()
+
+    runtime = MnemosRuntime(
+        db_path=db_path,
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+
+    try:
+        review_result = runtime.correct("", target_id=review_id, action="forget")
+        audit_result = runtime.correct("", target_id=audit_id, action="forget")
+        assert runtime._store is not None
+        review_entry = runtime._store.get_hypomnema_entry(
+            review_id,
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+        )
+        audit_entry = runtime._store.get_hypomnema_entry(
+            audit_id,
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+        )
+    finally:
+        runtime.close()
+
+    assert "Archived continuity note" not in review_result
+    assert "Archived continuity note" not in audit_result
+    assert "Review-only correction target" not in review_result
+    assert "Audit-only correction target" not in audit_result
+    assert review_entry is not None
+    assert audit_entry is not None
+    assert review_entry["active"] is True
+    assert audit_entry["active"] is True
+    assert review_entry["content"] == "Review-only correction target must not be mutated."
+    assert audit_entry["content"] == "Audit-only correction target must not be mutated."
+
+
+def test_direct_id_correction_does_not_mutate_non_operational_engram(tmp_path):
+    from mnemos.core.engram import Engram
+    from mnemos.store.sqlite_store import EngramStore
+
+    db_path = str(tmp_path / "simple.db")
+    seed = EngramStore(db_path)
+    try:
+        review = Engram(
+            content="Review-only engram target must not be archived.",
+            owner_agent_id="nova",
+            read_visibility="review_only",
+        )
+        audit = Engram(
+            content="Audit-only engram target must not be archived.",
+            owner_agent_id="nova",
+            read_visibility="audit_only",
+        )
+        seed.save_engram(review)
+        seed.save_engram(audit)
+    finally:
+        seed.close()
+
+    runtime = MnemosRuntime(
+        db_path=db_path,
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+
+    try:
+        review_result = runtime.correct("", target_id=review.id, action="forget")
+        audit_result = runtime.correct("", target_id=audit.id, action="forget")
+        assert runtime._store is not None
+        loaded_review = runtime._store.get_engram(review.id)
+        loaded_audit = runtime._store.get_engram(audit.id)
+    finally:
+        runtime.close()
+
+    assert "Archived memory" not in review_result
+    assert "Archived memory" not in audit_result
+    assert "Review-only engram target" not in review_result
+    assert "Audit-only engram target" not in audit_result
+    assert loaded_review is not None
+    assert loaded_audit is not None
+    assert loaded_review.state == "active"
+    assert loaded_audit.state == "active"
+
+
 def test_identity_scope_does_not_leak_between_agents(tmp_path):
     db_path = str(tmp_path / "shared.db")
     nova = MnemosRuntime(

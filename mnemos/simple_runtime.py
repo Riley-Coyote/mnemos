@@ -25,7 +25,7 @@ from .retrieval.reactive import ReactiveRetriever
 # remain importable from here for existing consumers.
 from .simple_scope import MnemosScope, resolve_scope  # noqa: F401
 from .store.embedding_index import EmbeddingIndex
-from .store.sqlite_store import EngramStore
+from .store.sqlite_store import EngramStore, READ_VISIBILITY_OPERATIONAL
 
 
 SIMPLE_TOOL_NAMES = (
@@ -748,6 +748,7 @@ class MnemosRuntime:
                 agent_id=self.scope.agent_id,
                 person_id=self.scope.person_id,
                 project_scope=self.scope.project_scope,
+                read_visibility=READ_VISIBILITY_OPERATIONAL,
             )
             if hypo is not None:
                 if action in {"forget", "archive", "remove", "delete"}:
@@ -760,7 +761,10 @@ class MnemosRuntime:
                     )
                     related_engram_id = hypo.get("related_engram_id") or hypo.get("graduated_to_engram_id")
                     if related_engram_id:
-                        related = self._store.get_engram(related_engram_id)
+                        related = self._store.get_engram(
+                            related_engram_id,
+                            read_visibility=READ_VISIBILITY_OPERATIONAL,
+                        )
                         if related is not None:
                             self._store.archive_engram(related, reason=f"simple_correction_{action}")
                     return f"Archived continuity note {target}."
@@ -777,7 +781,10 @@ class MnemosRuntime:
                 )
                 return f"Updated continuity note {target}."
 
-            engram = self._store.get_engram(target)
+            engram = self._store.get_engram(
+                target,
+                read_visibility=READ_VISIBILITY_OPERATIONAL,
+            )
             if engram is not None:
                 self._store.archive_engram(engram, reason=f"simple_correction_{action}")
                 if action in {"forget", "archive", "remove", "delete"} and not correction.strip():
@@ -819,7 +826,10 @@ class MnemosRuntime:
                     )
                     related_engram_id = match.get("related_engram_id") or match.get("graduated_to_engram_id")
                     if related_engram_id:
-                        related = self._store.get_engram(related_engram_id)
+                        related = self._store.get_engram(
+                            related_engram_id,
+                            read_visibility=READ_VISIBILITY_OPERATIONAL,
+                        )
                         if related is not None:
                             self._store.archive_engram(related, reason=f"simple_correction_{action}")
                     maintenance = self.maintain(auto=True)
@@ -853,7 +863,10 @@ class MnemosRuntime:
 
                 related_engram_id = match.get("related_engram_id") or match.get("graduated_to_engram_id")
                 if related_engram_id:
-                    related = self._store.get_engram(related_engram_id)
+                    related = self._store.get_engram(
+                        related_engram_id,
+                        read_visibility=READ_VISIBILITY_OPERATIONAL,
+                    )
                     if related is not None:
                         self._store.archive_engram(related, reason=f"simple_correction_{action}")
 

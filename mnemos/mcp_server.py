@@ -1381,7 +1381,10 @@ def mnemos_inspect(engram_id: str) -> str:
     if gate:
         return gate
     _ensure_store()
-    engram = _store.get_engram(engram_id)  # type: ignore
+    engram = _store.get_engram(  # type: ignore
+        engram_id,
+        read_visibility=READ_VISIBILITY_OPERATIONAL,
+    )
     if engram is None:
         return f"Memory not found: {engram_id}"
 
@@ -1581,7 +1584,10 @@ def mnemos_forget(engram_id: str) -> str:
     if gate:
         return gate
     _ensure_store()
-    engram = _store.get_engram(engram_id)  # type: ignore
+    engram = _store.get_engram(  # type: ignore
+        engram_id,
+        read_visibility=READ_VISIBILITY_OPERATIONAL,
+    )
     if engram is None:
         return f"Memory not found: {engram_id}"
 

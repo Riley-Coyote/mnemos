@@ -58,6 +58,7 @@ def build_context_packet(
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        exclude_needs_confirmation=mode == PACKET_MODE_OPERATIONAL,
         limit=max_functional,
     )
     hypomnema = store.search_hypomnema(
@@ -345,7 +346,6 @@ def _functional_review_reference(item: dict[str, Any]) -> dict[str, Any]:
         "id": item["id"],
         "source_id": item["id"],
         "memory_type": item["memory_type"],
-        "source": item.get("source", ""),
         "agent_id": item["agent_id"],
         "person_id": item["person_id"],
         "project_scope": item["project_scope"],

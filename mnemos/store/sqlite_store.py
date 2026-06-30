@@ -1121,12 +1121,17 @@ class EngramStore:
         project_scope: str = "global",
         memory_type: str | None = None,
         needs_confirmation_only: bool = False,
+        exclude_needs_confirmation: bool = False,
         include_deleted: bool = False,
         limit: int = 12,
     ) -> list[dict[str, Any]]:
         """Search functional memories for the current scope/session."""
         if memory_type and memory_type not in VALID_FUNCTIONAL_TYPES:
             raise ValueError(f"Unsupported functional memory type: {memory_type}")
+        if needs_confirmation_only and exclude_needs_confirmation:
+            raise ValueError(
+                "needs_confirmation_only and exclude_needs_confirmation conflict"
+            )
 
         sql = (
             "SELECT * FROM functional_memories "
@@ -1141,6 +1146,8 @@ class EngramStore:
             params.append(memory_type)
         if needs_confirmation_only:
             sql += " AND needs_confirmation = 1"
+        if exclude_needs_confirmation:
+            sql += " AND needs_confirmation = 0"
         if not include_deleted:
             sql += " AND is_deleted = 0"
         sql += " ORDER BY pinned DESC, updated_at DESC LIMIT 200"

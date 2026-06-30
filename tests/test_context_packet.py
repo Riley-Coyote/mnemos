@@ -132,6 +132,71 @@ def test_operational_context_packet_redacts_candidates_outside_review_queue(stor
     assert packet["review_queue"]["hypomnema_promotion_candidate_count"] == 7
 
 
+def test_operational_context_packet_omits_functional_review_source(store):
+    store.write_functional_memory(
+        "Pending functional body is review-only.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        memory_type="open_question",
+        needs_confirmation=True,
+        source="free-form source carries leaked pending prose",
+        confidence=0.9,
+        salience=0.9,
+    )
+
+    packet = build_context_packet(
+        store,
+        "review source boundary",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        packet_mode="operational",
+    )
+
+    reference = packet["review_queue"]["functional_needs_confirmation"][0]
+
+    assert "source" not in reference
+    assert "free-form source carries leaked pending prose" not in str(packet)
+
+
+def test_operational_functional_filter_runs_before_limit(store):
+    for index in range(5):
+        store.write_functional_memory(
+            f"Dominant pending functional hit {index} critical anchor.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            memory_type="open_question",
+            needs_confirmation=True,
+            pinned=True,
+            confidence=1.0,
+            salience=1.0,
+        )
+    active = store.write_functional_memory(
+        "Active operational functional memory critical anchor.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.35,
+        salience=0.35,
+    )
+
+    packet = build_context_packet(
+        store,
+        "critical anchor",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        packet_mode="operational",
+        max_functional=1,
+    )
+
+    assert [item["id"] for item in packet["functional_memory"]] == [active["id"]]
+    assert "Active operational functional memory" in packet["prompt"]
+    assert "Dominant pending functional hit" not in str(packet)
+
+
 def test_formatter_operational_override_redacts_existing_review_packet(store):
     functional = store.write_functional_memory(
         "Formatter functional prose must not survive operational rendering.",

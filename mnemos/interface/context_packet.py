@@ -362,9 +362,6 @@ def _hypomnema_review_reference(item: dict[str, Any]) -> dict[str, Any]:
         "agent_id": item["agent_id"],
         "person_id": item["person_id"],
         "project_scope": item["project_scope"],
-        "related_session_id": item.get("related_session_id"),
-        "related_engram_id": item.get("related_engram_id"),
-        "graduated_to_engram_id": item.get("graduated_to_engram_id"),
         "read_visibility": "review_only",
     }
 

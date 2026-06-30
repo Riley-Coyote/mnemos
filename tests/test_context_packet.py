@@ -1,5 +1,6 @@
 """Tests for turnkey context packets and visual snapshots."""
 
+from mnemos.core.engram import Engram
 from mnemos.interface.context_packet import build_context_packet, format_context_packet
 from mnemos.interface.visual_snapshot import build_memory_visual_snapshot
 
@@ -158,6 +159,40 @@ def test_operational_context_packet_omits_functional_review_source(store):
 
     assert "source" not in reference
     assert "free-form source carries leaked pending prose" not in str(packet)
+
+
+def test_operational_context_packet_omits_hypomnema_related_ids(store):
+    related_engram_id = "related-engram-id-carries-review-prose"
+    store.save_engram(Engram(id=related_engram_id, content="Existing related engram."))
+    store.write_hypomnema_entry(
+        "Pending hypomnema body is review-only.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.95,
+        salience=0.9,
+        foundational=True,
+        related_session_id="related session carries leaked pending prose",
+        related_engram_id=related_engram_id,
+    )
+
+    packet = build_context_packet(
+        store,
+        "hypomnema boundary",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        packet_mode="operational",
+    )
+
+    reference = packet["review_queue"]["hypomnema_promotion_candidates"][0]
+    serialized_packet = str(packet)
+
+    assert "related_session_id" not in reference
+    assert "related_engram_id" not in reference
+    assert "graduated_to_engram_id" not in reference
+    assert "related session carries leaked pending prose" not in serialized_packet
+    assert related_engram_id not in serialized_packet
 
 
 def test_operational_functional_filter_runs_before_limit(store):

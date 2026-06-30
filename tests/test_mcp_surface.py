@@ -37,6 +37,14 @@ def test_advanced_mcp_preserves_admin_tools_and_includes_simple_tools():
     assert "mnemos_consolidate" in names
 
 
+def test_advanced_context_packet_schema_exposes_packet_mode():
+    from mnemos.mcp_server import mcp
+
+    schema = _tools_by_name(mcp)["mnemos_context_packet"].inputSchema
+
+    assert "packet_mode" in schema.get("properties", {})
+
+
 def test_simple_tools_have_protocol_risk_annotations():
     from mnemos.simple_mcp import simple_mcp
 

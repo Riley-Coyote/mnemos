@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..retrieval.reactive import ReactiveRetriever, RetrievalResult
 
@@ -11,6 +11,21 @@ if TYPE_CHECKING:
 
 
 _CHARS_PER_TOKEN = 4
+PACKET_MODE_OPERATIONAL = "operational"
+PACKET_MODE_REVIEW = "review"
+PacketMode = Literal["operational", "review"]
+_VALID_PACKET_MODES = {PACKET_MODE_OPERATIONAL, PACKET_MODE_REVIEW}
+
+
+def normalize_packet_mode(packet_mode: str = PACKET_MODE_OPERATIONAL) -> PacketMode:
+    """Validate and normalize context packet visibility mode."""
+    mode = (packet_mode or PACKET_MODE_OPERATIONAL).strip().lower()
+    if mode not in _VALID_PACKET_MODES:
+        raise ValueError(
+            "packet_mode must be one of: "
+            f"{PACKET_MODE_OPERATIONAL}, {PACKET_MODE_REVIEW}"
+        )
+    return mode  # type: ignore[return-value]
 
 
 def build_context_packet(
@@ -23,6 +38,7 @@ def build_context_packet(
     session_id: str = "",
     token_budget: int = 3000,
     include_prompt: bool = True,
+    packet_mode: str = PACKET_MODE_OPERATIONAL,
     max_functional: int = 10,
     max_hypomnema: int = 8,
     max_engrams: int = 6,
@@ -32,6 +48,7 @@ def build_context_packet(
     The packet orders memory from most immediately actionable to most durable:
     functional memory, hypomnema continuity, then Mnemos engrams and beliefs.
     """
+    mode = normalize_packet_mode(packet_mode)
     identity = store.get_identity(agent_id)
     beliefs = store.get_beliefs(agent_id, active_only=True)
     session = store.get_memory_session(session_id) if session_id else None
@@ -64,6 +81,16 @@ def build_context_packet(
         project_scope=project_scope,
         limit=6,
     )
+    if mode == PACKET_MODE_OPERATIONAL:
+        review_hypomnema_ids = {entry["id"] for entry in review_hypomnema}
+        functional = [
+            item for item in functional
+            if not item.get("needs_confirmation")
+        ]
+        hypomnema = [
+            entry for entry in hypomnema
+            if entry.get("id") not in review_hypomnema_ids
+        ]
 
     engrams: list[dict[str, Any]] = []
     if query.strip():
@@ -79,6 +106,7 @@ def build_context_packet(
 
     stats = store.get_stats(agent_id)
     packet: dict[str, Any] = {
+        "packet_mode": mode,
         "scope": {
             "agent_id": agent_id,
             "person_id": person_id,
@@ -92,19 +120,31 @@ def build_context_packet(
         "functional_memory": functional,
         "hypomnema": hypomnema,
         "mnemos_engrams": engrams,
-        "review_queue": {
-            "functional_needs_confirmation": review_functional,
-            "hypomnema_promotion_candidates": review_hypomnema,
-        },
+        "review_queue": _build_review_queue(mode, review_functional, review_hypomnema),
         "stats": stats,
     }
     if include_prompt:
-        packet["prompt"] = format_context_packet(packet, token_budget=token_budget)
+        packet["prompt"] = format_context_packet(
+            packet,
+            token_budget=token_budget,
+            packet_mode=mode,
+        )
     return packet
 
 
-def format_context_packet(packet: dict[str, Any], *, token_budget: int = 3000) -> str:
+def format_context_packet(
+    packet: dict[str, Any],
+    *,
+    token_budget: int = 3000,
+    packet_mode: str | None = None,
+) -> str:
     """Format a context packet as an agent-readable prompt section."""
+    if packet_mode is not None:
+        mode = normalize_packet_mode(packet_mode)
+        packet = dict(packet)
+        packet["packet_mode"] = mode
+    else:
+        normalize_packet_mode(packet.get("packet_mode", PACKET_MODE_OPERATIONAL))
     sections = [
         "## Mnemos Context Packet",
         _format_scope(packet),
@@ -211,17 +251,107 @@ def _format_engrams(packet: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _build_review_queue(
+    packet_mode: PacketMode,
+    functional: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    queue: dict[str, Any] = {
+        "packet_mode": packet_mode,
+        "functional_needs_confirmation_count": len(functional),
+        "hypomnema_promotion_candidate_count": len(candidates),
+    }
+    if packet_mode == PACKET_MODE_REVIEW:
+        queue["functional_needs_confirmation"] = functional
+        queue["hypomnema_promotion_candidates"] = candidates
+        return queue
+
+    queue["functional_needs_confirmation"] = [
+        _functional_review_reference(item) for item in functional
+    ]
+    queue["hypomnema_promotion_candidates"] = [
+        _hypomnema_review_reference(item) for item in candidates
+    ]
+    return queue
+
+
+def _functional_review_reference(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item["id"],
+        "source_id": item["id"],
+        "memory_type": item["memory_type"],
+        "source": item.get("source", ""),
+        "agent_id": item["agent_id"],
+        "person_id": item["person_id"],
+        "project_scope": item["project_scope"],
+        "read_visibility": "review_only",
+    }
+
+
+def _hypomnema_review_reference(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item["id"],
+        "source_id": item["id"],
+        "domain": item["domain"],
+        "source": item["source"],
+        "agent_id": item["agent_id"],
+        "person_id": item["person_id"],
+        "project_scope": item["project_scope"],
+        "related_session_id": item.get("related_session_id"),
+        "related_engram_id": item.get("related_engram_id"),
+        "graduated_to_engram_id": item.get("graduated_to_engram_id"),
+        "read_visibility": "review_only",
+    }
+
+
 def _format_review(packet: dict[str, Any]) -> str:
     review = packet.get("review_queue") or {}
+    mode = normalize_packet_mode(
+        review.get("packet_mode") or packet.get("packet_mode", PACKET_MODE_OPERATIONAL)
+    )
     functional = review.get("functional_needs_confirmation") or []
     candidates = review.get("hypomnema_promotion_candidates") or []
+    functional_count = int(
+        review.get("functional_needs_confirmation_count", len(functional)) or 0
+    )
+    candidate_count = int(
+        review.get("hypomnema_promotion_candidate_count", len(candidates)) or 0
+    )
     if not functional and not candidates:
         return "### Review Queue\n- Nothing needs review right now."
     lines = ["### Review Queue"]
+    if mode == PACKET_MODE_OPERATIONAL:
+        if functional_count:
+            lines.append(
+                f"- {functional_count} functional memory item(s) need confirmation "
+                "(review-only; prose withheld)."
+            )
+            for item in functional:
+                lines.append(
+                    f"  - source_id={item['source_id']} type={item['memory_type']}"
+                )
+        if candidate_count:
+            lines.append(
+                f"- {candidate_count} hypomnema promotion candidate(s) need review "
+                "(review-only; prose withheld)."
+            )
+            for item in candidates:
+                lines.append(
+                    f"  - source_id={item['source_id']} domain={item['domain']} "
+                    f"source={item['source']}"
+                )
+        return "\n".join(lines)
+
     for item in functional:
-        lines.append(f"- confirm: {item['content']} [{item['memory_type']}]")
+        lines.append(
+            f"- confirm [review-only id={item['id']} source={item.get('source', '')}]: "
+            f"{item['content']} [{item['memory_type']}]"
+        )
     for item in candidates:
-        lines.append(f"- promotion candidate: {item['content']} [{item['domain']}]")
+        lines.append(
+            f"- promotion candidate [review-only id={item['id']} source={item['source']}]: "
+            f"{item['content']} [{item['domain']}]"
+        )
     return "\n".join(lines)
 
 

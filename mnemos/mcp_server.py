@@ -979,29 +979,35 @@ def mnemos_context_packet(
     project_scope: str = "global",
     token_budget: int = 3000,
     include_json: bool = False,
+    packet_mode: str = "operational",
 ) -> str:
     """Build the complete memory context an agent should read before answering.
 
     This is the turnkey call for agent integrations: it combines functional
     memory, hypomnema, long-term Mnemos recall, beliefs, and review cues in
-    the order an agent should reason over them. Default scope args inherit the
-    server's configured scope.
+    the order an agent should reason over them. packet_mode="operational"
+    withholds review prose; packet_mode="review" exposes candidate prose with
+    provenance labels. Default scope args inherit the server's configured scope.
     """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
     agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
-    packet = build_context_packet(
-        _store,  # type: ignore
-        query,
-        agent_id=agent_id,
-        person_id=person_id,
-        project_scope=project_scope,
-        session_id=session_id,
-        token_budget=max(500, token_budget),
-        include_prompt=True,
-    )
+    try:
+        packet = build_context_packet(
+            _store,  # type: ignore
+            query,
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope=project_scope,
+            session_id=session_id,
+            token_budget=max(500, token_budget),
+            include_prompt=True,
+            packet_mode=packet_mode,
+        )
+    except ValueError as exc:
+        return f"Context packet failed: {exc}"
     if include_json:
         return json.dumps(packet, indent=2, ensure_ascii=True, default=str)
     return packet["prompt"]

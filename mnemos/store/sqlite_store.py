@@ -31,19 +31,19 @@ from .migrations import (
     get_current_version,
     run_migrations,
 )
+from .read_visibility import (
+    HYPO_PROMOTION_MIN_CONFIDENCE,
+    HYPO_PROMOTION_MIN_SALIENCE,
+    READ_VISIBILITY_AUDIT as READ_VISIBILITY_AUDIT,
+    READ_VISIBILITY_OPERATIONAL,
+    READ_VISIBILITY_REVIEW,
+    VALID_READ_VISIBILITIES,
+    classify_hypomnema_read_visibility,
+)
 
 
 # Schema version — increment when tables change
 SCHEMA_VERSION = 6
-
-READ_VISIBILITY_OPERATIONAL = "operational_context"
-READ_VISIBILITY_REVIEW = "review_only"
-READ_VISIBILITY_AUDIT = "audit_only"
-VALID_READ_VISIBILITIES = {
-    READ_VISIBILITY_OPERATIONAL,
-    READ_VISIBILITY_REVIEW,
-    READ_VISIBILITY_AUDIT,
-}
 
 VALID_PROPOSAL_AUTHORITIES = {
     "user_stated",
@@ -223,7 +223,7 @@ CREATE TABLE IF NOT EXISTS hypomnema_entries (
     density REAL NOT NULL DEFAULT 0.5,
     domain TEXT NOT NULL DEFAULT 'topical'
         CHECK (domain IN ('foundational', 'identity', 'recurring', 'long-arc', 'topical', 'situational')),
-    read_visibility TEXT NOT NULL DEFAULT 'operational_context'
+    read_visibility TEXT NOT NULL DEFAULT 'review_only'
         CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only')),
     tags_json TEXT NOT NULL DEFAULT '[]',
     confidence REAL NOT NULL DEFAULT 0.5,
@@ -1806,9 +1806,9 @@ class EngramStore:
         """Write a scoped hypomnema continuity entry.
 
         Hypomnema is durable, relationship-scoped continuity that can be
-        revised before it graduates into shared Mnemos engrams. New entries
-        default to operational read visibility; callers may set review/audit
-        visibility for explicit queues.
+        revised before it graduates into shared Mnemos engrams. New stable or
+        foundational promotion candidates default to review visibility; callers
+        may set explicit visibility when a gate has already classified them.
         """
         conn = self._get_conn()
         entry_id = self._write_hypomnema_entry_no_commit(
@@ -1880,11 +1880,15 @@ class EngramStore:
             raise ValueError(
                 "Hypomnema entry ID already exists outside the requested scope"
             )
-        default_visibility = (
-            existing["read_visibility"]
-            if existing is not None and read_visibility is None
-            else READ_VISIBILITY_OPERATIONAL
-        )
+        if existing is not None and read_visibility is None:
+            default_visibility = existing["read_visibility"]
+        else:
+            default_visibility = classify_hypomnema_read_visibility(
+                confidence=confidence,
+                salience=salience,
+                foundational=foundational,
+                revision_count=0,
+            )
         normalized_visibility = _normalize_read_visibility(
             read_visibility,
             allow_all=False,
@@ -2024,8 +2028,8 @@ class EngramStore:
             sql += (
                 " AND NOT (active = 1 "
                 "AND graduated_to_engram_id IS NULL "
-                "AND confidence >= 0.82 "
-                "AND salience >= 0.65 "
+                f"AND confidence >= {HYPO_PROMOTION_MIN_CONFIDENCE} "
+                f"AND salience >= {HYPO_PROMOTION_MIN_SALIENCE} "
                 "AND (revision_count >= 1 OR foundational = 1))"
             )
         sql += " ORDER BY foundational DESC, last_revised_at DESC LIMIT 100"
@@ -2295,11 +2299,17 @@ class EngramStore:
             WHERE agent_id = ? AND person_id = ? AND project_scope = ?
               AND active = 1
               AND graduated_to_engram_id IS NULL
-              AND confidence >= 0.82
-              AND salience >= 0.65
+              AND confidence >= ?
+              AND salience >= ?
               AND (revision_count >= 1 OR foundational = 1)
         """
-        params: list[Any] = [agent_id, person_id, project_scope]
+        params: list[Any] = [
+            agent_id,
+            person_id,
+            project_scope,
+            HYPO_PROMOTION_MIN_CONFIDENCE,
+            HYPO_PROMOTION_MIN_SALIENCE,
+        ]
         sql = _append_read_visibility_filter(
             sql,
             params,
@@ -2355,11 +2365,18 @@ class EngramStore:
             f"WHERE {where_sql} "
             "AND active = 1 "
             "AND graduated_to_engram_id IS NULL "
-            "AND confidence >= 0.82 "
-            "AND salience >= 0.65 "
+            "AND confidence >= ? "
+            "AND salience >= ? "
             "AND (revision_count >= 1 OR foundational = 1)"
         )
-        candidate_row = conn.execute(candidate_query, params).fetchone()
+        candidate_row = conn.execute(
+            candidate_query,
+            [
+                *params,
+                HYPO_PROMOTION_MIN_CONFIDENCE,
+                HYPO_PROMOTION_MIN_SALIENCE,
+            ],
+        ).fetchone()
         candidates = int(candidate_row[0] or 0)
         return {
             "hypomnema_total": int(row["total"] or 0),

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from ..retrieval.reactive import ReactiveRetriever, RetrievalResult
 from ..store.sqlite_store import READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW
+from ..store.read_visibility import is_hypomnema_promotion_candidate
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -356,12 +357,13 @@ def _format_engrams(packet: dict[str, Any]) -> str:
 
 
 def _is_hypomnema_promotion_candidate(entry: dict[str, Any]) -> bool:
-    return (
-        bool(entry.get("active", True))
-        and entry.get("graduated_to_engram_id") is None
-        and float(entry.get("confidence", 0)) >= 0.82
-        and float(entry.get("salience", 0)) >= 0.65
-        and (int(entry.get("revision_count") or 0) >= 1 or bool(entry.get("foundational")))
+    return is_hypomnema_promotion_candidate(
+        active=entry.get("active", True),
+        graduated_to_engram_id=entry.get("graduated_to_engram_id"),
+        confidence=entry.get("confidence", 0),
+        salience=entry.get("salience", 0),
+        revision_count=entry.get("revision_count", 0),
+        foundational=entry.get("foundational", False),
     )
 
 

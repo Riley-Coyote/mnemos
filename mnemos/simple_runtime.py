@@ -677,6 +677,7 @@ class MnemosRuntime:
             salience=salience,
             foundational=domain in {"foundational", "identity"},
             related_engram_id=engram.id,
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
         )
         self._store.mark_hypomnema_promoted(note_id, engram.id)
         self._record_first_capture(note_id, engram.id, content)

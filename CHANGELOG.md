@@ -20,6 +20,11 @@
 - Functional memories needing confirmation and hypomnema promotion candidates
   are quarantined from operational packet bodies and simple runtime recall
   until they are reviewed or promoted through an explicit surface.
+- Live hypomnema writes now classify stable or foundational promotion
+  candidates as `review_only` unless the caller explicitly supplies a
+  visibility. The raw `hypomnema_entries` schema default is also `review_only`,
+  intentionally favoring operator-visible review over silent audit quarantine
+  for unclassified continuity rows.
 - Direct-ID advanced MCP tools (`mnemos_inspect`, `mnemos_forget`, and the
   hypomnema revise/supersede/promote mutators), shared-pool connect helpers,
   and substrate handlers (insight, reflection, surprise, wandering, dreaming,

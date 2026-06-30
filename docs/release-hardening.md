@@ -71,6 +71,10 @@ Use this checklist before publishing Mnemos or opening a release PR.
   surfaces.
 - Schema v6 migration defaults existing pending beliefs, confirmation-needed
   functional memories, and hypomnema promotion candidates to review visibility.
+- Fresh live hypomnema writes that already meet stable/foundational promotion
+  criteria default to `review_only`; raw hypomnema schema defaults also remain
+  `review_only` so unclassified continuity rows are review-visible before any
+  operational use.
 - Correction/forget behavior is documented.
 
 ## PAI Importer And Dual-Life Watcher

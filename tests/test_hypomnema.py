@@ -24,6 +24,7 @@ class TestHypomnemaStore:
             confidence=0.9,
             salience=0.8,
             foundational=True,
+            read_visibility="operational_context",
         )
 
         results = store.search_hypomnema(
@@ -189,6 +190,7 @@ class TestHypomnemaStore:
             confidence=0.9,
             salience=0.8,
             foundational=True,
+            read_visibility="operational_context",
         )
 
         candidates = store.get_hypomnema_promotion_candidates(
@@ -199,6 +201,56 @@ class TestHypomnemaStore:
 
         assert [entry["id"] for entry in candidates] == [high_id]
         assert low_id not in [entry["id"] for entry in candidates]
+
+    def test_live_write_classifies_stable_hypomnema_as_review_only(self, store):
+        entry_id = store.write_hypomnema_entry(
+            "Fresh foundational continuity should wait for review.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            confidence=0.9,
+            salience=0.8,
+            foundational=True,
+        )
+
+        entry = store.get_hypomnema_entry(
+            entry_id,
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+        )
+        operational_search = store.search_hypomnema(
+            "foundational continuity",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+        )
+        operational_candidates = store.get_hypomnema_promotion_candidates(
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+        )
+        review_candidates = store.get_hypomnema_promotion_candidates(
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            read_visibility="review_only",
+        )
+
+        assert entry["read_visibility"] == "review_only"
+        assert entry_id not in [item["id"] for item in operational_search]
+        assert entry_id not in [item["id"] for item in operational_candidates]
+        assert [item["id"] for item in review_candidates] == [entry_id]
+
+    def test_hypomnema_schema_default_is_review_only(self, store):
+        conn = store._get_conn()
+        read_visibility_column = next(
+            column
+            for column in conn.execute("PRAGMA table_info(hypomnema_entries)")
+            if column["name"] == "read_visibility"
+        )
+
+        assert read_visibility_column["dflt_value"] == "'review_only'"
 
     def test_promotion_candidates_default_to_operational_visibility(self, store):
         operational_id = store.write_hypomnema_entry(

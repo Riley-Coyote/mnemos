@@ -19,6 +19,13 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from .read_visibility import (
+    HYPO_PROMOTION_MIN_CONFIDENCE,
+    HYPO_PROMOTION_MIN_SALIENCE,
+    READ_VISIBILITY_OPERATIONAL,
+    READ_VISIBILITY_REVIEW,
+)
+
 
 # Migration registry: version -> (description, migration_function)
 _MIGRATIONS: dict[int, tuple[str, Callable[[sqlite3.Connection], None]]] = {}
@@ -404,17 +411,19 @@ def migrate_v5_u3b_hardening(conn: sqlite3.Connection) -> None:
 
 def apply_afferent_membrane_v1_schema_migration(conn: sqlite3.Connection) -> None:
     """Apply U2 proposal-ledger and read-visibility schema additions."""
-    visibility_check = (
-        "TEXT NOT NULL DEFAULT 'operational_context' "
-        "CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only'))"
-    )
-    for table in (
-        "engrams",
-        "beliefs",
-        "hypomnema_entries",
-        "functional_memories",
+    visibility_check = "CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only'))"
+    for table, default_visibility in (
+        ("engrams", READ_VISIBILITY_OPERATIONAL),
+        ("beliefs", READ_VISIBILITY_OPERATIONAL),
+        ("hypomnema_entries", READ_VISIBILITY_REVIEW),
+        ("functional_memories", READ_VISIBILITY_OPERATIONAL),
     ):
-        _add_column_if_missing(conn, table, "read_visibility", visibility_check)
+        _add_column_if_missing(
+            conn,
+            table,
+            "read_visibility",
+            f"TEXT NOT NULL DEFAULT '{default_visibility}' {visibility_check}",
+        )
 
     conn.execute(
         """
@@ -436,10 +445,11 @@ def apply_afferent_membrane_v1_schema_migration(conn: sqlite3.Connection) -> Non
         SET read_visibility = 'review_only'
         WHERE active = 1
           AND graduated_to_engram_id IS NULL
-          AND confidence >= 0.82
-          AND salience >= 0.65
+          AND confidence >= ?
+          AND salience >= ?
           AND (revision_count >= 1 OR foundational = 1)
-        """
+        """,
+        (HYPO_PROMOTION_MIN_CONFIDENCE, HYPO_PROMOTION_MIN_SALIENCE),
     )
 
     conn.execute(

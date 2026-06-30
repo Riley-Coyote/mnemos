@@ -39,6 +39,7 @@ def _seed_promotion_candidate(runtime: MnemosRuntime) -> None:
         foundational=True,
         confidence=0.9,
         salience=0.8,
+        read_visibility="operational_context",
     )
 
 

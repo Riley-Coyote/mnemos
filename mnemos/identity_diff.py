@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any
 import ulid as _ulid_mod
 
 from .core.identity import AgentIdentity, MemoryProfile
+from .store.read_visibility import READ_VISIBILITY_OPERATIONAL
 
 if TYPE_CHECKING:
     from .simple_runtime import MnemosScope
@@ -734,6 +735,7 @@ def write_divergence_note(
         confidence=0.9,
         salience=0.9,
         foundational=True,
+        read_visibility=READ_VISIBILITY_OPERATIONAL,
     )
 
 

@@ -31,13 +31,17 @@ class TestEngramStore:
         for table in (
             "engrams",
             "beliefs",
-            "hypomnema_entries",
             "functional_memories",
         ):
             columns = _column_map(conn, table)
             assert "read_visibility" in columns
             assert columns["read_visibility"]["notnull"] == 1
             assert columns["read_visibility"]["dflt_value"] == "'operational_context'"
+
+        hypomnema_columns = _column_map(conn, "hypomnema_entries")
+        assert "read_visibility" in hypomnema_columns
+        assert hypomnema_columns["read_visibility"]["notnull"] == 1
+        assert hypomnema_columns["read_visibility"]["dflt_value"] == "'review_only'"
 
         ledger_columns = _column_map(conn, "proposal_ledger")
         for column in (

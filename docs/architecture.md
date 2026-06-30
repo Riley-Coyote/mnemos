@@ -53,9 +53,12 @@ The fundamental unit of memory. Each engram has:
   `read_visibility` (`operational_context`, `review_only`, or `audit_only`).
   Operational retrieval, packets, consolidation, substrate producers, and
   modulators read only `operational_context` rows by default; review APIs opt
-  in explicitly. Proposed durable transitions are tracked in `proposal_ledger`
-  with authority, target surface, transition, blast radius, visibility, status,
-  reason, gate version, provenance, and payload fields.
+  in explicitly. Stable or foundational live hypomnema writes classify to
+  `review_only` by default, and the bare hypomnema schema default is also
+  `review_only` so unclassified rows remain review-visible before any
+  operational use. Proposed durable transitions are tracked in
+  `proposal_ledger` with authority, target surface, transition, blast radius,
+  visibility, status, reason, gate version, provenance, and payload fields.
 - **PAI coordinate guard**: before imported text becomes retrievable rows, the
   splitter strips Strict-B eigenvalue, vivezza, coordinate-target, and
   persona-signature tuple-value lines from any source kind. These values are

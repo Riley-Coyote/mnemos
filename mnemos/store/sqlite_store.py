@@ -717,7 +717,10 @@ class EngramStore:
         engram = Engram.from_dict(dict(row))
 
         # Load connections
-        engram.connections = self.get_connections(engram_id)
+        engram.connections = self.get_connections(
+            engram_id,
+            read_visibility=read_visibility,
+        )
 
         # Load versions
         engram.versions = self._get_versions(engram_id)
@@ -780,7 +783,10 @@ class EngramStore:
         engrams = [Engram.from_dict(dict(r)) for r in rows]
         if load_connections:
             for engram in engrams:
-                engram.connections = self.get_connections(engram.id)
+                engram.connections = self.get_connections(
+                    engram.id,
+                    read_visibility=read_visibility,
+                )
                 engram.versions = self._get_versions(engram.id)
         return engrams
 
@@ -869,12 +875,33 @@ class EngramStore:
             ),
         )
 
-    def get_connections(self, engram_id: str) -> list[Connection]:
+    def get_connections(
+        self,
+        engram_id: str,
+        *,
+        read_visibility: str | Sequence[str] | None = None,
+    ) -> list[Connection]:
         """Get all connections FROM an engram."""
         conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT * FROM connections WHERE source_id = ?", (engram_id,)
-        ).fetchall()
+        visibility_values = _normalize_read_visibility_values(read_visibility)
+        params: list[Any] = [engram_id]
+        if visibility_values is None:
+            rows = conn.execute(
+                "SELECT * FROM connections WHERE source_id = ?", params
+            ).fetchall()
+        else:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            params.extend(visibility_values)
+            params.extend(visibility_values)
+            rows = conn.execute(
+                "SELECT c.* FROM connections c "
+                "JOIN engrams source ON source.id = c.source_id "
+                "JOIN engrams target ON target.id = c.target_id "
+                "WHERE c.source_id = ? "
+                f"AND source.read_visibility IN ({placeholders}) "
+                f"AND target.read_visibility IN ({placeholders})",
+                params,
+            ).fetchall()
         return [
             Connection(
                 target_id=r["target_id"],

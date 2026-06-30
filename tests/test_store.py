@@ -103,6 +103,52 @@ class TestEngramStore:
         assert connections[0].target_id == e2.id
         assert connections[0].relation == ConnectionRelation.SUPPORTS
 
+    def test_operational_engram_load_filters_hidden_connection_targets(self, store):
+        source = Engram(content="Visible source memory")
+        visible_target = Engram(content="Visible target memory")
+        review_target = Engram(
+            content="Review-only target memory",
+            read_visibility="review_only",
+        )
+        audit_target = Engram(
+            content="Audit-only target memory",
+            read_visibility="audit_only",
+        )
+        for engram in (source, visible_target, review_target, audit_target):
+            store.save_engram(engram)
+
+        for target in (visible_target, review_target, audit_target):
+            store.save_connection(
+                source.id,
+                Connection(
+                    target_id=target.id,
+                    relation=ConnectionRelation.SUPPORTS,
+                    strength=0.7,
+                ),
+            )
+
+        operational = store.get_engram(
+            source.id,
+            read_visibility="operational_context",
+        )
+        admin = store.get_engram(source.id)
+        active = store.get_active_engrams(agent_id="default", load_connections=True)
+        loaded_source = next(engram for engram in active if engram.id == source.id)
+
+        assert operational is not None
+        assert {conn.target_id for conn in operational.connections} == {
+            visible_target.id
+        }
+        assert admin is not None
+        assert {conn.target_id for conn in admin.connections} == {
+            visible_target.id,
+            review_target.id,
+            audit_target.id,
+        }
+        assert {conn.target_id for conn in loaded_source.connections} == {
+            visible_target.id
+        }
+
     def test_save_and_get_belief(self, store):
         """Belief round-trip."""
         belief = Belief(

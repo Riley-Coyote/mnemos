@@ -155,7 +155,7 @@ def bootstrap(
 
     # ── Step 2: Initialize Mnemos database ──
     try:
-        from ..store.sqlite_store import EngramStore
+        from ..store.sqlite_store import EngramStore, READ_VISIBILITY_OPERATIONAL
 
         real_db_path = Path(db_path).expanduser()
         real_db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,6 +180,7 @@ def bootstrap(
             salience=0.8,
             foundational=True,
             related_session_id=session["id"],
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
         )
         functional = store.write_functional_memory(
             "Run mnemos_context_packet at session start, keep task state in functional memory, revise hypomnema when continuity changes, and promote only stable entries into Mnemos.",

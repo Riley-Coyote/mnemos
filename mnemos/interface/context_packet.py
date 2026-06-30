@@ -113,7 +113,17 @@ def build_context_packet(
         )
         engrams = [_serialize_retrieval_result(result) for result in results]
 
-    stats = store.get_stats(agent_id)
+    stats_read_visibility = (
+        (READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW)
+        if mode == PACKET_MODE_REVIEW
+        else READ_VISIBILITY_OPERATIONAL
+    )
+    stats = store.get_stats(
+        agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        read_visibility=stats_read_visibility,
+    )
     packet: dict[str, Any] = {
         "packet_mode": mode,
         "scope": {

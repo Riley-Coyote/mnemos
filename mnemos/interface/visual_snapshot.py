@@ -24,7 +24,12 @@ def build_memory_visual_snapshot(
     Review queues are represented by counts/source IDs only; pending prose
     stays behind explicit review packet surfaces.
     """
-    stats = store.get_stats(agent_id)
+    stats = store.get_stats(
+        agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        read_visibility=READ_VISIBILITY_OPERATIONAL,
+    )
     functional = store.load_functional_memories(
         "",
         session_id=session_id or None,

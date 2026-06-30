@@ -2538,22 +2538,47 @@ class EngramStore:
         self,
         agent_id: str = "default",
         include_pending_review: bool = False,
+        *,
+        person_id: str | None = None,
+        project_scope: str | None = None,
+        read_visibility: str | Sequence[str] | None = None,
     ) -> dict:
         """Get summary statistics for an agent's memory."""
         conn = self._get_conn()
         stats = {}
+        visibility_values = _normalize_read_visibility_values(read_visibility)
 
         # Engram counts by state
         for state in ("active", "consolidating", "dormant", "archived"):
-            row = conn.execute(
+            query = (
                 "SELECT COUNT(*) FROM engrams "
-                "WHERE owner_agent_id = ? AND state = ?",
-                (agent_id, state),
+                "WHERE owner_agent_id = ? AND state = ?"
+            )
+            params: list[Any] = [agent_id, state]
+            if visibility_values is not None:
+                placeholders = ", ".join("?" for _ in visibility_values)
+                query += f" AND read_visibility IN ({placeholders})"
+                params.extend(visibility_values)
+            row = conn.execute(
+                query,
+                params,
             ).fetchone()
             stats[f"engrams_{state}"] = row[0] if row else 0
 
         # Connection count
-        row = conn.execute("SELECT COUNT(*) FROM connections").fetchone()
+        if visibility_values is None:
+            row = conn.execute("SELECT COUNT(*) FROM connections").fetchone()
+        else:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM connections c "
+                "JOIN engrams source ON source.id = c.source_id "
+                "JOIN engrams target ON target.id = c.target_id "
+                "WHERE source.owner_agent_id = ? "
+                f"AND source.read_visibility IN ({placeholders}) "
+                f"AND target.read_visibility IN ({placeholders})",
+                [agent_id, *visibility_values, *visibility_values],
+            ).fetchone()
         stats["connections"] = row[0] if row else 0
 
         # Belief count
@@ -2561,33 +2586,79 @@ class EngramStore:
             "SELECT COUNT(*) FROM beliefs "
             "WHERE agent_id = ? AND superseded_by IS NULL"
         )
+        belief_params: list[Any] = [agent_id]
         if not include_pending_review:
             belief_query += " AND confidence_pending_review = 0"
-        row = conn.execute(belief_query, (agent_id,)).fetchone()
+        if visibility_values is not None:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            belief_query += f" AND read_visibility IN ({placeholders})"
+            belief_params.extend(visibility_values)
+        row = conn.execute(belief_query, belief_params).fetchone()
         stats["beliefs_active"] = row[0] if row else 0
 
         # Version count (reconsolidation events)
-        row = conn.execute("SELECT COUNT(*) FROM versions").fetchone()
+        if visibility_values is None:
+            row = conn.execute("SELECT COUNT(*) FROM versions").fetchone()
+        else:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM versions v "
+                "JOIN engrams e ON e.id = v.engram_id "
+                "WHERE e.owner_agent_id = ? "
+                f"AND e.read_visibility IN ({placeholders})",
+                [agent_id, *visibility_values],
+            ).fetchone()
         stats["reconsolidation_events"] = row[0] if row else 0
 
         # Archive count
-        row = conn.execute("SELECT COUNT(*) FROM archive").fetchone()
+        if visibility_values is None:
+            row = conn.execute("SELECT COUNT(*) FROM archive").fetchone()
+        else:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM engrams "
+                "WHERE owner_agent_id = ? AND state = 'archived' "
+                f"AND read_visibility IN ({placeholders})",
+                [agent_id, *visibility_values],
+            ).fetchone()
         stats["archived"] = row[0] if row else 0
 
         # Hypomnema counts use the default person/project scope for status.
-        stats.update(self.get_hypomnema_stats(agent_id=agent_id))
+        stats.update(
+            self.get_hypomnema_stats(
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+                read_visibility=read_visibility,
+            )
+        )
 
         # Functional memory counts cover active working context and review load.
-        stats.update(self.get_functional_stats(agent_id=agent_id))
+        stats.update(
+            self.get_functional_stats(
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+                read_visibility=read_visibility,
+            )
+        )
 
         # Accessibility distribution
-        rows = conn.execute(
+        accessibility_query = (
             "SELECT "
             "AVG(accessibility) as avg_acc, "
             "MIN(accessibility) as min_acc, "
             "MAX(accessibility) as max_acc "
-            "FROM engrams WHERE owner_agent_id = ? AND state = 'active'",
-            (agent_id,),
+            "FROM engrams WHERE owner_agent_id = ? AND state = 'active'"
+        )
+        accessibility_params: list[Any] = [agent_id]
+        if visibility_values is not None:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            accessibility_query += f" AND read_visibility IN ({placeholders})"
+            accessibility_params.extend(visibility_values)
+        rows = conn.execute(
+            accessibility_query,
+            accessibility_params,
         ).fetchone()
         if rows and rows["avg_acc"] is not None:
             stats["accessibility_avg"] = round(rows["avg_acc"], 3)

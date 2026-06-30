@@ -200,10 +200,18 @@ Advanced tools include:
 | Tool | Description |
 |---|---|
 | `mnemos_setup` | Legacy guided setup and seeding flow. |
+| `mnemos_session_start` | Start or resume a functional-memory session. |
+| `mnemos_functional_update` | Write live working context, optionally as confirmation-needed review material. |
+| `mnemos_functional_list` | List scoped functional memory and explicit confirmation queues. |
+| `mnemos_session_close` | Compress active functional memory into scoped hypomnema. |
+| `mnemos_context_packet` | Build a full context packet; `packet_mode="operational"` redacts review prose, while `packet_mode="review"` exposes it with labels. |
+| `mnemos_review_queue` | Inspect confirmation and promotion candidates through an explicit review surface. |
+| `mnemos_visual_snapshot` | Render an inline Mermaid memory map with review prose withheld. |
 | `mnemos_remember` | Encode a memory with explicit fields. |
 | `mnemos_ingest` | Ingest external knowledge with provenance. |
 | `mnemos_recall` | Retrieve memories. |
 | `mnemos_inspect` | View full memory details. |
+| `mnemos_introspect` | Audit text for metacognitive pattern markers. |
 | `mnemos_status` | Show memory system statistics. |
 | `mnemos_beliefs` | List reviewed current beliefs. |
 | `mnemos_shared` | Read shared memory pool entries. |
@@ -218,6 +226,12 @@ Advanced tools include:
 
 Use simple mode for normal continuity. Use advanced mode when the agent or
 operator needs direct access to Mnemos internals.
+
+Advanced context packets default to operational mode: review queues expose
+counts and source IDs, but not pending prose. Use
+`mnemos_context_packet(packet_mode="review")` or `mnemos_review_queue` when a
+human/operator intentionally needs review-only content. Audit-only rows stay
+out of both ordinary operational packets and ordinary review queues.
 
 ### Prompt For An Advanced MCP Agent
 
@@ -555,13 +569,13 @@ With no provider key and no extra setup, Mnemos can still run:
 - local SQLite memory graph
 - scoped continuity notes
 - durable engram capture
-- recall with reconsolidation
+- recall with reconsolidation and operational read-visibility filtering before ranking
 - strength, stability, and accessibility updates
 - local decay
 - lightweight connection discovery
 - promotion bookkeeping
 - correction, supersession, and archiving
-- startup context packet generation
+- startup context packet generation with review prose withheld by default
 - optional SVG identity graph snapshots
 - maintenance during normal tool calls
 

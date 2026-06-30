@@ -9,7 +9,7 @@ Mnemos gives an agent four cooperating surfaces:
 1. **Functional memory**: current task state, active corrections, commitments, preferences, and open questions.
 2. **Hypomnema**: durable scoped continuity for one human/project/agent relationship, still easy to revise.
 3. **Mnemos graph**: long-term engrams, connections, beliefs, decay, and reconsolidation.
-4. **Visibility**: context packets, health cards, recall, and optional SVG identity graphs.
+4. **Visibility**: operational context packets, review queues, health cards, recall, and optional SVG identity graphs.
 
 ## Default Session Loop
 
@@ -43,7 +43,9 @@ at defaults.
 
 Simple mode handles functional memory, hypomnema, and long-term promotion
 internally so the agent does not have to choose storage layers during normal
-conversation.
+conversation. Operational packets and recall use only `operational_context`
+rows; pending confirmation prose and promotion-candidate prose surface as
+review counts and source IDs until an explicit review surface asks for them.
 
 ## Onboarding Walkthrough
 
@@ -70,6 +72,8 @@ The onboarding ritual seeds:
 - Mark inferred memory as needing confirmation.
 - Revise hypomnema instead of overwriting it.
 - Promote to Mnemos only after continuity is stable, salient, and useful beyond the current relationship scope.
+- Treat review-only material as a queue, not as operating context; use review
+  mode or the review queue when a human/operator needs to inspect the prose.
 
 ## Inline Visual Content
 

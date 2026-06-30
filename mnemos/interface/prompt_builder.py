@@ -2,8 +2,8 @@
 Memory-enhanced prompt builder with token budget management.
 
 Constructs the memory section that gets injected into an agent's system
-prompt. Retrieves relevant memories, organizes them by type, and formats
-them within a specified token budget.
+prompt. Retrieves operational-context memories, organizes them by type, and
+formats them within a specified token budget.
 
 Token budget strategy:
 1. Identity + beliefs always included (highest priority)
@@ -31,9 +31,10 @@ _CHARS_PER_TOKEN = 4
 class PromptBuilder:
     """Builds memory-enhanced prompt sections within a token budget.
 
-    The prompt builder retrieves relevant memories and formats them into
-    a structured text block that can be injected into the agent's system
-    prompt. It respects token budgets to avoid context window overflow.
+    The prompt builder retrieves operational-context beliefs and engrams and
+    formats them into a structured text block that can be injected into the
+    agent's system prompt. Review-only and audit-only rows require explicit
+    review/admin surfaces, not this operating prompt path.
 
     Usage:
         builder = PromptBuilder(store=store)

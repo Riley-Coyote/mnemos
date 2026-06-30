@@ -19,7 +19,11 @@ def build_memory_visual_snapshot(
     session_id: str = "",
     max_items: int = 6,
 ) -> str:
-    """Return a Markdown/Mermaid snapshot that can be shown inline in chat."""
+    """Return an operational Markdown/Mermaid snapshot for inline chat.
+
+    Review queues are represented by counts/source IDs only; pending prose
+    stays behind explicit review packet surfaces.
+    """
     stats = store.get_stats(agent_id)
     functional = store.load_functional_memories(
         "",

@@ -11,11 +11,13 @@ date: 2026-06-30
 
 Implement the Afferent Membrane v1 over Mnemos as a staged architecture: operational packets stop ingesting review/pending prose first, then durable-affecting candidates move through a proposal ledger, harness-stamped authority, tiered review, bounded dynamic modulation, and experience ticks. The plan is staged, but every stage points at the full RFC architecture rather than a reduced MVP.
 
+Current branch state: U1 packet mode split and U2 proposal-ledger/read-visibility schema are implemented on `codex/afferent-membrane-v1-ledger`. U3-U7 remain planned follow-up stages.
+
 ---
 
 ## Problem Frame
 
-Mnemos already protects several write paths with PAI import review flags and pending-confidence belief filtering, but operational context assembly still lacks a general packet mode, read-visibility classification, or proposal ledger for durable-affecting candidates. The missing membrane lets review-shaped or generated material become operational input before it has earned authority.
+Mnemos already protects several write paths with PAI import review flags and pending-confidence belief filtering. U1/U2 extend that boundary with packet mode, read-visibility classification, and a proposal ledger for durable-affecting candidates so review-shaped or generated material does not become operational input before it has earned authority.
 
 ---
 
@@ -68,11 +70,11 @@ Mnemos already protects several write paths with PAI import review flags and pen
 
 ### Relevant Code and Patterns
 
-- `mnemos/interface/context_packet.py`: primary turnkey packet assembly; currently has `include_prompt` but no `packet_mode`.
+- `mnemos/interface/context_packet.py`: primary turnkey packet assembly; now has `packet_mode` with operational redaction and explicit review formatting.
 - `mnemos/mcp_server.py`: advanced MCP surfaces `mnemos_context_packet` and `mnemos_review_queue`; review queue is the intentional prose-bearing surface.
-- `mnemos/interface/prompt_builder.py`: older memory prompt builder that can emit text to prompts and needs the same read-side prefilter before it remains safe.
-- `mnemos/simple_runtime.py`: simple mode has `context`, `recall`, `maintain`, `_promote_candidates`, dream journal display, and retrieval producers that must eventually observe read visibility.
-- `mnemos/store/sqlite_store.py`: schema, search, stats, belief filtering, functional memory, hypomnema, and candidate methods live here.
+- `mnemos/interface/prompt_builder.py`: older memory prompt builder that emits operational-context rows only through store/retriever defaults.
+- `mnemos/simple_runtime.py`: simple mode has `context`, `recall`, `maintain`, `_promote_candidates`, dream journal display, and retrieval producers that now observe operational read visibility.
+- `mnemos/store/sqlite_store.py`: schema v6, proposal ledger, search, stats, belief filtering, functional memory, hypomnema, and candidate methods live here.
 - `mnemos/store/migrations.py`: schema migration registry and PAI hardening precedent.
 - `mnemos/importer/pai.py`: strongest current ingest/preview/apply precedent for authority and review workflow.
 - `mnemos/importer/review_gate.py`: diff-review gate precedent for dangerous durable changes.
@@ -117,7 +119,7 @@ Mnemos already protects several write paths with PAI import review flags and pen
 | Stage 5 | `codex/afferent-membrane-v1-modulation` | DynamicModulation persistence and distribution bounds | Modulation tests, calibration placeholder proof, no-mistakes |
 | Stage 6 | `codex/afferent-membrane-v1-experience-tick` | ExperienceTick afferent layer feeding modulation and ledger | Tick-to-ledger/modulation tests and no-mistakes |
 
-Current Stage 1 state: Treehouse-leased worktree, branch `codex/afferent-membrane-v1-stage1`, base `origin/main` at `03c9417`.
+Current Stage 2 state: branch `codex/afferent-membrane-v1-ledger`, base commit `03c9417`, implementing U1 packet mode and U2 proposal ledger/read visibility. Stage 3 starts from the authority lane.
 
 ---
 
@@ -462,8 +464,8 @@ The core invariant is one-way: afferent signals can modulate live retrieval and 
 
 ## Documentation / Operational Notes
 
-- Update `docs/release-hardening.md` after U2/U3 to describe read visibility and authority stamping.
-- Update `docs/turnkey-memory-system.md` after U1/U2 so agent-facing docs explain operational versus review packets.
+- U1/U2 documentation now covers operational versus review packets, read visibility, and proposal-ledger schema in README, changelog, architecture, privacy/security, release-hardening, and turnkey-agent docs.
+- Update release-hardening and user/operator docs again after U3 to describe harness-stamped authority and high-blast quarantine.
 - Do not update launchd, installation docs, or global setup until the full membrane is locally verified.
 - Each stage must run focused tests and `no-mistakes` before being reported complete.
 

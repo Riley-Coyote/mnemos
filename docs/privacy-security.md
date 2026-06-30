@@ -74,13 +74,31 @@ agent/person/project scope when callers leave the scope args at their default
 sentinels. Pass non-default scope args only for an intentional per-call
 override.
 
+## Afferent Membrane Read Visibility
+
+Schema v6 separates ordinary operating context from review and audit material:
+
+- `read_visibility="operational_context"` is the default surface for retrieval,
+  context packets, simple runtime context/recall, prompt building, visual
+  snapshots, shared-pool reads, consolidation producers, substrate producers,
+  and modulators.
+- `read_visibility="review_only"` keeps pending functional confirmations,
+  hypomnema promotion candidates, and other review-shaped material out of
+  operating context while leaving it visible to explicit review tools.
+- `read_visibility="audit_only"` is excluded from ordinary operational reads
+  and ordinary review queues; callers must opt in deliberately.
+- `proposal_ledger` records durable-affecting candidates with authority,
+  target surface, transition, blast radius, status, gate version, provenance,
+  and payload fields so candidate state is inspectable without becoming
+  operating context.
+
 ## Visual Artifacts
 
 Identity graph artifacts are generated from the same scoped local memory data
 used by `mnemos_context`. They should not include raw database paths, provider
-keys, or unscoped cross-agent memories. Hosts that render images may display
-the SVG inline; hosts that do not can ignore it and continue using the text and
-structured content.
+keys, unscoped cross-agent memories, or review-only prose in operational views.
+Hosts that render images may display the SVG inline; hosts that do not can
+ignore it and continue using the text and structured content.
 
 ## PAI Importer
 

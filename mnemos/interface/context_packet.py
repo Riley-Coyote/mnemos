@@ -48,6 +48,9 @@ def build_context_packet(
 
     The packet orders memory from most immediately actionable to most durable:
     functional memory, hypomnema continuity, then Mnemos engrams and beliefs.
+    ``packet_mode="operational"`` withholds review prose and returns only
+    review counts/source IDs; ``packet_mode="review"`` exposes review-only
+    candidate prose with labels for explicit review.
     """
     mode = normalize_packet_mode(packet_mode)
     identity = store.get_identity(agent_id)
@@ -150,7 +153,12 @@ def format_context_packet(
     token_budget: int = 3000,
     packet_mode: str | None = None,
 ) -> str:
-    """Format a context packet as an agent-readable prompt section."""
+    """Format a context packet as an agent-readable prompt section.
+
+    Operational formatting redacts review-only prose. Review formatting must be
+    given an unredacted review packet; redacted operational references cannot be
+    escalated back into prose by the formatter.
+    """
     if packet_mode is not None:
         mode = normalize_packet_mode(packet_mode)
         packet = _normalize_packet_visibility(packet, mode)

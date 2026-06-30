@@ -328,6 +328,7 @@ class Engram:
     owner_agent_id: str = "default"
     visibility: str = Visibility.PRIVATE
     read_visibility: str = "operational_context"
+    """Which read surfaces may consume this engram as context."""
 
     # Lifecycle
     state: str = EngramState.ACTIVE

@@ -695,7 +695,12 @@ class EngramStore:
         *,
         read_visibility: str | None = None,
     ) -> Engram | None:
-        """Load an engram by ID, including connections and versions."""
+        """Load an engram by ID, including connections and versions.
+
+        ``read_visibility`` is an explicit access filter. Pass
+        ``READ_VISIBILITY_OPERATIONAL`` for operating-context reads; the
+        default ``None`` performs no visibility filter for direct/admin lookup.
+        """
         conn = self._get_conn()
         query = "SELECT * FROM engrams WHERE id = ?"
         params: list[Any] = [engram_id]
@@ -1151,7 +1156,13 @@ class EngramStore:
         payload: dict[str, Any] | None = None,
         proposal_id: str | None = None,
     ) -> dict[str, Any]:
-        """Record a proposed durable transition for explicit review."""
+        """Record a durable-affecting candidate in the proposal ledger.
+
+        Proposal rows are review artifacts: they preserve authority, target
+        surface, transition, blast radius, gate version, provenance, payload,
+        visibility, and lifecycle status without making candidate prose part of
+        operational context.
+        """
         source_authority = _clean_choice(
             source_authority,
             VALID_PROPOSAL_AUTHORITIES,
@@ -1272,7 +1283,12 @@ class EngramStore:
         read_visibility: str | None = None,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
-        """List proposal ledger rows for an explicit review surface."""
+        """List proposal ledger rows for an explicit review surface.
+
+        ``read_visibility`` defaults to no visibility filter for scoped
+        admin/review listings. Supply ``READ_VISIBILITY_REVIEW`` or another
+        value when the caller wants a single review surface.
+        """
         if status is not None and status not in VALID_PROPOSAL_STATUSES:
             raise ValueError(f"Unsupported proposal status: {status}")
         normalized_visibility = _normalize_read_visibility(read_visibility)
@@ -1405,6 +1421,8 @@ class EngramStore:
         Functional memory is the live, revisable working layer. It is useful
         for current task state, open questions, corrections, commitments, and
         preferences that have not yet earned hypomnema or engram status.
+        Entries with ``needs_confirmation=True`` default to ``review_only`` so
+        they do not enter operational packets until confirmed.
         """
         if memory_type not in VALID_FUNCTIONAL_TYPES:
             raise ValueError(f"Unsupported functional memory type: {memory_type}")
@@ -1530,7 +1548,12 @@ class EngramStore:
         limit: int = 12,
         read_visibility: str | Sequence[str] | None | object = _READ_VISIBILITY_DEFAULT,
     ) -> list[dict[str, Any]]:
-        """Search functional memories for the current scope/session."""
+        """Search functional memories for the current scope/session.
+
+        Normal loads default to operational-context rows. Confirmation queues
+        default to operational plus review-only rows, excluding audit-only
+        unless ``read_visibility`` is explicitly supplied.
+        """
         if memory_type and memory_type not in VALID_FUNCTIONAL_TYPES:
             raise ValueError(f"Unsupported functional memory type: {memory_type}")
         if needs_confirmation_only and exclude_needs_confirmation:
@@ -1783,7 +1806,9 @@ class EngramStore:
         """Write a scoped hypomnema continuity entry.
 
         Hypomnema is durable, relationship-scoped continuity that can be
-        revised before it graduates into shared Mnemos engrams.
+        revised before it graduates into shared Mnemos engrams. New entries
+        default to operational read visibility; callers may set review/audit
+        visibility for explicit queues.
         """
         conn = self._get_conn()
         entry_id = self._write_hypomnema_entry_no_commit(
@@ -1974,7 +1999,12 @@ class EngramStore:
         exclude_promotion_candidates: bool = False,
         read_visibility: str | None = READ_VISIBILITY_OPERATIONAL,
     ) -> list[dict[str, Any]]:
-        """Search scoped hypomnema entries by text, confidence, and salience."""
+        """Search scoped hypomnema entries by text, confidence, and salience.
+
+        The default read surface is operational context. Operational packet and
+        runtime callers can also exclude promotion candidates so stable-but-
+        unreviewed continuity does not steer the agent as prose.
+        """
         conn = self._get_conn()
         sql = (
             "SELECT * FROM hypomnema_entries "
@@ -2252,7 +2282,12 @@ class EngramStore:
         limit: int = 10,
         read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
     ) -> list[dict[str, Any]]:
-        """List stable hypomnema entries ready to become Mnemos engrams."""
+        """List stable hypomnema entries ready to become Mnemos engrams.
+
+        Defaults to operational-context candidates; explicit review surfaces
+        may include review-only candidates. Audit-only candidates require an
+        explicit audit visibility read.
+        """
         conn = self._get_conn()
         visibility_values = _normalize_read_visibility_values(read_visibility)
         sql = """

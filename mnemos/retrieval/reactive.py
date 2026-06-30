@@ -9,11 +9,11 @@ and what lights up after N hops is what's relevant.
 The graph structure IS the relevance model. No formula needed.
 
 Pipeline:
-1. FTS search → seed nodes
-2. Spreading activation through connection graph (3 hops)
+1. Read-visibility filter → FTS search seed nodes
+2. Spreading activation through visible connection graph (3 hops)
 3. Emotional bias applied multiplicatively
 4. Threshold → return activated engrams
-5. Reconsolidation on all returned engrams
+5. Reconsolidation on all returned visible engrams
 """
 
 from __future__ import annotations
@@ -65,8 +65,9 @@ class ReactiveRetriever:
 
     Instead of scoring candidates with a weighted formula, retrieval
     works through spreading activation in the connection graph. FTS
-    finds seed nodes, activation spreads through typed connections,
-    and what lights up is what's relevant.
+    finds visible seed nodes, activation spreads through typed connections
+    whose targets are visible to the requested read surface, and what lights up
+    is what's relevant.
 
     Usage:
         retriever = ReactiveRetriever(store)
@@ -101,14 +102,18 @@ class ReactiveRetriever:
         emotional_state: EmotionalState | None = None,
         read_visibility: str | None = "operational_context",
     ) -> list[RetrievalResult]:
-        """Retrieve memories via resonance — spreading activation through the graph.
+        """Retrieve memories via resonance through the visible graph.
 
         Pipeline:
-        1. FTS search → seed nodes (entry points into the graph)
-        2. Spreading activation (3 hops, decay per hop, weighted by relation)
+        1. FTS search with read visibility → seed nodes
+        2. Spreading activation through visible targets
         3. Emotional bias (multiplicative boost for congruent tags)
         4. Filter by threshold + confidence floor
         5. Reconsolidate returned engrams
+
+        ``read_visibility`` defaults to ``operational_context``. Pass
+        ``review_only`` only for explicit review surfaces; pass ``None`` only
+        for audit/admin scans that intentionally include all visibilities.
 
         Returns:
             List of RetrievalResult sorted by activation level (descending).

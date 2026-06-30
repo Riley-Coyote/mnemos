@@ -213,7 +213,9 @@ Disable bootstrap with:
 
 ## Review Inbox
 
-Uncertain identity claims are queued as low-confidence hypomnema entries instead of becoming high-confidence identity automatically. Inspect them with:
+Uncertain identity claims are queued as low-confidence, review-only hypomnema
+entries instead of becoming high-confidence identity automatically or entering
+startup recall as operating context. Inspect them with:
 
 ```json
 {

@@ -19,6 +19,13 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Sampling is optional and occurs only inside an active client request.
 - Sampling failures, denials, or unsupported clients fall back cleanly.
 - Tool annotations match local side effects.
+- `mnemos_context_packet` defaults to `packet_mode="operational"` and never
+  includes confirmation or promotion-candidate prose in operational prompt or
+  JSON output.
+- Explicit review surfaces (`packet_mode="review"`, `mnemos_review_queue`) can
+  show review-only prose, while audit-only rows remain excluded unless a caller
+  deliberately asks for that visibility.
+- Inline visual snapshots show review counts/source IDs only, not pending prose.
 
 ## Install UX
 
@@ -52,6 +59,12 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Baseline simple mode does not require OpenRouter, Anthropic, OpenAI, or OpenClaw.
 - Dedicated providers are used only when explicitly configured.
 - Scope isolation is tested across multiple agents.
+- Operational retrieval, prompt building, simple runtime context/recall,
+  substrate producers, consolidation producers, shared-pool reads, and
+  modulators filter to `operational_context` before scoring, ranking, or
+  generation.
+- Schema v6 migration defaults existing pending beliefs, confirmation-needed
+  functional memories, and hypomnema promotion candidates to review visibility.
 - Correction/forget behavior is documented.
 
 ## PAI Importer And Dual-Life Watcher

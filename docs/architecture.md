@@ -91,9 +91,31 @@ Content → LLM classification → engram creation → connection discovery → 
 
 ### Retrieval
 
-Cue → FTS5 search + embedding similarity → scoring (accessibility, emotional congruence, recency) → reconsolidation → results
+Cue → read-visibility prefilter → FTS5 search + embedding similarity → graph
+activation/scoring → reconsolidation → results
 
-Every retrieval updates the memory — access count, strength, new connections. Memories are living traces.
+Operational retrieval uses `read_visibility="operational_context"` before FTS,
+embedding hits, graph propagation, scoring, and reconsolidation. Explicit
+review callers can request `review_only`; audit-only rows stay out of normal
+review flows.
+
+Every retrieval updates the returned visible memory — access count, strength,
+new connections. Operational paths return operational rows. Memories are living
+traces.
+
+### Operational Context And Review
+
+Context packets have two modes:
+
+- `operational`: the default for agents. It includes normal functional memory,
+  hypomnema, beliefs, and engrams, plus review counts/source IDs with prose
+  withheld.
+- `review`: the explicit operator surface. It can include review-only
+  confirmation and promotion-candidate prose with labels and provenance cues.
+
+`proposal_ledger` holds candidate durable transitions separately from the
+operational packet so generated or review-shaped material can be audited before
+it becomes operating context.
 
 ## Layer 2: Substrate (Inner Life / Consolidation)
 

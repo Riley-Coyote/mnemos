@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Afferent Membrane v1
+- Schema v6 adds first-class `read_visibility` to `engrams`, `beliefs`,
+  `hypomnema_entries`, and `functional_memories`, plus a `proposal_ledger`
+  table for durable-affecting candidates with authority, target surface,
+  transition, blast radius, status, gate version, provenance, and payload
+  fields.
+- Operational reads now filter to `operational_context` before retrieval
+  ranking, context packet assembly, prompt building, simple runtime context
+  and recall, visual snapshots, shared-pool reads, substrate/consolidation
+  producers, and modulators. Explicit review surfaces can opt into
+  `review_only`; `audit_only` remains excluded from ordinary review queues.
+- `mnemos_context_packet` accepts `packet_mode="operational"|"review"`.
+  Operational packets keep review counts and source IDs while withholding
+  pending prose; review packets expose candidate prose with review-only
+  labels. Visual snapshots apply the same redaction boundary.
+- Functional memories needing confirmation and hypomnema promotion candidates
+  are quarantined from operational packet bodies and simple runtime recall
+  until they are reviewed or promoted through an explicit surface.
+
 ### MCP Server
 - Advanced MCP tools now inherit the server's configured `agent_id`,
   `person_id`, and `project_scope` when callers leave scope args at their

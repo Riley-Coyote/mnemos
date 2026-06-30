@@ -42,7 +42,11 @@ import sys
 from mcp.server.fastmcp import FastMCP
 
 from .core.types import SourceType
-from .store.sqlite_store import EngramStore
+from .store.sqlite_store import (
+    EngramStore,
+    READ_VISIBILITY_OPERATIONAL,
+    READ_VISIBILITY_REVIEW,
+)
 from .store.embedding_index import EmbeddingIndex
 from .encoding.encoder import Encoder
 from .retrieval.reactive import ReactiveRetriever
@@ -1042,6 +1046,7 @@ def mnemos_review_queue(
         person_id=person_id,
         project_scope=project_scope,
         limit=max_results,
+        read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
     )
     if not functional and not candidates:
         return "Review queue is clear."

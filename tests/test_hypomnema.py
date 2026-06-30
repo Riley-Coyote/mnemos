@@ -129,3 +129,66 @@ class TestHypomnemaStore:
 
         assert [entry["id"] for entry in candidates] == [high_id]
         assert low_id not in [entry["id"] for entry in candidates]
+
+    def test_promotion_candidates_default_to_operational_visibility(self, store):
+        operational_id = store.write_hypomnema_entry(
+            "Operational candidate may appear in candidate listing.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            confidence=0.9,
+            salience=0.8,
+            foundational=True,
+            read_visibility="operational_context",
+        )
+        review_id = store.write_hypomnema_entry(
+            "Review-only candidate requires explicit review visibility.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            confidence=0.95,
+            salience=0.9,
+            foundational=True,
+            read_visibility="review_only",
+        )
+        audit_id = store.write_hypomnema_entry(
+            "Audit-only candidate requires explicit all-visibility opt-in.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            confidence=0.99,
+            salience=0.95,
+            foundational=True,
+            read_visibility="audit_only",
+        )
+
+        default_ids = {
+            entry["id"]
+            for entry in store.get_hypomnema_promotion_candidates(
+                agent_id="vektor",
+                person_id="riley",
+                project_scope="codex-test",
+            )
+        }
+        review_ids = {
+            entry["id"]
+            for entry in store.get_hypomnema_promotion_candidates(
+                agent_id="vektor",
+                person_id="riley",
+                project_scope="codex-test",
+                read_visibility="review_only",
+            )
+        }
+        explicit_all_ids = {
+            entry["id"]
+            for entry in store.get_hypomnema_promotion_candidates(
+                agent_id="vektor",
+                person_id="riley",
+                project_scope="codex-test",
+                read_visibility=None,
+            )
+        }
+
+        assert default_ids == {operational_id}
+        assert review_ids == {review_id}
+        assert audit_id in explicit_all_ids

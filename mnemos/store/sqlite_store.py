@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -487,6 +488,38 @@ def _normalize_read_visibility(
     if read_visibility not in VALID_READ_VISIBILITIES:
         raise ValueError(f"Unsupported read_visibility: {read_visibility}")
     return read_visibility
+
+
+def _normalize_read_visibility_values(
+    value: str | Sequence[str] | None,
+    *,
+    allow_all: bool = True,
+    default: str = READ_VISIBILITY_OPERATIONAL,
+) -> tuple[str, ...] | None:
+    if value is None:
+        return None if allow_all else (default,)
+    if isinstance(value, str):
+        return (_normalize_read_visibility(value, allow_all=False, default=default),)
+    values = tuple(
+        _normalize_read_visibility(item, allow_all=False, default=default)
+        for item in value
+    )
+    if not values:
+        raise ValueError("read_visibility must include at least one visibility")
+    return values
+
+
+def _append_read_visibility_filter(
+    sql: str,
+    params: list[Any],
+    column: str,
+    values: tuple[str, ...] | None,
+) -> str:
+    if values is None:
+        return sql
+    placeholders = ", ".join("?" for _ in values)
+    params.extend(values)
+    return f"{sql} AND {column} IN ({placeholders})"
 
 
 def _apply_read_visibility_filter(
@@ -1057,7 +1090,7 @@ class EngramStore:
         domain: str | None = None,
         active_only: bool = True,
         include_pending_review: bool = False,
-        read_visibility: str | None | object = _READ_VISIBILITY_DEFAULT,
+        read_visibility: str | Sequence[str] | None | object = _READ_VISIBILITY_DEFAULT,
     ) -> list[Belief]:
         """Get beliefs, excluding pending-confidence rows unless opted in.
 
@@ -1069,11 +1102,13 @@ class EngramStore:
         query = "SELECT * FROM beliefs WHERE agent_id = ?"
         params: list[Any] = [agent_id]
         if read_visibility is _READ_VISIBILITY_DEFAULT:
-            normalized_visibility = (
-                None if include_pending_review else READ_VISIBILITY_OPERATIONAL
+            visibility_values = (
+                (READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW)
+                if include_pending_review
+                else (READ_VISIBILITY_OPERATIONAL,)
             )
         else:
-            normalized_visibility = _normalize_read_visibility(read_visibility)  # type: ignore[arg-type]
+            visibility_values = _normalize_read_visibility_values(read_visibility)  # type: ignore[arg-type]
 
         if domain:
             query += " AND domain = ?"
@@ -1085,9 +1120,12 @@ class EngramStore:
         if not include_pending_review:
             query += " AND confidence_pending_review = 0"
 
-        if normalized_visibility is not None:
-            query += " AND read_visibility = ?"
-            params.append(normalized_visibility)
+        query = _append_read_visibility_filter(
+            query,
+            params,
+            "read_visibility",
+            visibility_values,
+        )
 
         query += " ORDER BY confidence DESC"
         rows = conn.execute(query, params).fetchall()
@@ -2165,11 +2203,11 @@ class EngramStore:
         person_id: str = "user",
         project_scope: str = "global",
         limit: int = 10,
-        read_visibility: str | None = None,
+        read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
     ) -> list[dict[str, Any]]:
         """List stable hypomnema entries ready to become Mnemos engrams."""
         conn = self._get_conn()
-        normalized_visibility = _normalize_read_visibility(read_visibility)
+        visibility_values = _normalize_read_visibility_values(read_visibility)
         sql = """
             SELECT * FROM hypomnema_entries
             WHERE agent_id = ? AND person_id = ? AND project_scope = ?
@@ -2180,9 +2218,12 @@ class EngramStore:
               AND (revision_count >= 1 OR foundational = 1)
         """
         params: list[Any] = [agent_id, person_id, project_scope]
-        if normalized_visibility is not None:
-            sql += " AND read_visibility = ?"
-            params.append(normalized_visibility)
+        sql = _append_read_visibility_filter(
+            sql,
+            params,
+            "read_visibility",
+            visibility_values,
+        )
         sql += (
             " ORDER BY foundational DESC, confidence DESC, salience DESC, created_at ASC"
             " LIMIT ?"
@@ -2197,17 +2238,23 @@ class EngramStore:
         agent_id: str = "default",
         person_id: str | None = None,
         project_scope: str | None = None,
+        read_visibility: str | Sequence[str] | None = None,
     ) -> dict[str, int]:
         """Count hypomnema entries for a scope."""
         conn = self._get_conn()
         where = ["agent_id = ?"]
         params: list[Any] = [agent_id]
+        visibility_values = _normalize_read_visibility_values(read_visibility)
         if person_id is not None:
             where.append("person_id = ?")
             params.append(person_id)
         if project_scope is not None:
             where.append("project_scope = ?")
             params.append(project_scope)
+        if visibility_values is not None:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            where.append(f"read_visibility IN ({placeholders})")
+            params.extend(visibility_values)
         where_sql = " AND ".join(where)
         row = conn.execute(
             f"""

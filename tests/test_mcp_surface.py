@@ -85,6 +85,94 @@ def test_simple_capture_accepts_numeric_or_string_importance():
     assert {entry["type"] for entry in importance_schema["anyOf"]} >= {"number", "string"}
 
 
+def test_hypomnema_candidates_tool_excludes_non_operational_prose(
+    monkeypatch,
+    store,
+):
+    from mnemos import mcp_server
+
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_ensure_store", lambda: store)
+    monkeypatch.setattr(mcp_server, "_setup_gate", lambda: None)
+    store.write_hypomnema_entry(
+        "Operational MCP candidate can be listed.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.9,
+        salience=0.8,
+        foundational=True,
+        read_visibility="operational_context",
+    )
+    store.write_hypomnema_entry(
+        "Review-only MCP candidate must stay out of raw listing.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.95,
+        salience=0.9,
+        foundational=True,
+        read_visibility="review_only",
+    )
+    store.write_hypomnema_entry(
+        "Audit-only MCP candidate must stay out of raw listing.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.99,
+        salience=0.95,
+        foundational=True,
+        read_visibility="audit_only",
+    )
+
+    output = mcp_server.mnemos_hypomnema_candidates(
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    assert "Operational MCP candidate can be listed." in output
+    assert "Review-only MCP candidate must stay out" not in output
+    assert "Audit-only MCP candidate must stay out" not in output
+
+
+def test_review_queue_opts_into_review_candidate_prose(monkeypatch, store):
+    from mnemos import mcp_server
+
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_ensure_store", lambda: store)
+    monkeypatch.setattr(mcp_server, "_setup_gate", lambda: None)
+    store.write_hypomnema_entry(
+        "Review queue may disclose review-only candidate prose.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.95,
+        salience=0.9,
+        foundational=True,
+        read_visibility="review_only",
+    )
+    store.write_hypomnema_entry(
+        "Review queue must not disclose audit-only candidate prose.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.99,
+        salience=0.95,
+        foundational=True,
+        read_visibility="audit_only",
+    )
+
+    output = mcp_server.mnemos_review_queue(
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    assert "Review queue may disclose review-only candidate prose." in output
+    assert "Review queue must not disclose audit-only" not in output
+
+
 def test_simple_stdio_server_lists_and_calls_context(tmp_path):
     from mcp.client.session import ClientSession
     from mcp.client.stdio import StdioServerParameters, stdio_client

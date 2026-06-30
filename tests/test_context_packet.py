@@ -147,6 +147,42 @@ def test_review_context_packet_can_include_review_only_rows(store):
     assert review["review_queue"]["hypomnema_promotion_candidates"][0]["read_visibility"] == "review_only"
 
 
+def test_review_context_packet_excludes_audit_only_hypomnema_candidates(store):
+    store.write_hypomnema_entry(
+        "Review packet may disclose review-only hypomnema candidate.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.95,
+        salience=0.9,
+        foundational=True,
+        read_visibility="review_only",
+    )
+    store.write_hypomnema_entry(
+        "Review packet must not disclose audit-only hypomnema candidate.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.99,
+        salience=0.95,
+        foundational=True,
+        read_visibility="audit_only",
+    )
+
+    packet = build_context_packet(
+        store,
+        "hypomnema candidate",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        packet_mode="review",
+    )
+
+    assert "Review packet may disclose review-only hypomnema candidate." in packet["prompt"]
+    assert "Review packet must not disclose audit-only" not in packet["prompt"]
+    assert packet["review_queue"]["hypomnema_promotion_candidate_count"] == 1
+
+
 def test_operational_context_packet_redacts_candidates_outside_review_queue(store):
     for index in range(6):
         store.write_hypomnema_entry(

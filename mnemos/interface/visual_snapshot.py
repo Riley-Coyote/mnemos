@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..store.sqlite_store import READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW
+
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
 
@@ -51,6 +53,7 @@ def build_memory_visual_snapshot(
         person_id=person_id,
         project_scope=project_scope,
         limit=max_items,
+        read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
     )
 
     diagram = _build_mermaid(stats, functional, hypomnema, engrams, review, candidates)

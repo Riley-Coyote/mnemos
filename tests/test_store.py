@@ -139,6 +139,37 @@ class TestEngramStore:
         assert pending.id in {b.id for b in all_beliefs}
         assert reviewed.id in {b.id for b in all_beliefs}
 
+    def test_pending_belief_review_excludes_audit_only_by_default(self, store):
+        review_pending = Belief(
+            content="Review pending belief is eligible for review",
+            confidence=0.8,
+            confidence_pending_review=True,
+            read_visibility="review_only",
+        )
+        audit_pending = Belief(
+            content="Audit pending belief must stay out of default review",
+            confidence=0.99,
+            confidence_pending_review=True,
+            read_visibility="audit_only",
+        )
+        store.save_belief(audit_pending)
+        store.save_belief(review_pending)
+
+        default_review_ids = {
+            b.id for b in store.get_beliefs(include_pending_review=True)
+        }
+        explicit_all_ids = {
+            b.id
+            for b in store.get_beliefs(
+                include_pending_review=True,
+                read_visibility=None,
+            )
+        }
+
+        assert review_pending.id in default_review_ids
+        assert audit_pending.id not in default_review_ids
+        assert audit_pending.id in explicit_all_ids
+
     def test_proposal_ledger_roundtrip_and_validation(self, store):
         """Proposal rows preserve permission-model fields and reject bad enums."""
         proposal = store.write_proposal(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..retrieval.reactive import ReactiveRetriever, RetrievalResult
+from ..store.sqlite_store import READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -82,6 +83,7 @@ def build_context_packet(
         person_id=person_id,
         project_scope=project_scope,
         limit=6,
+        read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
     )
     review_functional_count = store.get_functional_stats(
         agent_id=agent_id,
@@ -92,6 +94,7 @@ def build_context_packet(
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
     )["hypomnema_promotion_candidates"]
     engrams: list[dict[str, Any]] = []
     if query.strip():
@@ -392,7 +395,7 @@ def _functional_review_reference(item: dict[str, Any]) -> dict[str, Any]:
         "agent_id": item["agent_id"],
         "person_id": item["person_id"],
         "project_scope": item["project_scope"],
-        "read_visibility": "review_only",
+        "read_visibility": item.get("read_visibility", READ_VISIBILITY_REVIEW),
     }
 
 
@@ -405,7 +408,7 @@ def _hypomnema_review_reference(item: dict[str, Any]) -> dict[str, Any]:
         "agent_id": item["agent_id"],
         "person_id": item["person_id"],
         "project_scope": item["project_scope"],
-        "read_visibility": "review_only",
+        "read_visibility": item.get("read_visibility", READ_VISIBILITY_REVIEW),
     }
 
 

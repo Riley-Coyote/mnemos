@@ -402,6 +402,112 @@ def migrate_v5_u3b_hardening(conn: sqlite3.Connection) -> None:
     apply_u3b_hardening_schema_migration(conn)
 
 
+def apply_afferent_membrane_v1_schema_migration(conn: sqlite3.Connection) -> None:
+    """Apply U2 proposal-ledger and read-visibility schema additions."""
+    visibility_check = (
+        "TEXT NOT NULL DEFAULT 'operational_context' "
+        "CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only'))"
+    )
+    for table in (
+        "engrams",
+        "beliefs",
+        "hypomnema_entries",
+        "functional_memories",
+    ):
+        _add_column_if_missing(conn, table, "read_visibility", visibility_check)
+
+    conn.execute(
+        """
+        UPDATE beliefs
+        SET read_visibility = 'review_only'
+        WHERE needs_review = 1 OR confidence_pending_review = 1
+        """
+    )
+    conn.execute(
+        """
+        UPDATE functional_memories
+        SET read_visibility = 'review_only'
+        WHERE needs_confirmation = 1
+        """
+    )
+    conn.execute(
+        """
+        UPDATE hypomnema_entries
+        SET read_visibility = 'review_only'
+        WHERE active = 1
+          AND graduated_to_engram_id IS NULL
+          AND confidence >= 0.82
+          AND salience >= 0.65
+          AND (revision_count >= 1 OR foundational = 1)
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS proposal_ledger (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL DEFAULT 'default',
+            person_id TEXT NOT NULL DEFAULT 'user',
+            project_scope TEXT NOT NULL DEFAULT 'global',
+            source_authority TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            domain TEXT NOT NULL DEFAULT 'general',
+            target_surface TEXT NOT NULL
+                CHECK (target_surface IN (
+                    'engrams', 'beliefs', 'hypomnema_entries',
+                    'functional_memories', 'dynamic_modulations',
+                    'identity_profile', 'runtime_context'
+                )),
+            transition TEXT NOT NULL,
+            blast_radius TEXT NOT NULL DEFAULT 'medium'
+                CHECK (blast_radius IN ('low', 'medium', 'high', 'identity', 'foundational')),
+            read_visibility TEXT NOT NULL DEFAULT 'review_only'
+                CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only')),
+            status TEXT NOT NULL DEFAULT 'pending_review'
+                CHECK (status IN ('pending_review', 'approved', 'rejected', 'applied', 'superseded')),
+            reason TEXT NOT NULL DEFAULT '',
+            gate_version TEXT NOT NULL DEFAULT 'affmem-v1',
+            target_id TEXT,
+            provenance_ids_json TEXT NOT NULL DEFAULT '[]',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            decided_at INTEGER,
+            applied_at INTEGER
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proposal_ledger_status_scope "
+        "ON proposal_ledger(agent_id, person_id, project_scope, status, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proposal_ledger_visibility "
+        "ON proposal_ledger(read_visibility, status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_engrams_read_visibility "
+        "ON engrams(owner_agent_id, read_visibility, state)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_beliefs_read_visibility "
+        "ON beliefs(agent_id, read_visibility, superseded_by)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_hypomnema_read_visibility "
+        "ON hypomnema_entries(agent_id, person_id, project_scope, read_visibility)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_functional_read_visibility "
+        "ON functional_memories(agent_id, person_id, project_scope, read_visibility)"
+    )
+
+
+@register_migration(6, "Afferent Membrane v1: proposal ledger + read visibility")
+def migrate_v6_afferent_membrane_v1(conn: sqlite3.Connection) -> None:
+    apply_afferent_membrane_v1_schema_migration(conn)
+
+
 def insert_pai_import_event(
     conn: sqlite3.Connection,
     *,

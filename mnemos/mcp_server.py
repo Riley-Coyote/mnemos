@@ -1483,8 +1483,9 @@ def mnemos_status(agent_id: str = "default") -> str:
 def mnemos_beliefs(agent_id: str = "default", domain: str = "") -> str:
     """List reviewed current beliefs with confidence levels.
 
-    Beliefs with ``confidence_pending_review`` are hidden until the belief
-    review pass opts in and clears their pending state.
+    Beliefs with ``confidence_pending_review`` or review-only visibility are
+    hidden until the belief review pass opts in, clears pending state, and
+    restores operational read visibility.
 
     Args:
         agent_id: Which agent's beliefs to show. Default: "default".

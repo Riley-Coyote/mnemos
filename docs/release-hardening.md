@@ -105,7 +105,8 @@ Use this checklist before publishing Mnemos or opening a release PR.
   an explicit operator action; `watch-plist` only writes the file.
 - Default `get_beliefs()` consumers exclude `confidence_pending_review` rows;
   belief review is the explicit opt-in path that can clear pending review,
-  including no-op acceptance.
+  including no-op acceptance, and promote approved rows back to
+  `operational_context` read visibility.
 - Error messages that mention recovery actions are probed against actual
   behavior. Recovery steps that would destroy operator hand-edits or in-flight
   state must be removed from user-facing text, even when the underlying code

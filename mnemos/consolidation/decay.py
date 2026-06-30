@@ -164,6 +164,7 @@ def _count_authorized_same_agent_connections(
           AND target.owner_agent_id = ?
           AND target.state = 'active'
           AND target.consolidation_authorized = 1
+          AND target.read_visibility = 'operational_context'
         """,
         (source_id, owner_agent_id),
     ).fetchone()

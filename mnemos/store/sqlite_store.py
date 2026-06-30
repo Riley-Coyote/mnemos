@@ -33,7 +33,52 @@ from .migrations import (
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
+
+READ_VISIBILITY_OPERATIONAL = "operational_context"
+READ_VISIBILITY_REVIEW = "review_only"
+READ_VISIBILITY_AUDIT = "audit_only"
+VALID_READ_VISIBILITIES = {
+    READ_VISIBILITY_OPERATIONAL,
+    READ_VISIBILITY_REVIEW,
+    READ_VISIBILITY_AUDIT,
+}
+
+VALID_PROPOSAL_AUTHORITIES = {
+    "user_stated",
+    "agent_generated",
+    "agent_observed",
+    "imported",
+    "system_policy",
+    "operator_review",
+}
+VALID_PROPOSAL_KINDS = {
+    "belief",
+    "engram",
+    "hypomnema",
+    "functional_memory",
+    "identity",
+    "modulation",
+    "correction",
+    "promotion",
+}
+VALID_PROPOSAL_TARGET_SURFACES = {
+    "engrams",
+    "beliefs",
+    "hypomnema_entries",
+    "functional_memories",
+    "dynamic_modulations",
+    "identity_profile",
+    "runtime_context",
+}
+VALID_PROPOSAL_BLAST_RADII = {"low", "medium", "high", "identity", "foundational"}
+VALID_PROPOSAL_STATUSES = {
+    "pending_review",
+    "approved",
+    "rejected",
+    "applied",
+    "superseded",
+}
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -67,6 +112,7 @@ _ENGRAM_COLUMNS = frozenset({
     "last_accessed", "access_count", "reconsolidation_count",
     "voice_exemplar_eligible", "softening_protected", "original_substrate",
     "original_timestamp", "consolidation_authorized", "decay_protected",
+    "read_visibility",
 })
 
 # Allowed column names for beliefs table
@@ -74,6 +120,7 @@ _BELIEF_COLUMNS = frozenset({
     "id", "agent_id", "content", "confidence", "domain", "created_at",
     "last_revised", "last_challenged", "revision_history", "superseded_by",
     "supporting_engram_ids", "tier", "needs_review", "confidence_pending_review",
+    "read_visibility",
 })
 
 SQL_CREATE_TABLES = """
@@ -95,6 +142,8 @@ CREATE TABLE IF NOT EXISTS engrams (
     lineage TEXT NOT NULL DEFAULT '{}',
     owner_agent_id TEXT NOT NULL DEFAULT 'default',
     visibility TEXT NOT NULL DEFAULT 'private',
+    read_visibility TEXT NOT NULL DEFAULT 'operational_context'
+        CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only')),
     state TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL,
     last_accessed TEXT NOT NULL,
@@ -156,7 +205,9 @@ CREATE TABLE IF NOT EXISTS beliefs (
     tier TEXT CHECK (tier IS NULL OR tier IN ('foundational', 'operational', 'tactical')),
     needs_review INTEGER NOT NULL DEFAULT 0 CHECK (needs_review IN (0, 1)),
     confidence_pending_review INTEGER NOT NULL DEFAULT 0
-        CHECK (confidence_pending_review IN (0, 1))
+        CHECK (confidence_pending_review IN (0, 1)),
+    read_visibility TEXT NOT NULL DEFAULT 'operational_context'
+        CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only'))
 );
 
 -- Hypomnema: scoped durable continuity that can revise before promotion
@@ -171,6 +222,8 @@ CREATE TABLE IF NOT EXISTS hypomnema_entries (
     density REAL NOT NULL DEFAULT 0.5,
     domain TEXT NOT NULL DEFAULT 'topical'
         CHECK (domain IN ('foundational', 'identity', 'recurring', 'long-arc', 'topical', 'situational')),
+    read_visibility TEXT NOT NULL DEFAULT 'operational_context'
+        CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only')),
     tags_json TEXT NOT NULL DEFAULT '[]',
     confidence REAL NOT NULL DEFAULT 0.5,
     salience REAL NOT NULL DEFAULT 0.5,
@@ -221,6 +274,8 @@ CREATE TABLE IF NOT EXISTS functional_memories (
     needs_confirmation INTEGER NOT NULL DEFAULT 0,
     pinned INTEGER NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT 'agent_observed',
+    read_visibility TEXT NOT NULL DEFAULT 'operational_context'
+        CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only')),
     metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -290,6 +345,39 @@ CREATE TABLE IF NOT EXISTS pai_import_row_map (
     PRIMARY KEY (job_id, source_path, source_anchor, target_table)
 );
 
+-- Afferent Membrane proposal ledger: generated candidates and durable transitions
+CREATE TABLE IF NOT EXISTS proposal_ledger (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL DEFAULT 'default',
+    person_id TEXT NOT NULL DEFAULT 'user',
+    project_scope TEXT NOT NULL DEFAULT 'global',
+    source_authority TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    domain TEXT NOT NULL DEFAULT 'general',
+    target_surface TEXT NOT NULL
+        CHECK (target_surface IN (
+            'engrams', 'beliefs', 'hypomnema_entries',
+            'functional_memories', 'dynamic_modulations',
+            'identity_profile', 'runtime_context'
+        )),
+    transition TEXT NOT NULL,
+    blast_radius TEXT NOT NULL DEFAULT 'medium'
+        CHECK (blast_radius IN ('low', 'medium', 'high', 'identity', 'foundational')),
+    read_visibility TEXT NOT NULL DEFAULT 'review_only'
+        CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only')),
+    status TEXT NOT NULL DEFAULT 'pending_review'
+        CHECK (status IN ('pending_review', 'approved', 'rejected', 'applied', 'superseded')),
+    reason TEXT NOT NULL DEFAULT '',
+    gate_version TEXT NOT NULL DEFAULT 'affmem-v1',
+    target_id TEXT,
+    provenance_ids_json TEXT NOT NULL DEFAULT '[]',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    applied_at INTEGER
+);
+
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -326,6 +414,10 @@ CREATE INDEX IF NOT EXISTS idx_functional_session
 CREATE INDEX IF NOT EXISTS idx_functional_review
     ON functional_memories(agent_id, person_id, project_scope, updated_at DESC)
     WHERE is_deleted = 0 AND needs_confirmation = 1;
+CREATE INDEX IF NOT EXISTS idx_proposal_ledger_status_scope
+    ON proposal_ledger(agent_id, person_id, project_scope, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_proposal_ledger_visibility
+    ON proposal_ledger(read_visibility, status);
 CREATE INDEX IF NOT EXISTS idx_emotional_history_agent ON emotional_state_history(agent_id, timestamp);
 """
 
@@ -376,6 +468,45 @@ def _lexical_score(query: str, text: str) -> float:
     if not text_terms:
         return 0.0
     return len(query_terms & text_terms) / max(1, len(query_terms))
+
+
+_READ_VISIBILITY_DEFAULT = object()
+
+
+def _normalize_read_visibility(
+    value: str | None,
+    *,
+    allow_all: bool = True,
+    default: str = READ_VISIBILITY_OPERATIONAL,
+) -> str | None:
+    if value is None and allow_all:
+        return None
+    read_visibility = (value if value is not None else default).strip()
+    if not read_visibility:
+        read_visibility = default
+    if read_visibility not in VALID_READ_VISIBILITIES:
+        raise ValueError(f"Unsupported read_visibility: {read_visibility}")
+    return read_visibility
+
+
+def _apply_read_visibility_filter(
+    sql: str,
+    params: list[Any],
+    column: str,
+    read_visibility: str | None,
+) -> str:
+    normalized = _normalize_read_visibility(read_visibility)
+    if normalized is None:
+        return sql
+    params.append(normalized)
+    return f"{sql} AND {column} = ?"
+
+
+def _clean_choice(value: str, allowed: set[str], label: str) -> str:
+    cleaned = (value or "").strip()
+    if cleaned not in allowed:
+        raise ValueError(f"Unsupported {label}: {cleaned}")
+    return cleaned
 
 
 class EngramStore:
@@ -528,11 +659,22 @@ class EngramStore:
         for version in engram.versions:
             self._save_version_no_commit(conn, engram.id, version)
 
-    def get_engram(self, engram_id: str) -> Engram | None:
+    def get_engram(
+        self,
+        engram_id: str,
+        *,
+        read_visibility: str | None = None,
+    ) -> Engram | None:
         """Load an engram by ID, including connections and versions."""
         conn = self._get_conn()
+        query = "SELECT * FROM engrams WHERE id = ?"
+        params: list[Any] = [engram_id]
+        normalized = _normalize_read_visibility(read_visibility)
+        if normalized is not None:
+            query += " AND read_visibility = ?"
+            params.append(normalized)
         row = conn.execute(
-            "SELECT * FROM engrams WHERE id = ?", (engram_id,)
+            query, params
         ).fetchone()
         if row is None:
             return None
@@ -554,6 +696,7 @@ class EngramStore:
         load_connections: bool = True,
         include_decay_protected: bool = True,
         require_consolidation_authorized: bool = False,
+        read_visibility: str | None = READ_VISIBILITY_OPERATIONAL,
     ) -> list[Engram]:
         """Get all active engrams for an agent, sorted by accessibility.
 
@@ -567,6 +710,8 @@ class EngramStore:
                 decay pass must not mutate.
             require_consolidation_authorized: If True, exclude read-only
                 imported engrams from consolidation mutation candidates.
+            read_visibility: Defaults to operational-context rows. Pass None
+                only for explicit review/audit callers that need all rows.
         """
         conn = self._get_conn()
         predicates = ["state = 'active'"]
@@ -578,6 +723,10 @@ class EngramStore:
             predicates.append("decay_protected = 0")
         if require_consolidation_authorized:
             predicates.append("consolidation_authorized = 1")
+        normalized_visibility = _normalize_read_visibility(read_visibility)
+        if normalized_visibility is not None:
+            predicates.append("read_visibility = ?")
+            params.append(normalized_visibility)
         where = " AND ".join(predicates)
         params.append(limit)
 
@@ -634,15 +783,28 @@ class EngramStore:
 
     # ── Full-Text Search ──
 
-    def search_fts(self, query: str, limit: int = 50) -> list[Engram]:
+    def search_fts(
+        self,
+        query: str,
+        limit: int = 50,
+        *,
+        read_visibility: str | None = READ_VISIBILITY_OPERATIONAL,
+    ) -> list[Engram]:
         """Search engrams using FTS5 full-text search."""
         conn = self._get_conn()
+        normalized_visibility = _normalize_read_visibility(read_visibility)
+        predicates = ["engrams_fts MATCH ?", "e.state = 'active'"]
+        params: list[Any] = [query]
+        if normalized_visibility is not None:
+            predicates.append("e.read_visibility = ?")
+            params.append(normalized_visibility)
+        params.append(limit)
         rows = conn.execute(
             "SELECT e.* FROM engrams e "
             "JOIN engrams_fts f ON e.id = f.id "
-            "WHERE engrams_fts MATCH ? AND e.state = 'active' "
+            f"WHERE {' AND '.join(predicates)} "
             "ORDER BY rank LIMIT ?",
-            (query, limit),
+            params,
         ).fetchall()
         return [Engram.from_dict(dict(r)) for r in rows]
 
@@ -721,6 +883,7 @@ class EngramStore:
         since: "datetime | None" = None,
         limit: int = 50,
         require_consolidation_authorized: bool = False,
+        read_visibility: str | None = READ_VISIBILITY_OPERATIONAL,
     ) -> list:
         """Get recently created engrams, optionally filtered by agent and time.
 
@@ -730,12 +893,15 @@ class EngramStore:
             limit: Maximum number to return.
             require_consolidation_authorized: If True, exclude read-only
                 imported engrams from consolidation review inputs.
+            read_visibility: Defaults to operational-context rows. Pass None
+                for explicit review/audit scans.
 
         Returns:
             List of Engram objects, most recent first.
         """
         query = "SELECT * FROM engrams WHERE state = 'active'"
         params: list = []
+        normalized_visibility = _normalize_read_visibility(read_visibility)
 
         if agent_id:
             query += " AND owner_agent_id = ?"
@@ -747,6 +913,10 @@ class EngramStore:
 
         if require_consolidation_authorized:
             query += " AND consolidation_authorized = 1"
+
+        if normalized_visibility is not None:
+            query += " AND read_visibility = ?"
+            params.append(normalized_visibility)
 
         query += " ORDER BY created_at DESC LIMIT ?"
         params.append(limit)
@@ -887,6 +1057,7 @@ class EngramStore:
         domain: str | None = None,
         active_only: bool = True,
         include_pending_review: bool = False,
+        read_visibility: str | None | object = _READ_VISIBILITY_DEFAULT,
     ) -> list[Belief]:
         """Get beliefs, excluding pending-confidence rows unless opted in.
 
@@ -897,6 +1068,12 @@ class EngramStore:
         conn = self._get_conn()
         query = "SELECT * FROM beliefs WHERE agent_id = ?"
         params: list[Any] = [agent_id]
+        if read_visibility is _READ_VISIBILITY_DEFAULT:
+            normalized_visibility = (
+                None if include_pending_review else READ_VISIBILITY_OPERATIONAL
+            )
+        else:
+            normalized_visibility = _normalize_read_visibility(read_visibility)  # type: ignore[arg-type]
 
         if domain:
             query += " AND domain = ?"
@@ -908,9 +1085,179 @@ class EngramStore:
         if not include_pending_review:
             query += " AND confidence_pending_review = 0"
 
+        if normalized_visibility is not None:
+            query += " AND read_visibility = ?"
+            params.append(normalized_visibility)
+
         query += " ORDER BY confidence DESC"
         rows = conn.execute(query, params).fetchall()
         return [Belief.from_dict(dict(r)) for r in rows]
+
+    # ── Proposal Ledger ──
+
+    def write_proposal(
+        self,
+        *,
+        source_authority: str,
+        kind: str,
+        target_surface: str,
+        transition: str,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        domain: str = "general",
+        blast_radius: str = "medium",
+        read_visibility: str = READ_VISIBILITY_REVIEW,
+        status: str = "pending_review",
+        reason: str = "",
+        gate_version: str = "affmem-v1",
+        target_id: str | None = None,
+        provenance_ids: list[str] | tuple[str, ...] | None = None,
+        payload: dict[str, Any] | None = None,
+        proposal_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Record a proposed durable transition for explicit review."""
+        source_authority = _clean_choice(
+            source_authority,
+            VALID_PROPOSAL_AUTHORITIES,
+            "source authority",
+        )
+        kind = _clean_choice(kind, VALID_PROPOSAL_KINDS, "proposal kind")
+        target_surface = _clean_choice(
+            target_surface,
+            VALID_PROPOSAL_TARGET_SURFACES,
+            "target surface",
+        )
+        blast_radius = _clean_choice(
+            blast_radius,
+            VALID_PROPOSAL_BLAST_RADII,
+            "blast radius",
+        )
+        if status not in VALID_PROPOSAL_STATUSES:
+            raise ValueError(f"Unsupported proposal status: {status}")
+        normalized_visibility = _normalize_read_visibility(
+            read_visibility,
+            allow_all=False,
+            default=READ_VISIBILITY_REVIEW,
+        )
+        if not transition.strip():
+            raise ValueError("Proposal transition cannot be empty")
+
+        now = int(datetime.now(timezone.utc).timestamp())
+        pid = (proposal_id or "").strip() or _new_id()
+        provenance = [str(item).strip() for item in (provenance_ids or []) if str(item).strip()]
+        payload_json = _encode_json(payload or {})
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO proposal_ledger (
+                id, agent_id, person_id, project_scope, source_authority, kind,
+                domain, target_surface, transition, blast_radius, read_visibility,
+                status, reason, gate_version, target_id, provenance_ids_json,
+                payload_json, created_at, updated_at, decided_at, applied_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+            ON CONFLICT(id) DO UPDATE SET
+                agent_id = excluded.agent_id,
+                person_id = excluded.person_id,
+                project_scope = excluded.project_scope,
+                source_authority = excluded.source_authority,
+                kind = excluded.kind,
+                domain = excluded.domain,
+                target_surface = excluded.target_surface,
+                transition = excluded.transition,
+                blast_radius = excluded.blast_radius,
+                read_visibility = excluded.read_visibility,
+                status = excluded.status,
+                reason = excluded.reason,
+                gate_version = excluded.gate_version,
+                target_id = excluded.target_id,
+                provenance_ids_json = excluded.provenance_ids_json,
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at,
+                decided_at = CASE
+                    WHEN excluded.status IN ('approved', 'rejected', 'superseded')
+                    THEN excluded.updated_at
+                    ELSE proposal_ledger.decided_at
+                END,
+                applied_at = CASE
+                    WHEN excluded.status = 'applied'
+                    THEN excluded.updated_at
+                    ELSE proposal_ledger.applied_at
+                END
+            """,
+            (
+                pid,
+                agent_id,
+                person_id,
+                project_scope,
+                source_authority,
+                kind,
+                domain.strip() or "general",
+                target_surface,
+                transition.strip(),
+                blast_radius,
+                normalized_visibility,
+                status,
+                reason.strip(),
+                gate_version.strip() or "affmem-v1",
+                (target_id or "").strip() or None,
+                _encode_json(provenance),
+                payload_json,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        proposal = self.get_proposal(pid)
+        if proposal is None:
+            raise RuntimeError(f"Failed to write proposal: {pid}")
+        return proposal
+
+    def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        """Load one proposal ledger row by ID."""
+        row = self._get_conn().execute(
+            "SELECT * FROM proposal_ledger WHERE id = ?",
+            (proposal_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._hydrate_proposal_row(dict(row))
+
+    def list_proposals(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        status: str | None = None,
+        read_visibility: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """List proposal ledger rows for an explicit review surface."""
+        if status is not None and status not in VALID_PROPOSAL_STATUSES:
+            raise ValueError(f"Unsupported proposal status: {status}")
+        normalized_visibility = _normalize_read_visibility(read_visibility)
+        sql = (
+            "SELECT * FROM proposal_ledger "
+            "WHERE agent_id = ? AND person_id = ? AND project_scope = ?"
+        )
+        params: list[Any] = [agent_id, person_id, project_scope]
+        if status is not None:
+            sql += " AND status = ?"
+            params.append(status)
+        if normalized_visibility is not None:
+            sql += " AND read_visibility = ?"
+            params.append(normalized_visibility)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, limit))
+        rows = self._get_conn().execute(sql, params).fetchall()
+        return [self._hydrate_proposal_row(dict(row)) for row in rows]
+
+    @staticmethod
+    def _hydrate_proposal_row(row: dict[str, Any]) -> dict[str, Any]:
+        row["provenance_ids"] = _decode_json(row.pop("provenance_ids_json", "[]"), [])
+        row["payload"] = _decode_json(row.pop("payload_json", "{}"), {})
+        return row
 
     # ── Functional Memory ──
 
@@ -1010,6 +1357,7 @@ class EngramStore:
         needs_confirmation: bool = False,
         pinned: bool = False,
         source: str = "agent_observed",
+        read_visibility: str | None = None,
         metadata: dict[str, Any] | None = None,
         expires_at: str | None = None,
     ) -> dict[str, Any]:
@@ -1027,6 +1375,15 @@ class EngramStore:
         now = _utc_now()
         fid = (memory_id or "").strip() or _new_id()
         session = (session_id or "").strip() or None
+        normalized_visibility = _normalize_read_visibility(
+            read_visibility,
+            allow_all=False,
+            default=(
+                READ_VISIBILITY_REVIEW
+                if needs_confirmation
+                else READ_VISIBILITY_OPERATIONAL
+            ),
+        )
         conn = self._get_conn()
         if session and self.get_memory_session(session) is None:
             self.start_memory_session(
@@ -1043,9 +1400,9 @@ class EngramStore:
             INSERT INTO functional_memories(
                 id, session_id, agent_id, person_id, project_scope, content,
                 memory_type, confidence, salience, needs_confirmation, pinned,
-                source, metadata_json, created_at, updated_at, expires_at,
+                source, read_visibility, metadata_json, created_at, updated_at, expires_at,
                 is_deleted
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT(id) DO UPDATE SET
                 session_id = excluded.session_id,
                 agent_id = excluded.agent_id,
@@ -1058,6 +1415,7 @@ class EngramStore:
                 needs_confirmation = excluded.needs_confirmation,
                 pinned = excluded.pinned,
                 source = excluded.source,
+                read_visibility = excluded.read_visibility,
                 metadata_json = excluded.metadata_json,
                 updated_at = excluded.updated_at,
                 expires_at = excluded.expires_at,
@@ -1076,6 +1434,7 @@ class EngramStore:
                 int(needs_confirmation),
                 int(pinned),
                 source.strip() or "agent_observed",
+                normalized_visibility,
                 _encode_json(metadata or {}),
                 now,
                 now,
@@ -1124,6 +1483,7 @@ class EngramStore:
         exclude_needs_confirmation: bool = False,
         include_deleted: bool = False,
         limit: int = 12,
+        read_visibility: str | None | object = _READ_VISIBILITY_DEFAULT,
     ) -> list[dict[str, Any]]:
         """Search functional memories for the current scope/session."""
         if memory_type and memory_type not in VALID_FUNCTIONAL_TYPES:
@@ -1138,6 +1498,12 @@ class EngramStore:
             "WHERE agent_id = ? AND person_id = ? AND project_scope = ?"
         )
         params: list[Any] = [agent_id, person_id, project_scope]
+        if read_visibility is _READ_VISIBILITY_DEFAULT:
+            normalized_visibility = (
+                None if needs_confirmation_only else READ_VISIBILITY_OPERATIONAL
+            )
+        else:
+            normalized_visibility = _normalize_read_visibility(read_visibility)  # type: ignore[arg-type]
         if session_id:
             sql += " AND session_id = ?"
             params.append(session_id)
@@ -1150,6 +1516,9 @@ class EngramStore:
             sql += " AND needs_confirmation = 0"
         if not include_deleted:
             sql += " AND is_deleted = 0"
+        if normalized_visibility is not None:
+            sql += " AND read_visibility = ?"
+            params.append(normalized_visibility)
         sql += " ORDER BY pinned DESC, updated_at DESC LIMIT 200"
 
         rows = self._get_conn().execute(sql, params).fetchall()
@@ -1340,6 +1709,7 @@ class EngramStore:
         confidence: float = 0.6,
         salience: float = 0.5,
         foundational: bool = False,
+        read_visibility: str | None = None,
         original_timestamp: int | None = None,
         related_session_id: str | None = None,
         related_engram_id: str | None = None,
@@ -1364,6 +1734,7 @@ class EngramStore:
             confidence=confidence,
             salience=salience,
             foundational=foundational,
+            read_visibility=read_visibility,
             original_timestamp=original_timestamp,
             related_session_id=related_session_id,
             related_engram_id=related_engram_id,
@@ -1387,6 +1758,7 @@ class EngramStore:
         confidence: float = 0.6,
         salience: float = 0.5,
         foundational: bool = False,
+        read_visibility: str | None = None,
         original_timestamp: int | None = None,
         related_session_id: str | None = None,
         related_engram_id: str | None = None,
@@ -1400,6 +1772,11 @@ class EngramStore:
 
         now = _utc_now()
         entry_id = (entry_id or "").strip() or _new_id()
+        normalized_visibility = _normalize_read_visibility(
+            read_visibility,
+            allow_all=False,
+            default=READ_VISIBILITY_OPERATIONAL,
+        )
         existing = conn.execute(
             """
             SELECT agent_id, person_id, project_scope, content, revision_count,
@@ -1436,16 +1813,17 @@ class EngramStore:
             """
             INSERT INTO hypomnema_entries(
                 id, agent_id, person_id, project_scope, content, source,
-                density, domain, tags_json, confidence, salience,
+                density, domain, read_visibility, tags_json, confidence, salience,
                 active, foundational, revision_count, revisions_json,
                 original_timestamp, related_session_id, related_engram_id,
                 created_at, last_revised_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 content = excluded.content,
                 source = excluded.source,
                 density = excluded.density,
                 domain = excluded.domain,
+                read_visibility = excluded.read_visibility,
                 tags_json = excluded.tags_json,
                 confidence = excluded.confidence,
                 salience = excluded.salience,
@@ -1467,6 +1845,7 @@ class EngramStore:
                 source,
                 _clamp(density),
                 domain,
+                normalized_visibility,
                 _encode_json(_split_tags(tags)),
                 _clamp(confidence),
                 _clamp(salience),
@@ -1515,6 +1894,7 @@ class EngramStore:
         limit: int = 8,
         include_inactive: bool = False,
         exclude_promotion_candidates: bool = False,
+        read_visibility: str | None = READ_VISIBILITY_OPERATIONAL,
     ) -> list[dict[str, Any]]:
         """Search scoped hypomnema entries by text, confidence, and salience."""
         conn = self._get_conn()
@@ -1523,8 +1903,12 @@ class EngramStore:
             "WHERE agent_id = ? AND person_id = ? AND project_scope = ?"
         )
         params: list[Any] = [agent_id, person_id, project_scope]
+        normalized_visibility = _normalize_read_visibility(read_visibility)
         if not include_inactive:
             sql += " AND active = 1"
+        if normalized_visibility is not None:
+            sql += " AND read_visibility = ?"
+            params.append(normalized_visibility)
         if exclude_promotion_candidates:
             sql += (
                 " AND NOT (active = 1 "
@@ -1774,11 +2158,12 @@ class EngramStore:
         person_id: str = "user",
         project_scope: str = "global",
         limit: int = 10,
+        read_visibility: str | None = None,
     ) -> list[dict[str, Any]]:
         """List stable hypomnema entries ready to become Mnemos engrams."""
         conn = self._get_conn()
-        rows = conn.execute(
-            """
+        normalized_visibility = _normalize_read_visibility(read_visibility)
+        sql = """
             SELECT * FROM hypomnema_entries
             WHERE agent_id = ? AND person_id = ? AND project_scope = ?
               AND active = 1
@@ -1786,11 +2171,17 @@ class EngramStore:
               AND confidence >= 0.82
               AND salience >= 0.65
               AND (revision_count >= 1 OR foundational = 1)
-            ORDER BY foundational DESC, confidence DESC, salience DESC, created_at ASC
-            LIMIT ?
-            """,
-            (agent_id, person_id, project_scope, limit),
-        ).fetchall()
+        """
+        params: list[Any] = [agent_id, person_id, project_scope]
+        if normalized_visibility is not None:
+            sql += " AND read_visibility = ?"
+            params.append(normalized_visibility)
+        sql += (
+            " ORDER BY foundational DESC, confidence DESC, salience DESC, created_at ASC"
+            " LIMIT ?"
+        )
+        params.append(limit)
+        rows = conn.execute(sql, params).fetchall()
         return [self._hydrate_hypomnema_row(dict(row)) for row in rows]
 
     def get_hypomnema_stats(

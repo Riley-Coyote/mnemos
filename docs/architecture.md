@@ -49,6 +49,13 @@ The fundamental unit of memory. Each engram has:
   `voice_exemplar_eligible`, and consolidation/substrate mutation paths require
   `consolidation_authorized` so imported identity material is not silently
   rewritten by background maintenance.
+- **Afferent Membrane controls** (schema v6): producer-fed rows carry
+  `read_visibility` (`operational_context`, `review_only`, or `audit_only`).
+  Operational retrieval, packets, consolidation, substrate producers, and
+  modulators read only `operational_context` rows by default; review APIs opt
+  in explicitly. Proposed durable transitions are tracked in `proposal_ledger`
+  with authority, target surface, transition, blast radius, visibility, status,
+  reason, gate version, provenance, and payload fields.
 - **PAI coordinate guard**: before imported text becomes retrievable rows, the
   splitter strips Strict-B eigenvalue, vivezza, coordinate-target, and
   persona-signature tuple-value lines from any source kind. These values are
@@ -75,7 +82,8 @@ Higher-order knowledge structures extracted from patterns across engrams:
   `needs_review`, and `confidence_pending_review` mark beliefs whose
   upstream source has changed but has not been re-reviewed by the operator.
   Default `get_beliefs()` consumers exclude pending-confidence beliefs;
-  belief review opts in so it can resolve them and clear the pending flags.
+  belief review opts in so it can resolve them, clear the pending flags, and
+  move approved rows back to operational read visibility.
 
 ### Encoding Pipeline
 

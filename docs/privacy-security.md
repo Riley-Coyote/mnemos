@@ -112,8 +112,9 @@ Safety boundaries enforced by the importer:
 - Imported rows carry `decay_protected`, `softening_protected`, and
   `consolidation_authorized` flags so the consolidation and substrate passes
   cannot silently rewrite imported identity material.
-- Imported beliefs carry `confidence_pending_review` and are excluded from
-  default belief consumers until belief review clears the flag.
+- Imported beliefs carry `confidence_pending_review` and `review_only`
+  read visibility, so they are excluded from default belief consumers until
+  belief review clears the flag and restores `operational_context`.
 - Enforcement links: `mnemos/importer/operator.py`, `mnemos/importer/watcher.py`,
   `mnemos/importer/review_gate.py`, `tests/test_u3b_pai_operator.py`,
   `tests/test_u3c_pai_watch_doctor.py`, and

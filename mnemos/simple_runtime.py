@@ -1107,6 +1107,7 @@ class MnemosRuntime:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=limit,
+            read_visibility="operational_context",
         )
         promoted = 0
         for entry in candidates:
@@ -1278,4 +1279,3 @@ def format_health_card(data: dict[str, Any]) -> str:
         line("Last dream", dream_line),
         "Everything on this card is safe to relay to the human in plain words.",
     ])
-

@@ -136,7 +136,8 @@ class SharedPool:
         conn = self._store._get_conn()
         sql = (
             "SELECT * FROM engrams WHERE state = 'active' "
-            "AND visibility IN ('shared', 'public')"
+            "AND visibility IN ('shared', 'public') "
+            "AND read_visibility = 'operational_context'"
         )
         params: list[Any] = []
 
@@ -169,7 +170,9 @@ class SharedPool:
         conn = self._store._get_conn()
         rows = conn.execute(
             "SELECT * FROM engrams WHERE owner_agent_id = ? "
-            "AND state = 'active' ORDER BY created_at DESC LIMIT ?",
+            "AND state = 'active' "
+            "AND read_visibility = 'operational_context' "
+            "ORDER BY created_at DESC LIMIT ?",
             (agent_id, limit),
         ).fetchall()
         return [Engram.from_dict(dict(r)) for r in rows]

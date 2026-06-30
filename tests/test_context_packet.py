@@ -95,6 +95,58 @@ def test_operational_context_packet_quarantines_review_prose(store):
     assert review_queue["hypomnema_promotion_candidate_count"] == 1
 
 
+def test_review_context_packet_can_include_review_only_rows(store):
+    functional = store.write_functional_memory(
+        "Explicit review functional prose may enter a review packet.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        memory_type="open_question",
+        needs_confirmation=True,
+        confidence=0.9,
+        salience=0.9,
+        read_visibility="review_only",
+    )
+    hypomnema_id = store.write_hypomnema_entry(
+        "Explicit review hypomnema prose may enter a review packet.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.95,
+        salience=0.9,
+        foundational=True,
+        read_visibility="review_only",
+    )
+
+    operational = build_context_packet(
+        store,
+        "explicit review prose",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        packet_mode="operational",
+    )
+    review = build_context_packet(
+        store,
+        "explicit review prose",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        packet_mode="review",
+    )
+
+    assert "Explicit review functional prose" not in str(operational)
+    assert "Explicit review hypomnema prose" not in str(operational)
+    assert functional["id"] in operational["prompt"]
+    assert hypomnema_id in operational["prompt"]
+
+    review_prompt = review["prompt"]
+    assert "Explicit review functional prose" in review_prompt
+    assert "Explicit review hypomnema prose" in review_prompt
+    assert review["review_queue"]["functional_needs_confirmation"][0]["read_visibility"] == "review_only"
+    assert review["review_queue"]["hypomnema_promotion_candidates"][0]["read_visibility"] == "review_only"
+
+
 def test_operational_context_packet_redacts_candidates_outside_review_queue(store):
     for index in range(6):
         store.write_hypomnema_entry(

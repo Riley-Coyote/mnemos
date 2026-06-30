@@ -59,6 +59,53 @@ def test_capture_recall_and_correction_without_provider_key(tmp_path):
     assert "baseline continuity" in corrected_recall
 
 
+def test_context_and_recall_hide_review_only_prose(tmp_path):
+    from mnemos.core.engram import Engram
+    from mnemos.store.sqlite_store import EngramStore
+
+    db_path = str(tmp_path / "simple.db")
+    seed = EngramStore(db_path)
+    try:
+        seed.save_engram(
+            Engram(
+                content="Review-only runtime engram phrase should stay hidden.",
+                owner_agent_id="nova",
+                read_visibility="review_only",
+            )
+        )
+        seed.write_hypomnema_entry(
+            "Review-only runtime continuity phrase should stay hidden.",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            confidence=0.95,
+            salience=0.9,
+            foundational=True,
+            read_visibility="review_only",
+        )
+    finally:
+        seed.close()
+
+    runtime = MnemosRuntime(
+        db_path=db_path,
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+
+    try:
+        context = runtime.context("runtime phrase", max_results=6)
+        recall = runtime.recall("runtime phrase", max_results=6)
+    finally:
+        runtime.close()
+
+    assert "Review-only runtime engram phrase" not in context
+    assert "Review-only runtime continuity phrase" not in context
+    assert "Review-only runtime engram phrase" not in recall
+    assert "Review-only runtime continuity phrase" not in recall
+
+
 def test_identity_scope_does_not_leak_between_agents(tmp_path):
     db_path = str(tmp_path / "shared.db")
     nova = MnemosRuntime(

@@ -56,6 +56,7 @@ def handle(
         WHERE state='active' AND content LIKE '%[wandering]%'
         AND owner_agent_id = ?
         AND consolidation_authorized = 1
+        AND read_visibility = 'operational_context'
         AND created_at > datetime('now', '-7 days')
     """, (agent_id,)).fetchone()[0]
 
@@ -72,6 +73,7 @@ def handle(
         WHERE state='active' AND content LIKE '%[wandering]%'
         AND owner_agent_id = ?
         AND consolidation_authorized = 1
+        AND read_visibility = 'operational_context'
         ORDER BY created_at DESC LIMIT 1
     """, (agent_id,)).fetchone()
 
@@ -95,6 +97,7 @@ def handle(
         WHERE state='active'
           AND owner_agent_id = ?
           AND consolidation_authorized = 1
+          AND read_visibility = 'operational_context'
           AND content NOT LIKE '%[wandering]%'
           AND content NOT LIKE '%[dream]%'
         ORDER BY created_at DESC
@@ -108,6 +111,7 @@ def handle(
         WHERE state='active' AND content LIKE '%[wandering]%'
         AND owner_agent_id = ?
         AND consolidation_authorized = 1
+        AND read_visibility = 'operational_context'
         AND created_at > datetime('now', '-30 days')
     """, (agent_id,)).fetchall()
     for hr in hash_rows:
@@ -184,6 +188,7 @@ If something surfaces: {{"thought": "<the wandering thought>", "origin": "<which
                         WHERE id = ?
                           AND owner_agent_id = ?
                           AND consolidation_authorized = 1
+                          AND read_visibility = 'operational_context'
                         """,
                         (engram_id, agent_id),
                     ).fetchone()

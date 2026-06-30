@@ -39,6 +39,7 @@ def handle(
         WHERE state='active'
           AND owner_agent_id = ?
           AND consolidation_authorized = 1
+          AND read_visibility = 'operational_context'
         ORDER BY vividness DESC
         LIMIT 5
     """, (agent_id,)).fetchall()

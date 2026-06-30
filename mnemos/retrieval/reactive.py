@@ -99,6 +99,7 @@ class ReactiveRetriever:
         agent_id: str = "default",
         max_results: int = 10,
         emotional_state: EmotionalState | None = None,
+        read_visibility: str | None = "operational_context",
     ) -> list[RetrievalResult]:
         """Retrieve memories via resonance — spreading activation through the graph.
 
@@ -120,7 +121,11 @@ class ReactiveRetriever:
 
         # FTS seeds (keyword matching)
         fts_query = _to_fts_query(cue)
-        fts_results = self._store.search_fts(fts_query, limit=30)
+        fts_results = self._store.search_fts(
+            fts_query,
+            limit=30,
+            read_visibility=read_visibility,
+        )
         for engram in fts_results:
             if engram.owner_agent_id == agent_id:
                 seeds[engram.id] = engram
@@ -128,7 +133,11 @@ class ReactiveRetriever:
         # Shared DB seeds (cross-agent shared memories)
         if self._shared_store:
             try:
-                shared_fts = self._shared_store.search_fts(fts_query, limit=20)
+                shared_fts = self._shared_store.search_fts(
+                    fts_query,
+                    limit=20,
+                    read_visibility=read_visibility,
+                )
                 for engram in shared_fts:
                     if engram.visibility in ("shared", "public") and engram.id not in seeds:
                         seeds[engram.id] = engram
@@ -143,7 +152,10 @@ class ReactiveRetriever:
                 )
                 for eid, similarity in embedding_hits:
                     if similarity > 0.3 and eid not in seeds:  # Threshold for relevance
-                        engram = self._store.get_engram(eid)
+                        engram = self._store.get_engram(
+                            eid,
+                            read_visibility=read_visibility,
+                        )
                         if engram and engram.state == "active" and engram.owner_agent_id == agent_id:
                             seeds[eid] = engram
             except Exception:
@@ -192,7 +204,10 @@ class ReactiveRetriever:
             bias = emotional_state.get_retrieval_bias()
             if bias:
                 for eid in list(activation.keys()):
-                    engram = seeds.get(eid) or self._store.get_engram(eid)
+                    engram = seeds.get(eid) or self._store.get_engram(
+                        eid,
+                        read_visibility=read_visibility,
+                    )
                     if engram and engram.tags:
                         overlap = sum(bias.get(tag, 0.0) for tag in engram.tags)
                         if overlap > 0:
@@ -206,10 +221,16 @@ class ReactiveRetriever:
 
             engram = seeds.get(eid)
             if not engram:
-                engram = self._store.get_engram(eid)
+                engram = self._store.get_engram(
+                    eid,
+                    read_visibility=read_visibility,
+                )
             # Cross-DB: check shared store if not found in private
             if not engram and self._shared_store:
-                engram = self._shared_store.get_engram(eid)
+                engram = self._shared_store.get_engram(
+                    eid,
+                    read_visibility=read_visibility,
+                )
 
             if not engram or engram.state != "active":
                 continue

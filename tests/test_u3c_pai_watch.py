@@ -350,7 +350,13 @@ def test_u3c_removed_belief_section_flags_review_without_changing_content(tmp_pa
             (removed_id,),
         ).fetchone()
         store._get_conn().execute(
-            "UPDATE beliefs SET needs_review = 0, confidence_pending_review = 0 WHERE id = ?",
+            """
+            UPDATE beliefs
+            SET needs_review = 0,
+                confidence_pending_review = 0,
+                read_visibility = 'operational_context'
+            WHERE id = ?
+            """,
             (removed_id,),
         )
         store._get_conn().commit()

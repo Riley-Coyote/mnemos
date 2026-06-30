@@ -344,9 +344,9 @@ def test_u3a_migration_and_row_map_are_idempotent(tmp_path):
     conn = store._get_conn()
     try:
         assert any(m["version"] == 4 for m in list_migrations())
-        # Re-run target_version=5 (current SCHEMA_VERSION) — should be no-op
+        # Re-run target_version=6 (current SCHEMA_VERSION) — should be no-op
         # since EngramStore.__init__ already migrated to latest.
-        assert run_migrations(conn, target_version=5) == []
+        assert run_migrations(conn, target_version=6) == []
         apply_u3a_schema_migration(conn)
         apply_u3a_schema_migration(conn)
 
@@ -640,7 +640,7 @@ def test_legacy_v3_db_opens_and_migrates_through_engram_store(tmp_path):
 
     store = EngramStore(db_path)
     try:
-        assert store.get_meta("schema_version") == "5"
+        assert store.get_meta("schema_version") == "6"
         legacy = store.get_engram("legacy_e")
         assert legacy is not None
         assert legacy.voice_exemplar_eligible is True
@@ -677,7 +677,7 @@ def test_backed_up_legacy_db_rehearsal_preserves_u3a_sentinels(tmp_path, monkeyp
     store = EngramStore(backup_db)
     sentinel_ids: set[str] = set()
     try:
-        assert store.get_meta("schema_version") == "5"
+        assert store.get_meta("schema_version") == "6"
         assert store._get_conn().execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert store.get_engram("legacy_e") is not None
 
@@ -793,11 +793,11 @@ def test_migration_version_guards(tmp_path):
     empty = sqlite3.connect(tmp_path / "empty.db")
     empty.row_factory = sqlite3.Row
     try:
-        # Bootstrap empty DB to the current latest schema (v5).
-        assert run_migrations(empty, target_version=5) == [4, 5]
+        # Bootstrap empty DB to the current latest schema (v6).
+        assert run_migrations(empty, target_version=6) == [4, 5, 6]
         assert empty.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
-        ).fetchone()["value"] == "5"
+        ).fetchone()["value"] == "6"
         row_map_cols = _column_map(empty, "pai_import_row_map")
         assert "content_at_last_import" in row_map_cols
         assert "tombstone_at" in row_map_cols
@@ -849,15 +849,16 @@ def test_migration_version_guards(tmp_path):
 
 
 def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
-    """v5 hardening exists as a real migration now; use slot 6 to test failure
-    isolation — the DB rolls back to v5 (current latest) when a hypothetical
-    v6 migration fails partway through.
+    """v6 is real now; use slot 7 to test failure isolation.
+
+    The DB rolls back to v6 (current latest) when a hypothetical v7 migration
+    fails partway through.
     """
     db_path = tmp_path / "rollback.db"
     store = EngramStore(db_path)
     store.close()
 
-    previous = migrations._MIGRATIONS.get(6)
+    previous = migrations._MIGRATIONS.get(7)
 
     def fail_after_writes(conn):
         conn.execute("CREATE TABLE u3a_failure_probe (id TEXT PRIMARY KEY)")
@@ -866,14 +867,14 @@ def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
         )
         raise ValueError("synthetic migration failure")
 
-    migrations._MIGRATIONS[6] = ("synthetic failing migration", fail_after_writes)
+    migrations._MIGRATIONS[7] = ("synthetic failing migration", fail_after_writes)
     conn = sqlite3.connect(db_path)
     try:
-        with pytest.raises(RuntimeError, match="Migration 6 failed"):
-            run_migrations(conn, target_version=6)
+        with pytest.raises(RuntimeError, match="Migration 7 failed"):
+            run_migrations(conn, target_version=7)
         assert conn.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
-        ).fetchone()[0] == "5"
+        ).fetchone()[0] == "6"
         assert not conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'u3a_failure_probe'"
         ).fetchone()
@@ -883,9 +884,9 @@ def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
     finally:
         conn.close()
         if previous is None:
-            del migrations._MIGRATIONS[6]
+            del migrations._MIGRATIONS[7]
         else:
-            migrations._MIGRATIONS[6] = previous
+            migrations._MIGRATIONS[7] = previous
 
 
 def test_future_schema_store_open_fails_before_mutating_schema(tmp_path):

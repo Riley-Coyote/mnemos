@@ -137,6 +137,7 @@ def run_belief_review(
                 if pending_review:
                     belief.needs_review = False
                     belief.confidence_pending_review = False
+                    belief.read_visibility = "operational_context"
                 apply_belief_update(belief, eval_result, engram.id, store)
                 if pending_review:
                     belief.challenge()
@@ -155,6 +156,7 @@ def run_belief_review(
             ):
                 belief.needs_review = False
                 belief.confidence_pending_review = False
+                belief.read_visibility = "operational_context"
                 belief.challenge()
                 store.save_belief(belief)
 

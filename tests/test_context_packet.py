@@ -472,3 +472,49 @@ def test_visual_snapshot_returns_mermaid(store):
     assert "```mermaid" in snapshot
     assert "Functional memory" in snapshot
     assert "Hypomnema" in snapshot
+
+
+def test_visual_snapshot_redacts_review_queue_prose(store):
+    functional = store.write_functional_memory(
+        "Visual snapshot pending functional prose must be withheld.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        memory_type="open_question",
+        needs_confirmation=True,
+        confidence=0.9,
+        salience=0.9,
+        read_visibility="operational_context",
+    )
+    hypomnema_id = store.write_hypomnema_entry(
+        "Visual snapshot promotion candidate prose must be withheld.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        source="synthesized",
+        domain="foundational",
+        confidence=0.95,
+        salience=0.9,
+        foundational=True,
+        read_visibility="operational_context",
+    )
+
+    snapshot = build_memory_visual_snapshot(
+        store,
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    assert "Visual snapshot pending functional prose" not in snapshot
+    assert "Visual snapshot promotion candidate prose" not in snapshot
+    assert functional["id"] in snapshot
+    assert hypomnema_id in snapshot
+    assert (
+        "functional memory item(s) need confirmation (review-only; prose withheld)"
+        in snapshot
+    )
+    assert (
+        "hypomnema promotion candidate(s) need review (review-only; prose withheld)"
+        in snapshot
+    )

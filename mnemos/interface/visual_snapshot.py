@@ -25,6 +25,7 @@ def build_memory_visual_snapshot(
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        exclude_needs_confirmation=True,
         limit=max_items,
     )
     hypomnema = store.search_hypomnema(
@@ -32,6 +33,7 @@ def build_memory_visual_snapshot(
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        exclude_promotion_candidates=True,
         limit=max_items,
     )
     engrams = store.get_active_engrams(agent_id=agent_id, limit=max_items)
@@ -138,8 +140,21 @@ def _format_review(
     if not functional and not candidates:
         return "### Review Queue\n- Clear."
     lines = ["### Review Queue"]
-    for item in functional:
-        lines.append(f"- confirm: {item['content']} [{item['memory_type']}]")
-    for item in candidates:
-        lines.append(f"- promote: {item['content']} [{item['domain']}]")
+    if functional:
+        lines.append(
+            f"- {len(functional)} functional memory item(s) need confirmation "
+            "(review-only; prose withheld)."
+        )
+        for item in functional:
+            lines.append(f"  - source_id={item['id']} type={item['memory_type']}")
+    if candidates:
+        lines.append(
+            f"- {len(candidates)} hypomnema promotion candidate(s) need review "
+            "(review-only; prose withheld)."
+        )
+        for item in candidates:
+            lines.append(
+                f"  - source_id={item['id']} domain={item['domain']} "
+                f"source={item['source']}"
+            )
     return "\n".join(lines)

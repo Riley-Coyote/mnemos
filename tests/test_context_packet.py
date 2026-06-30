@@ -31,6 +31,7 @@ def test_context_packet_orders_memory_layers(store):
         confidence=0.88,
         salience=0.75,
         foundational=True,
+        read_visibility="operational_context",
     )
 
     packet = build_context_packet(

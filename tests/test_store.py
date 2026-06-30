@@ -360,6 +360,9 @@ class TestEngramStore:
             assert conn.execute(
                 "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_h'"
             ).fetchone()[0] == "review_only"
+            assert conn.execute(
+                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_ordinary_h'"
+            ).fetchone()[0] == "operational_context"
         finally:
             store.close()
 
@@ -641,6 +644,15 @@ def _create_legacy_v5_read_visibility_db(path):
                 created_at, last_revised_at
             ) VALUES (
                 'legacy_h', 'legacy promotion candidate', 0.95, 0.9, 1,
+                '2026-01-01T00:00:00+00:00',
+                '2026-01-01T00:00:00+00:00'
+            );
+
+            INSERT INTO hypomnema_entries (
+                id, content, confidence, salience, foundational,
+                created_at, last_revised_at
+            ) VALUES (
+                'legacy_ordinary_h', 'legacy ordinary continuity', 0.6, 0.5, 0,
                 '2026-01-01T00:00:00+00:00',
                 '2026-01-01T00:00:00+00:00'
             );

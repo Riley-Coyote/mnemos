@@ -456,6 +456,18 @@ class TestEngramStore:
         tagged_two = store.write_hypomnema_entry(
             "second tagged note", tags=["dream-journal", "continuity"], **in_scope
         )
+        review_tagged = store.write_hypomnema_entry(
+            "review tagged note",
+            tags=["dream-journal"],
+            read_visibility="review_only",
+            **in_scope,
+        )
+        audit_tagged = store.write_hypomnema_entry(
+            "audit tagged note",
+            tags=["dream-journal"],
+            read_visibility="audit_only",
+            **in_scope,
+        )
         store.write_hypomnema_entry("untagged note", tags=["continuity"], **in_scope)
         store.write_hypomnema_entry(
             "other scope note",
@@ -474,6 +486,21 @@ class TestEngramStore:
         assert all(e["active"] for e in entries)
         # Newest first by last_revised_at.
         assert entries[0]["id"] == tagged_two
+
+        review_entries = store.get_hypomnema_entries_by_tag(
+            "dream-journal", read_visibility="review_only", **in_scope
+        )
+        assert {e["id"] for e in review_entries} == {review_tagged}
+
+        all_visible_entries = store.get_hypomnema_entries_by_tag(
+            "dream-journal", read_visibility=None, limit=10, **in_scope
+        )
+        assert {e["id"] for e in all_visible_entries} == {
+            tagged_one,
+            tagged_two,
+            review_tagged,
+            audit_tagged,
+        }
 
         including_inactive = store.get_hypomnema_entries_by_tag(
             "dream-journal", active_only=False, limit=10, **in_scope

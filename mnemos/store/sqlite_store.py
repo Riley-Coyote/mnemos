@@ -2067,6 +2067,7 @@ class EngramStore:
         person_id: str = "user",
         project_scope: str = "global",
         active_only: bool = True,
+        read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
         limit: int = 5,
     ) -> list[dict[str, Any]]:
         """Scoped hypomnema entries carrying an exact tag, newest first."""
@@ -2079,8 +2080,15 @@ class EngramStore:
         # Quote-delimited match keeps the tag token-exact inside the JSON
         # array (so "dream" never matches "dream-journal").
         params: list[Any] = [agent_id, person_id, project_scope, f'%"{tag}"%']
+        visibility_values = _normalize_read_visibility_values(read_visibility)
         if active_only:
             sql += " AND active = 1"
+        sql = _append_read_visibility_filter(
+            sql,
+            params,
+            "read_visibility",
+            visibility_values,
+        )
         sql += " ORDER BY last_revised_at DESC LIMIT ?"
         params.append(max(1, limit))
         rows = conn.execute(sql, params).fetchall()

@@ -34,8 +34,8 @@ def handle(
     if not from_id or not to_id:
         return produced_events
 
-    from_engram = store.get_engram(from_id)
-    to_engram = store.get_engram(to_id)
+    from_engram = store.get_engram(from_id, read_visibility="operational_context")
+    to_engram = store.get_engram(to_id, read_visibility="operational_context")
 
     if not from_engram or not to_engram:
         return produced_events

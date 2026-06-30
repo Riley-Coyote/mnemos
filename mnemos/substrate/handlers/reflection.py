@@ -67,7 +67,7 @@ def handle(
     trigger_content = ""
     trigger_impact = ""
     if trigger_engram_id:
-        engram = store.get_engram(trigger_engram_id)
+        engram = store.get_engram(trigger_engram_id, read_visibility="operational_context")
         if (
             engram
             and engram.owner_agent_id == config.agent_id

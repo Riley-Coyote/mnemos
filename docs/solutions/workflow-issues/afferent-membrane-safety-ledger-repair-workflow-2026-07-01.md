@@ -11,7 +11,8 @@ applies_when:
   - "A review gate finds repeated safety invariants that the plan should have named first"
   - "A no-mistakes run is active on a stale branch head"
   - "A plan needs exact code chokepoints and executable test selectors"
-tags: [afferent-membrane, plan-ledger, no-mistakes, review-safety, mnemos, u2-5]
+  - "Actor/auth authority boundaries must be locked before U3/U4 implementation"
+tags: [afferent-membrane, plan-ledger, no-mistakes, review-safety, actor-auth-ledger, rfc-provenance, mnemos, u2-5]
 ---
 
 # Afferent Membrane Safety Ledger Repair Workflow
@@ -29,6 +30,7 @@ The repaired state is anchored in:
 - `docs/plans/afferent-membrane-plan-quality-gate.md`
 - `tests/test_afferent_plan_quality.py`
 - ledger repair commits `9957196` and `e285b3e`, with workflow capture beginning at `37613d7` on `codex/afferent-membrane-v1-ledger`
+- review-tooling hardening commit `09120a3`, where `ce-doc-review` caught stale current-head/no-mistakes wording, subset-proof-as-closure risk, U6b ownership ambiguity, and missing RFC provenance; `ce-agent-native-audit` caught the missing Actor/Auth Ledger and caller-authority boundary before U3/U4.
 
 ## Guidance
 
@@ -194,7 +196,46 @@ uv run --extra dev pytest \
 git diff --check
 ```
 
-### 8. No-mistakes is validation, not the first safety ledger author
+### 8. Review tooling must update the ledger, not only the report
+
+The ce-doc-review and ce-agent-native-audit pass found a second planning failure after the first ledger repair: the plan could look safety-aware while still letting future U3/U4 work proceed without current proof, caller-authority boundaries, or immutable RFC provenance.
+
+The repaired plan now has explicit gates for those findings:
+
+- same-SHA validation before U3: `git rev-parse --short HEAD` must match the active `no-mistakes` run head;
+- active no-mistakes on an older head is not closure for the current branch;
+- focused/subset proof is evidence, but full regression-ledger proof is required before claiming the current head is closed;
+- RFC provenance includes source path, read date, and SHA-256; if the hash changes, re-run the RFC ledger comparison;
+- U6b stays an ExperienceTick feeder constrained by RFC-R3/R7/R8, not a separate permission rule or independent owner of R7/R8;
+- the plan contract itself is test-guarded for same-SHA language, RFC hash, Actor/Auth Ledger, no operative RFC-R9/R10, no U7 ownership drift, and executable regression selectors.
+
+This is the closure rule for review tooling: a valid finding that changes policy, authority, proof, or source-of-truth semantics must land in the authoritative plan/gate/tests. A report-only finding is not enough when the next implementer will read the plan.
+
+### 9. Actor/Auth belongs in the safety ledger before U3/U4
+
+Review/audit visibility is not the same thing as permission. A row being `review_only` or `audit_only` does not answer who may inspect it, who may stamp authority, or who may apply a David-only decision.
+
+The repaired plan now requires an Actor/Auth Ledger before authority stamping or review gates proceed. It names caller classes, allowed surfaces, stampable authority values, forbidden actions, and David-only proof artifacts for:
+
+- default/simple MCP agents;
+- advanced MCP operator surfaces;
+- local CLI operators;
+- runtime/generated producers;
+- PAI importer/operator paths;
+- David-only review decisions.
+
+The key boundary is negative, not just descriptive: simple/default agents must not self-stamp `user_stated` or `imported`, invoke audit/admin/review-prose paths by default, or simulate David-only approval through metadata. U3 must add the caller-to-authority matrix; U4 must add the non-model proof artifact for David-only decisions.
+
+### 10. Test selectors in the workflow doc must distinguish subset proof from closure proof
+
+After review-tooling repair, the workflow doc keeps both proof shapes:
+
+- subset focused proof, preserved as historical evidence from the repair pass;
+- full regression-ledger proof, required before claiming the current branch head closed.
+
+Do not copy the shorter command as the closure proof. Its purpose is to show what was run during one repair pass; the full selector set is the reusable gate for the next closeout.
+
+### 11. No-mistakes is validation, not the first safety ledger author
 
 The reusable gate in `docs/plans/afferent-membrane-plan-quality-gate.md` records the process lesson: if no-mistakes would plausibly find more than three material safety-ledger issues, stop and repair the plan before running it.
 
@@ -212,7 +253,7 @@ The U2.5 run surfaced repeated classes that should have been planned:
 
 Fold every no-mistakes `ask-user` policy decision back into the plan or gate. In this lane, David resolved the terminal conflict policy: terminal proposal conflicts must be immutable, and later writes with the same terminal `proposal_id` are rejected.
 
-### 9. Do not claim no-mistakes coverage for a stale head
+### 12. Do not claim no-mistakes coverage for a stale head
 
 After the final ledger commit, `no-mistakes axi status` still showed an active run on the same branch but at stale head `f52fcf90`, with CI running. The ledger repair head was `e285b3e`; later workflow/doc-review commits moved the branch again.
 
@@ -226,7 +267,7 @@ git log --oneline -3
 
 If `no-mistakes` reports a PR for an old head, the branch may still contain newer pushed commits that are only locally tested. Say that. Do not treat the old run as proof for the new head. The closeout invariant is same-SHA proof: `git rev-parse --short HEAD` must match the active no-mistakes run head before U3 can start.
 
-### 10. Capture the whole failure catalogue, not just the headline miss
+### 13. Capture the whole failure catalogue, not just the headline miss
 
 The compound record needs to preserve the small failures because they are where the next plan will probably leak. The Afferent U2.5 chain produced these error classes and fixes:
 

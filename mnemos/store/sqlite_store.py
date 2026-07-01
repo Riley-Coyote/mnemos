@@ -590,6 +590,17 @@ def _strictest_read_visibility_sql(table_name: str) -> str:
     )
 
 
+def _preserved_quarantined_flag_sql(table_name: str, column_name: str) -> str:
+    strictest_visibility = _strictest_read_visibility_sql(table_name)
+    return (
+        "CASE "
+        f"WHEN {strictest_visibility} != '{READ_VISIBILITY_OPERATIONAL}' "
+        f"THEN MAX({table_name}.{column_name}, excluded.{column_name}) "
+        f"ELSE excluded.{column_name} "
+        "END"
+    )
+
+
 def _clean_choice(value: str, allowed: set[str], label: str) -> str:
     cleaned = (value or "").strip()
     if cleaned not in allowed:
@@ -1224,6 +1235,11 @@ class EngramStore:
             (
                 f"{k}={_strictest_read_visibility_sql('beliefs')}"
                 if k == "read_visibility" and not allow_visibility_promotion
+                else f"{k}={_preserved_quarantined_flag_sql('beliefs', k)}"
+                if (
+                    k in {"needs_review", "confidence_pending_review"}
+                    and not allow_visibility_promotion
+                )
                 else f"{k}=excluded.{k}"
             )
             for k in safe_data

@@ -291,11 +291,64 @@ class TestEngramStore:
         assert audit.id not in default_ids
         assert operational.id not in default_ids
 
+    def test_belief_upsert_preserves_pending_flags_for_quarantined_rows(
+        self, store
+    ):
+        review = Belief(
+            id="belief-review-pending-flags",
+            content="Review-only pending marker",
+            confidence=0.8,
+            needs_review=True,
+            confidence_pending_review=True,
+            read_visibility="review_only",
+        )
+        audit = Belief(
+            id="belief-audit-pending-flags",
+            content="Audit-only pending marker",
+            confidence=0.9,
+            needs_review=True,
+            confidence_pending_review=True,
+            read_visibility="audit_only",
+        )
+        store.save_belief(review)
+        store.save_belief(audit)
+
+        store.save_belief(
+            Belief(
+                id=review.id,
+                content="Default save must not clear review flags",
+                confidence=0.5,
+            )
+        )
+        store.save_belief(
+            Belief(
+                id=audit.id,
+                content="Default save must not clear audit flags",
+                confidence=0.4,
+            )
+        )
+
+        beliefs_by_id = {
+            belief.id: belief
+            for belief in store.get_beliefs(
+                include_pending_review=True,
+                read_visibility=None,
+            )
+        }
+
+        assert beliefs_by_id[review.id].read_visibility == "review_only"
+        assert beliefs_by_id[review.id].needs_review is True
+        assert beliefs_by_id[review.id].confidence_pending_review is True
+        assert beliefs_by_id[audit.id].read_visibility == "audit_only"
+        assert beliefs_by_id[audit.id].needs_review is True
+        assert beliefs_by_id[audit.id].confidence_pending_review is True
+
     def test_save_reviewed_belief_allows_explicit_visibility_promotion(self, store):
         belief = Belief(
             id="belief-reviewed-promotion",
             content="Review pending belief can be accepted.",
             confidence=0.8,
+            needs_review=True,
             confidence_pending_review=True,
             read_visibility="review_only",
         )
@@ -312,6 +365,8 @@ class TestEngramStore:
         loaded = [b for b in store.get_beliefs() if b.id == belief.id][0]
         assert loaded.read_visibility == "operational_context"
         assert loaded.content == "Reviewed belief is operational again."
+        assert loaded.needs_review is False
+        assert loaded.confidence_pending_review is False
 
     def test_get_beliefs_excludes_pending_confidence_by_default(self, store):
         """Pending-confidence beliefs require an explicit opt-in."""

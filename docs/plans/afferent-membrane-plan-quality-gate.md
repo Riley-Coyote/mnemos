@@ -71,3 +71,5 @@ The U2.5 no-mistakes run found repeated omissions that this gate is meant to pre
 - stale documentation of schema defaults versus write-time classification.
 
 Future plans should assume these classes recur unless the plan explicitly proves otherwise.
+
+See `docs/solutions/workflow-issues/afferent-membrane-safety-ledger-repair-workflow-2026-07-01.md` for the reusable workflow lesson and full failure catalogue from the U2.5 repair.

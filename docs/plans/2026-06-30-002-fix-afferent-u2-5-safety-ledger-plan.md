@@ -96,15 +96,15 @@ U2.5 exposed the failure mode this gate guards against: no-mistakes should valid
 - `mnemos/store/migrations.py` owns schema v6/v7 and legacy read-visibility migration behavior.
 - `mnemos/interface/context_packet.py` owns operational versus review packet behavior and must remain the primary proof that review prose does not leak into operational packets.
 - `mnemos/retrieval/reactive.py` already filters engrams before FTS/embedding seed use and graph propagation; keep this as the pre-rank filtering pattern.
-- `mnemos/simple_runtime.py` is the main live bypass: capture encodes an operational engram, writes operational hypomnema, then marks it promoted.
-- `mnemos/identity_diff.py` currently writes synthesized identity/foundational hypomnema as operational continuity.
+- `mnemos/simple_runtime.py` was the main live bypass before U2.5: capture could encode an operational engram, write operational hypomnema, then mark it promoted. The repaired path classifies review-worthy captures before operational write/promotion.
+- `mnemos/identity_diff.py` was a live bypass for synthesized identity/foundational hypomnema before U2.5. The repaired path passes identity notes through classifier inputs so foundational content becomes review-visible rather than operational by omission.
 - `mnemos/mcp_server.py` exposes model-facing and operator-facing write/search/promote surfaces and must not expose a model-settable operational override.
 - `mnemos/dream_journal.py` uses tag lookup; tag-based hypomnema reads should inherit read-visibility filtering rather than bypass it.
 - `templates/AGENTS.md` documents the intended user-facing memory contract: operational packets may show review counts and source IDs, while review-only prose belongs in explicit review surfaces.
 
 ### Institutional Learnings
 
-- There is no `docs/solutions/` learning surface in this checkout. The closest local institutional precedent is the existing Afferent plan plus U1/U2 tests.
+- `docs/solutions/workflow-issues/afferent-membrane-safety-ledger-repair-workflow-2026-07-01.md` records the reusable workflow lesson from this repair. Before that doc existed, the closest local institutional precedent was the existing Afferent plan plus U1/U2 tests.
 - Pending-confidence beliefs are excluded by default; review code must opt in explicitly and clear pending state before operational use. Mirror that posture for hypomnema and proposal rows.
 - PAI import and review-gate tests use temporary SQLite stores; U2.5 verification should do the same and avoid live memory data.
 - Existing review surfaces establish the product rule: quarantine means "not operational," not "hidden from David."
@@ -508,7 +508,7 @@ These U-IDs are repair-plan units. They do not replace the Afferent plan's exist
 
 ## Documentation / Operational Notes
 
-- Update `docs/plans/2026-06-30-001-feat-afferent-membrane-v1-plan.md` first, then code. The plan is currently suspect and should not steer implementation until repaired.
+- Update `docs/plans/2026-06-30-001-feat-afferent-membrane-v1-plan.md` first, then code. The plan was suspect before U2.5; it now contains the repaired RFC, State, Surface, and Regression ledgers, and future work should preserve those ledgers rather than bypass them.
 - Update user/operator documentation only if it currently overclaims U1/U2 safety or ProposalLedger behavior.
 - Do not update launchd, installation docs, or live rollout instructions in U2.5.
 - Record the `review_only` hypomnema deviation plainly anywhere schema/default behavior is documented.

@@ -11,6 +11,8 @@ date: 2026-06-30
 
 Implement the Afferent Membrane v1 over Mnemos as a staged architecture: operational packets stop ingesting review/pending prose first, then durable-affecting candidates move through a proposal ledger, harness-stamped authority, tiered review, bounded dynamic modulation, and experience ticks. The plan is staged, but every stage points at the full RFC architecture rather than a reduced MVP.
 
+This plan is derived from `/Users/davidef/phenom-felt-review/RFC-v1-proposal-ledger.md`. The RFC is the safety ledger and source of truth; this plan cannot override, renumber, or weaken it.
+
 Current branch state: U1 packet mode split and U2 proposal-ledger/read-visibility schema are implemented on `codex/afferent-membrane-v1-ledger`. U3-U7 remain planned follow-up stages.
 
 ---
@@ -28,22 +30,26 @@ Mnemos already protects several write paths with PAI import review flags and pen
 - The implementation branch starts from `origin/main` at `03c9417`, not from the dirty local `feat/gated-inner-life-soak` checkout.
 - Existing PAI import review flags are precedent and should be reused where they fit, but Afferent Membrane concepts need first-class schema/API surfaces rather than being hidden inside importer-only fields.
 - Stage 1 should change prompt/read behavior only. Schema-bearing ledger and authority work starts in Stage 2 so the first slice remains narrow enough to verify cleanly.
-- Dynamic modulation ships only after persistence bounds are implemented; the valence entropy floor starts with a calibration-required guard and must not claim real-corpus calibration before that evidence exists.
+- Dynamic modulation can be scaffolded only as inert or conservative storage until both RFC-R7 bounds exist: persistence bounds and distribution-shape bounds. Persistence bounds alone do not permit active retrieval influence.
 
 ---
 
 ## Requirements
 
-- R1. Add `packet_mode = operational | review` so operational packets expose review counts and source IDs only, while review mode exposes candidate prose with provenance labels.
-- R2. Ensure pending, deferred, rejected, or high-blast review material cannot enter operational prompt assembly or producer inputs.
-- R3. Add a universal `ProposalLedger` for durable-affecting candidates, including authority, kind, domain, target surface, transition, gate version, status, and reason.
-- R4. Add `read_visibility` as a pre-rank filter applied before retrieval, packet assembly, review queues, cron/consolidation producers, dream/reflection producers, and connection discovery.
-- R5. Stamp `source_authority` at harness/ingest boundaries and reject or quarantine payload/model-asserted high authority.
-- R6. Route durable changes through tiered review by blast radius: low-blast episodic can auto-apply after authority checks; inferred semantic/user-model writes require evidence-diverse or review; identity/foundational writes always require David.
-- R7. Add `DynamicModulation` as reversible, TTL/decay/magnitude-bounded, non-evidentiary modulation that cannot become durable by recurrence.
-- R8. Add distribution-shape protection for DynamicModulation: same-topic opposite-valence and deadband items remain exposed until real-corpus calibration can set the floor/deadband.
-- R9. Add `ExperienceTick` as the afferent layer that feeds modulation and proposal rows, never direct durable identity writes.
-- R10. Preserve live safety boundaries: no live user memory database mutation, no launchd/global binary/global config changes, no Riley/upstream repo changes.
+The RFC rule IDs below are canonical. Plan-local rule IDs must not replace or renumber them.
+
+| RFC rule | Source rule | Implementation unit | Code chokepoints | Proof surface |
+|---|---|---|---|---|
+| RFC-R1 | Authority stamped at ingest | U3 | `mnemos/mcp_server.py`, `mnemos/simple_runtime.py`, `mnemos/encoding/encoder.py`, `mnemos/importer/pai.py` | Ingest attack tests |
+| RFC-R2 | High-blast domain not self-assertable | U3 | `mnemos/store/read_visibility.py`, `mnemos/simple_runtime.py`, `mnemos/identity_diff.py`, `mnemos/mcp_server.py` | High-blast quarantine and live-write tests |
+| RFC-R3 | Universal proposal ledger | U2 | `mnemos/store/sqlite_store.py`, `mnemos/store/migrations.py`, `mnemos/interface/context_packet.py`, `mnemos/mcp_server.py` | Proposal ledger and review/audit surface tests |
+| RFC-R4 | Tiered review by blast radius | U4 | `mnemos/review/gates.py`, `mnemos/store/sqlite_store.py`, `mnemos/mcp_server.py`, `mnemos/simple_runtime.py` | Review gate tests |
+| RFC-R5 | Read quarantine, pre-rank, all producers | U2 | `mnemos/store/read_visibility.py`, `mnemos/store/sqlite_store.py`, `mnemos/retrieval/reactive.py`, `mnemos/interface/context_packet.py`, `mnemos/simple_runtime.py`, `mnemos/dream_journal.py` | Retrieval, packet, runtime, MCP, and producer tests |
+| RFC-R6 | `packet_mode = operational | review` | U1, extended by U2 | `mnemos/interface/context_packet.py`, `mnemos/mcp_server.py` | Packet mode and review queue tests |
+| RFC-R7 | Dynamic modulation double-bounded | U5/U6 | `mnemos/affect/dynamic_modulation.py`, `mnemos/affect/valence_floor.py`, `mnemos/retrieval/reactive.py` | Dynamic modulation persistence and valence-floor tests |
+| RFC-R8 | Salience fast-track, authority-qualified | U5/U6 | `mnemos/affect/dynamic_modulation.py`, `mnemos/affect/experience_tick.py`, `mnemos/store/sqlite_store.py` | Modulation/proposal tests proving salience cannot mint semantic truth |
+
+There is no RFC-R9 or RFC-R10. ExperienceTick is a build-sequence feeder constrained by RFC-R3/R7/R8, not a separate permission rule. Live safety boundaries remain hard scope boundaries, not RFC rule IDs.
 
 **Acceptance test mapping:** RFC tests 1-11 map to implementation units below. RFC test 5 is covered first by U1, then generalized by U2/U7; tests 7-11 are U5/U6; tests 1-4 are U3/U4.
 
@@ -149,7 +155,7 @@ The core invariant is one-way: afferent signals can modulate live retrieval and 
 
 **Goal:** Add `packet_mode = operational | review` to context packet assembly and advanced MCP packet calls so operational packets never include candidate prose from pending review queues.
 
-**Requirements:** R1, R2; covers RFC acceptance test 5 for packet assembly.
+**Requirements:** RFC-R6; covers RFC acceptance test 5 for packet assembly.
 
 **Dependencies:** None.
 
@@ -188,7 +194,7 @@ The core invariant is one-way: afferent signals can modulate live retrieval and 
 
 **Goal:** Add durable proposal tracking and store-level `read_visibility` filtering before retrieval, packet assembly, and producer reads.
 
-**Requirements:** R2, R3, R4; extends RFC acceptance tests 5 and 6.
+**Requirements:** RFC-R3, RFC-R5, RFC-R6; extends RFC acceptance tests 5 and 6.
 
 **Dependencies:** U1.
 
@@ -234,7 +240,7 @@ The core invariant is one-way: afferent signals can modulate live retrieval and 
 
 **Goal:** Move source authority to harness-owned ingest parameters and quarantine self-asserted high-blast writes.
 
-**Requirements:** R5; covers RFC acceptance test 4 and part of tests 2-3.
+**Requirements:** RFC-R1, RFC-R2; covers RFC acceptance test 4 and part of tests 2-3.
 
 **Dependencies:** U2.
 
@@ -275,7 +281,7 @@ The core invariant is one-way: afferent signals can modulate live retrieval and 
 
 **Goal:** Route proposal ledger rows through blast-radius/domain/target-surface review gates before any durable write applies.
 
-**Requirements:** R6; covers RFC acceptance tests 1-3.
+**Requirements:** RFC-R4; covers RFC acceptance tests 1-3.
 
 **Dependencies:** U2, U3.
 
@@ -310,9 +316,9 @@ The core invariant is one-way: afferent signals can modulate live retrieval and 
 
 ### U5. DynamicModulation Persistence Bounds
 
-**Goal:** Add bounded, reversible DynamicModulation records that can shape live salience/retrieval but never become evidence or durable state by recurrence.
+**Goal:** Add bounded, reversible DynamicModulation records as inert or conservative scaffolding. U5 alone must not actively shape live salience/retrieval; active influence waits for U6 so both RFC-R7 bounds exist.
 
-**Requirements:** R7; covers RFC acceptance tests 7, 8, 9, and 11.
+**Requirements:** RFC-R7, RFC-R8; prepares RFC acceptance tests 7, 8, 9, and 11 but cannot close active-influence behavior without U6.
 
 **Dependencies:** U2, U3.
 
@@ -328,10 +334,11 @@ The core invariant is one-way: afferent signals can modulate live retrieval and 
 
 **Approach:**
 - Add `dynamic_modulations` schema with source authority, target, target IDs/selectors, magnitude, TTL, decay, evidentiary=false, recurrence_promote=false, identity_authority=none, status, and timestamps.
-- Apply active non-expired modulations as bounded retrieval/salience influence only.
+- Store active non-expired modulations with TTL/decay/magnitude metadata, but keep retrieval/salience influence inert or fail-conservative until U6 adds the distribution-shape bound.
 - Expire/decay modulation effects without deleting the audit trail.
 - Disallow citing modulation rows as belief support or proposal evidence.
 - Require any persistence request to create a proposal ledger transition rather than extending TTL by recurrence.
+- Define the persistence bound as TTL/decay/magnitude and record that it is insufficient on its own for active retrieval steering.
 
 **Execution note:** Test-first for TTL/decay and "cannot cite as evidence" invariants.
 
@@ -340,20 +347,21 @@ The core invariant is one-way: afferent signals can modulate live retrieval and 
 - Store migration and idempotent schema tests from U3a/U3b.
 
 **Test scenarios:**
-- Happy path: an active modulation adjusts retrieval scoring within magnitude caps.
-- Happy path: expired modulation returns retrieval behavior to baseline.
+- Happy path: a modulation can be stored and expires/decays within TTL without becoming evidence.
+- Happy path: retrieval behavior remains unchanged or conservative while only U5 exists.
 - Error path: modulation cannot be inserted as evidentiary or with identity authority.
 - Error path: repeated matching modulation events do not promote themselves to durable memory.
 - Integration: belief review and proposal ledger evidence collection cannot cite modulation rows as support.
 
 **Verification:**
 - Tests prove decay to baseline, no evidence citation, no recurrence promotion, and no belief/identity write effect.
+- Tests cannot mark active retrieval influence complete from persistence bounds alone.
 
 ### U6. DynamicModulation Distribution-Shape Bound
 
 **Goal:** Add the same-topic opposite-valence protection and neutral deadband behavior required before modulation can safely affect retrieval ranking.
 
-**Requirements:** R8; covers RFC acceptance test 10.
+**Requirements:** RFC-R7, RFC-R8; covers RFC acceptance test 10 and unlocks any active retrieval influence started in U5.
 
 **Dependencies:** U5.
 
@@ -368,6 +376,7 @@ The core invariant is one-way: afferent signals can modulate live retrieval and 
 - Protect opposite-valence same-topic items from suppression below the configured floor.
 - Treat neutral/deadband items as protected exposure, not suppressible ambiguity.
 - Store calibration metadata separately from the modulation record so uncalibrated deployments cannot pretend precision.
+- Define the distribution-shape bound as valence floor, deadband, and fail-toward-width behavior.
 
 **Patterns to follow:**
 - Optional embedding index behavior in `ReactiveRetriever`; missing embeddings should fail toward ordinary retrieval width.
@@ -386,7 +395,7 @@ The core invariant is one-way: afferent signals can modulate live retrieval and 
 
 **Goal:** Add ExperienceTick as the afferent collection layer that emits proposal ledger rows and dynamic modulations but never writes durable identity directly.
 
-**Requirements:** R3, R7, R9; covers RFC acceptance tests 7-11 and bridges tests 1-5 into active operation.
+**Requirements:** RFC-R3, RFC-R7, RFC-R8; covers RFC acceptance tests 7-11 and bridges tests 1-5 into active operation.
 
 **Dependencies:** U4, U5, U6.
 

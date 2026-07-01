@@ -289,6 +289,23 @@ def _format_hypomnema_entry(entry: dict) -> str:
     )
 
 
+def _format_proposal_entry(entry: dict) -> str:
+    payload = entry.get("payload") or {}
+    if isinstance(payload, dict) and payload.get("content"):
+        payload_text = str(payload["content"])
+    else:
+        payload_text = str(payload)
+    provenance = ", ".join(entry.get("provenance_ids") or []) or "none"
+    return (
+        f"- {payload_text}\n"
+        f"  id={entry['id']} authority={entry['source_authority']} "
+        f"kind={entry['kind']} domain={entry['domain']} "
+        f"target={entry['target_surface']} transition={entry['transition']} "
+        f"blast={entry['blast_radius']} status={entry['status']} "
+        f"visibility={entry['read_visibility']} provenance={provenance}"
+    )
+
+
 @mcp.tool()
 def mnemos_setup(response: str = "") -> str:
     """Onboarding wizard for Mnemos. Call this to configure the memory system.
@@ -1048,7 +1065,13 @@ def mnemos_review_queue(
         limit=max_results,
         read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
     )
-    if not functional and not candidates:
+    proposals = _store.list_proposals(  # type: ignore
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        limit=max_results,
+    )
+    if not functional and not candidates and not proposals:
         return "Review queue is clear."
 
     lines = []
@@ -1060,7 +1083,39 @@ def mnemos_review_queue(
             lines.append("")
         lines.append("Hypomnema promotion candidates:")
         lines.extend(_format_hypomnema_entry(entry) for entry in candidates)
+    if proposals:
+        if lines:
+            lines.append("")
+        lines.append("Proposal candidates:")
+        lines.extend(_format_proposal_entry(entry) for entry in proposals)
     return "\n".join(lines)
+
+
+@mcp.tool()
+def mnemos_proposal_audit(
+    agent_id: str = "default",
+    person_id: str = "user",
+    project_scope: str = "global",
+    max_results: int = 20,
+) -> str:
+    """Explicit audit/admin read of audit-only proposal ledger rows."""
+    gate = _setup_gate()
+    if gate:
+        return gate
+    _ensure_store()
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    proposals = _store.list_audit_proposals(  # type: ignore
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        limit=max_results,
+    )
+    if not proposals:
+        return "Proposal audit ledger has no audit-only rows for this scope."
+    return (
+        "Audit-only proposal ledger rows:\n\n"
+        + "\n\n".join(_format_proposal_entry(entry) for entry in proposals)
+    )
 
 
 @mcp.tool()
@@ -1154,11 +1209,20 @@ def mnemos_hypomnema_write(
     except ValueError as exc:
         return f"Hypomnema write failed: {exc}"
 
+    entry = _store.get_hypomnema_entry(  # type: ignore
+        entry_id,
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+    )
+    visibility = entry["read_visibility"] if entry is not None else "unknown"
+
     return (
         f"Hypomnema written: {entry_id}\n"
         f"  Scope: {agent_id}/{person_id}/{project_scope}\n"
         f"  Domain: {domain}\n"
         f"  Source: {source}\n"
+        f"  Visibility: {visibility}\n"
         f"  Confidence: {confidence:.2f}\n"
         f"  Salience: {salience:.2f}"
     )
@@ -1197,6 +1261,7 @@ def mnemos_hypomnema_search(
         project_scope=project_scope,
         limit=max_results,
         include_inactive=include_inactive,
+        exclude_promotion_candidates=True,
     )
     if not entries:
         return "No hypomnema entries found."

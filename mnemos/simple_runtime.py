@@ -26,6 +26,7 @@ from .retrieval.reactive import ReactiveRetriever
 from .simple_scope import MnemosScope, resolve_scope  # noqa: F401
 from .store.embedding_index import EmbeddingIndex
 from .store.sqlite_store import EngramStore, READ_VISIBILITY_OPERATIONAL
+from .store.read_visibility import classify_hypomnema_read_visibility
 
 
 SIMPLE_TOOL_NAMES = (
@@ -654,6 +655,37 @@ class MnemosRuntime:
         tags = _simple_tags(content, context)
         confidence, salience = _importance_scores(importance, domain)
         impact = _impact_for(content, domain)
+        foundational = domain in {"foundational", "identity"}
+        read_visibility = classify_hypomnema_read_visibility(
+            confidence=confidence,
+            salience=salience,
+            foundational=foundational,
+            domain=domain,
+        )
+
+        if read_visibility != READ_VISIBILITY_OPERATIONAL:
+            note_id = self._store.write_hypomnema_entry(
+                content.strip(),
+                agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+                source="observed",
+                domain=domain,
+                tags=tags,
+                confidence=confidence,
+                salience=salience,
+                foundational=foundational,
+            )
+            self._record_first_capture(note_id, "", content)
+            maintenance = self.maintain(auto=True)
+            return (
+                "Captured continuity for review.\n"
+                f"Continuity note ID: {note_id}\n"
+                f"Visibility: {read_visibility}\n"
+                f"Scope: {self.scope.agent_id}/{self.scope.person_id}/{self.scope.project_scope}\n"
+                "Maintenance:\n"
+                f"{_indent(maintenance)}"
+            )
 
         engram = self._encoder.encode(
             content=full_content,
@@ -675,7 +707,7 @@ class MnemosRuntime:
             tags=tags,
             confidence=confidence,
             salience=salience,
-            foundational=domain in {"foundational", "identity"},
+            foundational=foundational,
             related_engram_id=engram.id,
             read_visibility=READ_VISIBILITY_OPERATIONAL,
         )
@@ -875,6 +907,30 @@ class MnemosRuntime:
                     )
                     if related is not None:
                         self._store.archive_engram(related, reason=f"simple_correction_{action}")
+
+                updated_note = self._store.get_hypomnema_entry(
+                    note_id,
+                    agent_id=self.scope.agent_id,
+                    person_id=self.scope.person_id,
+                    project_scope=self.scope.project_scope,
+                    read_visibility=None,
+                )
+                if (
+                    updated_note is None
+                    or updated_note.get("read_visibility") != READ_VISIBILITY_OPERATIONAL
+                ):
+                    maintenance = self.maintain(auto=True)
+                    visibility = (
+                        updated_note.get("read_visibility")
+                        if updated_note is not None
+                        else "unavailable"
+                    )
+                    return (
+                        f"Updated closest continuity note {note_id} for review.\n"
+                        f"Visibility: {visibility}\n"
+                        "Maintenance:\n"
+                        f"{_indent(maintenance)}"
+                    )
 
                 replacement = self._encoder.encode(
                     content=correction.strip(),

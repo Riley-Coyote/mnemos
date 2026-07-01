@@ -293,7 +293,7 @@ def test_report_persists_and_loads(seeded_store, soul_path):
     assert runs and runs[0]["stats"]["agent_id"] == AGENT
 
 
-def test_divergence_note_written_and_surfaces_in_context(
+def test_identity_diff_note_defaults_review_only_until_acceptance(
     seeded_store, soul_path, scope
 ):
     report = _diff(seeded_store, soul_path)
@@ -313,8 +313,26 @@ def test_divergence_note_written_and_surfaces_in_context(
         packet = runtime.context()
     finally:
         runtime.close()
-    assert "Identity tension" in packet
-    assert "mnemos identity diff" in packet
+    operational = seeded_store.get_hypomnema_entry(
+        note_id,
+        agent_id=AGENT,
+        person_id=PERSON,
+        project_scope=PROJECT,
+        read_visibility="operational_context",
+    )
+    review = seeded_store.get_hypomnema_entry(
+        note_id,
+        agent_id=AGENT,
+        person_id=PERSON,
+        project_scope=PROJECT,
+        read_visibility="review_only",
+    )
+
+    assert operational is None
+    assert review is not None
+    assert review["read_visibility"] == "review_only"
+    assert "Identity tension" not in packet
+    assert "mnemos identity diff" not in packet
 
 
 def test_rerun_supersedes_prior_note(seeded_store, soul_path, scope):
@@ -330,6 +348,7 @@ def test_rerun_supersedes_prior_note(seeded_store, soul_path, scope):
         project_scope=PROJECT,
         limit=50,
         include_inactive=True,
+        read_visibility="review_only",
     )
     tagged = [e for e in entries if "identity-diff" in (e.get("tags") or [])]
     active = [e for e in tagged if e["active"]]
@@ -361,7 +380,12 @@ def test_accept_transitions_epoch_and_persists(seeded_store, soul_path, scope):
 
     # The tension note resolves into a resolution note.
     entries = seeded_store.search_hypomnema(
-        "", agent_id=AGENT, person_id=PERSON, project_scope=PROJECT, limit=50
+        "",
+        agent_id=AGENT,
+        person_id=PERSON,
+        project_scope=PROJECT,
+        limit=50,
+        read_visibility="review_only",
     )
     tagged = [e for e in entries if "identity-diff" in (e.get("tags") or [])]
     assert len(tagged) == 1

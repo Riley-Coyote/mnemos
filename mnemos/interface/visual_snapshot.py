@@ -59,14 +59,20 @@ def build_memory_visual_snapshot(
         limit=max_items,
         read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
     )
+    proposals = store.list_proposals(
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        limit=max_items,
+    )
 
-    diagram = _build_mermaid(stats, functional, hypomnema, engrams, review, candidates)
+    diagram = _build_mermaid(stats, functional, hypomnema, engrams, review, candidates, proposals)
     lists = [
         _format_items("Functional Memory", functional, "memory_type"),
         _format_items("Hypomnema", hypomnema, "domain"),
         _format_engrams(engrams),
         _format_beliefs(beliefs),
-        _format_review(review, candidates),
+        _format_review(review, candidates, proposals),
     ]
     scope = f"`{agent_id}` / `{person_id}` / `{project_scope}`"
     if session_id:
@@ -86,12 +92,13 @@ def _build_mermaid(
     engrams: list[Any],
     review: list[dict[str, Any]],
     candidates: list[dict[str, Any]],
+    proposals: list[dict[str, Any]],
 ) -> str:
     fm_count = stats.get("functional_active", len(functional))
     hyp_count = stats.get("hypomnema_active", len(hypomnema))
     engram_count = stats.get("engrams_active", len(engrams))
     belief_count = stats.get("beliefs_active", 0)
-    review_count = len(review) + len(candidates)
+    review_count = len(review) + len(candidates) + len(proposals)
     return f"""```mermaid
 flowchart LR
   Human["Human + conversation"] --> FM["Functional memory<br/>{fm_count} active"]
@@ -143,8 +150,9 @@ def _format_beliefs(beliefs: list[Any]) -> str:
 def _format_review(
     functional: list[dict[str, Any]],
     candidates: list[dict[str, Any]],
+    proposals: list[dict[str, Any]],
 ) -> str:
-    if not functional and not candidates:
+    if not functional and not candidates and not proposals:
         return "### Review Queue\n- Clear."
     lines = ["### Review Queue"]
     if functional:
@@ -164,4 +172,11 @@ def _format_review(
                 f"  - source_id={item['id']} domain={item['domain']} "
                 f"source={item['source']}"
             )
+    if proposals:
+        lines.append(
+            f"- {len(proposals)} proposal candidate(s) need review "
+            "(review-only; prose withheld)."
+        )
+        for item in proposals:
+            lines.append(f"  - source_id={item['id']}")
     return "\n".join(lines)

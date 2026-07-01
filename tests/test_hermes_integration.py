@@ -120,12 +120,12 @@ def test_provider_can_capture_and_recall_in_temp_home(tmp_path):
 
     try:
         captured = json.loads(provider.handle_tool_call(
-            "mnemos_identity_capture",
-            {
-                "content": "Riley prefers Hermes Mnemos continuity to stay local-first.",
-                "importance": "high",
-            },
-        ))
+                "mnemos_identity_capture",
+                {
+                    "content": "Riley uses Hermes Mnemos continuity in local-first mode.",
+                    "importance": "high",
+                },
+            ))
         recalled = json.loads(provider.handle_tool_call(
             "mnemos_identity_recall",
             {"query": "local-first continuity", "max_results": 4},
@@ -161,24 +161,24 @@ def test_hermes_agent_scope_does_not_leak_between_agents(tmp_path):
     vektor.initialize("session-b", hermes_home=tmp_path, agent_identity="vektor")
 
     try:
-        nova.handle_tool_call(
-            "mnemos_identity_capture",
-            {"content": "Nova remembers a scoped Hermes identity note.", "importance": "high"},
-        )
-        leaked = json.loads(vektor.handle_tool_call(
-            "mnemos_identity_recall",
-            {"query": "scoped Hermes identity note"},
-        ))
-        found = json.loads(nova.handle_tool_call(
-            "mnemos_identity_recall",
-            {"query": "scoped Hermes identity note"},
-        ))
+            nova.handle_tool_call(
+                "mnemos_identity_capture",
+                {"content": "Nova records a scoped Hermes continuity note.", "importance": "high"},
+            )
+            leaked = json.loads(vektor.handle_tool_call(
+                "mnemos_identity_recall",
+                {"query": "scoped Hermes continuity note"},
+            ))
+            found = json.loads(nova.handle_tool_call(
+                "mnemos_identity_recall",
+                {"query": "scoped Hermes continuity note"},
+            ))
     finally:
         nova.shutdown()
         vektor.shutdown()
 
     assert "No relevant continuity found" in leaked["result"]
-    assert "Nova remembers" in found["result"]
+    assert "Nova records" in found["result"]
 
 
 def test_hermes_scope_does_not_leak_between_people_or_projects(tmp_path):
@@ -215,30 +215,30 @@ def test_hermes_scope_does_not_leak_between_people_or_projects(tmp_path):
     other_project.initialize("session-other", hermes_home=tmp_path)
 
     try:
-        riley.handle_tool_call(
-            "mnemos_identity_capture",
-            {"content": "Riley's Mnemos Hermes scope contains a private identity note.", "importance": "high"},
-        )
-        person_leak = json.loads(alex.handle_tool_call(
-            "mnemos_identity_recall",
-            {"query": "private identity note"},
-        ))
-        project_leak = json.loads(other_project.handle_tool_call(
-            "mnemos_identity_recall",
-            {"query": "private identity note"},
-        ))
-        found = json.loads(riley.handle_tool_call(
-            "mnemos_identity_recall",
-            {"query": "private identity note"},
-        ))
+            riley.handle_tool_call(
+                "mnemos_identity_capture",
+                {"content": "Riley's Mnemos Hermes scope contains a private continuity note.", "importance": "high"},
+            )
+            person_leak = json.loads(alex.handle_tool_call(
+                "mnemos_identity_recall",
+                {"query": "private continuity note"},
+            ))
+            project_leak = json.loads(other_project.handle_tool_call(
+                "mnemos_identity_recall",
+                {"query": "private continuity note"},
+            ))
+            found = json.loads(riley.handle_tool_call(
+                "mnemos_identity_recall",
+                {"query": "private continuity note"},
+            ))
     finally:
         riley.shutdown()
         alex.shutdown()
         other_project.shutdown()
 
-    assert "Riley's Mnemos Hermes scope contains a private identity note" not in person_leak["result"]
-    assert "Riley's Mnemos Hermes scope contains a private identity note" not in project_leak["result"]
-    assert "private identity note" in found["result"]
+    assert "Riley's Mnemos Hermes scope contains a private continuity note" not in person_leak["result"]
+    assert "Riley's Mnemos Hermes scope contains a private continuity note" not in project_leak["result"]
+    assert "private continuity note" in found["result"]
 
 
 def test_bootstrap_reads_soul_without_overwriting_it(tmp_path):
@@ -259,11 +259,63 @@ def test_bootstrap_reads_soul_without_overwriting_it(tmp_path):
             "mnemos_identity_recall",
             {"query": "Hermes-Coder local-first engineering"},
         ))
+        inbox = json.loads(provider.handle_tool_call(
+            "mnemos_identity_report",
+            {"kind": "inbox", "max_results": 8},
+        ))
     finally:
         provider.shutdown()
 
     assert soul.read_text(encoding="utf-8") == original
-    assert "Hermes-Coder" in recalled["result"]
+    assert "Hermes-Coder" not in recalled["result"]
+    assert any("Hermes-Coder" in item["content"] for item in inbox["inbox"])
+
+
+def test_bootstrap_review_only_seed_is_idempotent(tmp_path):
+    soul = tmp_path / "SOUL.md"
+    soul.write_text(
+        "You are Hermes-Coder, a precise local-first engineering agent.",
+        encoding="utf-8",
+    )
+    provider = MnemosMemoryProviderCore(
+        HermesMnemosConfig(
+            db_path=str(tmp_path / "mnemos.db"),
+            auto_bootstrap=True,
+            deep_maintenance=False,
+        )
+    )
+
+    provider.initialize("session-1", hermes_home=tmp_path, agent_identity="coder")
+    provider.shutdown()
+    provider.initialize("session-2", hermes_home=tmp_path, agent_identity="coder")
+
+    try:
+        assert provider._runtime is not None
+        assert provider._runtime._store is not None
+        entries = provider._runtime._store.search_hypomnema(
+            "",
+            agent_id=provider.scope.agent_id,
+            person_id=provider.scope.person_id,
+            project_scope=provider.scope.project_scope,
+            read_visibility=None,
+            limit=20,
+        )
+        bootstrap_entries = [
+            entry
+            for entry in entries
+            if "bootstrap" in entry["tags"]
+            and "Hermes identity bootstrap from SOUL.md" in entry["content"]
+        ]
+        recalled = json.loads(provider.handle_tool_call(
+            "mnemos_identity_recall",
+            {"query": "Hermes-Coder local-first engineering"},
+        ))
+    finally:
+        provider.shutdown()
+
+    assert len(bootstrap_entries) == 1
+    assert bootstrap_entries[0]["read_visibility"] == "review_only"
+    assert "Hermes-Coder" not in recalled["result"]
 
 
 def test_builtin_memory_files_are_never_overwritten(tmp_path):
@@ -307,14 +359,14 @@ def test_builtin_memory_write_is_mirrored_and_can_be_forgotten(tmp_path):
         provider.on_memory_write(
             "add",
             "user",
-            "Riley wants identity-memory corrections to supersede stale claims.",
+            "Riley uses memory corrections to supersede stale claims.",
             metadata={"tool_name": "memory", "session_id": "session-1"},
         )
-        before = provider.prefetch("identity-memory corrections")
-        provider.on_memory_write("remove", "user", "identity-memory corrections", metadata={})
+        before = provider.prefetch("memory corrections")
+        provider.on_memory_write("remove", "user", "memory corrections", metadata={})
         after = json.loads(provider.handle_tool_call(
             "mnemos_identity_recall",
-            {"query": "identity-memory corrections"},
+            {"query": "memory corrections"},
         ))
     finally:
         provider.shutdown()
@@ -391,11 +443,16 @@ def test_pre_compression_preserves_identity_critical_facts(tmp_path):
             "mnemos_identity_recall",
             {"query": "concise identity packet"},
         ))
+        inbox = json.loads(provider.handle_tool_call(
+            "mnemos_identity_report",
+            {"kind": "inbox", "max_results": 8},
+        ))
     finally:
         provider.shutdown()
 
     assert "Mnemos preserved" in contribution
-    assert "concise identity packet" in recalled["result"]
+    assert "concise identity packet" not in recalled["result"]
+    assert any("concise identity packet" in item["content"] for item in inbox["inbox"])
 
 
 def test_provider_mode_activation_sets_mnemos_provider(tmp_path):

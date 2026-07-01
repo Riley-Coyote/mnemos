@@ -147,6 +147,43 @@ def test_review_context_packet_can_include_review_only_rows(store):
     assert review["review_queue"]["hypomnema_promotion_candidates"][0]["read_visibility"] == "review_only"
 
 
+def test_review_context_packet_includes_low_salience_identity_review_rows(store):
+    identity_id = store.write_hypomnema_entry(
+        "Low-salience identity continuity still needs explicit review.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        domain="identity",
+        confidence=0.45,
+        salience=0.35,
+        foundational=False,
+    )
+
+    operational = build_context_packet(
+        store,
+        "low-salience identity",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        packet_mode="operational",
+    )
+    review = build_context_packet(
+        store,
+        "low-salience identity",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        packet_mode="review",
+    )
+
+    assert "Low-salience identity continuity" not in str(operational)
+    assert identity_id in operational["prompt"]
+    assert f"source_id={identity_id}" in operational["prompt"]
+    assert operational["review_queue"]["hypomnema_promotion_candidate_count"] == 1
+    assert "Low-salience identity continuity" in review["prompt"]
+    assert review["review_queue"]["hypomnema_promotion_candidates"][0]["id"] == identity_id
+
+
 def test_review_context_packet_excludes_audit_only_hypomnema_candidates(store):
     store.write_hypomnema_entry(
         "Review packet may disclose review-only hypomnema candidate.",
@@ -224,6 +261,139 @@ def test_review_context_packet_excludes_audit_only_functional_confirmations(stor
     assert review_ids == {review["id"]}
     assert audit["id"] not in str(packet)
     assert packet["review_queue"]["functional_needs_confirmation_count"] == 1
+
+
+def test_proposal_rows_are_counts_only_operational_and_labeled_in_review(store):
+    review = store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        domain="identity",
+        target_surface="beliefs",
+        transition="semantic_to_identity",
+        blast_radius="identity",
+        read_visibility="review_only",
+        reason="Needs David review.",
+        provenance_ids=["source-hypomnema"],
+        payload={"content": "Review proposal prose must stay out of operational packets."},
+    )
+
+    operational = build_context_packet(
+        store,
+        "proposal prose",
+        agent_id="default",
+        person_id="user",
+        project_scope="global",
+        packet_mode="operational",
+    )
+    review_packet = build_context_packet(
+        store,
+        "proposal prose",
+        agent_id="default",
+        person_id="user",
+        project_scope="global",
+        packet_mode="review",
+    )
+
+    assert "Review proposal prose" not in str(operational)
+    assert "semantic_to_identity" not in str(operational)
+    assert review["id"] in operational["prompt"]
+    assert f"source_id={review['id']}" in operational["prompt"]
+    assert operational["review_queue"]["proposal_candidate_count"] == 1
+    assert operational["review_queue"]["proposal_candidates"] == [
+        {
+            "id": review["id"],
+            "source_id": review["id"],
+            "read_visibility": "review_only",
+        }
+    ]
+
+    assert "Review proposal prose must stay out" in review_packet["prompt"]
+    proposal = review_packet["review_queue"]["proposal_candidates"][0]
+    assert proposal["id"] == review["id"]
+    assert proposal["source_authority"] == "generated"
+    assert proposal["kind"] == "semantic"
+    assert proposal["blast_radius"] == "identity"
+    assert proposal["provenance_ids"] == ["source-hypomnema"]
+
+
+def test_operational_proposal_count_uses_total_not_limited_reference_sample(store):
+    for index in range(8):
+        store.write_proposal(
+            source_authority="generated",
+            kind="semantic",
+            domain="identity",
+            target_surface="beliefs",
+            transition=f"proposal_{index}",
+            blast_radius="identity",
+            read_visibility="review_only",
+            payload={"content": f"Review proposal prose {index} must stay withheld."},
+        )
+
+    operational = build_context_packet(
+        store,
+        "proposal prose",
+        packet_mode="operational",
+    )
+
+    assert operational["review_queue"]["proposal_candidate_count"] == 8
+    assert len(operational["review_queue"]["proposal_candidates"]) == 6
+    assert "Review proposal prose" not in operational["prompt"]
+    assert operational["prompt"].count("source_id=") >= 6
+
+
+def test_audit_only_proposal_and_hypomnema_are_absent_from_review_packet(store):
+    audit_proposal = store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="audit_only_candidate",
+        payload={"content": "Audit-only proposal prose must be absent."},
+    )
+    audit_hypomnema = store.write_hypomnema_entry(
+        "Audit-only hypomnema prose must be absent from review packet.",
+        confidence=0.99,
+        salience=0.95,
+        foundational=True,
+        read_visibility="audit_only",
+    )
+
+    packet = build_context_packet(store, "audit-only", packet_mode="review")
+
+    assert audit_proposal["id"] not in str(packet)
+    assert "Audit-only proposal prose" not in str(packet)
+    assert audit_hypomnema not in str(packet)
+    assert "Audit-only hypomnema prose" not in str(packet)
+
+
+def test_operational_stats_exclude_audit_only_memory_counts(store):
+    store.write_functional_memory(
+        "Audit-only functional memory must not affect operational counts.",
+        read_visibility="audit_only",
+    )
+    store.write_hypomnema_entry(
+        "Audit-only hypomnema must not affect operational counts.",
+        read_visibility="audit_only",
+    )
+    store.save_engram(
+        Engram(
+            content="Audit-only engram must not affect operational counts.",
+            read_visibility="audit_only",
+        )
+    )
+
+    packet = build_context_packet(
+        store,
+        "audit-only counts",
+        packet_mode="operational",
+    )
+    snapshot = build_memory_visual_snapshot(store)
+
+    assert packet["stats"]["engrams_active"] == 0
+    assert packet["stats"]["functional_active"] == 0
+    assert packet["stats"]["hypomnema_active"] == 0
+    assert 'Functional memory<br/>0 active' in snapshot
+    assert 'Hypomnema<br/>0 scoped entries' in snapshot
+    assert 'Mnemos graph<br/>0 engrams' in snapshot
 
 
 def test_operational_context_packet_redacts_candidates_outside_review_queue(store):
@@ -430,6 +600,30 @@ def test_formatter_review_override_rejects_redacted_operational_packet(store):
         raise AssertionError("redacted operational packet should not escalate to review")
 
 
+def test_formatter_review_override_rejects_redacted_operational_proposal_packet(store):
+    store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="redacted_proposal_escalation",
+        read_visibility="review_only",
+        payload={"content": "Redacted proposal prose cannot be recovered."},
+    )
+    packet = build_context_packet(
+        store,
+        "redacted proposal escalation",
+        packet_mode="operational",
+        include_prompt=False,
+    )
+
+    try:
+        format_context_packet(packet, packet_mode="review")
+    except ValueError as exc:
+        assert "redacted operational proposal references" in str(exc)
+    else:
+        raise AssertionError("redacted operational proposal should not escalate to review")
+
+
 def test_operational_review_cues_survive_low_token_budget(store):
     functional = store.write_functional_memory(
         "Pending low-budget functional prose must stay withheld.",
@@ -571,12 +765,20 @@ def test_visual_snapshot_redacts_review_queue_prose(store):
         person_id="riley",
         project_scope="mnemos",
         source="synthesized",
-        domain="foundational",
-        confidence=0.95,
-        salience=0.9,
-        foundational=True,
-        read_visibility="operational_context",
     )
+    store._get_conn().execute(
+        """
+        UPDATE hypomnema_entries
+        SET domain = 'foundational',
+            confidence = 0.95,
+            salience = 0.9,
+            foundational = 1,
+            read_visibility = 'operational_context'
+        WHERE id = ?
+        """,
+        (hypomnema_id,),
+    )
+    store._get_conn().commit()
 
     snapshot = build_memory_visual_snapshot(
         store,
@@ -619,3 +821,30 @@ def test_visual_snapshot_excludes_audit_only_functional_review_ids(store):
 
     assert "Visual snapshot audit-only functional prose" not in snapshot
     assert audit["id"] not in snapshot
+
+
+def test_visual_snapshot_redacts_proposal_review_prose(store):
+    proposal = store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="visual_snapshot_candidate",
+        read_visibility="review_only",
+        payload={"content": "Visual snapshot proposal prose must be withheld."},
+    )
+    audit = store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="visual_snapshot_audit",
+        payload={"content": "Visual snapshot audit proposal must be absent."},
+    )
+
+    snapshot = build_memory_visual_snapshot(store)
+
+    assert "Visual snapshot proposal prose" not in snapshot
+    assert "Visual snapshot audit proposal" not in snapshot
+    assert "visual_snapshot_candidate" not in snapshot
+    assert proposal["id"] in snapshot
+    assert audit["id"] not in snapshot
+    assert "proposal candidate(s) need review" in snapshot

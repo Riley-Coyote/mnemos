@@ -89,6 +89,17 @@ def build_context_packet(
         limit=6,
         read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
     )
+    review_proposals = store.list_proposals(
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        limit=6,
+    )
+    review_proposal_count = store.count_proposals(
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+    )
     review_functional_count = store.get_functional_stats(
         agent_id=agent_id,
         person_id=person_id,
@@ -133,8 +144,10 @@ def build_context_packet(
             mode,
             review_functional,
             review_hypomnema,
+            review_proposals,
             functional_count=review_functional_count,
             candidate_count=review_hypomnema_count,
+            proposal_count=review_proposal_count,
         ),
         "stats": stats,
     }
@@ -250,10 +263,12 @@ def _normalize_packet_visibility(
     review = packet.get("review_queue") or {}
     review_functional = review.get("functional_needs_confirmation") or []
     review_candidates = review.get("hypomnema_promotion_candidates") or []
+    review_proposals = review.get("proposal_candidates") or []
     review_queue = _build_review_queue(
         PACKET_MODE_OPERATIONAL,
         review_functional,
         review_candidates,
+        review_proposals,
     )
     if "functional_needs_confirmation_count" in review:
         review_queue["functional_needs_confirmation_count"] = int(
@@ -262,6 +277,10 @@ def _normalize_packet_visibility(
     if "hypomnema_promotion_candidate_count" in review:
         review_queue["hypomnema_promotion_candidate_count"] = int(
             review.get("hypomnema_promotion_candidate_count") or 0
+        )
+    if "proposal_candidate_count" in review:
+        review_queue["proposal_candidate_count"] = int(
+            review.get("proposal_candidate_count") or 0
         )
     packet["review_queue"] = review_queue
     return packet
@@ -364,6 +383,7 @@ def _is_hypomnema_promotion_candidate(entry: dict[str, Any]) -> bool:
         salience=entry.get("salience", 0),
         revision_count=entry.get("revision_count", 0),
         foundational=entry.get("foundational", False),
+        domain=entry.get("domain", ""),
     )
 
 
@@ -371,10 +391,13 @@ def _build_review_queue(
     packet_mode: PacketMode,
     functional: list[dict[str, Any]],
     candidates: list[dict[str, Any]],
+    proposals: list[dict[str, Any]] | None = None,
     *,
     functional_count: int | None = None,
     candidate_count: int | None = None,
+    proposal_count: int | None = None,
 ) -> dict[str, Any]:
+    proposals = proposals or []
     queue: dict[str, Any] = {
         "packet_mode": packet_mode,
         "functional_needs_confirmation_count": (
@@ -383,10 +406,14 @@ def _build_review_queue(
         "hypomnema_promotion_candidate_count": (
             len(candidates) if candidate_count is None else candidate_count
         ),
+        "proposal_candidate_count": (
+            len(proposals) if proposal_count is None else proposal_count
+        ),
     }
     if packet_mode == PACKET_MODE_REVIEW:
         queue["functional_needs_confirmation"] = functional
         queue["hypomnema_promotion_candidates"] = candidates
+        queue["proposal_candidates"] = proposals
         return queue
 
     queue["functional_needs_confirmation"] = [
@@ -394,6 +421,9 @@ def _build_review_queue(
     ]
     queue["hypomnema_promotion_candidates"] = [
         _hypomnema_review_reference(item) for item in candidates
+    ]
+    queue["proposal_candidates"] = [
+        _proposal_review_reference(item) for item in proposals
     ]
     return queue
 
@@ -423,6 +453,14 @@ def _hypomnema_review_reference(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _proposal_review_reference(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item["id"],
+        "source_id": item["id"],
+        "read_visibility": item.get("read_visibility", READ_VISIBILITY_REVIEW),
+    }
+
+
 def _format_review(packet: dict[str, Any]) -> str:
     review = packet.get("review_queue") or {}
     mode = normalize_packet_mode(
@@ -430,13 +468,17 @@ def _format_review(packet: dict[str, Any]) -> str:
     )
     functional = review.get("functional_needs_confirmation") or []
     candidates = review.get("hypomnema_promotion_candidates") or []
+    proposals = review.get("proposal_candidates") or []
     functional_count = int(
         review.get("functional_needs_confirmation_count", len(functional)) or 0
     )
     candidate_count = int(
         review.get("hypomnema_promotion_candidate_count", len(candidates)) or 0
     )
-    if not functional_count and not candidate_count:
+    proposal_count = int(
+        review.get("proposal_candidate_count", len(proposals)) or 0
+    )
+    if not functional_count and not candidate_count and not proposal_count:
         return "### Review Queue\n- Nothing needs review right now."
     lines = ["### Review Queue"]
     if mode == PACKET_MODE_OPERATIONAL:
@@ -459,6 +501,13 @@ def _format_review(packet: dict[str, Any]) -> str:
                     f"  - source_id={item['source_id']} domain={item['domain']} "
                     f"source={item['source']}"
                 )
+        if proposal_count:
+            lines.append(
+                f"- {proposal_count} proposal candidate(s) need review "
+                "(review-only; prose withheld)."
+            )
+            for item in proposals:
+                lines.append(f"  - source_id={item['source_id']}")
         return "\n".join(lines)
 
     if mode == PACKET_MODE_REVIEW and any(
@@ -466,6 +515,13 @@ def _format_review(packet: dict[str, Any]) -> str:
     ):
         raise ValueError(
             "review packet cannot be formatted from redacted operational references; "
+            "rebuild context packet with packet_mode='review'"
+        )
+    if mode == PACKET_MODE_REVIEW and any(
+        "payload" not in item for item in proposals
+    ):
+        raise ValueError(
+            "review packet cannot be formatted from redacted operational proposal references; "
             "rebuild context packet with packet_mode='review'"
         )
 
@@ -479,7 +535,24 @@ def _format_review(packet: dict[str, Any]) -> str:
             f"- promotion candidate [review-only id={item['id']} source={item['source']}]: "
             f"{item['content']} [{item['domain']}]"
         )
+    for item in proposals:
+        provenance = ", ".join(item.get("provenance_ids") or []) or "none"
+        lines.append(
+            "- proposal "
+            f"[review-only id={item['id']} authority={item['source_authority']} "
+            f"kind={item['kind']} domain={item['domain']} "
+            f"target={item['target_surface']} blast={item['blast_radius']} "
+            f"status={item['status']} provenance={provenance}]: "
+            f"{_format_proposal_payload(item)}"
+        )
     return "\n".join(lines)
+
+
+def _format_proposal_payload(item: dict[str, Any]) -> str:
+    payload = item.get("payload") or {}
+    if isinstance(payload, dict) and payload.get("content"):
+        return str(payload["content"])
+    return str(payload)
 
 
 def _serialize_identity(identity: Any | None) -> dict[str, Any]:

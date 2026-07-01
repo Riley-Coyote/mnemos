@@ -554,7 +554,8 @@ class MnemosMemoryProviderCore:
         )
         review = [
             entry for entry in entries
-            if float(entry.get("confidence", 1.0)) < 0.62
+            if entry.get("read_visibility") == READ_VISIBILITY_REVIEW
+            or float(entry.get("confidence", 1.0)) < 0.62
             or {"review", "inbox", "uncertain"} & set(entry.get("tags", []))
         ]
         return review[:limit]
@@ -570,6 +571,7 @@ class MnemosMemoryProviderCore:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=3,
+            read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
         )
         if any("bootstrap" in entry.get("tags", []) for entry in existing):
             return

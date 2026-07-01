@@ -28,19 +28,28 @@ def _runtime(tmp_path) -> MnemosRuntime:
 
 
 def _seed_promotion_candidate(runtime: MnemosRuntime) -> None:
-    """Plant a foundational note that _promote_candidates will graduate."""
+    """Plant a legacy operational candidate that _promote_candidates can graduate."""
 
     runtime._ensure_init()
-    runtime._store.write_hypomnema_entry(
-        "Riley always wants the dream journal verified by tests.",
+    assert runtime._store is not None
+    entry_id = runtime._store.write_hypomnema_entry(
+        "Riley uses the dream journal verification tests.",
         agent_id="nova",
         person_id="riley",
         project_scope="demo",
-        foundational=True,
-        confidence=0.9,
-        salience=0.8,
-        read_visibility="operational_context",
     )
+    runtime._store._get_conn().execute(
+        """
+        UPDATE hypomnema_entries
+        SET confidence = 0.9,
+            salience = 0.8,
+            foundational = 1,
+            read_visibility = 'operational_context'
+        WHERE id = ?
+        """,
+        (entry_id,),
+    )
+    runtime._store._get_conn().commit()
 
 
 def test_compose_returns_none_when_nothing_noteworthy():

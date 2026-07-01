@@ -297,6 +297,61 @@ class TestFunctionalMemoryStore:
         assert by_id[review["id"]]["is_deleted"] is False
         assert by_id[review["id"]]["promoted_to_hypomnema_id"] is None
 
+    def test_close_session_review_worthy_synthesis_keeps_source_memory_active(self, store):
+        store.start_memory_session(
+            session_id="session-high-blast",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            title="High blast functional memory test",
+        )
+        source = store.write_functional_memory(
+            "Riley always wants identity-memory summaries reviewed before becoming durable.",
+            session_id="session-high-blast",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            memory_type="preference",
+            confidence=0.95,
+            salience=0.9,
+            read_visibility="operational_context",
+        )
+
+        result = store.close_session_to_hypomnema(
+            "session-high-blast",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+        )
+        entry = store.get_hypomnema_entry(
+            result["hypomnema_id"],
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            read_visibility=None,
+        )
+        all_rows = store.load_functional_memories(
+            session_id="session-high-blast",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            include_deleted=True,
+            read_visibility=None,
+            limit=10,
+        )
+        source_after = {item["id"]: item for item in all_rows}[source["id"]]
+        operational_entries = store.search_hypomnema(
+            "identity-memory summaries",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+        )
+
+        assert entry["read_visibility"] == "review_only"
+        assert source_after["is_deleted"] is False
+        assert source_after["promoted_to_hypomnema_id"] is None
+        assert operational_entries == []
+
     def test_invalid_functional_memory_type_fails(self, store):
         with pytest.raises(ValueError):
             store.write_functional_memory(

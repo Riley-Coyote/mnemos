@@ -45,6 +45,14 @@ def test_advanced_context_packet_schema_exposes_packet_mode():
     assert "packet_mode" in schema.get("properties", {})
 
 
+def test_mcp_hypomnema_write_schema_does_not_expose_read_visibility():
+    from mnemos.mcp_server import mcp
+
+    schema = _tools_by_name(mcp)["mnemos_hypomnema_write"].inputSchema
+
+    assert "read_visibility" not in schema.get("properties", {})
+
+
 def test_simple_tools_have_protocol_risk_annotations():
     from mnemos.simple_mcp import simple_mcp
 
@@ -94,16 +102,24 @@ def test_hypomnema_candidates_tool_excludes_non_operational_prose(
     monkeypatch.setattr(mcp_server, "_store", store)
     monkeypatch.setattr(mcp_server, "_ensure_store", lambda: store)
     monkeypatch.setattr(mcp_server, "_setup_gate", lambda: None)
-    store.write_hypomnema_entry(
+    legacy_id = store.write_hypomnema_entry(
         "Operational MCP candidate can be listed.",
         agent_id="vektor",
         person_id="riley",
         project_scope="mnemos",
-        confidence=0.9,
-        salience=0.8,
-        foundational=True,
-        read_visibility="operational_context",
     )
+    store._get_conn().execute(
+        """
+        UPDATE hypomnema_entries
+        SET confidence = 0.9,
+            salience = 0.8,
+            foundational = 1,
+            read_visibility = 'operational_context'
+        WHERE id = ?
+        """,
+        (legacy_id,),
+    )
+    store._get_conn().commit()
     store.write_hypomnema_entry(
         "Review-only MCP candidate must stay out of raw listing.",
         agent_id="vektor",
@@ -353,6 +369,139 @@ def test_review_queue_opts_into_review_candidate_prose(monkeypatch, store):
     assert "Review queue must not disclose audit-only" not in output
 
 
+def test_review_queue_includes_low_salience_identity_hypomnema(monkeypatch, store):
+    from mnemos import mcp_server
+
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_ensure_store", lambda: store)
+    monkeypatch.setattr(mcp_server, "_setup_gate", lambda: None)
+    store.write_hypomnema_entry(
+        "Low-salience identity MCP prose belongs in review.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        domain="identity",
+        confidence=0.45,
+        salience=0.35,
+        foundational=False,
+    )
+
+    output = mcp_server.mnemos_review_queue(
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    assert "Low-salience identity MCP prose belongs in review." in output
+
+
+def test_mcp_hypomnema_write_default_review_only_is_quarantined_from_search_candidates_promote_and_visible_in_review(
+    monkeypatch,
+    store,
+):
+    from mnemos import mcp_server
+
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_ensure_store", lambda: store)
+    monkeypatch.setattr(mcp_server, "_setup_gate", lambda: None)
+
+    write_output = mcp_server.mnemos_hypomnema_write(
+        "MCP-written identity continuity must wait for review.",
+        domain="identity",
+        confidence=0.95,
+        salience=0.9,
+        foundational=True,
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+    entry_id = write_output.splitlines()[0].split(": ", 1)[1]
+
+    search_output = mcp_server.mnemos_hypomnema_search(
+        "identity continuity",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+    candidates_output = mcp_server.mnemos_hypomnema_candidates(
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+    promote_output = mcp_server.mnemos_hypomnema_promote(
+        entry_id,
+        dry_run=True,
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+    review_output = mcp_server.mnemos_review_queue(
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    entry = store.get_hypomnema_entry(
+        entry_id,
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    assert "Visibility: review_only" in write_output
+    assert entry["read_visibility"] == "review_only"
+    assert entry["graduated_to_engram_id"] is None
+    assert "MCP-written identity continuity" not in search_output
+    assert "MCP-written identity continuity" not in candidates_output
+    assert "MCP-written identity continuity" not in promote_output
+    assert "Active operational hypomnema entry not found" in promote_output
+    assert "MCP-written identity continuity must wait for review." in review_output
+
+
+def test_hypomnema_search_excludes_operational_promotion_candidates(
+    monkeypatch,
+    store,
+):
+    from mnemos import mcp_server
+
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_ensure_store", lambda: store)
+    monkeypatch.setattr(mcp_server, "_setup_gate", lambda: None)
+    legacy_id = store.write_hypomnema_entry(
+        "Legacy operational promotion candidate must not appear in MCP search.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+    store._get_conn().execute(
+        """
+        UPDATE hypomnema_entries
+        SET confidence = 0.95,
+            salience = 0.9,
+            foundational = 1,
+            read_visibility = 'operational_context'
+        WHERE id = ?
+        """,
+        (legacy_id,),
+    )
+    store._get_conn().commit()
+
+    search_output = mcp_server.mnemos_hypomnema_search(
+        "promotion candidate",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+    candidates_output = mcp_server.mnemos_hypomnema_candidates(
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    assert "Legacy operational promotion candidate" not in search_output
+    assert "Legacy operational promotion candidate" in candidates_output
+
+
 def test_functional_review_tools_exclude_audit_only_confirmation_prose(
     monkeypatch,
     store,
@@ -401,6 +550,103 @@ def test_functional_review_tools_exclude_audit_only_confirmation_prose(
     )
     assert "Functional tools must not disclose audit-only" not in list_output
     assert "Functional tools must not disclose audit-only" not in queue_output
+
+
+def test_review_queue_includes_review_only_proposal_rows_with_provenance(
+    monkeypatch,
+    store,
+):
+    from mnemos import mcp_server
+
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_ensure_store", lambda: store)
+    monkeypatch.setattr(mcp_server, "_setup_gate", lambda: None)
+    review = store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        domain="identity",
+        target_surface="beliefs",
+        transition="semantic_to_identity",
+        blast_radius="identity",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        read_visibility="review_only",
+        provenance_ids=["source-hypomnema"],
+        payload={"content": "MCP review proposal prose may be shown."},
+    )
+    audit = store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="audit_only_candidate",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        payload={"content": "MCP audit proposal prose must not show in review queue."},
+    )
+
+    output = mcp_server.mnemos_review_queue(
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    assert review["id"] in output
+    assert "MCP review proposal prose may be shown." in output
+    assert "source-hypomnema" in output
+    assert audit["id"] not in output
+    assert "MCP audit proposal prose" not in output
+
+
+def test_audit_admin_proposal_review_lists_audit_only_rows_without_operational_exposure(
+    monkeypatch,
+    store,
+):
+    from mnemos import mcp_server
+
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_ensure_store", lambda: store)
+    monkeypatch.setattr(mcp_server, "_setup_gate", lambda: None)
+    audit = store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="audit_only_candidate",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        payload={"content": "MCP explicit audit proposal prose may be shown."},
+    )
+    review = store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="review_only_candidate",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        read_visibility="review_only",
+        payload={"content": "MCP review proposal prose must stay out of audit listing."},
+    )
+
+    queue_output = mcp_server.mnemos_review_queue(
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+    audit_output = mcp_server.mnemos_proposal_audit(
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    assert audit["id"] not in queue_output
+    assert "MCP explicit audit proposal prose" not in queue_output
+    assert audit["id"] in audit_output
+    assert "MCP explicit audit proposal prose may be shown." in audit_output
+    assert review["id"] not in audit_output
+    assert "MCP review proposal prose" not in audit_output
 
 
 def test_simple_stdio_server_lists_and_calls_context(tmp_path):
@@ -492,7 +738,7 @@ def test_simple_stdio_context_can_return_identity_graph(tmp_path):
                 await session.call_tool(
                     "mnemos_capture",
                     {
-                        "content": "Graph smoke wants an optional identity graph artifact.",
+                        "content": "Graph smoke uses optional graph artifacts.",
                         "importance": 0.9,
                     },
                 )

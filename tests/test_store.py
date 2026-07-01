@@ -41,7 +41,7 @@ class TestEngramStore:
         hypomnema_columns = _column_map(conn, "hypomnema_entries")
         assert "read_visibility" in hypomnema_columns
         assert hypomnema_columns["read_visibility"]["notnull"] == 1
-        assert hypomnema_columns["read_visibility"]["dflt_value"] == "'review_only'"
+        assert hypomnema_columns["read_visibility"]["dflt_value"] == "'operational_context'"
 
         ledger_columns = _column_map(conn, "proposal_ledger")
         for column in (
@@ -62,7 +62,7 @@ class TestEngramStore:
 
         ledger_sql = _table_sql(conn, "proposal_ledger")
         assert "read_visibility IN ('operational_context', 'review_only', 'audit_only')" in ledger_sql
-        assert "status IN ('pending_review', 'approved', 'rejected', 'applied', 'superseded')" in ledger_sql
+        assert "status IN ('pending_review', 'deferred', 'approved', 'rejected', 'applied', 'superseded')" in ledger_sql
 
     def test_save_and_get_engram(self, store):
         """Round-trip save/get for an engram."""
@@ -174,16 +174,15 @@ class TestEngramStore:
         assert audit_pending.id not in default_review_ids
         assert audit_pending.id in explicit_all_ids
 
-    def test_proposal_ledger_roundtrip_and_validation(self, store):
-        """Proposal rows preserve permission-model fields and reject bad enums."""
+    def test_proposal_ledger_accepts_rfc_authority_and_kind_axes(self, store):
+        """Proposal rows preserve RFC permission-model fields and reject bad enums."""
         proposal = store.write_proposal(
-            source_authority="agent_generated",
-            kind="belief",
+            source_authority="generated",
+            kind="semantic",
             domain="identity",
             target_surface="beliefs",
             transition="propose_identity_belief",
             blast_radius="identity",
-            read_visibility="review_only",
             status="pending_review",
             reason="Needs explicit human review before operational use.",
             gate_version="affmem-v1",
@@ -196,60 +195,114 @@ class TestEngramStore:
 
         assert loaded is not None
         assert loaded["id"] == proposal["id"]
+        assert loaded["source_authority"] == "generated"
+        assert loaded["kind"] == "semantic"
         assert loaded["target_surface"] == "beliefs"
-        assert loaded["read_visibility"] == "review_only"
+        assert loaded["read_visibility"] == "audit_only"
         assert loaded["status"] == "pending_review"
         assert loaded["provenance_ids"] == ["engram_source", "hypomnema_source"]
         assert loaded["payload"] == {"content": "candidate belief"}
 
+        alias = store.write_proposal(
+            source_authority="agent_generated",
+            kind="belief",
+            target_surface="beliefs",
+            transition="deprecated_aliases_serialize_canonically",
+        )
+        assert alias["source_authority"] == "generated"
+        assert alias["kind"] == "semantic"
+
         with pytest.raises(ValueError, match="Unsupported read_visibility"):
             store.write_proposal(
-                source_authority="agent_generated",
-                kind="belief",
+                source_authority="generated",
+                kind="semantic",
                 target_surface="beliefs",
                 transition="bad_visibility",
                 read_visibility="public",
             )
         with pytest.raises(ValueError, match="Unsupported proposal status"):
             store.write_proposal(
-                source_authority="agent_generated",
-                kind="belief",
+                source_authority="generated",
+                kind="semantic",
                 target_surface="beliefs",
                 transition="bad_status",
                 status="live",
             )
         with pytest.raises(ValueError, match="Unsupported target surface"):
             store.write_proposal(
-                source_authority="agent_generated",
-                kind="belief",
+                source_authority="generated",
+                kind="semantic",
                 target_surface="prompt_builder",
                 transition="bad_surface",
             )
 
-    def test_initial_terminal_proposals_set_lifecycle_timestamps(self, store):
-        for status in ("approved", "rejected", "superseded"):
-            proposal = store.write_proposal(
-                source_authority="operator_review",
-                kind="belief",
-                target_surface="beliefs",
-                transition=f"{status}_proposal",
-                status=status,
-                proposal_id=f"proposal-{status}",
-            )
-            assert proposal["decided_at"] == proposal["updated_at"]
-            assert proposal["applied_at"] is None
-
-        applied = store.write_proposal(
-            source_authority="operator_review",
-            kind="belief",
+    def test_proposal_ledger_defaults_to_audit_only_and_rejects_pending_operational_visibility(self, store):
+        deferred = store.write_proposal(
+            source_authority="generated",
+            kind="semantic",
             target_surface="beliefs",
-            transition="applied_proposal",
-            status="applied",
-            proposal_id="proposal-applied",
+            transition="defer_candidate",
+            status="deferred",
+        )
+        rejected = store.write_proposal(
+            source_authority="observed",
+            kind="episodic",
+            target_surface="hypomnema_entries",
+            transition="reject_candidate",
+            status="rejected",
+            read_visibility="review_only",
         )
 
-        assert applied["decided_at"] is None
-        assert applied["applied_at"] == applied["updated_at"]
+        assert deferred["read_visibility"] == "audit_only"
+        assert deferred["status"] == "deferred"
+        assert rejected["read_visibility"] == "review_only"
+        assert rejected["decided_at"] == rejected["updated_at"]
+        assert rejected["applied_at"] is None
+
+        with pytest.raises(ValueError, match="cannot be operational"):
+            store.write_proposal(
+                source_authority="generated",
+                kind="semantic",
+                target_surface="beliefs",
+                transition="pending_operational",
+                status="pending_review",
+                read_visibility="operational_context",
+            )
+
+        for status in ("approved", "applied", "superseded"):
+            with pytest.raises(ValueError, match="cannot be created directly"):
+                store.write_proposal(
+                    source_authority="generated",
+                    kind="semantic",
+                    target_surface="beliefs",
+                    transition=f"{status}_proposal",
+                    status=status,
+                )
+
+    def test_list_proposals_audit_visibility_requires_explicit_audit_read(self, store):
+        audit = store.write_proposal(
+            source_authority="generated",
+            kind="semantic",
+            target_surface="beliefs",
+            transition="audit_candidate",
+            payload={"content": "audit-only candidate prose"},
+        )
+        review = store.write_proposal(
+            source_authority="observed",
+            kind="episodic",
+            target_surface="hypomnema_entries",
+            transition="review_candidate",
+            read_visibility="review_only",
+            payload={"content": "review-only candidate prose"},
+        )
+
+        default_rows = store.list_proposals()
+        audit_rows = store.list_audit_proposals()
+        unfiltered_rows = store.list_proposals(read_visibility=None)
+
+        assert [row["id"] for row in default_rows] == [review["id"]]
+        assert [row["id"] for row in audit_rows] == [audit["id"]]
+        assert {row["id"] for row in unfiltered_rows} == {audit["id"], review["id"]}
 
     def test_store_reads_filter_read_visibility_before_scoring(self, store):
         """Operational store reads exclude review-only rows before ranking/limits."""
@@ -339,15 +392,15 @@ class TestEngramStore:
             limit=1,
         )] == [review_hypo]
 
-    def test_legacy_v5_db_migrates_read_visibility_defaults(self, tmp_path):
-        """Existing databases gain visibility with review-safe defaults."""
+    def test_legacy_v5_migrates_non_candidate_hypomnema_operational_and_candidates_review_only(self, tmp_path):
+        """Existing databases preserve ordinary continuity and quarantine candidates."""
         db_path = tmp_path / "legacy-v5-read-visibility.db"
         _create_legacy_v5_read_visibility_db(db_path)
 
         store = EngramStore(db_path)
         try:
             conn = store._get_conn()
-            assert store.get_meta("schema_version") == "6"
+            assert store.get_meta("schema_version") == "7"
             assert conn.execute(
                 "SELECT read_visibility FROM engrams WHERE id = 'legacy_e'"
             ).fetchone()[0] == "operational_context"
@@ -360,6 +413,135 @@ class TestEngramStore:
             assert conn.execute(
                 "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_h'"
             ).fetchone()[0] == "review_only"
+            assert conn.execute(
+                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_low_h'"
+            ).fetchone()[0] == "operational_context"
+            assert conn.execute(
+                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_identity_low_h'"
+            ).fetchone()[0] == "review_only"
+        finally:
+            store.close()
+
+    def test_legacy_v6_proposal_ledger_rows_normalize_to_audit_default(self, tmp_path):
+        db_path = tmp_path / "legacy-v6-proposal-ledger.db"
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE proposal_ledger (
+                    id TEXT PRIMARY KEY,
+                    agent_id TEXT NOT NULL DEFAULT 'default',
+                    person_id TEXT NOT NULL DEFAULT 'user',
+                    project_scope TEXT NOT NULL DEFAULT 'global',
+                    source_authority TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    domain TEXT NOT NULL DEFAULT 'general',
+                    target_surface TEXT NOT NULL,
+                    transition TEXT NOT NULL,
+                    blast_radius TEXT NOT NULL DEFAULT 'medium',
+                    read_visibility TEXT NOT NULL DEFAULT 'operational_context',
+                    status TEXT NOT NULL DEFAULT 'pending_review',
+                    reason TEXT NOT NULL DEFAULT '',
+                    gate_version TEXT NOT NULL DEFAULT 'affmem-v1',
+                    target_id TEXT,
+                    provenance_ids_json TEXT NOT NULL DEFAULT '[]',
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    decided_at INTEGER,
+                    applied_at INTEGER
+                );
+                CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                INSERT INTO meta(key, value) VALUES ('schema_version', '6');
+                INSERT INTO proposal_ledger (
+                    id, source_authority, kind, target_surface, transition,
+                    blast_radius, created_at, updated_at
+                ) VALUES (
+                    'proposal_old_default', 'agent_generated', 'belief', 'beliefs',
+                    'old_default_candidate', 'identity', 100, 100
+                );
+                INSERT INTO proposal_ledger (
+                    id, source_authority, kind, target_surface, transition,
+                    blast_radius, read_visibility, created_at, updated_at
+                ) VALUES (
+                    'proposal_review', 'generated', 'semantic', 'beliefs',
+                    'review_candidate', 'identity', 'review_only', 200, 200
+                );
+                INSERT INTO proposal_ledger (
+                    id, source_authority, kind, target_surface, transition,
+                    blast_radius, read_visibility, status, reason, created_at,
+                    updated_at, decided_at, applied_at
+                ) VALUES (
+                    'proposal_bad_terminal', 'unknown_authority', 'unknown_kind',
+                    'beliefs', 'legacy_terminal_candidate', 'foundational',
+                    'operational_context', 'applied', 'legacy applied row',
+                    300, 400, 350, 375
+                );
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        store = EngramStore(db_path)
+        try:
+            conn = store._get_conn()
+            assert store.get_meta("schema_version") == "7"
+            default_row = store.get_proposal("proposal_old_default")
+            review_row = store.get_proposal("proposal_review")
+            terminal_row = store.get_proposal("proposal_bad_terminal")
+            read_visibility_column = next(
+                column
+                for column in conn.execute("PRAGMA table_info(proposal_ledger)")
+                if column["name"] == "read_visibility"
+            )
+            ledger_sql = _table_sql(conn, "proposal_ledger")
+            ledger_sql_flat = " ".join(ledger_sql.split())
+
+            assert default_row["read_visibility"] == "audit_only"
+            assert default_row["source_authority"] == "generated"
+            assert default_row["kind"] == "semantic"
+            assert review_row["read_visibility"] == "review_only"
+            assert terminal_row["source_authority"] == "generated"
+            assert terminal_row["kind"] == "semantic"
+            assert terminal_row["read_visibility"] == "audit_only"
+            assert terminal_row["status"] == "pending_review"
+            assert terminal_row["decided_at"] is None
+            assert terminal_row["applied_at"] is None
+            assert "legacy terminal proposal status=applied" in terminal_row["reason"]
+            assert read_visibility_column["dflt_value"] == "'audit_only'"
+            assert "source_authority IN ('user_stated', 'imported', 'observed', 'generated')" in ledger_sql_flat
+            assert "kind IN ('episodic', 'semantic', 'procedural', 'prospective')" in ledger_sql_flat
+        finally:
+            store.close()
+
+    def test_legacy_v6_hypomnema_review_default_is_repaired(self, tmp_path):
+        db_path = tmp_path / "legacy-v6-hypomnema-review-default.db"
+        _create_legacy_v6_hypomnema_review_default_db(db_path)
+
+        store = EngramStore(db_path)
+        try:
+            conn = store._get_conn()
+            read_visibility_column = next(
+                column
+                for column in conn.execute("PRAGMA table_info(hypomnema_entries)")
+                if column["name"] == "read_visibility"
+            )
+
+            assert store.get_meta("schema_version") == "7"
+            assert read_visibility_column["dflt_value"] == "'operational_context'"
+            assert conn.execute(
+                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_ordinary'"
+            ).fetchone()[0] == "operational_context"
+            assert conn.execute(
+                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_candidate'"
+            ).fetchone()[0] == "review_only"
+            assert conn.execute(
+                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_identity'"
+            ).fetchone()[0] == "review_only"
+            assert conn.execute(
+                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_audit'"
+            ).fetchone()[0] == "audit_only"
         finally:
             store.close()
 
@@ -377,7 +559,10 @@ class TestEngramStore:
         store.save_belief(reviewed)
 
         default_stats = store.get_stats()
-        all_stats = store.get_stats(include_pending_review=True)
+        all_stats = store.get_stats(
+            include_pending_review=True,
+            read_visibility=("operational_context", "review_only"),
+        )
 
         assert default_stats["beliefs_active"] == 1
         assert all_stats["beliefs_active"] == 2
@@ -479,6 +664,43 @@ class TestEngramStore:
 
         # Quote-delimited matching keeps tags token-exact.
         assert store.get_hypomnema_entries_by_tag("dream", **in_scope) == []
+
+    def test_get_hypomnema_entries_by_tag_filters_read_visibility_by_default(self, store):
+        in_scope = {"agent_id": "nova", "person_id": "riley", "project_scope": "demo"}
+        operational = store.write_hypomnema_entry(
+            "operational tagged note",
+            tags=["dream-journal"],
+            read_visibility="operational_context",
+            **in_scope,
+        )
+        review = store.write_hypomnema_entry(
+            "review tagged note",
+            tags=["dream-journal"],
+            read_visibility="review_only",
+            **in_scope,
+        )
+        audit = store.write_hypomnema_entry(
+            "audit tagged note",
+            tags=["dream-journal"],
+            read_visibility="audit_only",
+            **in_scope,
+        )
+
+        default_entries = store.get_hypomnema_entries_by_tag("dream-journal", **in_scope)
+        review_entries = store.get_hypomnema_entries_by_tag(
+            "dream-journal",
+            read_visibility="review_only",
+            **in_scope,
+        )
+        all_entries = store.get_hypomnema_entries_by_tag(
+            "dream-journal",
+            read_visibility=None,
+            **in_scope,
+        )
+
+        assert [entry["id"] for entry in default_entries] == [operational]
+        assert [entry["id"] for entry in review_entries] == [review]
+        assert {entry["id"] for entry in all_entries} == {operational, review, audit}
 
 
 def _column_map(conn, table: str):
@@ -642,6 +864,127 @@ def _create_legacy_v5_read_visibility_db(path):
             ) VALUES (
                 'legacy_h', 'legacy promotion candidate', 0.95, 0.9, 1,
                 '2026-01-01T00:00:00+00:00',
+                '2026-01-01T00:00:00+00:00'
+            );
+
+            INSERT INTO hypomnema_entries (
+                id, content, confidence, salience, foundational,
+                created_at, last_revised_at
+            ) VALUES (
+                'legacy_low_h', 'legacy ordinary hypomnema', 0.6, 0.5, 0,
+                '2026-01-01T00:00:00+00:00',
+                '2026-01-01T00:00:00+00:00'
+            );
+
+            INSERT INTO hypomnema_entries (
+                id, content, domain, confidence, salience, foundational,
+                created_at, last_revised_at
+            ) VALUES (
+                'legacy_identity_low_h', 'legacy identity hypomnema', 'identity',
+                0.4, 0.4, 0,
+                '2026-01-01T00:00:00+00:00',
+                '2026-01-01T00:00:00+00:00'
+            );
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _create_legacy_v6_hypomnema_review_default_db(path):
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE hypomnema_entries (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL DEFAULT 'default',
+                person_id TEXT NOT NULL DEFAULT 'user',
+                project_scope TEXT NOT NULL DEFAULT 'global',
+                content TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'observed'
+                    CHECK (source IN ('observed', 'synthesized', 'co-formed')),
+                density REAL NOT NULL DEFAULT 0.5,
+                domain TEXT NOT NULL DEFAULT 'topical'
+                    CHECK (domain IN ('foundational', 'identity', 'recurring', 'long-arc', 'topical', 'situational')),
+                read_visibility TEXT NOT NULL DEFAULT 'review_only'
+                    CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only')),
+                tags_json TEXT NOT NULL DEFAULT '[]',
+                confidence REAL NOT NULL DEFAULT 0.5,
+                salience REAL NOT NULL DEFAULT 0.5,
+                active INTEGER NOT NULL DEFAULT 1,
+                foundational INTEGER NOT NULL DEFAULT 0,
+                revision_count INTEGER NOT NULL DEFAULT 0,
+                revisions_json TEXT NOT NULL DEFAULT '[]',
+                original_timestamp INTEGER,
+                related_session_id TEXT,
+                related_engram_id TEXT,
+                graduated_to_engram_id TEXT,
+                superseded_by TEXT,
+                created_at TEXT NOT NULL,
+                last_revised_at TEXT NOT NULL,
+                last_challenged_at TEXT
+            );
+
+            CREATE TABLE proposal_ledger (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL DEFAULT 'default',
+                person_id TEXT NOT NULL DEFAULT 'user',
+                project_scope TEXT NOT NULL DEFAULT 'global',
+                source_authority TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                domain TEXT NOT NULL DEFAULT 'general',
+                target_surface TEXT NOT NULL,
+                transition TEXT NOT NULL,
+                blast_radius TEXT NOT NULL DEFAULT 'medium',
+                read_visibility TEXT NOT NULL DEFAULT 'review_only',
+                status TEXT NOT NULL DEFAULT 'pending_review',
+                reason TEXT NOT NULL DEFAULT '',
+                gate_version TEXT NOT NULL DEFAULT 'affmem-v1',
+                target_id TEXT,
+                provenance_ids_json TEXT NOT NULL DEFAULT '[]',
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                decided_at INTEGER,
+                applied_at INTEGER
+            );
+
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta(key, value) VALUES ('schema_version', '6');
+
+            INSERT INTO hypomnema_entries (
+                id, content, confidence, salience, foundational,
+                read_visibility, created_at, last_revised_at
+            ) VALUES (
+                'v6_ordinary', 'v6 ordinary hypomnema', 0.4, 0.4, 0,
+                'review_only', '2026-01-01T00:00:00+00:00',
+                '2026-01-01T00:00:00+00:00'
+            );
+            INSERT INTO hypomnema_entries (
+                id, content, confidence, salience, foundational,
+                read_visibility, created_at, last_revised_at
+            ) VALUES (
+                'v6_candidate', 'v6 candidate hypomnema', 0.95, 0.9, 1,
+                'review_only', '2026-01-01T00:00:00+00:00',
+                '2026-01-01T00:00:00+00:00'
+            );
+            INSERT INTO hypomnema_entries (
+                id, content, domain, confidence, salience, foundational,
+                read_visibility, created_at, last_revised_at
+            ) VALUES (
+                'v6_identity', 'v6 low-salience identity hypomnema', 'identity',
+                0.4, 0.4, 0, 'review_only',
+                '2026-01-01T00:00:00+00:00',
+                '2026-01-01T00:00:00+00:00'
+            );
+            INSERT INTO hypomnema_entries (
+                id, content, confidence, salience, foundational,
+                read_visibility, created_at, last_revised_at
+            ) VALUES (
+                'v6_audit', 'v6 explicit audit hypomnema', 0.4, 0.4, 0,
+                'audit_only', '2026-01-01T00:00:00+00:00',
                 '2026-01-01T00:00:00+00:00'
             );
             """

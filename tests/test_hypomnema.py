@@ -19,11 +19,10 @@ class TestHypomnemaStore:
             agent_id="vektor",
             person_id="riley",
             project_scope="codex-test",
-            domain="foundational",
+            domain="topical",
             tags="memory,continuity",
-            confidence=0.9,
-            salience=0.8,
-            foundational=True,
+            confidence=0.7,
+            salience=0.6,
             read_visibility="operational_context",
         )
 
@@ -36,7 +35,7 @@ class TestHypomnemaStore:
 
         assert results[0]["id"] == entry_id
         assert results[0]["tags"] == ["memory", "continuity"]
-        assert results[0]["foundational"] is True
+        assert results[0]["foundational"] is False
 
     def test_revise_hypomnema_keeps_revision_history(self, store):
         entry_id = store.write_hypomnema_entry(
@@ -172,7 +171,38 @@ class TestHypomnemaStore:
         assert updated["read_visibility"] == "audit_only"
         assert updated["revision_count"] == 1
 
-    def test_promotion_candidates_require_stability_thresholds(self, store):
+    def test_hypomnema_upsert_reclassifies_operational_row_crossing_promotion_threshold(self, store):
+        entry_id = store.write_hypomnema_entry(
+            "Ordinary continuity claim",
+            entry_id="ordinary-continuity",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            confidence=0.5,
+            salience=0.4,
+        )
+
+        store.write_hypomnema_entry(
+            "Ordinary continuity claim revised into promotion territory",
+            entry_id=entry_id,
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            confidence=0.9,
+            salience=0.8,
+        )
+
+        updated = store.get_hypomnema_entry(
+            entry_id,
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+        )
+
+        assert updated["revision_count"] == 1
+        assert updated["read_visibility"] == "review_only"
+
+    def test_review_candidate_queue_includes_stable_and_high_blast_rows(self, store):
         low_id = store.write_hypomnema_entry(
             "Interesting but weak continuity",
             agent_id="vektor",
@@ -183,24 +213,33 @@ class TestHypomnemaStore:
             foundational=True,
         )
         high_id = store.write_hypomnema_entry(
-            "Foundational continuity ready for Mnemos.",
+            "Repeated topical continuity ready for review.",
+            entry_id="review-candidate",
             agent_id="vektor",
             person_id="riley",
             project_scope="codex-test",
             confidence=0.9,
             salience=0.8,
-            foundational=True,
-            read_visibility="operational_context",
+        )
+        store.revise_hypomnema_entry(
+            high_id,
+            "Repeated topical continuity ready for review after revision.",
+            reason="stabilized",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            confidence=0.9,
+            salience=0.8,
         )
 
         candidates = store.get_hypomnema_promotion_candidates(
             agent_id="vektor",
             person_id="riley",
             project_scope="codex-test",
+            read_visibility="review_only",
         )
 
-        assert [entry["id"] for entry in candidates] == [high_id]
-        assert low_id not in [entry["id"] for entry in candidates]
+        assert {entry["id"] for entry in candidates} == {high_id, low_id}
 
     def test_live_write_classifies_stable_hypomnema_as_review_only(self, store):
         entry_id = store.write_hypomnema_entry(
@@ -242,7 +281,98 @@ class TestHypomnemaStore:
         assert entry_id not in [item["id"] for item in operational_candidates]
         assert [item["id"] for item in review_candidates] == [entry_id]
 
-    def test_hypomnema_schema_default_is_review_only(self, store):
+    def test_identity_or_foundational_hypomnema_defaults_review_only_even_below_promotion_threshold(self, store):
+        identity_id = store.write_hypomnema_entry(
+            "Identity-domain continuity should wait for review even when low salience.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            domain="identity",
+            confidence=0.55,
+            salience=0.4,
+        )
+        foundational_id = store.write_hypomnema_entry(
+            "Foundational flag should wait for review even when low confidence.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            confidence=0.5,
+            salience=0.45,
+            foundational=True,
+        )
+
+        identity = store.get_hypomnema_entry(
+            identity_id,
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+        )
+        foundational = store.get_hypomnema_entry(
+            foundational_id,
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+        )
+
+        assert identity["read_visibility"] == "review_only"
+        assert foundational["read_visibility"] == "review_only"
+
+    def test_low_salience_identity_review_rows_are_listed_and_counted(self, store):
+        identity_id = store.write_hypomnema_entry(
+            "Identity-domain continuity should remain review-visible even below thresholds.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            domain="identity",
+            confidence=0.45,
+            salience=0.35,
+        )
+        store.write_hypomnema_entry(
+            "Ordinary review-only continuity should not count as review-needed.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            confidence=0.45,
+            salience=0.35,
+            read_visibility="review_only",
+        )
+        store.write_hypomnema_entry(
+            "Ordinary operational continuity should not count as review-needed.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            confidence=0.45,
+            salience=0.35,
+            read_visibility="operational_context",
+        )
+        store.write_hypomnema_entry(
+            "Audit-only identity continuity should require explicit audit reads.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            domain="identity",
+            confidence=0.45,
+            salience=0.35,
+            read_visibility="audit_only",
+        )
+
+        candidates = store.get_hypomnema_promotion_candidates(
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            read_visibility=("operational_context", "review_only"),
+        )
+        stats = store.get_hypomnema_stats(
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            read_visibility=("operational_context", "review_only"),
+        )
+
+        assert [entry["id"] for entry in candidates] == [identity_id]
+        assert stats["hypomnema_promotion_candidates"] == 1
+
+    def test_hypomnema_schema_default_is_operational_with_store_classifier(self, store):
         conn = store._get_conn()
         read_visibility_column = next(
             column
@@ -250,19 +380,83 @@ class TestHypomnemaStore:
             if column["name"] == "read_visibility"
         )
 
-        assert read_visibility_column["dflt_value"] == "'review_only'"
+        assert read_visibility_column["dflt_value"] == "'operational_context'"
 
-    def test_promotion_candidates_default_to_operational_visibility(self, store):
-        operational_id = store.write_hypomnema_entry(
-            "Operational candidate may appear in candidate listing.",
+    def test_explicit_operational_visibility_for_review_worthy_hypomnema_is_rejected(self, store):
+        with pytest.raises(ValueError, match="requires review visibility"):
+            store.write_hypomnema_entry(
+                "Explicit operational identity continuity should fail closed.",
+                agent_id="vektor",
+                person_id="riley",
+                project_scope="codex-test",
+                domain="identity",
+                confidence=0.6,
+                salience=0.4,
+                read_visibility="operational_context",
+            )
+
+    def test_explicit_upsert_cannot_downgrade_existing_review_or_audit_visibility(self, store):
+        review_id = store.write_hypomnema_entry(
+            "Existing review-only continuity must not downgrade.",
             agent_id="vektor",
             person_id="riley",
             project_scope="codex-test",
-            confidence=0.9,
-            salience=0.8,
-            foundational=True,
-            read_visibility="operational_context",
+            confidence=0.45,
+            salience=0.45,
+            read_visibility="review_only",
         )
+        audit_id = store.write_hypomnema_entry(
+            "Existing audit-only continuity must not downgrade.",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            confidence=0.45,
+            salience=0.45,
+            read_visibility="audit_only",
+        )
+
+        with pytest.raises(ValueError, match="requires review visibility"):
+            store.write_hypomnema_entry(
+                "Existing review-only continuity must not downgrade.",
+                entry_id=review_id,
+                agent_id="vektor",
+                person_id="riley",
+                project_scope="codex-test",
+                confidence=0.45,
+                salience=0.45,
+                read_visibility="operational_context",
+            )
+        with pytest.raises(ValueError, match="requires review visibility"):
+            store.write_hypomnema_entry(
+                "Existing audit-only continuity must not downgrade.",
+                entry_id=audit_id,
+                agent_id="vektor",
+                person_id="riley",
+                project_scope="codex-test",
+                confidence=0.45,
+                salience=0.45,
+                read_visibility="review_only",
+            )
+
+        review = store.get_hypomnema_entry(
+            review_id,
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            read_visibility=None,
+        )
+        audit = store.get_hypomnema_entry(
+            audit_id,
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="codex-test",
+            read_visibility=None,
+        )
+
+        assert review["read_visibility"] == "review_only"
+        assert audit["read_visibility"] == "audit_only"
+
+    def test_promotion_candidates_filter_by_visibility(self, store):
         review_id = store.write_hypomnema_entry(
             "Review-only candidate requires explicit review visibility.",
             agent_id="vektor",
@@ -311,6 +505,6 @@ class TestHypomnemaStore:
             )
         }
 
-        assert default_ids == {operational_id}
+        assert default_ids == set()
         assert review_ids == {review_id}
         assert audit_id in explicit_all_ids

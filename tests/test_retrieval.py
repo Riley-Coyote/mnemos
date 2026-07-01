@@ -108,6 +108,52 @@ class TestReactiveRetriever:
         )
         assert [result.engram.id for result in review_results] == [review_seed.id]
 
+    def test_review_and_audit_rows_do_not_seed_operational_retrieval(
+        self, store, retriever
+    ):
+        operational = Engram(
+            content="Operational retrieval seed for afferent proof",
+            owner_agent_id="default",
+            read_visibility="operational_context",
+        )
+        review_seed = Engram(
+            content="Review-only retrieval seed must not operationally rank",
+            owner_agent_id="default",
+            read_visibility="review_only",
+        )
+        audit_seed = Engram(
+            content="Audit-only retrieval seed must not operationally rank",
+            owner_agent_id="default",
+            read_visibility="audit_only",
+        )
+        audit_target = Engram(
+            content="Audit-only propagation target must not operationally rank",
+            owner_agent_id="default",
+            read_visibility="audit_only",
+        )
+        operational.add_connection(
+            audit_target.id,
+            ConnectionRelation.SUPPORTS,
+            strength=1.0,
+            formed_by="test",
+        )
+        store.save_engram(review_seed)
+        store.save_engram(audit_seed)
+        store.save_engram(audit_target)
+        store.save_engram(operational)
+
+        results = retriever.retrieve(
+            "retrieval seed afferent proof",
+            agent_id="default",
+            max_results=10,
+        )
+        contents = {result.engram.content for result in results}
+
+        assert "Operational retrieval seed for afferent proof" in contents
+        assert "Review-only retrieval seed must not operationally rank" not in contents
+        assert "Audit-only retrieval seed must not operationally rank" not in contents
+        assert "Audit-only propagation target must not operationally rank" not in contents
+
     def test_retrieval_does_not_bridge_through_review_only_engram(
         self, store, retriever
     ):

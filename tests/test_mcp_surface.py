@@ -152,6 +152,99 @@ def test_hypomnema_candidates_tool_excludes_non_operational_prose(
     assert "Audit-only MCP candidate must stay out" not in output
 
 
+def test_mnemos_setup_seeds_starting_context_for_review(monkeypatch, store):
+    from mnemos import mcp_server
+
+    class FakeEncoder:
+        def encode(self, **kwargs):
+            return None
+
+    config = {
+        "setup_step": 3,
+        "agent_id": "vektor",
+        "person_id": "riley",
+        "agent_name": "Vektor",
+        "user_name": "Riley",
+    }
+    monkeypatch.setattr(mcp_server, "_config", config)
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_encoder", FakeEncoder())
+    monkeypatch.setattr(mcp_server, "_ensure_store", lambda: None)
+    monkeypatch.setattr(mcp_server, "save_config", lambda updated: None)
+    monkeypatch.setattr(mcp_server, "_config_invalidate", lambda: None)
+
+    mcp_server.mnemos_setup(
+        "Riley needs the agent to remember the foundational setup context."
+    )
+
+    operational = store.search_hypomnema(
+        "foundational setup context",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="global",
+        read_visibility="operational_context",
+    )
+    review_only = store.search_hypomnema(
+        "foundational setup context",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="global",
+        read_visibility="review_only",
+    )
+
+    assert operational == []
+    assert any("starting context" in entry["content"] for entry in review_only)
+
+
+def test_mnemos_status_counts_only_operational_scoped_rows(monkeypatch, store):
+    from mnemos import mcp_server
+    from mnemos.core.engram import Engram
+
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_ensure_store", lambda: None)
+    monkeypatch.setattr(mcp_server, "_setup_gate", lambda: None)
+    store.save_engram(
+        Engram(content="Operational status memory.", owner_agent_id="vektor")
+    )
+    store.save_engram(
+        Engram(
+            content="Review-only status memory.",
+            owner_agent_id="vektor",
+            read_visibility="review_only",
+        )
+    )
+    store.write_hypomnema_entry(
+        "Operational status continuity.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        read_visibility="operational_context",
+    )
+    store.write_hypomnema_entry(
+        "Review-only status continuity.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        read_visibility="review_only",
+    )
+    store.write_hypomnema_entry(
+        "Other-project status continuity.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="other",
+        read_visibility="operational_context",
+    )
+
+    output = mcp_server.mnemos_status(
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    assert "Active engrams: 1" in output
+    assert "Hypomnema active: 1" in output
+
+
 def test_hypomnema_promote_rejects_non_operational_entries(monkeypatch, store):
     from mnemos import mcp_server
 

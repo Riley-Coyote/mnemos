@@ -106,6 +106,66 @@ def test_context_and_recall_hide_review_only_prose(tmp_path):
     assert "Review-only runtime continuity phrase" not in recall
 
 
+def test_context_and_health_counts_use_operational_scope(tmp_path):
+    from mnemos.core.engram import Engram
+    from mnemos.store.sqlite_store import EngramStore
+
+    db_path = str(tmp_path / "simple.db")
+    seed = EngramStore(db_path)
+    try:
+        seed.save_engram(
+            Engram(content="Operational memory count.", owner_agent_id="nova")
+        )
+        seed.save_engram(
+            Engram(
+                content="Review-only memory count.",
+                owner_agent_id="nova",
+                read_visibility="review_only",
+            )
+        )
+        seed.write_hypomnema_entry(
+            "Operational scoped continuity count.",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility="operational_context",
+        )
+        seed.write_hypomnema_entry(
+            "Review-only scoped continuity count.",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility="review_only",
+        )
+        seed.write_hypomnema_entry(
+            "Operational other-project continuity count.",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="other",
+            read_visibility="operational_context",
+        )
+    finally:
+        seed.close()
+
+    runtime = MnemosRuntime(
+        db_path=db_path,
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+
+    try:
+        context = runtime.context()
+        health = runtime.health()
+    finally:
+        runtime.close()
+
+    assert "Status: 1 memories, 1 continuity notes" in context
+    assert health["counts"]["memories_active"] == 1
+    assert health["counts"]["continuity_notes_active"] == 1
+
+
 def test_context_and_recall_hide_operational_promotion_candidates(tmp_path, monkeypatch):
     from mnemos.store.sqlite_store import EngramStore
 

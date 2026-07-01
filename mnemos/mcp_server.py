@@ -468,6 +468,7 @@ def mnemos_setup(response: str = "") -> str:
                     confidence=0.78,
                     salience=0.7,
                     related_session_id=session_id,
+                    read_visibility=READ_VISIBILITY_OPERATIONAL,
                 )
                 _store.write_functional_memory(  # type: ignore
                     f"Onboarding project context: {proj}",
@@ -601,8 +602,15 @@ def mnemos_setup(response: str = "") -> str:
         # Count what we've built
         _ensure_store()
         agent_id = config.get("agent_id", "default")
+        person_id = config.get("person_id", "user")
+        project_scope = "global"
         try:
-            stats = _store.get_stats(agent_id)
+            stats = _store.get_stats(
+                agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+                read_visibility=READ_VISIBILITY_OPERATIONAL,
+            )
             engram_count = stats.get("engrams_active", 0)
             belief_count = stats.get("beliefs_active", 0)
             conn_count = stats.get("connections", 0)
@@ -612,8 +620,6 @@ def mnemos_setup(response: str = "") -> str:
             engram_count = belief_count = conn_count = functional_count = hypomnema_count = 0
 
         agent_name = config.get("agent_name", "Agent")
-        person_id = config.get("person_id", "user")
-        project_scope = "global"
 
         # Final step — set setup complete
         config["setup_complete"] = True
@@ -1502,7 +1508,11 @@ def mnemos_introspect(text: str) -> str:
 
 
 @mcp.tool()
-def mnemos_status(agent_id: str = "default") -> str:
+def mnemos_status(
+    agent_id: str = "default",
+    person_id: str = "user",
+    project_scope: str = "global",
+) -> str:
     """Get memory system status and statistics.
 
     Shows counts of active/dormant/archived memories, connections,
@@ -1515,8 +1525,13 @@ def mnemos_status(agent_id: str = "default") -> str:
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
-    stats = _store.get_stats(agent_id)  # type: ignore
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    stats = _store.get_stats(  # type: ignore
+        agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        read_visibility=READ_VISIBILITY_OPERATIONAL,
+    )
 
     # Count long-term (stability >= 0.8) engrams
     active_engrams = _store.get_active_engrams(agent_id=agent_id, limit=10000)  # type: ignore

@@ -456,6 +456,20 @@ def apply_afferent_membrane_v1_schema_migration(conn: sqlite3.Connection) -> Non
     conn.execute(
         """
         UPDATE hypomnema_entries
+        SET read_visibility = 'operational_context'
+        WHERE NOT (
+            active = 1
+            AND graduated_to_engram_id IS NULL
+            AND confidence >= ?
+            AND salience >= ?
+            AND (revision_count >= 1 OR foundational = 1)
+        )
+        """,
+        (HYPO_PROMOTION_MIN_CONFIDENCE, HYPO_PROMOTION_MIN_SALIENCE),
+    )
+    conn.execute(
+        """
+        UPDATE hypomnema_entries
         SET read_visibility = 'review_only'
         WHERE """ + HYPO_REVIEW_CANDIDATE_SQL + """
         """,

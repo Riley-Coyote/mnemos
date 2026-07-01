@@ -103,6 +103,52 @@ class TestEngramStore:
         assert connections[0].target_id == e2.id
         assert connections[0].relation == ConnectionRelation.SUPPORTS
 
+    def test_operational_engram_load_filters_hidden_connection_targets(self, store):
+        source = Engram(content="Visible source memory")
+        visible_target = Engram(content="Visible target memory")
+        review_target = Engram(
+            content="Review-only target memory",
+            read_visibility="review_only",
+        )
+        audit_target = Engram(
+            content="Audit-only target memory",
+            read_visibility="audit_only",
+        )
+        for engram in (source, visible_target, review_target, audit_target):
+            store.save_engram(engram)
+
+        for target in (visible_target, review_target, audit_target):
+            store.save_connection(
+                source.id,
+                Connection(
+                    target_id=target.id,
+                    relation=ConnectionRelation.SUPPORTS,
+                    strength=0.7,
+                ),
+            )
+
+        operational = store.get_engram(
+            source.id,
+            read_visibility="operational_context",
+        )
+        admin = store.get_engram(source.id)
+        active = store.get_active_engrams(agent_id="default", load_connections=True)
+        loaded_source = next(engram for engram in active if engram.id == source.id)
+
+        assert operational is not None
+        assert {conn.target_id for conn in operational.connections} == {
+            visible_target.id
+        }
+        assert admin is not None
+        assert {conn.target_id for conn in admin.connections} == {
+            visible_target.id,
+            review_target.id,
+            audit_target.id,
+        }
+        assert {conn.target_id for conn in loaded_source.connections} == {
+            visible_target.id
+        }
+
     def test_save_and_get_belief(self, store):
         """Belief round-trip."""
         belief = Belief(
@@ -419,6 +465,9 @@ class TestEngramStore:
             assert conn.execute(
                 "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_identity_low_h'"
             ).fetchone()[0] == "review_only"
+            assert conn.execute(
+                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_ordinary_h'"
+            ).fetchone()[0] == "operational_context"
         finally:
             store.close()
 
@@ -638,6 +687,18 @@ class TestEngramStore:
         tagged_two = store.write_hypomnema_entry(
             "second tagged note", tags=["dream-journal", "continuity"], **in_scope
         )
+        review_tagged = store.write_hypomnema_entry(
+            "review tagged note",
+            tags=["dream-journal"],
+            read_visibility="review_only",
+            **in_scope,
+        )
+        audit_tagged = store.write_hypomnema_entry(
+            "audit tagged note",
+            tags=["dream-journal"],
+            read_visibility="audit_only",
+            **in_scope,
+        )
         store.write_hypomnema_entry("untagged note", tags=["continuity"], **in_scope)
         store.write_hypomnema_entry(
             "other scope note",
@@ -656,6 +717,21 @@ class TestEngramStore:
         assert all(e["active"] for e in entries)
         # Newest first by last_revised_at.
         assert entries[0]["id"] == tagged_two
+
+        review_entries = store.get_hypomnema_entries_by_tag(
+            "dream-journal", read_visibility="review_only", **in_scope
+        )
+        assert {e["id"] for e in review_entries} == {review_tagged}
+
+        all_visible_entries = store.get_hypomnema_entries_by_tag(
+            "dream-journal", read_visibility=None, limit=10, **in_scope
+        )
+        assert {e["id"] for e in all_visible_entries} == {
+            tagged_one,
+            tagged_two,
+            review_tagged,
+            audit_tagged,
+        }
 
         including_inactive = store.get_hypomnema_entries_by_tag(
             "dream-journal", active_only=False, limit=10, **in_scope
@@ -882,6 +958,15 @@ def _create_legacy_v5_read_visibility_db(path):
             ) VALUES (
                 'legacy_identity_low_h', 'legacy identity hypomnema', 'identity',
                 0.4, 0.4, 0,
+                '2026-01-01T00:00:00+00:00',
+                '2026-01-01T00:00:00+00:00'
+            );
+
+            INSERT INTO hypomnema_entries (
+                id, content, confidence, salience, foundational,
+                created_at, last_revised_at
+            ) VALUES (
+                'legacy_ordinary_h', 'legacy ordinary continuity', 0.6, 0.5, 0,
                 '2026-01-01T00:00:00+00:00',
                 '2026-01-01T00:00:00+00:00'
             );

@@ -256,7 +256,12 @@ class MnemosRuntime:
     def _stats(self) -> dict[str, Any]:
         self._ensure_init()
         assert self._store is not None
-        return self._store.get_stats(self.scope.agent_id)
+        return self._store.get_stats(
+            self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
+        )
 
     def _meta_key(self, name: str) -> str:
         return f"simple:{self.scope.agent_id}:{self.scope.person_id}:{self.scope.project_scope}:{name}"

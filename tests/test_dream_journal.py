@@ -6,6 +6,7 @@ import pytest
 
 from mnemos.core.belief import Belief, BeliefRevision
 from mnemos.dream_journal import (
+    DREAM_DOMAIN,
     DREAM_JOURNAL_TAG,
     MAX_NARRATIVE_CHARS,
     collect_belief_deltas,
@@ -212,6 +213,36 @@ def test_dream_failure_never_breaks_maintain(tmp_path, monkeypatch):
         assert "Dream journal: skipped (write failed)" in result
         assert runtime.last_dream_note_id is None
         assert runtime.last_dream_narrative is None
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("read_visibility", ["review_only", "audit_only"])
+def test_polish_dream_only_revises_operational_entries(tmp_path, read_visibility):
+    runtime = _runtime(tmp_path)
+    try:
+        runtime._ensure_init()
+        note_id = runtime._store.write_hypomnema_entry(
+            f"{read_visibility} dream",
+            agent_id=runtime.scope.agent_id,
+            person_id=runtime.scope.person_id,
+            project_scope=runtime.scope.project_scope,
+            source="synthesized",
+            domain=DREAM_DOMAIN,
+            tags=[DREAM_JOURNAL_TAG],
+            read_visibility=read_visibility,
+        )
+
+        assert runtime.polish_dream(note_id, "attempted polish") is False
+        entry = runtime._store.get_hypomnema_entry(
+            note_id,
+            agent_id=runtime.scope.agent_id,
+            person_id=runtime.scope.person_id,
+            project_scope=runtime.scope.project_scope,
+            read_visibility=None,
+        )
+        assert entry is not None
+        assert entry["content"] == f"{read_visibility} dream"
     finally:
         runtime.close()
 

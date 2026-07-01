@@ -787,7 +787,10 @@ class EngramStore:
         engram = Engram.from_dict(dict(row))
 
         # Load connections
-        engram.connections = self.get_connections(engram_id)
+        engram.connections = self.get_connections(
+            engram_id,
+            read_visibility=read_visibility,
+        )
 
         # Load versions
         engram.versions = self._get_versions(engram_id)
@@ -850,7 +853,10 @@ class EngramStore:
         engrams = [Engram.from_dict(dict(r)) for r in rows]
         if load_connections:
             for engram in engrams:
-                engram.connections = self.get_connections(engram.id)
+                engram.connections = self.get_connections(
+                    engram.id,
+                    read_visibility=read_visibility,
+                )
                 engram.versions = self._get_versions(engram.id)
         return engrams
 
@@ -939,12 +945,33 @@ class EngramStore:
             ),
         )
 
-    def get_connections(self, engram_id: str) -> list[Connection]:
+    def get_connections(
+        self,
+        engram_id: str,
+        *,
+        read_visibility: str | Sequence[str] | None = None,
+    ) -> list[Connection]:
         """Get all connections FROM an engram."""
         conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT * FROM connections WHERE source_id = ?", (engram_id,)
-        ).fetchall()
+        visibility_values = _normalize_read_visibility_values(read_visibility)
+        params: list[Any] = [engram_id]
+        if visibility_values is None:
+            rows = conn.execute(
+                "SELECT * FROM connections WHERE source_id = ?", params
+            ).fetchall()
+        else:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            params.extend(visibility_values)
+            params.extend(visibility_values)
+            rows = conn.execute(
+                "SELECT c.* FROM connections c "
+                "JOIN engrams source ON source.id = c.source_id "
+                "JOIN engrams target ON target.id = c.target_id "
+                "WHERE c.source_id = ? "
+                f"AND source.read_visibility IN ({placeholders}) "
+                f"AND target.read_visibility IN ({placeholders})",
+                params,
+            ).fetchall()
         return [
             Connection(
                 target_id=r["target_id"],
@@ -2234,13 +2261,14 @@ class EngramStore:
         # Quote-delimited match keeps the tag token-exact inside the JSON
         # array (so "dream" never matches "dream-journal").
         params: list[Any] = [agent_id, person_id, project_scope, f'%"{tag}"%']
+        visibility_values = _normalize_read_visibility_values(read_visibility)
         if active_only:
             sql += " AND active = 1"
-        sql = _apply_read_visibility_filter(
+        sql = _append_read_visibility_filter(
             sql,
             params,
             "read_visibility",
-            read_visibility,
+            visibility_values,
         )
         sql += " ORDER BY last_revised_at DESC LIMIT ?"
         params.append(max(1, limit))
@@ -2716,6 +2744,9 @@ class EngramStore:
         self,
         agent_id: str = "default",
         include_pending_review: bool = False,
+        *,
+        person_id: str | None = None,
+        project_scope: str | None = None,
         read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
     ) -> dict:
         """Get summary statistics for an agent's memory."""
@@ -2743,7 +2774,19 @@ class EngramStore:
             stats[f"engrams_{state}"] = row[0] if row else 0
 
         # Connection count
-        row = conn.execute("SELECT COUNT(*) FROM connections").fetchone()
+        if visibility_values is None:
+            row = conn.execute("SELECT COUNT(*) FROM connections").fetchone()
+        else:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM connections c "
+                "JOIN engrams source ON source.id = c.source_id "
+                "JOIN engrams target ON target.id = c.target_id "
+                "WHERE source.owner_agent_id = ? "
+                f"AND source.read_visibility IN ({placeholders}) "
+                f"AND target.read_visibility IN ({placeholders})",
+                [agent_id, *visibility_values, *visibility_values],
+            ).fetchone()
         stats["connections"] = row[0] if row else 0
 
         # Belief count
@@ -2764,17 +2807,38 @@ class EngramStore:
         stats["beliefs_active"] = row[0] if row else 0
 
         # Version count (reconsolidation events)
-        row = conn.execute("SELECT COUNT(*) FROM versions").fetchone()
+        if visibility_values is None:
+            row = conn.execute("SELECT COUNT(*) FROM versions").fetchone()
+        else:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM versions v "
+                "JOIN engrams e ON e.id = v.engram_id "
+                "WHERE e.owner_agent_id = ? "
+                f"AND e.read_visibility IN ({placeholders})",
+                [agent_id, *visibility_values],
+            ).fetchone()
         stats["reconsolidation_events"] = row[0] if row else 0
 
         # Archive count
-        row = conn.execute("SELECT COUNT(*) FROM archive").fetchone()
+        if visibility_values is None:
+            row = conn.execute("SELECT COUNT(*) FROM archive").fetchone()
+        else:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM engrams "
+                "WHERE owner_agent_id = ? AND state = 'archived' "
+                f"AND read_visibility IN ({placeholders})",
+                [agent_id, *visibility_values],
+            ).fetchone()
         stats["archived"] = row[0] if row else 0
 
         # Hypomnema counts use the default person/project scope for status.
         stats.update(
             self.get_hypomnema_stats(
                 agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
                 read_visibility=read_visibility,
             )
         )
@@ -2783,6 +2847,8 @@ class EngramStore:
         stats.update(
             self.get_functional_stats(
                 agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
                 read_visibility=read_visibility,
             )
         )

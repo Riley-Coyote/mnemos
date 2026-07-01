@@ -1,6 +1,7 @@
 """Tests for turnkey context packets and visual snapshots."""
 
 from mnemos.core.engram import Engram
+from mnemos.core.belief import Belief
 from mnemos.interface.context_packet import build_context_packet, format_context_packet
 from mnemos.interface.visual_snapshot import build_memory_visual_snapshot
 
@@ -30,7 +31,6 @@ def test_context_packet_orders_memory_layers(store):
         project_scope="mnemos",
         confidence=0.88,
         salience=0.75,
-        foundational=True,
     )
 
     packet = build_context_packet(
@@ -396,6 +396,85 @@ def test_operational_stats_exclude_audit_only_memory_counts(store):
     assert 'Mnemos graph<br/>0 engrams' in snapshot
 
 
+def test_context_packet_stats_are_visibility_scoped(store):
+    for visibility in ("operational_context", "review_only", "audit_only"):
+        store.write_functional_memory(
+            f"{visibility} functional stats row",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            read_visibility=visibility,
+        )
+        store.write_hypomnema_entry(
+            f"{visibility} hypomnema stats row",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            confidence=0.2,
+            salience=0.2,
+            read_visibility=visibility,
+        )
+        store.save_engram(
+            Engram(
+                content=f"{visibility} engram stats row",
+                owner_agent_id="vektor",
+                read_visibility=visibility,
+            )
+        )
+        store.save_belief(
+            Belief(
+                content=f"{visibility} belief stats row",
+                agent_id="vektor",
+                read_visibility=visibility,
+            )
+        )
+
+    store.write_functional_memory(
+        "Other scoped operational functional stats row",
+        agent_id="vektor",
+        person_id="other",
+        project_scope="elsewhere",
+        read_visibility="operational_context",
+    )
+    store.write_hypomnema_entry(
+        "Other scoped operational hypomnema stats row",
+        agent_id="vektor",
+        person_id="other",
+        project_scope="elsewhere",
+        confidence=0.2,
+        salience=0.2,
+        read_visibility="operational_context",
+    )
+
+    operational = build_context_packet(
+        store,
+        "stats boundary",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        packet_mode="operational",
+        include_prompt=False,
+    )
+    review = build_context_packet(
+        store,
+        "stats boundary",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        packet_mode="review",
+        include_prompt=False,
+    )
+
+    assert operational["stats"]["functional_active"] == 1
+    assert operational["stats"]["hypomnema_active"] == 1
+    assert operational["stats"]["engrams_active"] == 1
+    assert operational["stats"]["beliefs_active"] == 1
+    assert review["stats"]["functional_active"] == 2
+    assert review["stats"]["hypomnema_active"] == 2
+    assert review["stats"]["engrams_active"] == 2
+    assert review["stats"]["beliefs_active"] == 2
+
+
 def test_operational_context_packet_redacts_candidates_outside_review_queue(store):
     for index in range(6):
         store.write_hypomnema_entry(
@@ -745,6 +824,51 @@ def test_visual_snapshot_returns_mermaid(store):
     assert "```mermaid" in snapshot
     assert "Functional memory" in snapshot
     assert "Hypomnema" in snapshot
+
+
+def test_visual_snapshot_counts_are_operational_scoped(store):
+    store.write_functional_memory(
+        "Visual snapshot operational functional row.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        read_visibility="operational_context",
+    )
+    store.write_functional_memory(
+        "Visual snapshot review-only functional row.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        read_visibility="review_only",
+    )
+    store.write_hypomnema_entry(
+        "Visual snapshot operational hypomnema row.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.2,
+        salience=0.2,
+        read_visibility="operational_context",
+    )
+    store.write_hypomnema_entry(
+        "Visual snapshot review-only hypomnema row.",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        confidence=0.2,
+        salience=0.2,
+        read_visibility="review_only",
+    )
+
+    snapshot = build_memory_visual_snapshot(
+        store,
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    assert "Functional memory<br/>1 active" in snapshot
+    assert "Hypomnema<br/>1 scoped entries" in snapshot
 
 
 def test_visual_snapshot_redacts_review_queue_prose(store):

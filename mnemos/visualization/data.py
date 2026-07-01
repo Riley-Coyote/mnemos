@@ -23,15 +23,17 @@ def extract_all(
     include_non_operational: bool = False,
 ) -> dict[str, Any]:
     """Extract all data needed for the dashboard from the Mnemos database."""
+    _ensure_dashboard_schema(db_path)
     db = sqlite3.connect(db_path)
     db.row_factory = sqlite3.Row
 
-    engrams = _extract_engrams(db, include_non_operational=include_non_operational)
-    connections = _extract_connections(db, {e["id"] for e in engrams})
-    beliefs = _extract_beliefs(db, include_non_operational=include_non_operational)
-    consolidation_log = _extract_consolidation_log(db)
-
-    db.close()
+    try:
+        engrams = _extract_engrams(db, include_non_operational=include_non_operational)
+        connections = _extract_connections(db, {e["id"] for e in engrams})
+        beliefs = _extract_beliefs(db, include_non_operational=include_non_operational)
+        consolidation_log = _extract_consolidation_log(db)
+    finally:
+        db.close()
 
     # Indexing state
     state_path = Path(db_path).parent / f"{agent_id}_indexing_state.json"
@@ -54,6 +56,68 @@ def extract_all(
         "indexing_state": indexing_state,
         "stats": stats,
     }
+
+
+def _ensure_dashboard_schema(db_path: str) -> None:
+    path = Path(db_path).expanduser()
+    if not path.exists():
+        return
+    if not _dashboard_schema_needs_migration(path):
+        return
+    from mnemos.store.sqlite_store import EngramStore
+
+    store = EngramStore(path)
+    store.close()
+
+
+def _dashboard_schema_needs_migration(path: Path) -> bool:
+    db = sqlite3.connect(path)
+    try:
+        if not _table_exists(db, "engrams"):
+            return False
+
+        from mnemos.store.sqlite_store import SCHEMA_VERSION
+
+        schema_version = _read_schema_version(db)
+        if schema_version < SCHEMA_VERSION:
+            return True
+        if schema_version > SCHEMA_VERSION:
+            return False
+
+        if not _column_exists(db, "engrams", "read_visibility"):
+            return True
+        if _table_exists(db, "beliefs") and (
+            not _column_exists(db, "beliefs", "read_visibility")
+            or not _column_exists(db, "beliefs", "confidence_pending_review")
+        ):
+            return True
+        return False
+    finally:
+        db.close()
+
+
+def _read_schema_version(db: sqlite3.Connection) -> int:
+    if not _table_exists(db, "meta"):
+        return 0
+    row = db.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+    if row is None:
+        return 0
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return -1
+
+
+def _table_exists(db: sqlite3.Connection, table: str) -> bool:
+    row = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _column_exists(db: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(row[1] == column for row in db.execute(f"PRAGMA table_info({table})"))
 
 
 def _extract_engrams(

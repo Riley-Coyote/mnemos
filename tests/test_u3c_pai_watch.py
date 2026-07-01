@@ -436,6 +436,60 @@ def test_u3c_review_action_moves_already_pending_belief_to_review_only(tmp_path)
         store.close()
 
 
+def test_u3c_review_action_preserves_audit_only_belief_visibility(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source(
+            "beliefs",
+            "David context is foundational.\n\nReports change family narratives.",
+        )
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        removed_id = next(row for row in first.rows if row.source_anchor == "block:002").target_id
+        store._get_conn().execute(
+            """
+            UPDATE beliefs
+            SET needs_review = 0,
+                confidence_pending_review = 0,
+                read_visibility = 'audit_only'
+            WHERE id = ?
+            """,
+            (removed_id,),
+        )
+        store._get_conn().commit()
+
+        removed = replace(source, source_text="David context is foundational.")
+        preview = preview_pai_watch_update(store, [removed])
+        assert preview.counts == {ACTION_NOOP: 1, ACTION_REVIEW: 1}
+
+        apply_pai_watch_update(store, preview)
+        row = store._get_conn().execute(
+            """
+            SELECT needs_review, confidence_pending_review, read_visibility,
+                   revision_history
+            FROM beliefs
+            WHERE id = ?
+            """,
+            (removed_id,),
+        ).fetchone()
+
+        assert bool(row["needs_review"]) is True
+        assert bool(row["confidence_pending_review"]) is True
+        assert row["read_visibility"] == "audit_only"
+        assert json.loads(row["revision_history"])[-1]["reason"] == (
+            "pai_import_review:u3c-job"
+        )
+
+        apply_pai_watch_update(store, preview_pai_watch_update(store, [removed]))
+        replayed_revisions = store._get_conn().execute(
+            "SELECT revision_history FROM beliefs WHERE id = ?",
+            (removed_id,),
+        ).fetchone()["revision_history"]
+        assert len(json.loads(replayed_revisions)) == 1
+    finally:
+        store.close()
+
+
 def test_u3c_watch_apply_rejects_stale_lifecycle_preview_after_target_drift(tmp_path):
     store = EngramStore(tmp_path / "u3c.db")
     try:

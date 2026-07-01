@@ -1428,6 +1428,55 @@ def test_u3b_imported_belief_re_import_flips_needs_review_back_on_change(tmp_pat
         store.close()
 
 
+def test_u3b_imported_belief_re_import_preserves_audit_only_visibility(tmp_path):
+    store = EngramStore(tmp_path / "u3b.db")
+    try:
+        source = _source("beliefs", "David grinds his own coffee.")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+
+        store._get_conn().execute(
+            """
+            UPDATE beliefs
+            SET needs_review = 0,
+                confidence_pending_review = 0,
+                read_visibility = 'audit_only'
+            WHERE id = ?
+            """,
+            (target_id,),
+        )
+        store._get_conn().commit()
+
+        changed = replace(
+            source,
+            source_text="David grinds his own coffee every morning.",
+        )
+        preview = preview_pai_import(store, [changed])
+        assert preview.counts == {ACTION_UPDATE: 1}
+
+        apply_pai_import(store, preview)
+
+        row = (
+            store._get_conn()
+            .execute(
+                """
+            SELECT content, needs_review, confidence_pending_review, read_visibility
+            FROM beliefs
+            WHERE id = ?
+            """,
+                (target_id,),
+            )
+            .fetchone()
+        )
+        assert row["content"] == "David grinds his own coffee every morning."
+        assert bool(row["needs_review"]) is True
+        assert bool(row["confidence_pending_review"]) is True
+        assert row["read_visibility"] == "audit_only"
+    finally:
+        store.close()
+
+
 def test_u3b_imported_belief_revision_metadata_survives_later_save(tmp_path):
     store = EngramStore(tmp_path / "u3b.db")
     try:

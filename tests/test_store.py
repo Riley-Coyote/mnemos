@@ -514,7 +514,7 @@ class TestEngramStore:
             row["id"] for row in store.list_proposals()
         }
 
-    def test_proposal_upsert_preserves_terminal_status(self, store):
+    def test_proposal_upsert_rejects_rejected_terminal_conflict(self, store):
         rejected = store.write_proposal(
             proposal_id="terminal_proposal",
             source_authority="generated",
@@ -523,27 +523,85 @@ class TestEngramStore:
             transition="reject_candidate",
             read_visibility="review_only",
             status="rejected",
+            reason="original rejection",
+            provenance_ids=["source-a"],
             payload={"content": "Rejected proposal must stay terminal."},
         )
 
-        rewritten = store.write_proposal(
-            proposal_id="terminal_proposal",
-            source_authority="generated",
-            kind="semantic",
-            target_surface="beliefs",
-            transition="rewrite_as_pending",
-            read_visibility="review_only",
-            status="pending_review",
-            payload={"content": "Pending rewrite must not resurrect."},
-        )
+        with pytest.raises(ValueError, match="Terminal proposal rows are immutable"):
+            store.write_proposal(
+                proposal_id="terminal_proposal",
+                source_authority="generated",
+                kind="semantic",
+                target_surface="beliefs",
+                transition="rewrite_as_pending",
+                read_visibility="review_only",
+                status="pending_review",
+                reason="mutating rejection",
+                provenance_ids=["source-b"],
+                payload={"content": "Pending rewrite must not mutate history."},
+            )
 
         assert rejected["status"] == "rejected"
-        assert rewritten["status"] == "rejected"
-        assert rewritten["decided_at"] == rejected["decided_at"]
+        assert store.get_proposal("terminal_proposal") == rejected
         assert store.count_proposals() == 0
         assert "terminal_proposal" not in {
             row["id"] for row in store.list_proposals()
         }
+
+    def test_proposal_upsert_rejects_applied_terminal_conflict(self, store):
+        conn = store._get_conn()
+        conn.execute(
+            """
+            INSERT INTO proposal_ledger (
+                id, agent_id, person_id, project_scope, source_authority, kind,
+                domain, target_surface, transition, blast_radius, read_visibility,
+                status, reason, gate_version, target_id, provenance_ids_json,
+                payload_json, created_at, updated_at, decided_at, applied_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "applied_terminal_proposal",
+                "default",
+                "user",
+                "global",
+                "generated",
+                "semantic",
+                "identity",
+                "beliefs",
+                "apply_candidate",
+                "identity",
+                "audit_only",
+                "applied",
+                "original applied decision",
+                "affmem-v1",
+                "target-belief",
+                '["source-a"]',
+                '{"content":"applied audit record"}',
+                100,
+                110,
+                120,
+                130,
+            ),
+        )
+        conn.commit()
+        original = store.get_proposal("applied_terminal_proposal")
+
+        with pytest.raises(ValueError, match="Terminal proposal rows are immutable"):
+            store.write_proposal(
+                proposal_id="applied_terminal_proposal",
+                source_authority="observed",
+                kind="episodic",
+                target_surface="hypomnema_entries",
+                transition="reuse_applied_id",
+                read_visibility="review_only",
+                status="pending_review",
+                reason="new pending content",
+                provenance_ids=["source-b"],
+                payload={"content": "new content needs a new proposal id"},
+            )
+
+        assert store.get_proposal("applied_terminal_proposal") == original
 
     def test_active_proposal_listing_defaults_to_pending_review_only(self, store):
         pending = store.write_proposal(

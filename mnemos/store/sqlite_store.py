@@ -93,6 +93,7 @@ VALID_PROPOSAL_STATUSES = {
     "superseded",
 }
 RAW_PROPOSAL_STATUSES = {"pending_review", "deferred", "rejected"}
+PROPOSAL_TERMINAL_STATUSES = VALID_PROPOSAL_STATUSES - {"pending_review"}
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -1352,14 +1353,23 @@ class EngramStore:
         if not transition.strip():
             raise ValueError("Proposal transition cannot be empty")
 
-        now = int(datetime.now(timezone.utc).timestamp())
         pid = (proposal_id or "").strip() or _new_id()
+        conn = self._get_conn()
+        existing = conn.execute(
+            "SELECT status FROM proposal_ledger WHERE id = ?",
+            (pid,),
+        ).fetchone()
+        if existing is not None and existing["status"] in PROPOSAL_TERMINAL_STATUSES:
+            raise ValueError(
+                "Terminal proposal rows are immutable; use a new proposal_id"
+            )
+
+        now = int(datetime.now(timezone.utc).timestamp())
         provenance = [str(item).strip() for item in (provenance_ids or []) if str(item).strip()]
         payload_json = _encode_json(payload or {})
         decided_at = now if status in {"deferred", "rejected"} else None
         applied_at = None
-        conn = self._get_conn()
-        conn.execute(
+        cursor = conn.execute(
             f"""
             INSERT INTO proposal_ledger (
                 id, agent_id, person_id, project_scope, source_authority, kind,
@@ -1401,6 +1411,9 @@ class EngramStore:
                     ELSE proposal_ledger.decided_at
                 END,
                 applied_at = proposal_ledger.applied_at
+            WHERE proposal_ledger.status NOT IN (
+                'deferred', 'approved', 'rejected', 'applied', 'superseded'
+            )
             """,
             (
                 pid,
@@ -1426,6 +1439,10 @@ class EngramStore:
                 applied_at,
             ),
         )
+        if cursor.rowcount == 0:
+            raise ValueError(
+                "Terminal proposal rows are immutable; use a new proposal_id"
+            )
         conn.commit()
         proposal = self.get_proposal(pid)
         if proposal is None:

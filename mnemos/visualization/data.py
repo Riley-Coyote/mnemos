@@ -13,15 +13,22 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from mnemos.store.read_visibility import READ_VISIBILITY_OPERATIONAL
 
-def extract_all(db_path: str, agent_id: str = "default") -> dict[str, Any]:
+
+def extract_all(
+    db_path: str,
+    agent_id: str = "default",
+    *,
+    include_non_operational: bool = False,
+) -> dict[str, Any]:
     """Extract all data needed for the dashboard from the Mnemos database."""
     db = sqlite3.connect(db_path)
     db.row_factory = sqlite3.Row
 
-    engrams = _extract_engrams(db)
+    engrams = _extract_engrams(db, include_non_operational=include_non_operational)
     connections = _extract_connections(db, {e["id"] for e in engrams})
-    beliefs = _extract_beliefs(db)
+    beliefs = _extract_beliefs(db, include_non_operational=include_non_operational)
     consolidation_log = _extract_consolidation_log(db)
 
     db.close()
@@ -49,13 +56,24 @@ def extract_all(db_path: str, agent_id: str = "default") -> dict[str, Any]:
     }
 
 
-def _extract_engrams(db: sqlite3.Connection) -> list[dict]:
+def _extract_engrams(
+    db: sqlite3.Connection,
+    *,
+    include_non_operational: bool = False,
+) -> list[dict]:
     engrams = []
-    for r in db.execute(
+    query = (
         "SELECT id, content, impact, kind, tags, strength, stability, accessibility, "
         "source, created_at, last_accessed, access_count, encoding_context, "
-        "reconsolidation_count, state FROM engrams ORDER BY created_at DESC"
-    ).fetchall():
+        "reconsolidation_count, state FROM engrams"
+    )
+    params: list[Any] = []
+    if not include_non_operational:
+        query += " WHERE read_visibility = ?"
+        params.append(READ_VISIBILITY_OPERATIONAL)
+    query += " ORDER BY created_at DESC"
+
+    for r in db.execute(query, params).fetchall():
         source = _parse_json(r["source"], {})
         tags = _parse_json(r["tags"], [])
         enc_ctx = _parse_json(r["encoding_context"], {})
@@ -106,12 +124,25 @@ def _extract_connections(db: sqlite3.Connection, engram_ids: set[str]) -> list[d
     return connections
 
 
-def _extract_beliefs(db: sqlite3.Connection) -> list[dict]:
+def _extract_beliefs(
+    db: sqlite3.Connection,
+    *,
+    include_non_operational: bool = False,
+) -> list[dict]:
     beliefs = []
     try:
+        predicates = ["superseded_by IS NULL"]
+        params: list[Any] = []
+        if not include_non_operational:
+            predicates.append("read_visibility = ?")
+            predicates.append("confidence_pending_review = 0")
+            params.append(READ_VISIBILITY_OPERATIONAL)
         for r in db.execute(
             "SELECT id, content, confidence, domain, created_at, last_revised, "
-            "revision_history FROM beliefs WHERE superseded_by IS NULL ORDER BY confidence DESC"
+            "revision_history FROM beliefs WHERE "
+            + " AND ".join(predicates)
+            + " ORDER BY confidence DESC",
+            params,
         ).fetchall():
             beliefs.append({
                 "id": r["id"],
@@ -240,17 +271,23 @@ def _compute_stats(engrams: list, connections: list, beliefs: list, state: dict)
     acc_buckets = {"high (>0.7)": 0, "medium (0.3-0.7)": 0, "low (<0.3)": 0}
     for e in active:
         a = e["accessibility"]
-        if a > 0.7: acc_buckets["high (>0.7)"] += 1
-        elif a >= 0.3: acc_buckets["medium (0.3-0.7)"] += 1
-        else: acc_buckets["low (<0.3)"] += 1
+        if a > 0.7:
+            acc_buckets["high (>0.7)"] += 1
+        elif a >= 0.3:
+            acc_buckets["medium (0.3-0.7)"] += 1
+        else:
+            acc_buckets["low (<0.3)"] += 1
 
     # Strength distribution
     str_buckets = {"strong (>0.7)": 0, "moderate (0.4-0.7)": 0, "weak (<0.4)": 0}
     for e in active:
         s = e["strength"]
-        if s > 0.7: str_buckets["strong (>0.7)"] += 1
-        elif s >= 0.4: str_buckets["moderate (0.4-0.7)"] += 1
-        else: str_buckets["weak (<0.4)"] += 1
+        if s > 0.7:
+            str_buckets["strong (>0.7)"] += 1
+        elif s >= 0.4:
+            str_buckets["moderate (0.4-0.7)"] += 1
+        else:
+            str_buckets["weak (<0.4)"] += 1
 
     # Avg connections
     conn_per: Counter = Counter()

@@ -708,15 +708,18 @@ def migrate_v7_afferent_u2_5_proposal_contract(conn: sqlite3.Connection) -> None
                 ELSE 'medium'
             END,
             CASE
+                WHEN status IN ('approved', 'applied', 'superseded')
+                THEN 'audit_only'
                 WHEN read_visibility = 'review_only' THEN 'review_only'
                 WHEN read_visibility = 'audit_only' THEN 'audit_only'
                 ELSE 'audit_only'
             END,
             CASE
-                WHEN status IN ('pending_review', 'deferred', 'rejected')
+                WHEN status IN (
+                    'pending_review', 'deferred', 'rejected',
+                    'approved', 'applied', 'superseded'
+                )
                 THEN status
-                WHEN status IN ('approved', 'applied', 'superseded')
-                THEN 'pending_review'
                 ELSE 'pending_review'
             END,
             CASE
@@ -725,7 +728,7 @@ def migrate_v7_afferent_u2_5_proposal_contract(conn: sqlite3.Connection) -> None
                     COALESCE(NULLIF(reason, ''), '') ||
                     CASE WHEN COALESCE(NULLIF(reason, ''), '') = '' THEN '' ELSE ' ' END ||
                     '[u2.5 migrated legacy terminal proposal status=' || status ||
-                    ' back to pending_review; U4 review gate not represented]'
+                    ' as audit/history; U4 review gate not represented]'
                 ELSE COALESCE(reason, '')
             END,
             COALESCE(NULLIF(gate_version, ''), 'affmem-v1'),
@@ -735,13 +738,20 @@ def migrate_v7_afferent_u2_5_proposal_contract(conn: sqlite3.Connection) -> None
             COALESCE(created_at, ?),
             COALESCE(updated_at, ?),
             CASE
-                WHEN status IN ('deferred', 'rejected') THEN decided_at
+                WHEN status IN (
+                    'deferred', 'rejected', 'approved', 'applied', 'superseded'
+                )
+                THEN COALESCE(decided_at, updated_at, created_at, ?)
                 ELSE NULL
             END,
-            NULL
+            CASE
+                WHEN status IN ('approved', 'applied', 'superseded')
+                THEN applied_at
+                ELSE NULL
+            END
         FROM proposal_ledger_v6
         """,
-        (now, now),
+        (now, now, now),
     )
     conn.execute("DROP TABLE proposal_ledger_v6")
     conn.execute(

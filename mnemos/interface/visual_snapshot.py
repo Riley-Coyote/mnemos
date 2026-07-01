@@ -71,14 +71,47 @@ def build_memory_visual_snapshot(
         status="pending_review",
         limit=max_items,
     )
+    review_functional_count = store.get_functional_stats(
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
+    )["functional_needs_confirmation"]
+    review_hypomnema_count = store.get_hypomnema_stats(
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
+    )["hypomnema_promotion_candidates"]
+    review_proposal_count = store.count_proposals(
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        status="pending_review",
+    )
 
-    diagram = _build_mermaid(stats, functional, hypomnema, engrams, review, candidates, proposals)
+    diagram = _build_mermaid(
+        stats,
+        functional,
+        hypomnema,
+        engrams,
+        review_count=review_functional_count
+        + review_hypomnema_count
+        + review_proposal_count,
+    )
     lists = [
         _format_items("Functional Memory", functional, "memory_type"),
         _format_items("Hypomnema", hypomnema, "domain"),
         _format_engrams(engrams),
         _format_beliefs(beliefs),
-        _format_review(review, candidates, proposals),
+        _format_review(
+            review,
+            candidates,
+            proposals,
+            functional_count=review_functional_count,
+            candidate_count=review_hypomnema_count,
+            proposal_count=review_proposal_count,
+        ),
     ]
     scope = f"`{agent_id}` / `{person_id}` / `{project_scope}`"
     if session_id:
@@ -96,15 +129,13 @@ def _build_mermaid(
     functional: list[dict[str, Any]],
     hypomnema: list[dict[str, Any]],
     engrams: list[Any],
-    review: list[dict[str, Any]],
-    candidates: list[dict[str, Any]],
-    proposals: list[dict[str, Any]],
+    *,
+    review_count: int,
 ) -> str:
     fm_count = stats.get("functional_active", len(functional))
     hyp_count = stats.get("hypomnema_active", len(hypomnema))
     engram_count = stats.get("engrams_active", len(engrams))
     belief_count = stats.get("beliefs_active", 0)
-    review_count = len(review) + len(candidates) + len(proposals)
     return f"""```mermaid
 flowchart LR
   Human["Human + conversation"] --> FM["Functional memory<br/>{fm_count} active"]
@@ -157,20 +188,27 @@ def _format_review(
     functional: list[dict[str, Any]],
     candidates: list[dict[str, Any]],
     proposals: list[dict[str, Any]],
+    *,
+    functional_count: int | None = None,
+    candidate_count: int | None = None,
+    proposal_count: int | None = None,
 ) -> str:
-    if not functional and not candidates and not proposals:
+    functional_total = len(functional) if functional_count is None else functional_count
+    candidate_total = len(candidates) if candidate_count is None else candidate_count
+    proposal_total = len(proposals) if proposal_count is None else proposal_count
+    if not functional_total and not candidate_total and not proposal_total:
         return "### Review Queue\n- Clear."
     lines = ["### Review Queue"]
-    if functional:
+    if functional_total:
         lines.append(
-            f"- {len(functional)} functional memory item(s) need confirmation "
+            f"- {functional_total} functional memory item(s) need confirmation "
             "(review-only; prose withheld)."
         )
         for item in functional:
             lines.append(f"  - source_id={item['id']} type={item['memory_type']}")
-    if candidates:
+    if candidate_total:
         lines.append(
-            f"- {len(candidates)} hypomnema promotion candidate(s) need review "
+            f"- {candidate_total} hypomnema promotion candidate(s) need review "
             "(review-only; prose withheld)."
         )
         for item in candidates:
@@ -178,9 +216,9 @@ def _format_review(
                 f"  - source_id={item['id']} domain={item['domain']} "
                 f"source={item['source']}"
             )
-    if proposals:
+    if proposal_total:
         lines.append(
-            f"- {len(proposals)} proposal candidate(s) need review "
+            f"- {proposal_total} proposal candidate(s) need review "
             "(review-only; prose withheld)."
         )
         for item in proposals:

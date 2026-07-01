@@ -1018,3 +1018,23 @@ def test_visual_snapshot_redacts_proposal_review_prose(store):
     assert proposal["id"] in snapshot
     assert audit["id"] not in snapshot
     assert "proposal candidate(s) need review" in snapshot
+
+
+def test_visual_snapshot_review_count_uses_total_pending_proposals(store):
+    proposal_ids = []
+    for index in range(8):
+        proposal = store.write_proposal(
+            source_authority="generated",
+            kind="semantic",
+            target_surface="beliefs",
+            transition=f"visual_snapshot_total_candidate_{index}",
+            read_visibility="review_only",
+            payload={"content": f"Visual snapshot total proposal {index}"},
+        )
+        proposal_ids.append(proposal["id"])
+
+    snapshot = build_memory_visual_snapshot(store, max_items=3)
+
+    assert "Review queue<br/>8 items" in snapshot
+    assert "- 8 proposal candidate(s) need review" in snapshot
+    assert sum(1 for proposal_id in proposal_ids if proposal_id in snapshot) == 3

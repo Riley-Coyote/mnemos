@@ -368,6 +368,37 @@ class TestEngramStore:
             row["id"] for row in store.list_proposals()
         }
 
+    def test_proposal_upsert_preserves_terminal_status(self, store):
+        rejected = store.write_proposal(
+            proposal_id="terminal_proposal",
+            source_authority="generated",
+            kind="semantic",
+            target_surface="beliefs",
+            transition="reject_candidate",
+            read_visibility="review_only",
+            status="rejected",
+            payload={"content": "Rejected proposal must stay terminal."},
+        )
+
+        rewritten = store.write_proposal(
+            proposal_id="terminal_proposal",
+            source_authority="generated",
+            kind="semantic",
+            target_surface="beliefs",
+            transition="rewrite_as_pending",
+            read_visibility="review_only",
+            status="pending_review",
+            payload={"content": "Pending rewrite must not resurrect."},
+        )
+
+        assert rejected["status"] == "rejected"
+        assert rewritten["status"] == "rejected"
+        assert rewritten["decided_at"] == rejected["decided_at"]
+        assert store.count_proposals() == 0
+        assert "terminal_proposal" not in {
+            row["id"] for row in store.list_proposals()
+        }
+
     def test_active_proposal_listing_defaults_to_pending_review_only(self, store):
         pending = store.write_proposal(
             source_authority="generated",
@@ -633,10 +664,15 @@ class TestEngramStore:
             assert terminal_row["source_authority"] == "generated"
             assert terminal_row["kind"] == "semantic"
             assert terminal_row["read_visibility"] == "audit_only"
-            assert terminal_row["status"] == "pending_review"
-            assert terminal_row["decided_at"] is None
-            assert terminal_row["applied_at"] is None
+            assert terminal_row["status"] == "applied"
+            assert terminal_row["decided_at"] == 350
+            assert terminal_row["applied_at"] == 375
             assert "legacy terminal proposal status=applied" in terminal_row["reason"]
+            assert "back to pending_review" not in terminal_row["reason"]
+            assert terminal_row["id"] not in {row["id"] for row in store.list_proposals()}
+            assert terminal_row["id"] in {
+                row["id"] for row in store.list_audit_proposals()
+            }
             assert read_visibility_column["dflt_value"] == "'audit_only'"
             assert "source_authority IN ('user_stated', 'imported', 'observed', 'generated')" in ledger_sql_flat
             assert "kind IN ('episodic', 'semantic', 'procedural', 'prospective')" in ledger_sql_flat

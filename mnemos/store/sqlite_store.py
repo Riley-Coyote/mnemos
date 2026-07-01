@@ -1334,7 +1334,13 @@ class EngramStore:
                     THEN 'review_only'
                     ELSE 'operational_context'
                 END,
-                status = excluded.status,
+                status = CASE
+                    WHEN proposal_ledger.status IN (
+                        'deferred', 'approved', 'rejected', 'applied', 'superseded'
+                    )
+                    THEN proposal_ledger.status
+                    ELSE excluded.status
+                END,
                 reason = excluded.reason,
                 gate_version = excluded.gate_version,
                 target_id = excluded.target_id,
@@ -1342,6 +1348,10 @@ class EngramStore:
                 payload_json = excluded.payload_json,
                 updated_at = excluded.updated_at,
                 decided_at = CASE
+                    WHEN proposal_ledger.status IN (
+                        'deferred', 'approved', 'rejected', 'applied', 'superseded'
+                    )
+                    THEN proposal_ledger.decided_at
                     WHEN excluded.status IN ('deferred', 'rejected')
                     THEN excluded.updated_at
                     ELSE proposal_ledger.decided_at

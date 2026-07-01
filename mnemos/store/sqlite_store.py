@@ -831,10 +831,11 @@ class EngramStore:
             predicates.append("decay_protected = 0")
         if require_consolidation_authorized:
             predicates.append("consolidation_authorized = 1")
-        normalized_visibility = _normalize_read_visibility(read_visibility)
-        if normalized_visibility is not None:
-            predicates.append("read_visibility = ?")
-            params.append(normalized_visibility)
+        visibility_values = _normalize_read_visibility_values(read_visibility)
+        if visibility_values is not None:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            predicates.append(f"read_visibility IN ({placeholders})")
+            params.extend(visibility_values)
         where = " AND ".join(predicates)
         params.append(limit)
 
@@ -903,12 +904,13 @@ class EngramStore:
     ) -> list[Engram]:
         """Search engrams using FTS5 full-text search."""
         conn = self._get_conn()
-        normalized_visibility = _normalize_read_visibility(read_visibility)
+        visibility_values = _normalize_read_visibility_values(read_visibility)
         predicates = ["engrams_fts MATCH ?", "e.state = 'active'"]
         params: list[Any] = [query]
-        if normalized_visibility is not None:
-            predicates.append("e.read_visibility = ?")
-            params.append(normalized_visibility)
+        if visibility_values is not None:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            predicates.append(f"e.read_visibility IN ({placeholders})")
+            params.extend(visibility_values)
         params.append(limit)
         rows = conn.execute(
             "SELECT e.* FROM engrams e "

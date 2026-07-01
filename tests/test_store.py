@@ -548,6 +548,46 @@ class TestEngramStore:
             limit=1,
         )] == [review_hypo]
 
+    def test_engram_reads_accept_multiple_explicit_visibilities(self, store):
+        operational = Engram(
+            content="Operational multi visibility membrane marker",
+            read_visibility="operational_context",
+        )
+        review = Engram(
+            content="Review multi visibility membrane marker",
+            read_visibility="review_only",
+        )
+        audit = Engram(
+            content="Audit multi visibility membrane marker",
+            read_visibility="audit_only",
+        )
+        for engram in (operational, review, audit):
+            store.save_engram(engram)
+
+        active = store.get_active_engrams(
+            agent_id="default",
+            load_connections=False,
+            read_visibility=("operational_context", "review_only"),
+        )
+        hits = store.search_fts(
+            "multi visibility membrane",
+            read_visibility=("operational_context", "review_only"),
+            limit=10,
+        )
+
+        assert {engram.id for engram in active} == {operational.id, review.id}
+        assert {engram.id for engram in hits} == {operational.id, review.id}
+        default_active = store.get_active_engrams(
+            agent_id="default",
+            load_connections=False,
+        )
+        default_hits = store.search_fts(
+            "multi visibility membrane",
+            limit=10,
+        )
+        assert {engram.id for engram in default_active} == {operational.id}
+        assert {engram.id for engram in default_hits} == {operational.id}
+
     def test_legacy_v5_migrates_non_candidate_hypomnema_operational_and_candidates_review_only(self, tmp_path):
         """Existing databases preserve ordinary continuity and quarantine candidates."""
         db_path = tmp_path / "legacy-v5-read-visibility.db"

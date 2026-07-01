@@ -819,7 +819,13 @@ class MnemosRuntime:
                     salience=0.75,
                     read_visibility=READ_VISIBILITY_OPERATIONAL,
                 )
-                return f"Updated continuity note {target}."
+                return self._finish_hypomnema_correction(
+                    target,
+                    hypo.get("related_engram_id") or hypo.get("graduated_to_engram_id"),
+                    correction,
+                    action,
+                    label="continuity note",
+                )
 
             engram = self._store.get_engram(
                 target,
@@ -904,56 +910,12 @@ class MnemosRuntime:
                         read_visibility=READ_VISIBILITY_OPERATIONAL,
                     )
 
-                related_engram_id = match.get("related_engram_id") or match.get("graduated_to_engram_id")
-                if related_engram_id:
-                    related = self._store.get_engram(
-                        related_engram_id,
-                        read_visibility=READ_VISIBILITY_OPERATIONAL,
-                    )
-                    if related is not None:
-                        self._store.archive_engram(related, reason=f"simple_correction_{action}")
-
-                updated_note = self._store.get_hypomnema_entry(
+                return self._finish_hypomnema_correction(
                     note_id,
-                    agent_id=self.scope.agent_id,
-                    person_id=self.scope.person_id,
-                    project_scope=self.scope.project_scope,
-                    read_visibility=None,
-                )
-                if (
-                    updated_note is None
-                    or updated_note.get("read_visibility") != READ_VISIBILITY_OPERATIONAL
-                ):
-                    maintenance = self.maintain(auto=True)
-                    visibility = (
-                        updated_note.get("read_visibility")
-                        if updated_note is not None
-                        else "unavailable"
-                    )
-                    return (
-                        f"Updated closest continuity note {note_id} for review.\n"
-                        f"Visibility: {visibility}\n"
-                        "Maintenance:\n"
-                        f"{_indent(maintenance)}"
-                    )
-
-                replacement = self._encoder.encode(
-                    content=correction.strip(),
-                    impact="Corrected continuity for future interactions.",
-                    kind=_classify_kind(correction),
-                    tags=sorted(set(["continuity", "correction", *_simple_tags(correction)])),
-                    source=SourceType.SESSION,
-                    agent_id=self.scope.agent_id,
-                    override_confidence=0.92,
-                    skip_surprise_detection=True,
-                )
-                self._store.mark_hypomnema_promoted(note_id, replacement.id)
-                maintenance = self.maintain(auto=True)
-                return (
-                    f"Updated closest continuity note {note_id}.\n"
-                    f"Memory ID: {replacement.id}\n"
-                    "Maintenance:\n"
-                    f"{_indent(maintenance)}"
+                    match.get("related_engram_id") or match.get("graduated_to_engram_id"),
+                    correction,
+                    action,
+                    label="closest continuity note",
                 )
 
         if action in {"forget", "archive", "remove", "delete"} and search_text:
@@ -967,6 +929,69 @@ class MnemosRuntime:
             correction.strip(),
             context=f"Correction supplied through mnemos_correct. Prior query: {query.strip()}",
             importance="high",
+        )
+
+    def _finish_hypomnema_correction(
+        self,
+        note_id: str,
+        related_engram_id: str | None,
+        correction: str,
+        action: str,
+        *,
+        label: str,
+    ) -> str:
+        assert self._store is not None
+        assert self._encoder is not None
+
+        if related_engram_id:
+            related = self._store.get_engram(
+                related_engram_id,
+                read_visibility=READ_VISIBILITY_OPERATIONAL,
+            )
+            if related is not None:
+                self._store.archive_engram(related, reason=f"simple_correction_{action}")
+
+        updated_note = self._store.get_hypomnema_entry(
+            note_id,
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+            read_visibility=None,
+        )
+        if (
+            updated_note is None
+            or updated_note.get("read_visibility") != READ_VISIBILITY_OPERATIONAL
+        ):
+            maintenance = self.maintain(auto=True)
+            visibility = (
+                updated_note.get("read_visibility")
+                if updated_note is not None
+                else "unavailable"
+            )
+            return (
+                f"Updated {label} {note_id} for review.\n"
+                f"Visibility: {visibility}\n"
+                "Maintenance:\n"
+                f"{_indent(maintenance)}"
+            )
+
+        replacement = self._encoder.encode(
+            content=correction.strip(),
+            impact="Corrected continuity for future interactions.",
+            kind=_classify_kind(correction),
+            tags=sorted(set(["continuity", "correction", *_simple_tags(correction)])),
+            source=SourceType.SESSION,
+            agent_id=self.scope.agent_id,
+            override_confidence=0.92,
+            skip_surprise_detection=True,
+        )
+        self._store.mark_hypomnema_promoted(note_id, replacement.id)
+        maintenance = self.maintain(auto=True)
+        return (
+            f"Updated {label} {note_id}.\n"
+            f"Memory ID: {replacement.id}\n"
+            "Maintenance:\n"
+            f"{_indent(maintenance)}"
         )
 
     def maintain(self, deep: bool = False, auto: bool = False) -> str:

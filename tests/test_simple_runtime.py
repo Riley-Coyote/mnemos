@@ -589,6 +589,54 @@ def test_query_only_correction_updates_closest_continuity(tmp_path):
     assert "hide security caveats" not in recall
 
 
+def test_direct_note_correction_reports_review_and_archives_stale_memory(tmp_path):
+    runtime = MnemosRuntime(
+        db_path=str(tmp_path / "simple.db"),
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+
+    try:
+        captured = runtime.capture(
+            "Nova should write long release reports and hide security caveats.",
+        )
+        memory_id = re.search(r"Memory ID: (\S+)", captured).group(1)
+        note_id = re.search(r"Continuity note ID: (\S+)", captured).group(1)
+        corrected = runtime.correct(
+            "Nova should write concise release reports and call out security caveats explicitly.",
+            target_id=note_id,
+            action="revise",
+        )
+        assert runtime._store is not None
+        entry = runtime._store.get_hypomnema_entry(
+            note_id,
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility=None,
+        )
+        stale = runtime._store.get_engram(memory_id)
+        recall = runtime.recall("release reports security caveats", max_results=6)
+        engrams = runtime._store.get_active_engrams(agent_id="nova")
+    finally:
+        runtime.close()
+
+    assert "Updated continuity note" in corrected
+    assert "for review" in corrected
+    assert "Visibility: review_only" in corrected
+    assert "Memory ID:" not in corrected
+    assert entry is not None
+    assert "concise release reports" in entry["content"]
+    assert entry["read_visibility"] == "review_only"
+    assert stale is not None
+    assert stale.state == "archived"
+    assert all("release reports" not in engram.content for engram in engrams)
+    assert "concise release reports" not in recall
+    assert "hide security caveats" not in recall
+
+
 def test_query_only_supersede_reclassifies_identity_replacement_for_review(tmp_path):
     runtime = MnemosRuntime(
         db_path=str(tmp_path / "simple.db"),

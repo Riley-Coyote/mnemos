@@ -75,6 +75,62 @@ class TestEngramStore:
         assert loaded.content == "Python prefers explicit over implicit"
         assert loaded.read_visibility == "operational_context"
 
+    def test_engram_upsert_preserves_stricter_read_visibility(self, store):
+        review = Engram(
+            id="engram-review-visibility",
+            content="Review-only original marker",
+            read_visibility="review_only",
+        )
+        audit = Engram(
+            id="engram-audit-visibility",
+            content="Audit-only original marker",
+            read_visibility="audit_only",
+        )
+        operational = Engram(
+            id="engram-operational-visibility",
+            content="Operational original marker",
+        )
+        for engram in (review, audit, operational):
+            store.save_engram(engram)
+
+        store.save_engram(
+            Engram(
+                id=review.id,
+                content="Review-only rewritten through default save marker",
+            )
+        )
+        store.save_engram(
+            Engram(
+                id=audit.id,
+                content="Audit-only rewritten through default save marker",
+            )
+        )
+        store.save_engram(
+            Engram(
+                id=operational.id,
+                content="Operational strengthened to audit-only marker",
+                read_visibility="audit_only",
+            )
+        )
+
+        loaded_review = store.get_engram(review.id)
+        loaded_audit = store.get_engram(audit.id)
+        loaded_operational = store.get_engram(operational.id)
+        hidden_hits = store.search_fts("rewritten strengthened marker", limit=10)
+
+        assert loaded_review is not None
+        assert loaded_review.read_visibility == "review_only"
+        assert loaded_review.content == "Review-only rewritten through default save marker"
+        assert loaded_audit is not None
+        assert loaded_audit.read_visibility == "audit_only"
+        assert loaded_audit.content == "Audit-only rewritten through default save marker"
+        assert loaded_operational is not None
+        assert loaded_operational.read_visibility == "audit_only"
+        assert store.get_engram(review.id, read_visibility="operational_context") is None
+        assert store.get_engram(audit.id, read_visibility="operational_context") is None
+        assert store.get_engram(operational.id, read_visibility="operational_context") is None
+        assert hidden_hits == []
+
     def test_fts_search(self, store):
         """Save engram, search by content via FTS5."""
         engram = Engram(content="Riley likes dark mode in all editors")

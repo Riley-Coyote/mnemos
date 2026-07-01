@@ -488,6 +488,12 @@ def _lexical_score(query: str, text: str) -> float:
 
 _READ_VISIBILITY_DEFAULT = object()
 
+_READ_VISIBILITY_ORDER = {
+    READ_VISIBILITY_OPERATIONAL: 0,
+    READ_VISIBILITY_REVIEW: 1,
+    READ_VISIBILITY_AUDIT: 2,
+}
+
 
 def _normalize_read_visibility(
     value: str | None,
@@ -559,6 +565,30 @@ def _apply_read_visibility_filter(
     return _append_read_visibility_filter(sql, params, column, normalized)
 
 
+def _stricter_read_visibility(
+    existing_visibility: str,
+    incoming_visibility: str,
+) -> str:
+    return max(
+        (existing_visibility, incoming_visibility),
+        key=lambda value: _READ_VISIBILITY_ORDER.get(value, 0),
+    )
+
+
+def _strictest_read_visibility_sql(table_name: str) -> str:
+    return (
+        "CASE "
+        f"WHEN {table_name}.read_visibility = '{READ_VISIBILITY_AUDIT}' "
+        f"OR excluded.read_visibility = '{READ_VISIBILITY_AUDIT}' "
+        f"THEN '{READ_VISIBILITY_AUDIT}' "
+        f"WHEN {table_name}.read_visibility = '{READ_VISIBILITY_REVIEW}' "
+        f"OR excluded.read_visibility = '{READ_VISIBILITY_REVIEW}' "
+        f"THEN '{READ_VISIBILITY_REVIEW}' "
+        f"ELSE '{READ_VISIBILITY_OPERATIONAL}' "
+        "END"
+    )
+
+
 def _clean_choice(value: str, allowed: set[str], label: str) -> str:
     cleaned = (value or "").strip()
     if cleaned not in allowed:
@@ -583,15 +613,7 @@ def _stricter_hypomnema_visibility(
     existing_visibility: str,
     classified_visibility: str,
 ) -> str:
-    order = {
-        READ_VISIBILITY_OPERATIONAL: 0,
-        READ_VISIBILITY_REVIEW: 1,
-        READ_VISIBILITY_AUDIT: 2,
-    }
-    return max(
-        (existing_visibility, classified_visibility),
-        key=lambda value: order.get(value, 0),
-    )
+    return _stricter_read_visibility(existing_visibility, classified_visibility)
 
 
 def _classify_hypomnema_domain_from_text(text: str, *, fallback: str = "situational") -> str:
@@ -736,7 +758,15 @@ class EngramStore:
         safe_data = {k: v for k, v in data.items() if k in _ENGRAM_COLUMNS}
         columns = ", ".join(safe_data.keys())
         placeholders = ", ".join("?" for _ in safe_data)
-        updates = ", ".join(f"{k}=excluded.{k}" for k in safe_data if k != "id")
+        updates = ", ".join(
+            (
+                f"{k}={_strictest_read_visibility_sql('engrams')}"
+                if k == "read_visibility"
+                else f"{k}=excluded.{k}"
+            )
+            for k in safe_data
+            if k != "id"
+        )
 
         conn.execute(
             f"INSERT INTO engrams ({columns}) VALUES ({placeholders}) "
@@ -1310,7 +1340,7 @@ class EngramStore:
         applied_at = None
         conn = self._get_conn()
         conn.execute(
-            """
+            f"""
             INSERT INTO proposal_ledger (
                 id, agent_id, person_id, project_scope, source_authority, kind,
                 domain, target_surface, transition, blast_radius, read_visibility,
@@ -1327,15 +1357,7 @@ class EngramStore:
                 target_surface = excluded.target_surface,
                 transition = excluded.transition,
                 blast_radius = excluded.blast_radius,
-                read_visibility = CASE
-                    WHEN proposal_ledger.read_visibility = 'audit_only'
-                         OR excluded.read_visibility = 'audit_only'
-                    THEN 'audit_only'
-                    WHEN proposal_ledger.read_visibility = 'review_only'
-                         OR excluded.read_visibility = 'review_only'
-                    THEN 'review_only'
-                    ELSE 'operational_context'
-                END,
+                read_visibility = {_strictest_read_visibility_sql("proposal_ledger")},
                 status = CASE
                     WHEN proposal_ledger.status IN (
                         'deferred', 'approved', 'rejected', 'applied', 'superseded'

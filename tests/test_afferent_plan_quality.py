@@ -20,6 +20,7 @@ def _assert_no_operative_r9_or_r10(text: str) -> None:
             or "do not exist" in window
             or "does not use" in window
             or "no operative" in window
+            or "rejects operative" in window
         ), window
 
 
@@ -43,10 +44,68 @@ def test_afferent_main_plan_keeps_rfc_rule_ledger_and_modulation_boundary():
         assert f"| {rule} |" in text
         assert unit in text
 
+    assert "U7" not in text
     _assert_no_operative_r9_or_r10(text)
     assert "U5 alone must not actively shape live salience/retrieval" in text
     assert "active influence waits for U6 so both RFC-R7 bounds exist" in text
     assert "docs/plans/afferent-membrane-plan-quality-gate.md" in text
+
+
+def test_afferent_main_plan_has_state_surface_and_regression_ledgers():
+    text = _read(MAIN_PLAN)
+
+    for heading in ("## Rule Ledger", "## State Ledger", "## Surface Ledger", "## Regression Ledger"):
+        assert heading in text
+
+    required_rule_ledger = [
+        "RFC rule | Implementation unit | Code chokepoints | Positive tests | Negative tests",
+        "mnemos/store/sqlite_store.py::write_proposal",
+        "mnemos/store/read_visibility.py::classify_hypomnema_read_visibility",
+        "tests/test_store.py::TestEngramStore::test_proposal_upsert_rejects_rejected_terminal_conflict",
+        "tests/test_context_packet.py::test_operational_proposal_count_uses_total_not_limited_reference_sample",
+        "planned `tests/test_dynamic_modulation.py::test_modulation_decays_to_baseline_within_ttl`",
+        "planned `tests/test_experience_tick.py::test_high_salience_single_tick_cannot_mint_semantic_truth`",
+    ]
+    for phrase in required_rule_ledger:
+        assert phrase in text
+
+    required_state_ledger = [
+        "Allowed states / visibility",
+        "Defaults and omitted fields",
+        "Upsert behavior",
+        "Terminal states",
+        "Allowed transitions",
+        "Rejected transitions",
+        "duplicate write against terminal row is rejected without mutating reason, provenance, payload, status, or visibility",
+        "fresh high-confidence/foundational write cannot become operational",
+    ]
+    for phrase in required_state_ledger:
+        assert phrase in text
+
+    required_surface_ledger = [
+        "Context packet JSON and prompt",
+        "MCP context/review/audit",
+        "CLI inspect/direct-ID",
+        "Retrieval/search/prompt builder",
+        "Store aggregate/count/status",
+        "Visual/dashboard",
+        "Migration/backfill",
+        "Tag/dream/substrate producers",
+        "review/audit rows satisfying operational bootstrap thresholds",
+    ]
+    for phrase in required_surface_ledger:
+        assert phrase in text
+
+    required_regression_ledger = [
+        "Each invariant below requires at least one positive and one negative test",
+        "Fresh high-confidence/foundational omitted-visibility hypomnema is review-only",
+        "Duplicate/upsert cannot promote or downgrade quarantined hypomnema",
+        "Terminal ProposalLedger rows are immutable",
+        "Proposal sample limits do not alter total queue count",
+        "Aggregates/bootstrap counts ignore quarantined rows",
+    ]
+    for phrase in required_regression_ledger:
+        assert phrase in text
 
 
 def test_u2_5_repair_plan_records_quality_gate_and_deliberate_deviation():
@@ -67,14 +126,18 @@ def test_plan_quality_gate_blocks_error_amplification_patterns():
 
     required_phrases = [
         "The RFC remains the source of truth",
+        "Rule Ledger",
+        "State Ledger",
+        "Surface Ledger",
+        "Regression Ledger",
         "RFC-R1 through RFC-R8",
         "RFC-R9 and RFC-R10 do not exist",
-        "Chokepoint inventory",
-        "Default and upsert semantics",
-        "Terminal-state policy",
+        "RFC rule -> implementation unit -> chokepoint -> positive test -> negative test",
+        "allowed states, defaults, omitted-field behavior, upsert behavior, terminal states, allowed transitions, and rejected transitions",
         "terminal conflicts are immutable",
-        "Operational, review, and audit surface matrix",
+        "operational, review, audit, admin, migration, direct-ID, aggregate/count, visual, MCP, and context paths",
         "Migration and legacy-row policy",
+        "Every invariant needs at least one positive test and one negative test",
         "DynamicModulation bound check",
         "TTL/decay/magnitude",
         "valence floor/deadband/fail-toward-width",

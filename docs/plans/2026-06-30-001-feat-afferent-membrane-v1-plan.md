@@ -13,7 +13,7 @@ Implement the Afferent Membrane v1 over Mnemos as a staged architecture: operati
 
 This plan is derived from `/Users/davidef/phenom-felt-review/RFC-v1-proposal-ledger.md`. The RFC is the safety ledger and source of truth; this plan cannot override, renumber, or weaken it.
 
-Current branch state: U1 packet mode split and U2 proposal-ledger/read-visibility schema are implemented on `codex/afferent-membrane-v1-ledger`. U3-U7 remain planned follow-up stages.
+Current branch state: U1 packet mode split and U2 proposal-ledger/read-visibility schema are implemented on `codex/afferent-membrane-v1-ledger`. U3-U6 remain planned follow-up stages.
 
 ---
 
@@ -51,7 +51,7 @@ The RFC rule IDs below are canonical. Plan-local rule IDs must not replace or re
 
 There is no RFC-R9 or RFC-R10. ExperienceTick is a build-sequence feeder constrained by RFC-R3/R7/R8, not a separate permission rule. Live safety boundaries remain hard scope boundaries, not RFC rule IDs.
 
-**Acceptance test mapping:** RFC tests 1-11 map to implementation units below. RFC test 5 is covered first by U1, then generalized by U2/U7; tests 7-11 are U5/U6; tests 1-4 are U3/U4.
+**Acceptance test mapping:** RFC tests 1-11 map to implementation units below. RFC test 5 is covered first by U1, then generalized by U2/U6; tests 7-11 are U5/U6; tests 1-4 are U3/U4.
 
 ---
 
@@ -60,6 +60,79 @@ There is no RFC-R9 or RFC-R10. ExperienceTick is a build-sequence feeder constra
 Before any remaining Afferent unit starts implementation, run the gate in `docs/plans/afferent-membrane-plan-quality-gate.md`. The plan is not executable if the RFC ledger, chokepoint inventory, default/upsert semantics, terminal-state policy, operational/review/audit surface matrix, migration policy, DynamicModulation bound check, or no-mistakes error budget is incomplete.
 
 This gate exists because U2.5 proved that a plan can be directionally correct while still omitting enough load-bearing invariants for no-mistakes to discover many preventable safety-ledger errors. Future units should treat no-mistakes as validation, not as the first place these invariants are found.
+
+---
+
+## Rule Ledger
+
+This ledger is the plan's executable trace from RFC rule to unit, chokepoint, and tests. A future Afferent plan is not acceptable if it has orphan RFC rules, invented rule IDs, or "covered by X" claims that do not name a file/function/test surface.
+
+| RFC rule | Implementation unit | Code chokepoints | Positive tests | Negative tests |
+|---|---|---|---|---|
+| RFC-R1 | U3 | `mnemos/mcp_server.py::mnemos_remember`, `mnemos/mcp_server.py::mnemos_ingest`, `mnemos/simple_runtime.py::MnemosRuntime.capture`, `mnemos/encoding/encoder.py::Encoder.encode`, `mnemos/importer/pai.py::apply_pai_import`, `mnemos/importer/pai.py::_write_target_row` | planned `tests/test_encoding.py::TestEncoder::test_ingest_stamps_harness_authority`; planned `tests/test_u3b_pai_importer.py::test_pai_import_preserves_imported_authority` | planned `tests/test_mcp_surface.py::test_mnemos_remember_rejects_forged_source_authority`; planned `tests/test_simple_runtime.py::test_generated_capture_cannot_self_upgrade_authority` |
+| RFC-R2 | U3, with U2 pre-authority guardrails | `mnemos/store/read_visibility.py::classify_hypomnema_read_visibility`, `mnemos/store/sqlite_store.py::write_hypomnema_entry`, `mnemos/simple_runtime.py::MnemosRuntime.capture`, `mnemos/identity_diff.py`, `mnemos/mcp_server.py::mnemos_hypomnema_write` | `tests/test_hypomnema.py::TestHypomnemaStore::test_identity_or_foundational_hypomnema_defaults_review_only_even_below_promotion_threshold`; `tests/test_simple_runtime.py::test_capture_foundational_identity_note_is_review_only_and_not_promoted` | `tests/test_hypomnema.py::TestHypomnemaStore::test_explicit_operational_visibility_for_review_worthy_hypomnema_is_rejected`; `tests/test_mcp_surface.py::test_mcp_hypomnema_write_default_review_only_is_quarantined_from_search_candidates_promote_and_visible_in_review` |
+| RFC-R3 | U2 | `mnemos/store/sqlite_store.py::write_proposal`, `mnemos/store/sqlite_store.py::list_proposals`, `mnemos/store/sqlite_store.py::get_proposal`, `mnemos/store/migrations.py`, `mnemos/mcp_server.py::mnemos_review_queue`, `mnemos/mcp_server.py::mnemos_proposal_audit` | `tests/test_store.py::TestEngramStore::test_proposal_ledger_accepts_rfc_authority_and_kind_axes`; `tests/test_mcp_surface.py::test_review_queue_includes_review_only_proposal_rows_with_provenance` | `tests/test_store.py::TestEngramStore::test_proposal_upsert_rejects_rejected_terminal_conflict`; `tests/test_store.py::TestEngramStore::test_proposal_upsert_rejects_applied_terminal_conflict`; `tests/test_mcp_surface.py::test_review_queue_excludes_terminal_review_only_proposals` |
+| RFC-R4 | U4 | planned `mnemos/review/gates.py::classify_review_requirement`, planned `mnemos/review/gates.py::apply_review_decision`, `mnemos/store/sqlite_store.py::write_proposal`, planned `mnemos/store/sqlite_store.py::apply_proposal_decision`, planned `mnemos/mcp_server.py::mnemos_proposal_decide` | planned `tests/test_afferent_review_gates.py::test_non_foundational_hypomnema_auto_applies_after_authority_checks`; planned `tests/test_afferent_review_gates.py::test_user_stated_foundational_identity_applies_only_after_david_review` | planned `tests/test_afferent_review_gates.py::test_foundational_revision_without_review_is_blocked`; `tests/test_store.py::TestEngramStore::test_proposal_ledger_defaults_to_audit_only_and_rejects_pending_operational_visibility` |
+| RFC-R5 | U2 | `mnemos/store/sqlite_store.py::get_active_engrams`, `mnemos/store/sqlite_store.py::search_fts`, `mnemos/store/sqlite_store.py::count_engrams`, `mnemos/retrieval/reactive.py::ReactiveRetriever.retrieve`, `mnemos/interface/context_packet.py::build_context_packet`, `mnemos/simple_runtime.py::MnemosRuntime.context`, `mnemos/dream_journal.py` tag readers | `tests/test_retrieval.py::TestReactiveRetriever::test_retrieval_excludes_review_only_fts_and_propagation`; `tests/test_context_packet.py::test_operational_context_packet_quarantines_review_prose`; `tests/test_store.py::TestEngramStore::test_count_engrams_defaults_to_operational_visibility` | `tests/test_retrieval.py::TestReactiveRetriever::test_review_and_audit_rows_do_not_seed_operational_retrieval`; `tests/test_visualization_data.py::test_dashboard_extracts_operational_visibility_by_default`; `tests/test_store.py::TestEngramStore::test_get_hypomnema_entries_by_tag_filters_read_visibility_by_default` |
+| RFC-R6 | U1, extended by U2 | `mnemos/interface/context_packet.py::build_context_packet`, `mnemos/interface/context_packet.py::format_context_packet`, `mnemos/mcp_server.py::mnemos_context_packet`, `mnemos/mcp_server.py::mnemos_review_queue`, `mnemos/interface/visual_snapshot.py` | `tests/test_context_packet.py::test_review_context_packet_can_include_review_only_rows`; `tests/test_mcp_surface.py::test_review_queue_opts_into_review_candidate_prose` | `tests/test_context_packet.py::test_formatter_operational_override_redacts_existing_review_packet`; `tests/test_context_packet.py::test_formatter_review_override_rejects_redacted_operational_packet`; `tests/test_context_packet.py::test_operational_proposal_count_uses_total_not_limited_reference_sample` |
+| RFC-R7 | U5/U6 | planned `mnemos/affect/dynamic_modulation.py::store_modulation`, planned `mnemos/affect/dynamic_modulation.py::bounded_retrieval_adjustment`, planned `mnemos/affect/valence_floor.py::apply_valence_floor`, `mnemos/retrieval/reactive.py::ReactiveRetriever.retrieve`, planned `mnemos/store/sqlite_store.py::write_dynamic_modulation` | planned `tests/test_dynamic_modulation.py::test_modulation_decays_to_baseline_within_ttl`; planned `tests/test_dynamic_modulation_valence_floor.py::test_opposite_valence_same_topic_items_remain_above_floor` | planned `tests/test_dynamic_modulation.py::test_dynamic_modulation_cannot_be_cited_as_evidence`; planned `tests/test_dynamic_modulation.py::test_dynamic_modulation_cannot_promote_by_recurrence`; planned `tests/test_dynamic_modulation_valence_floor.py::test_deadband_items_fail_toward_width` |
+| RFC-R8 | U5/U6 | planned `mnemos/affect/experience_tick.py::ExperienceTick`, planned `mnemos/affect/experience_tick.py::route_tick`, planned `mnemos/affect/dynamic_modulation.py::store_modulation`, `mnemos/store/sqlite_store.py::write_proposal`, `mnemos/retrieval/reactive.py::ReactiveRetriever.retrieve` | planned `tests/test_experience_tick.py::test_salience_fast_track_emits_bounded_modulation_or_proposal` | planned `tests/test_experience_tick.py::test_high_salience_single_tick_cannot_mint_semantic_truth`; planned `tests/test_dynamic_modulation.py::test_modulation_cannot_write_belief_or_identity` |
+
+---
+
+## State Ledger
+
+This ledger names durable object states, defaults, omitted-field behavior, upsert behavior, terminal states, allowed transitions, and rejected transitions. It exists so code cannot hide lifecycle policy in a helper or migration.
+
+| Durable object | Allowed states / visibility | Defaults and omitted fields | Upsert behavior | Terminal states | Allowed transitions | Rejected transitions |
+|---|---|---|---|---|---|---|
+| Engram | `state=active/archived/forgotten`; `read_visibility=operational_context/review_only/audit_only` | New ordinary engrams default operational unless a trusted writer explicitly sets stricter visibility | Generic `save_engram` preserves or strengthens existing `read_visibility`; it must not downgrade review/audit rows to operational | `archived`, `forgotten` for ordinary reads | active operational reads; explicit reviewed promotion path may lower visibility only when implemented as a reviewed gate | default dataclass save cannot operationalize an existing review/audit engram; review/audit targets cannot be forgotten/inspected by ordinary MCP direct-ID tools |
+| Belief | `needs_review`, `confidence_pending_review`, `read_visibility=operational_context/review_only/audit_only` | Imported/review-risk beliefs default review-only or audit-only; reviewed beliefs become operational through the reviewed path | Generic `save_belief` preserves stricter visibility and pending-review flags when effective visibility is non-operational | explicit reviewed promotion clears pending flags; audit-only stays quarantined unless a reviewed path changes it | `save_reviewed_belief` can intentionally promote after review; review flows may move operational rows to review-only | generic upsert cannot clear pending flags on review/audit rows; PAI re-import cannot downgrade audit-only to review-only |
+| Functional memory | normal, `needs_confirmation`, `read_visibility=operational_context/review_only/audit_only` | Confirmation-needed rows are review-only unless explicitly confirmed; audit-only rows require audit/admin reads | Conflict/update keeps stricter visibility and confirmation state until confirmed | confirmed operational row; archived/removed confirmation records if later implemented | explicit confirmation path may move review-only confirmation into operational memory | ordinary packets, status counts, visual snapshots, and review queues cannot expose audit-only confirmation prose or IDs |
+| Hypomnema entry | `active/superseded/promoted`; `read_visibility=operational_context/review_only/audit_only`; `domain`, `foundational`, `revision_count`, `promoted_to_engram_id` | Schema default is `operational_context`, but omitted live writes classify at write time. Promotion candidates and identity/foundational rows become `review_only` unless a trusted gate overrides | Omitted-visibility upsert preserves ordinary operational rows only while still ordinary; crossing promotion/high-blast thresholds strengthens to review-only. Explicit upsert cannot downgrade review/audit rows | `superseded`; promoted rows remain non-operational unless reviewed/promotion path permits | ordinary low-risk write -> operational; promotion/high-blast write -> review-only; supersede preserves or strengthens visibility | fresh high-confidence/foundational write cannot become operational; duplicate upsert cannot promote by omission; explicit operational visibility for review-worthy row is rejected |
+| ProposalLedger row | `status=pending_review/deferred/rejected/applied`; `read_visibility=review_only/audit_only` for non-terminal proposal review, never operational for pending review | Omitted proposal `read_visibility` defaults to `audit_only`; public axes serialize as RFC `source_authority=user_stated/imported/observed/generated` and `kind=episodic/semantic/procedural/prospective` | Non-terminal upserts preserve or strengthen visibility; duplicate write against terminal row is rejected without mutating reason, provenance, payload, status, or visibility | `deferred`, `rejected`, `applied` are immutable terminal audit records | create pending review/audit proposal; reviewed U4 path may later apply/reject/defer; explicit audit/admin listing can inspect audit-only rows | pending review cannot be operational; raw write cannot forge applied/approved; terminal proposal ID reuse cannot mutate existing audit record |
+| DynamicModulation | stored/inert/conservative/expired; `evidentiary=false`; `recurrence_promote=false`; no identity authority | U5 may store only bounded inert/conservative modulation with TTL/decay/magnitude; active influence omitted until U6 supplies distribution-shape bound | Recurrence may create a new event/proposal, not extend itself into durable truth or evidence | expired modulation remains audit trail, not active evidence | U5 store -> decay/expire; U6 may allow bounded influence only with TTL/decay/magnitude plus valence floor/deadband/fail-toward-width | modulation cannot cite itself as evidence, promote by recurrence, write belief/identity state, or actively shape retrieval before both bounds |
+| ExperienceTick | transient afferent signal; output is proposal or modulation, not direct identity write | High-salience generated/felt/reflection/dream signals default to proposal/modulation routes | Duplicate ticks may accumulate audit/proposal evidence but cannot bypass review gates | none as durable memory; durable effects terminate in ProposalLedger/DynamicModulation states | low-blast tick -> bounded proposal/modulation; high-blast tick -> proposal only | tick cannot directly write durable identity/foundational memory or semantic truth |
+
+---
+
+## Surface Ledger
+
+This ledger defines what each read surface can see. Review/audit visibility is a read contract, not a display preference; surfaces that aggregate, count, bootstrap, or produce future content are part of the read contract.
+
+| Surface | Operational visibility | Review visibility | Audit/admin visibility | Must never see or influence |
+|---|---|---|---|---|
+| Context packet JSON and prompt (`build_context_packet`, `format_context_packet`) | operational rows plus review counts/source IDs only where explicitly allowed | review-only candidate prose with labels and provenance | audit-only rows absent from ordinary operational/review packets | audit-only counts/IDs/prose; review-only prose in operational prompt; sample limits changing total queue count |
+| MCP context/review/audit (`mnemos_context_packet`, `mnemos_review_queue`, `mnemos_proposal_audit`) | context packet defaults operational | `mnemos_review_queue` shows only active `pending_review` review-only candidates/proposals | `mnemos_proposal_audit` lists audit-only proposals deliberately | terminal proposals in active review queue; audit-only rows in ordinary review; model-settable operational override |
+| CLI inspect/direct-ID (`mnemos inspect`, `mnemos_inspect`, direct store getters) | default inspect/direct-ID reads operational rows only | explicit `--review` or review tool may show review-only rows | explicit `--audit`/`--admin` may show audit-only rows | default direct-ID reads leaking quarantined prose; direct mutate/forget/promote on review/audit rows |
+| Retrieval/search/prompt builder (`ReactiveRetriever.retrieve`, `search_fts`, `get_active_engrams`, `PromptBuilder.build`) | operational rows only before FTS, embedding, graph propagation, ranking, and formatting | explicit review/admin call sites only | explicit admin/audit inspection only, never producer input | review/audit rows seeding retrieval, graph bridge, prompt builder, or producer generation |
+| Runtime producers (`MnemosRuntime.context`, `recall`, `capture`, `correct`, `maintain`) | ordinary low-risk operational state | review-only writes reported as review state and withheld from ordinary context/recall/maintain promotion | audit-only not surfaced except explicit audit/admin path | capture creating operational engram for review-only hypomnema; maintain promoting fresh review-only foundational rows; correction silently quarantining while stale operational prose keeps surfacing |
+| Store aggregate/count/status (`count_engrams`, stats helpers, status tools) | counts default operational and scoped | review counts only where review mode explicitly asks | audit counts only through explicit audit/admin | review/audit rows satisfying operational bootstrap thresholds, queue totals, health/status, or dashboard counts |
+| Visual/dashboard (`visual_snapshot`, `mnemos ui`, `mnemos/visualization/data.py`) | dashboard and visual snapshot default operational; review counts may be redacted as cues only | explicit review-visible summaries may show review rows where supported | explicit dashboard audit/admin mode required for non-operational rows | generated HTML or Mermaid leaking review/audit prose/IDs by default; sample count truncation changing totals |
+| Migration/backfill (`mnemos/store/migrations.py`) | ordinary non-candidate legacy rows remain operational | promotion/high-blast legacy rows become review-only | explicit audit rows remain audit-only; proposal defaults normalize to audit-only | blanket review-only defaults hiding ordinary continuity; ambiguous review/audit rows downgraded to operational |
+| Tag/dream/substrate producers (`dream_journal`, substrate handlers, connection discovery) | tag lookup, dream display, substrate ticks, and connection discovery use operational rows by default | explicit review analysis only | audit/admin only | review/audit rows satisfying operational connection counts, dream/tag lookup, substrate modulation, or shared pool reads |
+
+---
+
+## Regression Ledger
+
+Each invariant below requires at least one positive and one negative test. Positive tests prove the allowed path still works; negative tests prove the forbidden laundering path stays closed.
+
+| Invariant | Positive test | Negative test |
+|---|---|---|
+| RFC ledger is complete and uses no invented rule IDs | `tests/test_afferent_plan_quality.py::test_afferent_main_plan_keeps_rfc_rule_ledger_and_modulation_boundary` | same test rejects operative RFC-R9/R10 claims |
+| Plan contains executable State, Surface, and Regression ledgers | `tests/test_afferent_plan_quality.py::test_afferent_main_plan_has_state_surface_and_regression_ledgers` | same test fails when state/upsert/terminal/surface/regression phrases disappear |
+| Fresh high-confidence/foundational omitted-visibility hypomnema is review-only | `tests/test_hypomnema.py::TestHypomnemaStore::test_live_write_classifies_stable_hypomnema_as_review_only`; `tests/test_simple_runtime.py::test_capture_foundational_identity_note_is_review_only_and_not_promoted` | `tests/test_hypomnema.py::TestHypomnemaStore::test_explicit_operational_visibility_for_review_worthy_hypomnema_is_rejected` |
+| Duplicate/upsert cannot promote or downgrade quarantined hypomnema | `tests/test_hypomnema.py::TestHypomnemaStore::test_hypomnema_upsert_preserves_existing_visibility_when_omitted` | `tests/test_hypomnema.py::TestHypomnemaStore::test_explicit_upsert_cannot_downgrade_existing_review_or_audit_visibility` |
+| Terminal ProposalLedger rows are immutable | `tests/test_store.py::TestEngramStore::test_proposal_upsert_rejects_rejected_terminal_conflict` | `tests/test_store.py::TestEngramStore::test_proposal_upsert_rejects_applied_terminal_conflict` |
+| Proposal sample limits do not alter total queue count | `tests/test_context_packet.py::test_operational_proposal_count_uses_total_not_limited_reference_sample` | `tests/test_context_packet.py::test_visual_snapshot_review_count_uses_total_pending_proposals` |
+| Audit-only rows are explicit audit/admin only | `tests/test_store.py::TestEngramStore::test_list_proposals_audit_visibility_requires_explicit_audit_read`; `tests/test_mcp_surface.py::test_audit_admin_proposal_review_lists_audit_only_rows_without_operational_exposure` | `tests/test_context_packet.py::test_audit_only_proposal_and_hypomnema_are_absent_from_review_packet` |
+| Operational retrieval filters before ranking/propagation | `tests/test_retrieval.py::TestReactiveRetriever::test_retrieval_excludes_review_only_fts_and_propagation` | `tests/test_retrieval.py::TestReactiveRetriever::test_review_and_audit_rows_do_not_seed_operational_retrieval` |
+| CLI/direct-ID default is not admin | `tests/test_cli_simple.py::test_inspect_defaults_to_operational_visibility` | `tests/test_mcp_surface.py::test_inspect_and_forget_reject_non_operational_engrams` |
+| Aggregates/bootstrap counts ignore quarantined rows | `tests/test_store.py::TestEngramStore::test_count_engrams_defaults_to_operational_visibility` | `tests/test_encoding.py::TestEncoder::test_quarantined_engrams_do_not_end_bootstrap_policy` |
+| Migration preserves ordinary continuity while quarantining candidates | `tests/test_store.py::TestEngramStore::test_legacy_v5_migrates_non_candidate_hypomnema_operational_and_candidates_review_only` | `tests/test_store.py::TestEngramStore::test_legacy_v6_hypomnema_review_default_is_repaired` |
+| Dashboard/visual surfaces default operational | `tests/test_visualization_data.py::test_dashboard_extracts_operational_visibility_by_default` | `tests/test_visualization_data.py::test_dashboard_audit_mode_extracts_non_operational_rows` proves non-operational rows require explicit audit mode |
+| DynamicModulation remains inert/conservative before both bounds | planned `tests/test_dynamic_modulation.py::test_modulation_decays_to_baseline_within_ttl` | planned `tests/test_dynamic_modulation.py::test_active_influence_requires_persistence_and_distribution_bounds`; planned `tests/test_dynamic_modulation_valence_floor.py::test_uncalibrated_floor_fails_toward_width` |
 
 ---
 
@@ -399,7 +472,7 @@ The core invariant is one-way: afferent signals can modulate live retrieval and 
 **Verification:**
 - Valence-floor tests prove modulation cannot collapse retrieval width in one window.
 
-### U7. ExperienceTick Afferent Layer
+### U6b. ExperienceTick Afferent Layer
 
 **Goal:** Add ExperienceTick as the afferent collection layer that emits proposal ledger rows and dynamic modulations but never writes durable identity directly.
 
@@ -441,17 +514,17 @@ The core invariant is one-way: afferent signals can modulate live retrieval and 
 
 | RFC test | Primary unit | Concrete proof surface |
 |---|---|---|
-| 1. `chain_write` may create non-foundational hypomnema automatically | U4 | `tests/test_afferent_review_gates.py` |
-| 2. `chain_write` may not revise foundational hypomnema without review | U4 | `tests/test_afferent_review_gates.py` |
-| 3. Identity/relationship/user-model semantic promotion pending unless sufficient authority/evidence | U3, U4 | `tests/test_afferent_review_gates.py`, `tests/test_u3b_pai_importer.py` |
-| 4. Forged topical/user-stated declarations are caught | U3 | `tests/test_encoding.py`, `tests/test_simple_runtime.py` |
-| 5. Review/pending prose absent from operational packets | U1, U2 | `tests/test_context_packet.py`, `tests/test_mcp_surface.py` |
-| 6. `read_visibility` enforced pre-rank | U2 | `tests/test_retrieval.py`, `tests/test_context_packet.py` |
-| 7. DynamicModulation cannot be cited as evidence | U5 | `tests/test_dynamic_modulation.py` |
-| 8. DynamicModulation cannot promote by recurrence | U5 | `tests/test_dynamic_modulation.py` |
-| 9. DynamicModulation decays to baseline within TTL | U5 | `tests/test_dynamic_modulation.py` |
-| 10. Opposite-valence/deadband items protected from suppression | U6 | `tests/test_dynamic_modulation_valence_floor.py` |
-| 11. DynamicModulation cannot effect belief/identity write | U5, U7 | `tests/test_dynamic_modulation.py`, `tests/test_experience_tick.py` |
+| 1. `chain_write` may create non-foundational hypomnema automatically | U4 | planned `tests/test_afferent_review_gates.py::test_non_foundational_hypomnema_auto_applies_after_authority_checks` |
+| 2. `chain_write` may not revise foundational hypomnema without review | U4 | planned `tests/test_afferent_review_gates.py::test_foundational_revision_without_review_is_blocked` |
+| 3. Identity/relationship/user-model semantic promotion pending unless sufficient authority/evidence | U3, U4 | planned `tests/test_afferent_review_gates.py::test_user_model_semantic_promotion_requires_review_or_evidence_diversity`; planned `tests/test_u3b_pai_importer.py::test_pai_import_preserves_imported_authority` |
+| 4. Forged topical/user-stated declarations are caught | U3 | planned `tests/test_encoding.py::TestEncoder::test_ingest_stamps_harness_authority`; planned `tests/test_simple_runtime.py::test_generated_capture_cannot_self_upgrade_authority` |
+| 5. Review/pending prose absent from operational packets | U1, U2 | `tests/test_context_packet.py::test_operational_context_packet_quarantines_review_prose`; `tests/test_mcp_surface.py::test_mcp_hypomnema_write_default_review_only_is_quarantined_from_search_candidates_promote_and_visible_in_review` |
+| 6. `read_visibility` enforced pre-rank | U2 | `tests/test_retrieval.py::TestReactiveRetriever::test_retrieval_excludes_review_only_fts_and_propagation`; `tests/test_context_packet.py::test_audit_only_proposal_and_hypomnema_are_absent_from_review_packet` |
+| 7. DynamicModulation cannot be cited as evidence | U5 | planned `tests/test_dynamic_modulation.py::test_dynamic_modulation_cannot_be_cited_as_evidence` |
+| 8. DynamicModulation cannot promote by recurrence | U5 | planned `tests/test_dynamic_modulation.py::test_dynamic_modulation_cannot_promote_by_recurrence` |
+| 9. DynamicModulation decays to baseline within TTL | U5 | planned `tests/test_dynamic_modulation.py::test_modulation_decays_to_baseline_within_ttl` |
+| 10. Opposite-valence/deadband items protected from suppression | U6 | planned `tests/test_dynamic_modulation_valence_floor.py::test_opposite_valence_same_topic_items_remain_above_floor`; planned `tests/test_dynamic_modulation_valence_floor.py::test_deadband_items_fail_toward_width` |
+| 11. DynamicModulation cannot effect belief/identity write | U5/U6 | planned `tests/test_dynamic_modulation.py::test_modulation_cannot_write_belief_or_identity`; planned `tests/test_experience_tick.py::test_high_salience_single_tick_cannot_mint_semantic_truth` |
 
 ---
 

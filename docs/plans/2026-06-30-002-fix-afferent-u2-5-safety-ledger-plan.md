@@ -57,6 +57,14 @@ There is no RFC-R9. ExperienceTick remains a build-sequence feeder constrained b
 
 ---
 
+## Plan-Quality Gate
+
+The reusable prevention gate for later Afferent work lives at `docs/plans/afferent-membrane-plan-quality-gate.md`. Future Afferent plans must pass it before implementation, especially before U3 authority stamping and U5/U6 DynamicModulation work.
+
+U2.5 exposed the failure mode this gate guards against: no-mistakes should validate an already rigorous safety ledger, not discover missing ledger invariants one repair round at a time. Any future no-mistakes `ask-user` policy decision must be folded back into the plan or the gate before another implementation round continues.
+
+---
+
 ## Scope Boundaries
 
 - Do not implement U3 authority stamping.

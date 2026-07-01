@@ -55,6 +55,14 @@ There is no RFC-R9 or RFC-R10. ExperienceTick is a build-sequence feeder constra
 
 ---
 
+## Plan-Quality Gate
+
+Before any remaining Afferent unit starts implementation, run the gate in `docs/plans/afferent-membrane-plan-quality-gate.md`. The plan is not executable if the RFC ledger, chokepoint inventory, default/upsert semantics, terminal-state policy, operational/review/audit surface matrix, migration policy, DynamicModulation bound check, or no-mistakes error budget is incomplete.
+
+This gate exists because U2.5 proved that a plan can be directionally correct while still omitting enough load-bearing invariants for no-mistakes to discover many preventable safety-ledger errors. Future units should treat no-mistakes as validation, not as the first place these invariants are found.
+
+---
+
 ## Scope Boundaries
 
 - Do not touch live user memory data; all tests use temporary SQLite databases.

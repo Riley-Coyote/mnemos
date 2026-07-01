@@ -37,6 +37,11 @@ import sys
 from pathlib import Path
 
 from .config.loader import load_config
+from .store.read_visibility import (
+    READ_VISIBILITY_AUDIT,
+    READ_VISIBILITY_OPERATIONAL,
+    READ_VISIBILITY_REVIEW,
+)
 
 
 def _resolve_default_mode() -> str:
@@ -100,6 +105,29 @@ def main(argv: list[str] | None = None) -> int:
     # ── inspect ──
     p_inspect = sub.add_parser("inspect", help="Inspect a specific engram")
     p_inspect.add_argument("engram_id", help="The engram ID to inspect")
+    inspect_visibility = p_inspect.add_mutually_exclusive_group()
+    inspect_visibility.add_argument(
+        "--review",
+        action="store_const",
+        const=READ_VISIBILITY_REVIEW,
+        dest="read_visibility",
+        help="Inspect an explicitly review-only engram",
+    )
+    inspect_visibility.add_argument(
+        "--audit",
+        action="store_const",
+        const=READ_VISIBILITY_AUDIT,
+        dest="read_visibility",
+        help="Inspect an explicitly audit-only engram",
+    )
+    inspect_visibility.add_argument(
+        "--admin",
+        action="store_const",
+        const=None,
+        dest="read_visibility",
+        help="Inspect an engram regardless of read visibility",
+    )
+    p_inspect.set_defaults(read_visibility=READ_VISIBILITY_OPERATIONAL)
 
     # ── stats ──
     sub.add_parser("stats", help="Show memory statistics")
@@ -595,7 +623,10 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 def _cmd_inspect(args: argparse.Namespace) -> int:
     """Inspect a specific engram."""
     store = _get_store(args)
-    engram = store.get_engram(args.engram_id)
+    engram = store.get_engram(
+        args.engram_id,
+        read_visibility=getattr(args, "read_visibility", READ_VISIBILITY_OPERATIONAL),
+    )
     if engram is None:
         print(f"Engram not found: {args.engram_id}", file=sys.stderr)
         store.close()

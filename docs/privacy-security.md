@@ -87,9 +87,10 @@ Schema v6 separates ordinary operating context from review and audit material:
   hypomnema promotion candidates, and other review-shaped material out of
   operating context while leaving it visible to explicit review tools.
 - Live hypomnema writes classify stable or foundational promotion candidates
-  as `review_only` by default. The bare `hypomnema_entries` SQL default is also
-  `review_only`, so unclassified continuity rows surface to operator review
-  instead of disappearing into audit-only quarantine.
+  as `review_only` at write time. The bare `hypomnema_entries` SQL default is
+  `operational_context` for legacy compatibility; callers that omit
+  `read_visibility` still go through the store's write-time classifier before
+  durable rows can enter ordinary context.
 - `read_visibility="audit_only"` is excluded from ordinary operational reads
   and ordinary review queues; callers must opt in deliberately.
 - `proposal_ledger` records durable-affecting candidates with authority,

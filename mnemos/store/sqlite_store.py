@@ -915,24 +915,35 @@ class EngramStore:
         conn.execute("DELETE FROM versions WHERE engram_id = ?", (engram_id,))
         conn.commit()
 
-    def count_engrams(self, agent_id: str | None = "default", state: str = "active") -> int:
+    def count_engrams(
+        self,
+        agent_id: str | None = "default",
+        state: str = "active",
+        read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
+    ) -> int:
         """Count engrams for an agent in a given state.
 
         Args:
             agent_id: Agent to count for. If None, counts all agents.
             state: Engram state to filter by.
+            read_visibility: Defaults to operational-context rows. Pass None
+                only for explicit audit/admin counts across all visibility tiers.
         """
         conn = self._get_conn()
+        visibility_values = _normalize_read_visibility_values(read_visibility)
         if agent_id is None:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM engrams WHERE state = ?",
-                (state,),
-            ).fetchone()
+            params: list[Any] = [state]
+            query = "SELECT COUNT(*) FROM engrams WHERE state = ?"
         else:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM engrams WHERE owner_agent_id = ? AND state = ?",
-                (agent_id, state),
-            ).fetchone()
+            params = [agent_id, state]
+            query = "SELECT COUNT(*) FROM engrams WHERE owner_agent_id = ? AND state = ?"
+        query = _append_read_visibility_filter(
+            query,
+            params,
+            "read_visibility",
+            visibility_values,
+        )
+        row = conn.execute(query, params).fetchone()
         return row[0] if row else 0
 
     # ── Full-Text Search ──

@@ -1049,6 +1049,32 @@ class TestEngramStore:
         count = store.count_engrams()
         assert count >= 2
 
+    def test_count_engrams_defaults_to_operational_visibility(self, store):
+        store.save_engram(
+            Engram(
+                content="Operational countable memory",
+                read_visibility="operational_context",
+            )
+        )
+        store.save_engram(
+            Engram(
+                content="Review-only hidden memory",
+                read_visibility="review_only",
+            )
+        )
+        store.save_engram(
+            Engram(
+                content="Audit-only hidden memory",
+                read_visibility="audit_only",
+            )
+        )
+
+        assert store.count_engrams() == 1
+        assert store.count_engrams(read_visibility=None) == 3
+        assert store.count_engrams(
+            read_visibility=("operational_context", "review_only")
+        ) == 2
+
     def test_read_only_get_recent_opens_lazy_connection(self, tmp_db):
         writable = EngramStore(tmp_db)
         engram = Engram(content="Read-only recent memory")

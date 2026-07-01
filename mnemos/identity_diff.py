@@ -943,7 +943,7 @@ def run_diff_command(args: argparse.Namespace) -> int:
             if note_id:
                 print(
                     f"Continuity note written ({note_id}): divergences will "
-                    "surface at next mnemos_context."
+                    "stay in explicit identity review/acceptance surfaces."
                 )
             if report.divergences:
                 print(

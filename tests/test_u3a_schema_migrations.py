@@ -11,6 +11,7 @@ from mnemos.core.emotional_state import EmotionalState
 from mnemos.core.belief import Belief
 from mnemos.core.engram import Connection, Engram
 from mnemos.core.identity import AgentIdentity
+from mnemos.core.types import ConnectionRelation
 from mnemos.substrate.events import EventType, SubstrateEvent
 from mnemos.store.migrations import (
     U3A_PHASE0_DECAY_FINDING,
@@ -1225,6 +1226,80 @@ def test_connection_discovery_excludes_review_only_embedding_candidates(tmp_path
         assert stats["embedding_candidates"] == 1
         assert operational_candidate.id in targets
         assert review_candidate.id not in targets
+    finally:
+        store.close()
+
+
+def test_connection_discovery_counts_only_operational_existing_edges(tmp_path):
+    class StubEmbeddingIndex:
+        available = True
+
+        def __init__(self, hits):
+            self.hits = hits
+
+        def search(self, _query, k=10, exclude_ids=None):
+            excluded = exclude_ids or set()
+            return [(eid, score) for eid, score in self.hits if eid not in excluded][:k]
+
+    store = EngramStore(tmp_path / "connections-hidden-edge-count.db")
+    source = _old_engram(
+        "operational source with hidden existing edges",
+        owner_agent_id="oliver",
+        accessibility=0.99,
+    )
+    review_target = _old_engram(
+        "review only existing target should not satisfy connectivity",
+        owner_agent_id="oliver",
+        read_visibility="review_only",
+        accessibility=0.4,
+    )
+    audit_target = _old_engram(
+        "audit only existing target should not satisfy connectivity",
+        owner_agent_id="oliver",
+        read_visibility="audit_only",
+        accessibility=0.4,
+    )
+    operational_target = _old_engram(
+        "operational target should be discovered despite hidden edges",
+        owner_agent_id="oliver",
+        accessibility=0.3,
+    )
+    for engram in (source, review_target, audit_target, operational_target):
+        store.save_engram(engram)
+    for target in (review_target, audit_target):
+        store.save_connection(
+            source.id,
+            Connection(
+                target_id=target.id,
+                relation=ConnectionRelation.SUPPORTS,
+                strength=0.7,
+            ),
+        )
+
+    try:
+        stats = run_connection_discovery(
+            store,
+            embedding_index=StubEmbeddingIndex([(operational_target.id, 0.95)]),
+            config={
+                "max_engrams_per_discovery_pass": 1,
+                "max_connections_per_engram": 2,
+            },
+            llm_client=None,
+            agent_id="oliver",
+        )
+        operational_targets = {
+            connection.target_id
+            for connection in store.get_connections(
+                source.id,
+                read_visibility="operational_context",
+            )
+        }
+        all_targets = {connection.target_id for connection in store.get_connections(source.id)}
+
+        assert stats["engrams_processed"] == 1
+        assert stats["embedding_candidates"] == 1
+        assert operational_targets == {operational_target.id}
+        assert all_targets == {review_target.id, audit_target.id, operational_target.id}
     finally:
         store.close()
 

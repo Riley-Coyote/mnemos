@@ -882,12 +882,21 @@ class TestEngramStore:
             assert read_visibility_column["dflt_value"] == "'operational_context'"
             assert conn.execute(
                 "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_ordinary'"
-            ).fetchone()[0] == "operational_context"
+            ).fetchone()[0] == "review_only"
+            assert conn.execute(
+                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_defaulted_ordinary'"
+            ).fetchone()[0] == "review_only"
             assert conn.execute(
                 "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_candidate'"
             ).fetchone()[0] == "review_only"
             assert conn.execute(
                 "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_identity'"
+            ).fetchone()[0] == "review_only"
+            assert conn.execute(
+                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_low_confidence_review'"
+            ).fetchone()[0] == "review_only"
+            assert conn.execute(
+                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_inbox_review'"
             ).fetchone()[0] == "review_only"
             assert conn.execute(
                 "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_audit'"
@@ -1350,6 +1359,14 @@ def _create_legacy_v6_hypomnema_review_default_db(path):
             );
             INSERT INTO hypomnema_entries (
                 id, content, confidence, salience, foundational,
+                created_at, last_revised_at
+            ) VALUES (
+                'v6_defaulted_ordinary', 'v6 ordinary hypomnema from stale default',
+                0.4, 0.4, 0, '2026-01-01T00:00:00+00:00',
+                '2026-01-01T00:00:00+00:00'
+            );
+            INSERT INTO hypomnema_entries (
+                id, content, confidence, salience, foundational,
                 read_visibility, created_at, last_revised_at
             ) VALUES (
                 'v6_candidate', 'v6 candidate hypomnema', 0.95, 0.9, 1,
@@ -1362,6 +1379,25 @@ def _create_legacy_v6_hypomnema_review_default_db(path):
             ) VALUES (
                 'v6_identity', 'v6 low-salience identity hypomnema', 'identity',
                 0.4, 0.4, 0, 'review_only',
+                '2026-01-01T00:00:00+00:00',
+                '2026-01-01T00:00:00+00:00'
+            );
+            INSERT INTO hypomnema_entries (
+                id, content, confidence, salience, foundational,
+                read_visibility, created_at, last_revised_at
+            ) VALUES (
+                'v6_low_confidence_review',
+                'v6 explicit low-confidence review hypomnema',
+                0.2, 0.2, 0, 'review_only',
+                '2026-01-01T00:00:00+00:00',
+                '2026-01-01T00:00:00+00:00'
+            );
+            INSERT INTO hypomnema_entries (
+                id, content, tags_json, confidence, salience, foundational,
+                read_visibility, created_at, last_revised_at
+            ) VALUES (
+                'v6_inbox_review', 'v6 inbox review hypomnema', '["inbox"]',
+                0.3, 0.3, 0, 'review_only',
                 '2026-01-01T00:00:00+00:00',
                 '2026-01-01T00:00:00+00:00'
             );

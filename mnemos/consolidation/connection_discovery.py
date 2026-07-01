@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..core.types import ConnectionRelation, DEFAULT_AGENT_ID
 from ..encoding.llm_classifier import classify_connections
+from ..store.read_visibility import READ_VISIBILITY_OPERATIONAL
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -73,7 +74,10 @@ def run_connection_discovery(
     # ── Phase A: Discover new connections for underconnected engrams ──
     underconnected = []
     for engram in all_active:
-        existing = store.get_connections(engram.id)
+        existing = store.get_connections(
+            engram.id,
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
+        )
         if len(existing) < max_per_engram:
             underconnected.append((engram, existing))
 
@@ -102,7 +106,11 @@ def run_connection_discovery(
         if words:
             query = " OR ".join(f'"{w}"' for w in words[:8])
             try:
-                fts_results = store.search_fts(query, limit=10)
+                fts_results = store.search_fts(
+                    query,
+                    limit=10,
+                    read_visibility=READ_VISIBILITY_OPERATIONAL,
+                )
                 for match in fts_results:
                     if (
                         match.id != engram.id
@@ -196,7 +204,10 @@ def _reclassify_old_connections(
         if reclassified_count >= batch_size:
             break
 
-        connections = store.get_connections(engram.id)
+        connections = store.get_connections(
+            engram.id,
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
+        )
         raw_connections = [
             c for c in connections
             if c.relation in _RECLASSIFIABLE_RELATIONS

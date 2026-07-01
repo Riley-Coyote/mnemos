@@ -433,6 +433,8 @@ def test_cli_identity_diff_smoke(seeded_store, soul_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "ALIGNMENTS" in out and "DIVERGENCES" in out and "EMERGENCES" in out
+    assert "explicit identity review/acceptance surfaces" in out
+    assert "surface at next mnemos_context" not in out
 
     rc = main(
         ["identity", "diff", "--json", *_cli_args(soul_path, seeded_store.db_path)]

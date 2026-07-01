@@ -545,7 +545,7 @@ def migrate_v6_afferent_membrane_v1(conn: sqlite3.Connection) -> None:
 
 
 def _repair_stale_v6_hypomnema_visibility(conn: sqlite3.Connection) -> None:
-    """Repair v6 databases created before hypomnema defaulted operational."""
+    """Repair stale v6 hypomnema schema defaults without promoting review rows."""
     if not _has_table(conn, "hypomnema_entries") or not _has_column(
         conn, "hypomnema_entries", "read_visibility"
     ):
@@ -582,17 +582,6 @@ def _repair_stale_v6_hypomnema_visibility(conn: sqlite3.Connection) -> None:
     finally:
         conn.execute("PRAGMA writable_schema=OFF")
 
-    conn.execute(
-        """
-        UPDATE hypomnema_entries
-        SET read_visibility = 'operational_context'
-        WHERE read_visibility = 'review_only'
-          AND active = 1
-          AND graduated_to_engram_id IS NULL
-          AND NOT (""" + HYPO_REVIEW_CANDIDATE_SQL + """)
-        """,
-        (HYPO_PROMOTION_MIN_CONFIDENCE, HYPO_PROMOTION_MIN_SALIENCE),
-    )
     conn.execute(
         """
         UPDATE hypomnema_entries

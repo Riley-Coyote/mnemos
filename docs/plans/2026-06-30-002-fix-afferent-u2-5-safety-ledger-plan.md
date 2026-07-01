@@ -85,7 +85,7 @@ There is no RFC-R9. ExperienceTick remains a build-sequence feeder constrained b
 
 - `mnemos/store/read_visibility.py` centralizes read-visibility constants and the current hypomnema promotion-candidate heuristic.
 - `mnemos/store/sqlite_store.py` owns ProposalLedger, hypomnema writes/revisions/promotions, search filters, tag lookup, and stats.
-- `mnemos/store/migrations.py` owns schema v6 and legacy read-visibility migration behavior.
+- `mnemos/store/migrations.py` owns schema v6/v7 and legacy read-visibility migration behavior.
 - `mnemos/interface/context_packet.py` owns operational versus review packet behavior and must remain the primary proof that review prose does not leak into operational packets.
 - `mnemos/retrieval/reactive.py` already filters engrams before FTS/embedding seed use and graph propagation; keep this as the pre-rank filtering pattern.
 - `mnemos/simple_runtime.py` is the main live bypass: capture encodes an operational engram, writes operational hypomnema, then marks it promoted.

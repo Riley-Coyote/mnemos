@@ -76,7 +76,8 @@ override.
 
 ## Afferent Membrane Read Visibility
 
-Schema v6 separates ordinary operating context from review and audit material:
+Schema v6/v7 separates ordinary operating context from review and audit
+material:
 
 - `read_visibility="operational_context"` is the default surface for retrieval,
   context packets, simple runtime context/recall, prompt building, visual
@@ -92,7 +93,8 @@ Schema v6 separates ordinary operating context from review and audit material:
   `read_visibility` still go through the store's write-time classifier before
   durable rows can enter ordinary context.
 - `read_visibility="audit_only"` is excluded from ordinary operational reads
-  and ordinary review queues; callers must opt in deliberately.
+  and ordinary review queues; ProposalLedger audit rows require the explicit
+  `mnemos_proposal_audit` admin/audit surface.
 - `proposal_ledger` records durable-affecting candidates with authority,
   target surface, transition, blast radius, status, gate version, provenance,
   and payload fields so candidate state is inspectable without becoming

@@ -37,9 +37,9 @@ mnemos_context with include_graph=true, when the client can display visual artif
 
 For explicit admin workflows, start advanced mode with `mnemos serve --mode
 advanced`; that surface still exposes direct functional-memory, hypomnema,
-belief, inspect, and consolidate tools. Scope-taking advanced tools inherit the
-server's configured agent/person/project scope when their scope args are left
-at defaults.
+belief, inspect, proposal-audit, and consolidate tools. Scope-taking advanced
+tools inherit the server's configured agent/person/project scope when their
+scope args are left at defaults.
 
 Simple mode handles functional memory, hypomnema, and long-term promotion
 internally so the agent does not have to choose storage layers during normal

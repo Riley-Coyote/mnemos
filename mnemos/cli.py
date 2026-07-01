@@ -4,7 +4,10 @@ CLI entry point for Mnemos.
 Commands:
     mnemos init                  Initialize a new memory database
     mnemos serve                 Start MCP server (stdio mode)
-    mnemos inspect ID            Inspect a specific engram
+    mnemos inspect ID            Inspect a specific operational engram
+    mnemos inspect --review ID   Inspect a review-only engram explicitly
+    mnemos inspect --audit ID    Inspect an audit-only engram explicitly
+    mnemos inspect --admin ID    Inspect an engram regardless of read visibility
     mnemos stats                 Show memory statistics
     mnemos snapshot              Print an inline Mermaid memory snapshot
     mnemos search QUERY          Search memories

@@ -13,10 +13,10 @@ Usage:
     python -m mnemos.visualization.app --build-only                 # just generate HTML
     python -m mnemos.visualization.app --agent-id vektor            # different agent
     python -m mnemos.visualization.app --port 9000                  # custom port
+    python -m mnemos.visualization.app --audit                      # include review/audit rows
 
-Or via CLI:
-    mnemos ui
-    mnemos ui --agent-id vektor --port 9000
+Inline visual snapshots are available through `mnemos snapshot`; the dashboard
+runs as this module.
 """
 
 from __future__ import annotations

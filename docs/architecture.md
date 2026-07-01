@@ -49,14 +49,15 @@ The fundamental unit of memory. Each engram has:
   `voice_exemplar_eligible`, and consolidation/substrate mutation paths require
   `consolidation_authorized` so imported identity material is not silently
   rewritten by background maintenance.
-- **Afferent Membrane controls** (schema v6): producer-fed rows carry
+- **Afferent Membrane controls** (schema v6/v7): producer-fed rows carry
   `read_visibility` (`operational_context`, `review_only`, or `audit_only`).
   Operational retrieval, packets, consolidation, substrate producers, and
   modulators read only `operational_context` rows by default; review APIs opt
   in explicitly. Stable or foundational live hypomnema writes classify to
-  `review_only` by default, and the bare hypomnema schema default is also
-  `review_only` so unclassified rows remain review-visible before any
-  operational use. Proposed durable transitions are tracked in
+  `review_only` by default, while the bare hypomnema SQL default stays
+  `operational_context` for legacy compatibility; omitted-visibility callers
+  still pass through the write-time classifier before ordinary use. Proposed
+  durable transitions are tracked in
   `proposal_ledger` with authority, target surface, transition, blast radius,
   visibility, status, reason, gate version, provenance, and payload fields.
 - **PAI coordinate guard**: before imported text becomes retrievable rows, the
@@ -118,7 +119,9 @@ Context packets have two modes:
 
 `proposal_ledger` holds candidate durable transitions separately from the
 operational packet so generated or review-shaped material can be audited before
-it becomes operating context.
+it becomes operating context. Audit-only proposal rows require the explicit
+`mnemos_proposal_audit` admin/audit surface and do not appear in ordinary
+operational or review packets.
 
 ## Layer 2: Substrate (Inner Life / Consolidation)
 

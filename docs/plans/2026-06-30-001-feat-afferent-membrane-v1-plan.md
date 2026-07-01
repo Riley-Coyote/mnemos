@@ -80,7 +80,7 @@ There is no RFC-R9 or RFC-R10. ExperienceTick is a build-sequence feeder constra
 - `mnemos/mcp_server.py`: advanced MCP surfaces `mnemos_context_packet` and `mnemos_review_queue`; review queue is the intentional prose-bearing surface.
 - `mnemos/interface/prompt_builder.py`: older memory prompt builder that emits operational-context rows only through store/retriever defaults.
 - `mnemos/simple_runtime.py`: simple mode has `context`, `recall`, `maintain`, `_promote_candidates`, dream journal display, and retrieval producers that now observe operational read visibility.
-- `mnemos/store/sqlite_store.py`: schema v6, proposal ledger, search, stats, belief filtering, functional memory, hypomnema, and candidate methods live here.
+- `mnemos/store/sqlite_store.py`: schema v6/v7, proposal ledger, search, stats, belief filtering, functional memory, hypomnema, and candidate methods live here.
 - `mnemos/store/migrations.py`: schema migration registry and PAI hardening precedent.
 - `mnemos/importer/pai.py`: strongest current ingest/preview/apply precedent for authority and review workflow.
 - `mnemos/importer/review_gate.py`: diff-review gate precedent for dangerous durable changes.

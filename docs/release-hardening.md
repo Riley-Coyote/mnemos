@@ -23,8 +23,8 @@ Use this checklist before publishing Mnemos or opening a release PR.
   includes confirmation or promotion-candidate prose in operational prompt or
   JSON output.
 - Explicit review surfaces (`packet_mode="review"`, `mnemos_review_queue`) can
-  show review-only prose, while audit-only rows remain excluded unless a caller
-  deliberately asks for that visibility.
+  show review-only prose, while audit-only proposal rows remain excluded except
+  through the deliberate `mnemos_proposal_audit` admin/audit surface.
 - Inline visual snapshots show review counts/source IDs only, not pending prose.
 
 ## Install UX
@@ -69,12 +69,12 @@ Use this checklist before publishing Mnemos or opening a release PR.
   or reflect over non-operational rows: a review-only or audit-only ID returns
   a "not found" response instead of leaking review prose into operating
   surfaces.
-- Schema v6 migration defaults existing pending beliefs, confirmation-needed
+- Schema v6/v7 migrations default existing pending beliefs, confirmation-needed
   functional memories, and hypomnema promotion candidates to review visibility.
 - Fresh live hypomnema writes that already meet stable/foundational promotion
-  criteria default to `review_only`; raw hypomnema schema defaults also remain
-  `review_only` so unclassified continuity rows are review-visible before any
-  operational use.
+  criteria default to `review_only`; the raw hypomnema SQL default remains
+  `operational_context` for legacy compatibility, with omitted-visibility
+  callers still routed through the store classifier before ordinary use.
 - Correction/forget behavior is documented.
 
 ## PAI Importer And Dual-Life Watcher

@@ -8,6 +8,9 @@
   table for durable-affecting candidates with authority, target surface,
   transition, blast radius, status, gate version, provenance, and payload
   fields.
+- Schema v7 normalizes the U2.5 proposal quarantine contract: unclassified
+  proposal rows default to `audit_only`, raw proposal writes cannot mint
+  approved/applied terminal states, and terminal proposal rows are immutable.
 - Operational reads now filter to `operational_context` before retrieval
   ranking, context packet assembly, prompt building, simple runtime context
   and recall, visual snapshots, shared-pool reads, substrate/consolidation
@@ -17,14 +20,17 @@
   Operational packets keep review counts and source IDs while withholding
   pending prose; review packets expose candidate prose with review-only
   labels. Visual snapshots apply the same redaction boundary.
+- `mnemos_proposal_audit` is the explicit audit/admin MCP surface for
+  audit-only proposal ledger rows; ordinary operational packets, review
+  packets, review queues, and visual snapshots still omit them.
 - Functional memories needing confirmation and hypomnema promotion candidates
   are quarantined from operational packet bodies and simple runtime recall
   until they are reviewed or promoted through an explicit surface.
 - Live hypomnema writes now classify stable or foundational promotion
   candidates as `review_only` unless the caller explicitly supplies a
-  visibility. The raw `hypomnema_entries` schema default is also `review_only`,
-  intentionally favoring operator-visible review over silent audit quarantine
-  for unclassified continuity rows.
+  visibility. The raw `hypomnema_entries` SQL default remains
+  `operational_context` for legacy compatibility; omitted-visibility callers
+  still go through the store classifier before rows can enter ordinary context.
 - Direct-ID advanced MCP tools (`mnemos_inspect`, `mnemos_forget`, and the
   hypomnema revise/supersede/promote mutators), shared-pool connect helpers,
   and substrate handlers (insight, reflection, surprise, wandering, dreaming,

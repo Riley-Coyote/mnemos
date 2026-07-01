@@ -11,6 +11,7 @@ Tools:
     mnemos_session_close — Compress functional context into hypomnema
     mnemos_context_packet — Build the turnkey prompt/context packet
     mnemos_review_queue — Show confirmations and promotion candidates
+    mnemos_proposal_audit — Inspect audit-only proposal ledger rows
     mnemos_visual_snapshot — Generate an inline Mermaid memory map
     mnemos_remember     — Encode a new memory
     mnemos_ingest       — Ingest content from external sources
@@ -22,6 +23,7 @@ Tools:
     mnemos_hypomnema_candidates — List promotion-ready continuity
     mnemos_hypomnema_promote — Promote stable continuity into Mnemos
     mnemos_inspect      — View full details of a memory
+    mnemos_introspect   — Audit text for metacognitive pattern markers
     mnemos_status       — Get memory system status
     mnemos_beliefs      — List reviewed current beliefs
     mnemos_forget       — Archive a specific memory

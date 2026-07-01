@@ -3,6 +3,8 @@ Data extraction for the Mnemos visualization dashboard.
 
 Reads engrams, connections, beliefs, and consolidation history from the
 SQLite database. Computes timeline, project groupings, and session mappings.
+Default extraction uses operational-context rows only; pass
+``include_non_operational=True`` only for explicit audit/admin dashboards.
 """
 
 from __future__ import annotations

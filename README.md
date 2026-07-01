@@ -206,6 +206,7 @@ Advanced tools include:
 | `mnemos_session_close` | Compress active functional memory into scoped hypomnema. |
 | `mnemos_context_packet` | Build a full context packet; `packet_mode="operational"` redacts review prose, while `packet_mode="review"` exposes it with labels. |
 | `mnemos_review_queue` | Inspect confirmation and promotion candidates through an explicit review surface. |
+| `mnemos_proposal_audit` | Inspect audit-only proposal ledger rows through an explicit admin/audit surface. |
 | `mnemos_visual_snapshot` | Render an inline Mermaid memory map with review prose withheld. |
 | `mnemos_remember` | Encode a memory with explicit fields. |
 | `mnemos_ingest` | Ingest external knowledge with provenance. |
@@ -232,6 +233,8 @@ counts and source IDs, but not pending prose. Use
 `mnemos_context_packet(packet_mode="review")` or `mnemos_review_queue` when a
 human/operator intentionally needs review-only content. Audit-only rows stay
 out of both ordinary operational packets and ordinary review queues.
+Use `mnemos_proposal_audit` only for deliberate audit/admin inspection of
+audit-only proposal ledger rows.
 
 Direct-ID advanced tools (`mnemos_inspect`, `mnemos_forget`, and the
 `mnemos_hypomnema_revise` / `mnemos_hypomnema_supersede` /
@@ -417,10 +420,21 @@ mnemos init                           # Initialize a database
 mnemos remember "Prefers tabs"        # Capture continuity from the CLI
 mnemos stats                          # Memory statistics
 mnemos search "debugging strategies"  # Search memories
-mnemos inspect <engram-id>            # Inspect memory details
+mnemos inspect <engram-id>            # Inspect operational memory details
+mnemos inspect --review <engram-id>   # Explicit review-only inspection
+mnemos inspect --audit <engram-id>    # Explicit audit-only inspection
+mnemos inspect --admin <engram-id>    # Ignore read visibility for admin inspection
+mnemos snapshot                       # Inline operational Mermaid snapshot
 mnemos consolidate                    # Local deterministic maintenance
 mnemos consolidate --deep             # Deep maintenance when a provider exists
 mnemos substrate-tick                 # Run one substrate cycle
+```
+
+Dashboard module:
+
+```bash
+python -m mnemos.visualization.app --build-only
+python -m mnemos.visualization.app --audit --build-only  # include review/audit rows
 ```
 
 Workspace, identity, and automation commands:

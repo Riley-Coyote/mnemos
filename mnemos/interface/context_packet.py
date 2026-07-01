@@ -93,12 +93,14 @@ def build_context_packet(
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        status="pending_review",
         limit=6,
     )
     review_proposal_count = store.count_proposals(
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        status="pending_review",
     )
     review_functional_count = store.get_functional_stats(
         agent_id=agent_id,

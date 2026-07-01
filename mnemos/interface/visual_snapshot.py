@@ -68,6 +68,7 @@ def build_memory_visual_snapshot(
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        status="pending_review",
         limit=max_items,
     )
 

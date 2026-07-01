@@ -692,6 +692,62 @@ def test_review_queue_includes_review_only_proposal_rows_with_provenance(
     assert "MCP audit proposal prose" not in output
 
 
+def test_review_queue_excludes_terminal_review_only_proposals(monkeypatch, store):
+    from mnemos import mcp_server
+
+    monkeypatch.setattr(mcp_server, "_store", store)
+    monkeypatch.setattr(mcp_server, "_ensure_store", lambda: store)
+    monkeypatch.setattr(mcp_server, "_setup_gate", lambda: None)
+    pending = store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="pending_candidate",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        read_visibility="review_only",
+        payload={"content": "MCP pending proposal prose may be shown."},
+    )
+    deferred = store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="deferred_candidate",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        read_visibility="review_only",
+        status="deferred",
+        payload={"content": "MCP deferred proposal prose must not show."},
+    )
+    rejected = store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="rejected_candidate",
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+        read_visibility="review_only",
+        status="rejected",
+        payload={"content": "MCP rejected proposal prose must not show."},
+    )
+
+    output = mcp_server.mnemos_review_queue(
+        agent_id="vektor",
+        person_id="riley",
+        project_scope="mnemos",
+    )
+
+    assert pending["id"] in output
+    assert "MCP pending proposal prose may be shown." in output
+    for terminal in (deferred, rejected):
+        assert terminal["id"] not in output
+    assert "MCP deferred proposal prose" not in output
+    assert "MCP rejected proposal prose" not in output
+
+
 def test_audit_admin_proposal_review_lists_audit_only_rows_without_operational_exposure(
     monkeypatch,
     store,

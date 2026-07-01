@@ -1325,7 +1325,15 @@ class EngramStore:
                 target_surface = excluded.target_surface,
                 transition = excluded.transition,
                 blast_radius = excluded.blast_radius,
-                read_visibility = excluded.read_visibility,
+                read_visibility = CASE
+                    WHEN proposal_ledger.read_visibility = 'audit_only'
+                         OR excluded.read_visibility = 'audit_only'
+                    THEN 'audit_only'
+                    WHEN proposal_ledger.read_visibility = 'review_only'
+                         OR excluded.read_visibility = 'review_only'
+                    THEN 'review_only'
+                    ELSE 'operational_context'
+                END,
                 status = excluded.status,
                 reason = excluded.reason,
                 gate_version = excluded.gate_version,
@@ -1386,7 +1394,7 @@ class EngramStore:
         agent_id: str = "default",
         person_id: str = "user",
         project_scope: str = "global",
-        status: str | None = None,
+        status: str | None = "pending_review",
         read_visibility: str | None = READ_VISIBILITY_REVIEW,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
@@ -1421,7 +1429,7 @@ class EngramStore:
         agent_id: str = "default",
         person_id: str = "user",
         project_scope: str = "global",
-        status: str | None = None,
+        status: str | None = "pending_review",
         read_visibility: str | None = READ_VISIBILITY_REVIEW,
     ) -> int:
         """Count proposal ledger rows for a specific visibility surface."""

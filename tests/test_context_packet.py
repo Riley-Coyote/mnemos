@@ -341,6 +341,52 @@ def test_operational_proposal_count_uses_total_not_limited_reference_sample(stor
     assert operational["prompt"].count("source_id=") >= 6
 
 
+def test_active_review_packets_exclude_terminal_proposals(store):
+    pending = store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="pending_candidate",
+        read_visibility="review_only",
+        payload={"content": "Pending proposal prose may show in review packet."},
+    )
+    deferred = store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="deferred_candidate",
+        read_visibility="review_only",
+        status="deferred",
+        payload={"content": "Deferred proposal prose must not be active."},
+    )
+    rejected = store.write_proposal(
+        source_authority="generated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="rejected_candidate",
+        read_visibility="review_only",
+        status="rejected",
+        payload={"content": "Rejected proposal prose must not be active."},
+    )
+
+    operational = build_context_packet(store, "proposal", packet_mode="operational")
+    review_packet = build_context_packet(store, "proposal", packet_mode="review")
+    snapshot = build_memory_visual_snapshot(store)
+
+    assert operational["review_queue"]["proposal_candidate_count"] == 1
+    assert review_packet["review_queue"]["proposal_candidate_count"] == 1
+    assert review_packet["review_queue"]["proposal_candidates"][0]["id"] == pending["id"]
+    assert pending["id"] in snapshot
+    for terminal in (deferred, rejected):
+        assert terminal["id"] not in str(operational)
+        assert terminal["id"] not in str(review_packet)
+        assert terminal["id"] not in snapshot
+    assert "Deferred proposal prose" not in str(review_packet)
+    assert "Rejected proposal prose" not in str(review_packet)
+    assert "Deferred proposal prose" not in snapshot
+    assert "Rejected proposal prose" not in snapshot
+
+
 def test_audit_only_proposal_and_hypomnema_are_absent_from_review_packet(store):
     audit_proposal = store.write_proposal(
         source_authority="generated",

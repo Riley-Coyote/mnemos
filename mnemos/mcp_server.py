@@ -1075,6 +1075,7 @@ def mnemos_review_queue(
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        status="pending_review",
         limit=max_results,
     )
     if not functional and not candidates and not proposals:

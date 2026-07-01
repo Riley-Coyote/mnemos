@@ -325,6 +325,85 @@ class TestEngramStore:
                     status=status,
                 )
 
+    def test_proposal_upsert_preserves_stricter_read_visibility(self, store):
+        store.write_proposal(
+            proposal_id="visibility_monotonic_audit",
+            source_authority="generated",
+            kind="semantic",
+            target_surface="beliefs",
+            transition="audit_first",
+            read_visibility="audit_only",
+        )
+
+        downgraded = store.write_proposal(
+            proposal_id="visibility_monotonic_audit",
+            source_authority="observed",
+            kind="episodic",
+            target_surface="hypomnema_entries",
+            transition="review_second",
+            read_visibility="review_only",
+        )
+
+        store.write_proposal(
+            proposal_id="visibility_monotonic_review",
+            source_authority="observed",
+            kind="episodic",
+            target_surface="hypomnema_entries",
+            transition="review_first",
+            read_visibility="review_only",
+        )
+
+        strengthened = store.write_proposal(
+            proposal_id="visibility_monotonic_review",
+            source_authority="generated",
+            kind="semantic",
+            target_surface="beliefs",
+            transition="audit_second",
+            read_visibility="audit_only",
+        )
+
+        assert downgraded["read_visibility"] == "audit_only"
+        assert strengthened["read_visibility"] == "audit_only"
+        assert "visibility_monotonic_audit" not in {
+            row["id"] for row in store.list_proposals()
+        }
+
+    def test_active_proposal_listing_defaults_to_pending_review_only(self, store):
+        pending = store.write_proposal(
+            source_authority="generated",
+            kind="semantic",
+            target_surface="beliefs",
+            transition="pending_candidate",
+            read_visibility="review_only",
+        )
+        deferred = store.write_proposal(
+            source_authority="generated",
+            kind="semantic",
+            target_surface="beliefs",
+            transition="deferred_candidate",
+            read_visibility="review_only",
+            status="deferred",
+        )
+        rejected = store.write_proposal(
+            source_authority="generated",
+            kind="semantic",
+            target_surface="beliefs",
+            transition="rejected_candidate",
+            read_visibility="review_only",
+            status="rejected",
+        )
+
+        default_rows = store.list_proposals()
+        explicit_history = store.list_proposals(status=None)
+
+        assert {row["id"] for row in default_rows} == {pending["id"]}
+        assert store.count_proposals() == 1
+        assert {row["id"] for row in explicit_history} == {
+            pending["id"],
+            deferred["id"],
+            rejected["id"],
+        }
+
     def test_list_proposals_audit_visibility_requires_explicit_audit_read(self, store):
         audit = store.write_proposal(
             source_authority="generated",

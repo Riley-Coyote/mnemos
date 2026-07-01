@@ -1673,6 +1673,7 @@ class EngramStore:
                 source=source,
             )
 
+        functional_visibility = _strictest_read_visibility_sql("functional_memories")
         conn.execute(
             f"""
             INSERT INTO functional_memories(
@@ -1690,10 +1691,15 @@ class EngramStore:
                 memory_type = excluded.memory_type,
                 confidence = excluded.confidence,
                 salience = excluded.salience,
-                needs_confirmation = excluded.needs_confirmation,
+                needs_confirmation = CASE
+                    WHEN functional_memories.needs_confirmation = 1
+                    AND ({functional_visibility}) != '{READ_VISIBILITY_OPERATIONAL}'
+                    THEN 1
+                    ELSE excluded.needs_confirmation
+                END,
                 pinned = excluded.pinned,
                 source = excluded.source,
-                read_visibility = {_strictest_read_visibility_sql("functional_memories")},
+                read_visibility = {functional_visibility},
                 metadata_json = excluded.metadata_json,
                 updated_at = excluded.updated_at,
                 expires_at = excluded.expires_at,

@@ -455,6 +455,49 @@ def test_capture_foundational_identity_note_is_review_only_and_not_promoted(
     assert "test-first engineering" not in recall
 
 
+def test_review_capture_persists_context_in_review_only_hypomnema(
+    tmp_path,
+    monkeypatch,
+):
+    runtime = MnemosRuntime(
+        db_path=str(tmp_path / "simple.db"),
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "maintain",
+        lambda deep=False, auto=False: "maintenance skipped",
+    )
+
+    try:
+        captured = runtime.capture(
+            "My identity is anchored by source-aware review decisions.",
+            context="Review context source: operator intake ticket 42.",
+            importance="critical",
+        )
+        assert runtime._store is not None
+        entries = runtime._store.search_hypomnema(
+            "operator intake ticket 42",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility="review_only",
+        )
+    finally:
+        runtime.close()
+
+    assert "Captured continuity for review" in captured
+    assert len(entries) == 1
+    assert (
+        "Context: Review context source: operator intake ticket 42."
+        in entries[0]["content"]
+    )
+    assert entries[0]["read_visibility"] == "review_only"
+
+
 def test_maintain_does_not_promote_fresh_default_review_only_foundational_hypomnema(tmp_path):
     runtime = MnemosRuntime(
         db_path=str(tmp_path / "simple.db"),

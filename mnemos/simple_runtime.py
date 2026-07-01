@@ -670,7 +670,7 @@ class MnemosRuntime:
 
         if read_visibility != READ_VISIBILITY_OPERATIONAL:
             note_id = self._store.write_hypomnema_entry(
-                content.strip(),
+                full_content,
                 agent_id=self.scope.agent_id,
                 person_id=self.scope.person_id,
                 project_scope=self.scope.project_scope,

@@ -210,6 +210,84 @@ class TestFunctionalMemoryStore:
         assert updated["read_visibility"] == expected_visibility
         assert original["id"] not in operational_ids
 
+    @pytest.mark.parametrize(
+        ("initial_visibility", "queue_visibility"),
+        [
+            ("review_only", None),
+            ("audit_only", "audit_only"),
+        ],
+    )
+    def test_functional_upsert_preserves_confirmation_for_quarantined_rows(
+        self,
+        store,
+        initial_visibility,
+        queue_visibility,
+    ):
+        original = store.write_functional_memory(
+            f"{initial_visibility} confirmation before ordinary update.",
+            memory_id=f"{initial_visibility}-confirmation",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            needs_confirmation=True,
+            read_visibility=initial_visibility,
+        )
+
+        store.write_functional_memory(
+            f"{initial_visibility} confirmation after ordinary update.",
+            memory_id=original["id"],
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            needs_confirmation=False,
+            read_visibility="operational_context",
+        )
+
+        updated = store.get_functional_memory(original["id"])
+        kwargs = {}
+        if queue_visibility is not None:
+            kwargs["read_visibility"] = queue_visibility
+        queue_ids = {
+            item["id"]
+            for item in store.load_functional_memories(
+                agent_id="vektor",
+                person_id="riley",
+                project_scope="mnemos",
+                needs_confirmation_only=True,
+                **kwargs,
+            )
+        }
+
+        assert updated["read_visibility"] == initial_visibility
+        assert updated["needs_confirmation"] is True
+        assert original["id"] in queue_ids
+
+    def test_functional_upsert_can_clear_operational_confirmation(self, store):
+        original = store.write_functional_memory(
+            "Operational confirmation before ordinary update.",
+            memory_id="operational-confirmation",
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            needs_confirmation=True,
+            read_visibility="operational_context",
+        )
+
+        store.write_functional_memory(
+            "Operational confirmation after ordinary update.",
+            memory_id=original["id"],
+            agent_id="vektor",
+            person_id="riley",
+            project_scope="mnemos",
+            needs_confirmation=False,
+            read_visibility="operational_context",
+        )
+
+        updated = store.get_functional_memory(original["id"])
+
+        assert updated["read_visibility"] == "operational_context"
+        assert updated["needs_confirmation"] is False
+
     def test_close_session_promotes_functional_context_to_hypomnema(self, store):
         store.start_memory_session(
             session_id="session-2",

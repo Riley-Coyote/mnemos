@@ -29,6 +29,9 @@ def test_afferent_main_plan_keeps_rfc_rule_ledger_and_modulation_boundary():
 
     assert "The RFC is the safety ledger and source of truth" in text
     assert "this plan cannot override, renumber, or weaken it" in text
+    assert "U3 through U6b remain planned follow-up stages" in text
+    assert "Do not start U3 until `no-mistakes` passes for the same short SHA returned by `git rev-parse --short HEAD`" in text
+    assert "SHA-256 `4c0a0b46534365023be89c328e6647b257bb431e5d4a5e346b74a8c56e1f976a`" in text
 
     expected_mappings = [
         ("RFC-R1", "U3"),
@@ -54,7 +57,7 @@ def test_afferent_main_plan_keeps_rfc_rule_ledger_and_modulation_boundary():
 def test_afferent_main_plan_has_state_surface_and_regression_ledgers():
     text = _read(MAIN_PLAN)
 
-    for heading in ("## Rule Ledger", "## State Ledger", "## Surface Ledger", "## Regression Ledger"):
+    for heading in ("## Rule Ledger", "## State Ledger", "## Surface Ledger", "## Actor/Auth Ledger", "## Regression Ledger"):
         assert heading in text
 
     required_rule_ledger = [
@@ -96,6 +99,17 @@ def test_afferent_main_plan_has_state_surface_and_regression_ledgers():
     for phrase in required_surface_ledger:
         assert phrase in text
 
+    required_actor_auth_ledger = [
+        "This ledger prevents review/audit visibility from becoming a read permission grant",
+        "Default/simple MCP agent",
+        "Advanced MCP operator surface",
+        "David-only review decision",
+        "model/MCP callers cannot self-stamp `user_stated` or `imported`",
+        "U4 must add negative tests rejecting forged David approvals",
+    ]
+    for phrase in required_actor_auth_ledger:
+        assert phrase in text
+
     required_regression_ledger = [
         "Each invariant below requires at least one positive and one negative test",
         "Fresh high-confidence/foundational omitted-visibility hypomnema is review-only",
@@ -129,6 +143,7 @@ def test_plan_quality_gate_blocks_error_amplification_patterns():
         "Rule Ledger",
         "State Ledger",
         "Surface Ledger",
+        "Actor/Auth Ledger",
         "Regression Ledger",
         "RFC-R1 through RFC-R8",
         "RFC-R9 and RFC-R10 do not exist",
@@ -136,6 +151,8 @@ def test_plan_quality_gate_blocks_error_amplification_patterns():
         "allowed states, defaults, omitted-field behavior, upsert behavior, terminal states, allowed transitions, and rejected transitions",
         "terminal conflicts are immutable",
         "operational, review, audit, admin, migration, direct-ID, aggregate/count, visual, MCP, and context paths",
+        "caller classes, authority values, proof artifacts, and negative tests",
+        "David-only decisions require a non-model proof artifact",
         "Migration and legacy-row policy",
         "Every invariant needs at least one positive test and one negative test",
         "DynamicModulation bound check",

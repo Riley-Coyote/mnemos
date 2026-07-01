@@ -28,7 +28,7 @@ The repaired state is anchored in:
 - `docs/plans/2026-06-30-002-fix-afferent-u2-5-safety-ledger-plan.md`
 - `docs/plans/afferent-membrane-plan-quality-gate.md`
 - `tests/test_afferent_plan_quality.py`
-- commits `9957196` and `e285b3e` on `codex/afferent-membrane-v1-ledger`
+- ledger repair commits `9957196` and `e285b3e`, with workflow capture beginning at `37613d7` on `codex/afferent-membrane-v1-ledger`
 
 ## Guidance
 
@@ -122,7 +122,7 @@ The second repair pass found false coordinates inside the new ledger itself:
 
 Those mistakes matter because a ledger with precise-looking but non-executable selectors gives false confidence. The fix was to correct the plan selectors and run the focused node IDs, not just inspect the prose.
 
-Current focused proof:
+Subset focused proof observed during the repair pass:
 
 ```bash
 uv run --extra dev pytest tests/test_afferent_plan_quality.py -q
@@ -155,6 +155,45 @@ git diff --check
 
 The observed results were `4 passed`, then `25 passed`, then a clean whitespace check.
 
+Full regression-ledger proof before claiming the current branch head closed:
+
+```bash
+uv run --extra dev pytest \
+  tests/test_afferent_plan_quality.py \
+  tests/test_context_packet.py::test_operational_context_packet_quarantines_review_prose \
+  tests/test_context_packet.py::test_operational_proposal_count_uses_total_not_limited_reference_sample \
+  tests/test_context_packet.py::test_audit_only_proposal_and_hypomnema_are_absent_from_review_packet \
+  tests/test_context_packet.py::test_visual_snapshot_review_count_uses_total_pending_proposals \
+  tests/test_store.py::TestEngramStore::test_proposal_ledger_accepts_rfc_authority_and_kind_axes \
+  tests/test_store.py::TestEngramStore::test_proposal_ledger_defaults_to_audit_only_and_rejects_pending_operational_visibility \
+  tests/test_store.py::TestEngramStore::test_proposal_upsert_rejects_rejected_terminal_conflict \
+  tests/test_store.py::TestEngramStore::test_proposal_upsert_rejects_applied_terminal_conflict \
+  tests/test_store.py::TestEngramStore::test_list_proposals_audit_visibility_requires_explicit_audit_read \
+  tests/test_store.py::TestEngramStore::test_count_engrams_defaults_to_operational_visibility \
+  tests/test_store.py::TestEngramStore::test_get_hypomnema_entries_by_tag_filters_read_visibility_by_default \
+  tests/test_store.py::TestEngramStore::test_legacy_v5_migrates_non_candidate_hypomnema_operational_and_candidates_review_only \
+  tests/test_store.py::TestEngramStore::test_legacy_v6_hypomnema_review_default_is_repaired \
+  tests/test_hypomnema.py::TestHypomnemaStore::test_live_write_classifies_stable_hypomnema_as_review_only \
+  tests/test_hypomnema.py::TestHypomnemaStore::test_identity_or_foundational_hypomnema_defaults_review_only_even_below_promotion_threshold \
+  tests/test_hypomnema.py::TestHypomnemaStore::test_hypomnema_upsert_preserves_existing_visibility_when_omitted \
+  tests/test_hypomnema.py::TestHypomnemaStore::test_explicit_upsert_cannot_downgrade_existing_review_or_audit_visibility \
+  tests/test_hypomnema.py::TestHypomnemaStore::test_explicit_operational_visibility_for_review_worthy_hypomnema_is_rejected \
+  tests/test_simple_runtime.py::test_capture_foundational_identity_note_is_review_only_and_not_promoted \
+  tests/test_cli_simple.py::test_inspect_defaults_to_operational_visibility \
+  tests/test_mcp_surface.py::test_mcp_hypomnema_write_default_review_only_is_quarantined_from_search_candidates_promote_and_visible_in_review \
+  tests/test_mcp_surface.py::test_review_queue_includes_review_only_proposal_rows_with_provenance \
+  tests/test_mcp_surface.py::test_review_queue_excludes_terminal_review_only_proposals \
+  tests/test_mcp_surface.py::test_audit_admin_proposal_review_lists_audit_only_rows_without_operational_exposure \
+  tests/test_mcp_surface.py::test_inspect_and_forget_reject_non_operational_engrams \
+  tests/test_retrieval.py::TestReactiveRetriever::test_retrieval_excludes_review_only_fts_and_propagation \
+  tests/test_retrieval.py::TestReactiveRetriever::test_review_and_audit_rows_do_not_seed_operational_retrieval \
+  tests/test_visualization_data.py::test_dashboard_extracts_operational_visibility_by_default \
+  tests/test_visualization_data.py::test_dashboard_audit_mode_extracts_non_operational_rows \
+  tests/test_encoding.py::TestEncoder::test_quarantined_engrams_do_not_end_bootstrap_policy \
+  -q
+git diff --check
+```
+
 ### 8. No-mistakes is validation, not the first safety ledger author
 
 The reusable gate in `docs/plans/afferent-membrane-plan-quality-gate.md` records the process lesson: if no-mistakes would plausibly find more than three material safety-ledger issues, stop and repair the plan before running it.
@@ -175,7 +214,7 @@ Fold every no-mistakes `ask-user` policy decision back into the plan or gate. In
 
 ### 9. Do not claim no-mistakes coverage for a stale head
 
-After the final ledger commit, `no-mistakes axi status` still showed an active run on the same branch but at stale head `f52fcf90`, with CI running. The current repair head was `e285b3e`.
+After the final ledger commit, `no-mistakes axi status` still showed an active run on the same branch but at stale head `f52fcf90`, with CI running. The ledger repair head was `e285b3e`; later workflow/doc-review commits moved the branch again.
 
 The correct action was to report that distinction precisely and not claim the new commit was no-mistakes-covered. Do not abort or restart an active run unless David explicitly authorizes that. The control-plane check that matters is:
 
@@ -185,7 +224,7 @@ no-mistakes axi status
 git log --oneline -3
 ```
 
-If `no-mistakes` reports a PR for an old head, the branch may still contain newer pushed commits that are only locally tested. Say that. Do not treat the old run as proof for the new head.
+If `no-mistakes` reports a PR for an old head, the branch may still contain newer pushed commits that are only locally tested. Say that. Do not treat the old run as proof for the new head. The closeout invariant is same-SHA proof: `git rev-parse --short HEAD` must match the active no-mistakes run head before U3 can start.
 
 ### 10. Capture the whole failure catalogue, not just the headline miss
 
@@ -258,10 +297,11 @@ Then add tests that fail if those ledgers disappear, if RFC-R9/R10 become operat
 ### Correct no-mistakes closeout
 
 ```text
-Current branch head: e285b3e
+Current branch head: <git rev-parse --short HEAD>
 Active no-mistakes run head: f52fcf90
+Active no-mistakes status/PR: <status and PR URL from no-mistakes axi status>
 
-Result: e285b3e is locally tested and pushed, but not no-mistakes-covered.
+Result: if the two heads differ, the current branch head is locally tested/pushed only; no-mistakes covers the active run head, not the current head.
 ```
 
 ## Related

@@ -13,7 +13,17 @@ Implement the Afferent Membrane v1 over Mnemos as a staged architecture: operati
 
 This plan is derived from `/Users/davidef/phenom-felt-review/RFC-v1-proposal-ledger.md`. The RFC is the safety ledger and source of truth; this plan cannot override, renumber, or weaken it.
 
-Current branch state: U1 packet mode split and U2 proposal-ledger/read-visibility schema are implemented on `codex/afferent-membrane-v1-ledger`. U3-U6 remain planned follow-up stages.
+Current branch state: U1 packet mode split and U2 proposal-ledger/read-visibility schema are implemented on `codex/afferent-membrane-v1-ledger`. U3 through U6b remain planned follow-up stages.
+
+## Current Validation State
+
+Validation snapshot, recorded 2026-07-01 before this ce-doc-review repair:
+
+- Branch head inspected: `37613d7`.
+- Active `no-mistakes` run: `01KWDGFPVZ89DWHK80EKBEFFC0` on branch `codex/afferent-membrane-v1-ledger`, head `f52fcf90`, PR `https://github.com/davidefitz/mnemos/pull/4`, status `ci: running`.
+- Therefore Stage 2/U2.5 is not no-mistakes-covered at the inspected branch head.
+
+Do not start U3 until `no-mistakes` passes for the same short SHA returned by `git rev-parse --short HEAD`. Recompute this block before authority-stamping work; stale validation snapshots are warnings, not clearance.
 
 ---
 
@@ -57,7 +67,7 @@ There is no RFC-R9 or RFC-R10. ExperienceTick is a build-sequence feeder constra
 
 ## Plan-Quality Gate
 
-Before any remaining Afferent unit starts implementation, run the gate in `docs/plans/afferent-membrane-plan-quality-gate.md`. The plan is not executable if the RFC ledger, chokepoint inventory, default/upsert semantics, terminal-state policy, operational/review/audit surface matrix, migration policy, DynamicModulation bound check, or no-mistakes error budget is incomplete.
+Before any remaining Afferent unit starts implementation, run the gate in `docs/plans/afferent-membrane-plan-quality-gate.md`. The plan is not executable if the RFC ledger, chokepoint inventory, default/upsert semantics, terminal-state policy, operational/review/audit surface matrix, actor/auth policy, migration policy, DynamicModulation bound check, or no-mistakes error budget is incomplete.
 
 This gate exists because U2.5 proved that a plan can be directionally correct while still omitting enough load-bearing invariants for no-mistakes to discover many preventable safety-ledger errors. Future units should treat no-mistakes as validation, not as the first place these invariants are found.
 
@@ -111,6 +121,23 @@ This ledger defines what each read surface can see. Review/audit visibility is a
 | Visual/dashboard (`visual_snapshot`, `mnemos ui`, `mnemos/visualization/data.py`) | dashboard and visual snapshot default operational; review counts may be redacted as cues only | explicit review-visible summaries may show review rows where supported | explicit dashboard audit/admin mode required for non-operational rows | generated HTML or Mermaid leaking review/audit prose/IDs by default; sample count truncation changing totals |
 | Migration/backfill (`mnemos/store/migrations.py`) | ordinary non-candidate legacy rows remain operational | promotion/high-blast legacy rows become review-only | explicit audit rows remain audit-only; proposal defaults normalize to audit-only | blanket review-only defaults hiding ordinary continuity; ambiguous review/audit rows downgraded to operational |
 | Tag/dream/substrate producers (`dream_journal`, substrate handlers, connection discovery) | tag lookup, dream display, substrate ticks, and connection discovery use operational rows by default | explicit review analysis only | audit/admin only | review/audit rows satisfying operational connection counts, dream/tag lookup, substrate modulation, or shared pool reads |
+
+---
+
+## Actor/Auth Ledger
+
+This ledger prevents review/audit visibility from becoming a read permission grant. U3 cannot start until caller authority is fixed per surface, and U4 cannot start until David-only decisions have a non-model proof artifact.
+
+| Actor / caller class | Allowed surfaces before U3/U4 | Authority values it may stamp | Explicitly forbidden |
+|---|---|---|---|
+| Default/simple MCP agent | operational context, recall, low-risk capture, ordinary review counts where the tool explicitly exposes them | none beyond caller-supplied low-risk operational capture until U3 defines the harness stamp | audit/admin reads; proposal decisions; review-prose reads; self-stamping `user_stated` or `imported` |
+| Advanced MCP operator surface | explicit review/audit/admin inspection tools only when the server is launched in the operator/admin mode | no authority upgrade by payload or metadata alone | treating advanced mode as David approval; applying proposal decisions without a human proof artifact |
+| Local CLI operator | explicit `--review`, `--audit`, `--admin`, PAI preview/apply, migration, and diagnostics commands | `imported` only through importer-owned paths; never `user_stated` by convention | default direct-ID reads leaking review/audit rows; live `~/.mnemos` mutation without an explicit live rollout plan |
+| Runtime/generated producers (`capture`, `maintain`, reflection, dream, substrate, ExperienceTick) | write review-only proposals or inert/conservative modulation according to the State and Surface ledgers | `generated` or `observed` only, as fixed by the trusted caller boundary | direct durable identity/foundational writes; self-stamping `user_stated`; bypassing ProposalLedger |
+| PAI importer/operator import path | preview/apply imported PAI material through importer review gates and explicit DB paths | `imported` only, preserving importer provenance | downgrading audit-only rows; converting imported material into user-stated authority |
+| David-only review decision | U4 proposal decision path after it records actor, decision source, confirmation artifact, and audit row | reviewed promotion/application only after the proof artifact is present | model-callable ceremony; forged `actor=David`; metadata-only approval; mutable terminal proposal records |
+
+U3 must add an authority-stamping matrix with one row per ingest surface (`mnemos_remember`, `mnemos_ingest`, `MnemosRuntime.capture`, PAI import, hypomnema write, ExperienceTick route) and tests proving model/MCP callers cannot self-stamp `user_stated` or `imported`. U4 must add negative tests rejecting forged David approvals before `mnemos_proposal_decide` can apply identity/foundational proposals.
 
 ---
 
@@ -206,7 +233,7 @@ Each invariant below requires at least one positive and one negative test. Posit
 | Stage 5 | `codex/afferent-membrane-v1-modulation` | DynamicModulation persistence and distribution bounds | Modulation tests, calibration placeholder proof, no-mistakes |
 | Stage 6 | `codex/afferent-membrane-v1-experience-tick` | ExperienceTick afferent layer feeding modulation and ledger | Tick-to-ledger/modulation tests and no-mistakes |
 
-Current Stage 2 state: branch `codex/afferent-membrane-v1-ledger`, base commit `03c9417`, implementing U1 packet mode and U2 proposal ledger/read visibility. Stage 3 starts from the authority lane.
+Current Stage 2 state: branch `codex/afferent-membrane-v1-ledger`, base commit `03c9417`, implementing U1 packet mode and U2 proposal ledger/read visibility. Stage 3 starts from the authority lane only after the current branch head has local focused proof and same-head no-mistakes proof.
 
 ---
 
@@ -476,7 +503,7 @@ The core invariant is one-way: afferent signals can modulate live retrieval and 
 
 **Goal:** Add ExperienceTick as the afferent collection layer that emits proposal ledger rows and dynamic modulations but never writes durable identity directly.
 
-**Requirements:** RFC-R3, RFC-R7, RFC-R8; covers RFC acceptance tests 7-11 and bridges tests 1-5 into active operation.
+**Requirements boundary:** U6b is constrained by RFC-R3/R7/R8 and feeds proposal/modulation proof, but it is not a separate permission rule and does not own RFC-R3/R7/R8 independently. It covers RFC acceptance tests 7-11 and bridges tests 1-5 into active operation only through U3/U4/U5/U6 gates.
 
 **Dependencies:** U4, U5, U6.
 
@@ -563,7 +590,7 @@ The core invariant is one-way: afferent signals can modulate live retrieval and 
 
 ## Sources & References
 
-- Origin RFC: Afferent Membrane v1 proposal ledger RFC supplied by David.
+- Origin RFC: `/Users/davidef/phenom-felt-review/RFC-v1-proposal-ledger.md`, SHA-256 `4c0a0b46534365023be89c328e6647b257bb431e5d4a5e346b74a8c56e1f976a`, read 2026-07-01. This path is outside the repo and not itself versioned here; if the hash changes, re-run the RFC ledger comparison before implementation.
 - Companion RFC: DynamicModulation addendum supplied with the RFC.
 - Related code: `mnemos/interface/context_packet.py`
 - Related code: `mnemos/store/sqlite_store.py`

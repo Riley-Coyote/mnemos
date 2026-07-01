@@ -27,19 +27,26 @@ Before implementation starts, the plan must include all of these items:
    - Prove audit-only rows are absent from ordinary operational and review surfaces, including counts and IDs unless explicitly allowed.
    - Treat raw SQL helpers, stats/count methods, direct-ID reads, and bootstrap heuristics as chokepoints when they can influence operational behavior.
 
-4. **Migration and legacy-row policy**
+4. **Actor/Auth Ledger**
+   - For each caller class, name allowed surfaces, authority values it may stamp, and forbidden actions.
+   - Include the simple/default MCP agent, advanced MCP operator surface, local CLI operator, runtime/generated producers, PAI importer, and David-only review decision path.
+   - Add an authority-stamping matrix before U3: each ingest surface gets fixed allowed authority values.
+   - Add negative tests proving simple/default agents cannot invoke audit/admin/review-prose paths or self-stamp `user_stated` / `imported`.
+   - Block U4 until David-only decisions require a non-model proof artifact: actor field, decision source, confirmation artifact, audit row, and rejection of forged `actor=David`.
+
+5. **Migration and legacy-row policy**
    - Name which legacy rows remain operational, which become review-only, and which become audit-only.
    - Add a populated legacy database test when defaults or backfills change.
 
-5. **Regression Ledger**
+6. **Regression Ledger**
    - Every invariant needs at least one positive test and one negative test.
    - Include explicit tests for fresh high-confidence/foundational review-only classification, duplicate/upsert non-promotion, terminal proposal immutability, and sample limits not altering total queue counts.
 
-6. **DynamicModulation bound check**
+7. **DynamicModulation bound check**
    - State whether DynamicModulation is inert, conservative, or actively influencing retrieval.
    - Active influence is not allowed until both bounds exist: TTL/decay/magnitude and valence floor/deadband/fail-toward-width.
 
-7. **No-mistakes error budget**
+8. **No-mistakes error budget**
    - Before no-mistakes, run a local adversarial review against the plan and implementation.
    - If the expected no-mistakes review would plausibly find more than three material safety-ledger issues, stop and repair the plan first.
    - Any `ask-user` finding that resolves a policy must be folded back into the plan or this gate before the next implementation round.
@@ -53,6 +60,7 @@ Stop before implementation when any of these are true:
 - A plan says "default" without saying whether it is schema-time, write-time, migration-time, or review-gate-set.
 - A terminal state can be overwritten without an explicit immutable or reviewed-transition rule.
 - A review/audit row can influence operational retrieval, context, dashboard, bootstrap, aggregation, CLI inspect, MCP output, promotion, or producer behavior.
+- The plan exposes review/audit/admin or David-only decision surfaces without caller classes, authority values, proof artifacts, and negative tests.
 - DynamicModulation can affect retrieval before both RFC-R7 bounds exist.
 - The plan relies on no-mistakes to discover basic ledger invariants instead of using no-mistakes as validation.
 
@@ -69,6 +77,7 @@ The U2.5 no-mistakes run found repeated omissions that this gate is meant to pre
 - direct hypomnema correction silent quarantine;
 - bootstrap counts influenced by quarantined engrams;
 - stale documentation of schema defaults versus write-time classification.
+- caller-authority ambiguity around audit/admin/review and David-only decision surfaces.
 
 Future plans should assume these classes recur unless the plan explicitly proves otherwise.
 

@@ -1674,7 +1674,7 @@ class EngramStore:
             )
 
         conn.execute(
-            """
+            f"""
             INSERT INTO functional_memories(
                 id, session_id, agent_id, person_id, project_scope, content,
                 memory_type, confidence, salience, needs_confirmation, pinned,
@@ -1693,7 +1693,7 @@ class EngramStore:
                 needs_confirmation = excluded.needs_confirmation,
                 pinned = excluded.pinned,
                 source = excluded.source,
-                read_visibility = excluded.read_visibility,
+                read_visibility = {_strictest_read_visibility_sql("functional_memories")},
                 metadata_json = excluded.metadata_json,
                 updated_at = excluded.updated_at,
                 expires_at = excluded.expires_at,

@@ -140,57 +140,75 @@ class TestFunctionalMemoryStore:
         assert all_ids == {operational["id"], review["id"], audit["id"]}
         assert default_stats["functional_needs_confirmation"] == 2
 
-    def test_functional_upsert_preserves_existing_visibility_when_omitted(self, store):
-        review = store.write_functional_memory(
-            "Review-only functional memory before ordinary update.",
-            memory_id="review-functional",
+    @pytest.mark.parametrize(
+        ("memory_id", "initial_visibility", "incoming_visibility", "expected_visibility"),
+        [
+            ("review-functional-default", "review_only", None, "review_only"),
+            ("audit-functional-default", "audit_only", None, "audit_only"),
+            (
+                "review-functional-explicit-operational",
+                "review_only",
+                "operational_context",
+                "review_only",
+            ),
+            (
+                "audit-functional-explicit-operational",
+                "audit_only",
+                "operational_context",
+                "audit_only",
+            ),
+            (
+                "operational-functional-explicit-review",
+                "operational_context",
+                "review_only",
+                "review_only",
+            ),
+        ],
+    )
+    def test_functional_upsert_preserves_or_strengthens_read_visibility(
+        self,
+        store,
+        memory_id,
+        initial_visibility,
+        incoming_visibility,
+        expected_visibility,
+    ):
+        original = store.write_functional_memory(
+            f"{memory_id} before ordinary update.",
+            memory_id=memory_id,
             agent_id="vektor",
             person_id="riley",
             project_scope="mnemos",
-            needs_confirmation=True,
-            read_visibility="review_only",
-        )
-        audit = store.write_functional_memory(
-            "Audit-only functional memory before ordinary update.",
-            memory_id="audit-functional",
-            agent_id="vektor",
-            person_id="riley",
-            project_scope="mnemos",
-            read_visibility="audit_only",
+            needs_confirmation=initial_visibility == "review_only",
+            read_visibility=initial_visibility,
         )
 
+        kwargs = {}
+        if incoming_visibility is not None:
+            kwargs["read_visibility"] = incoming_visibility
         store.write_functional_memory(
-            "Review-only functional memory after ordinary update.",
-            memory_id=review["id"],
+            f"{memory_id} after ordinary update.",
+            memory_id=original["id"],
             agent_id="vektor",
             person_id="riley",
             project_scope="mnemos",
             needs_confirmation=False,
-        )
-        store.write_functional_memory(
-            "Audit-only functional memory after ordinary update.",
-            memory_id=audit["id"],
-            agent_id="vektor",
-            person_id="riley",
-            project_scope="mnemos",
+            **kwargs,
         )
 
-        updated_review = store.get_functional_memory(review["id"])
-        updated_audit = store.get_functional_memory(audit["id"])
+        updated = store.get_functional_memory(original["id"])
         operational_ids = {
             item["id"]
             for item in store.load_functional_memories(
-                "ordinary update",
+                memory_id,
                 agent_id="vektor",
                 person_id="riley",
                 project_scope="mnemos",
             )
         }
 
-        assert updated_review["read_visibility"] == "review_only"
-        assert updated_audit["read_visibility"] == "audit_only"
-        assert review["id"] not in operational_ids
-        assert audit["id"] not in operational_ids
+        assert updated["read_visibility"] == expected_visibility
+        assert original["id"] not in operational_ids
 
     def test_close_session_promotes_functional_context_to_hypomnema(self, store):
         store.start_memory_session(

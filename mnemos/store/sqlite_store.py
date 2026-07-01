@@ -1200,14 +1200,34 @@ class EngramStore:
         self._save_belief_no_commit(conn, belief)
         conn.commit()
 
-    def _save_belief_no_commit(self, conn: sqlite3.Connection, belief: Belief) -> None:
+    def save_reviewed_belief(self, belief: Belief) -> None:
+        """Insert or update a belief after an explicit review decision."""
+        conn = self._get_conn()
+        self._save_belief_no_commit(conn, belief, allow_visibility_promotion=True)
+        conn.commit()
+
+    def _save_belief_no_commit(
+        self,
+        conn: sqlite3.Connection,
+        belief: Belief,
+        *,
+        allow_visibility_promotion: bool = False,
+    ) -> None:
         data = belief.to_dict()
 
         # Validate column names
         safe_data = {k: v for k, v in data.items() if k in _BELIEF_COLUMNS}
         columns = ", ".join(safe_data.keys())
         placeholders = ", ".join("?" for _ in safe_data)
-        updates = ", ".join(f"{k}=excluded.{k}" for k in safe_data if k != "id")
+        updates = ", ".join(
+            (
+                f"{k}={_strictest_read_visibility_sql('beliefs')}"
+                if k == "read_visibility" and not allow_visibility_promotion
+                else f"{k}=excluded.{k}"
+            )
+            for k in safe_data
+            if k != "id"
+        )
 
         conn.execute(
             f"INSERT INTO beliefs ({columns}) VALUES ({placeholders}) "

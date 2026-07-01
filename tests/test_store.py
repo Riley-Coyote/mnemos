@@ -223,6 +223,96 @@ class TestEngramStore:
         assert matched.confidence == pytest.approx(0.7)
         assert matched.read_visibility == "operational_context"
 
+    def test_belief_upsert_preserves_stricter_read_visibility(self, store):
+        review = Belief(
+            id="belief-review-visibility",
+            content="Review-only original marker",
+            confidence=0.8,
+            confidence_pending_review=True,
+            read_visibility="review_only",
+        )
+        audit = Belief(
+            id="belief-audit-visibility",
+            content="Audit-only original marker",
+            confidence=0.9,
+            confidence_pending_review=True,
+            read_visibility="audit_only",
+        )
+        operational = Belief(
+            id="belief-operational-visibility",
+            content="Operational original marker",
+            confidence=0.6,
+        )
+        for belief in (review, audit, operational):
+            store.save_belief(belief)
+
+        store.save_belief(
+            Belief(
+                id=review.id,
+                content="Review-only rewritten through default save marker",
+                confidence=0.5,
+            )
+        )
+        store.save_belief(
+            Belief(
+                id=audit.id,
+                content="Audit-only rewritten through default save marker",
+                confidence=0.4,
+            )
+        )
+        store.save_belief(
+            Belief(
+                id=operational.id,
+                content="Operational strengthened to audit-only marker",
+                confidence=0.7,
+                read_visibility="audit_only",
+            )
+        )
+
+        beliefs_by_id = {
+            belief.id: belief
+            for belief in store.get_beliefs(
+                include_pending_review=True,
+                read_visibility=None,
+            )
+        }
+        default_ids = {belief.id for belief in store.get_beliefs()}
+
+        assert beliefs_by_id[review.id].read_visibility == "review_only"
+        assert beliefs_by_id[review.id].content == (
+            "Review-only rewritten through default save marker"
+        )
+        assert beliefs_by_id[audit.id].read_visibility == "audit_only"
+        assert beliefs_by_id[audit.id].content == (
+            "Audit-only rewritten through default save marker"
+        )
+        assert beliefs_by_id[operational.id].read_visibility == "audit_only"
+        assert review.id not in default_ids
+        assert audit.id not in default_ids
+        assert operational.id not in default_ids
+
+    def test_save_reviewed_belief_allows_explicit_visibility_promotion(self, store):
+        belief = Belief(
+            id="belief-reviewed-promotion",
+            content="Review pending belief can be accepted.",
+            confidence=0.8,
+            confidence_pending_review=True,
+            read_visibility="review_only",
+        )
+        store.save_belief(belief)
+
+        reviewed = Belief(
+            id=belief.id,
+            content="Reviewed belief is operational again.",
+            confidence=0.75,
+            read_visibility="operational_context",
+        )
+        store.save_reviewed_belief(reviewed)
+
+        loaded = [b for b in store.get_beliefs() if b.id == belief.id][0]
+        assert loaded.read_visibility == "operational_context"
+        assert loaded.content == "Reviewed belief is operational again."
+
     def test_get_beliefs_excludes_pending_confidence_by_default(self, store):
         """Pending-confidence beliefs require an explicit opt-in."""
         pending = Belief(

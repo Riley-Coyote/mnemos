@@ -141,7 +141,7 @@ def run_belief_review(
                 apply_belief_update(belief, eval_result, engram.id, store)
                 if pending_review:
                     belief.challenge()
-                    store.save_belief(belief)
+                    store.save_reviewed_belief(belief)
                 new_conf = belief.confidence
 
                 if new_conf > old_conf:
@@ -158,6 +158,6 @@ def run_belief_review(
                 belief.confidence_pending_review = False
                 belief.read_visibility = "operational_context"
                 belief.challenge()
-                store.save_belief(belief)
+                store.save_reviewed_belief(belief)
 
     return stats

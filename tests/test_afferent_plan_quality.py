@@ -182,6 +182,7 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
         or "Modify: mnemos/store/migrations.py" in u4_section
     )
     assert "Create: `mnemos/review/evidence_diversity.py`" in u4_section
+    assert "mnemos/review/consistency_anomaly.py" in u4_section
     assert "v8 database migrates forward (v8 -> v9)" in u4_section
 
     # A-regression rows (three, aligned to 3-col schema)
@@ -197,9 +198,15 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "codex/afferent-membrane-v1-dream-graduation" in text
     assert "non-accumulating" in text
     assert "vividness-ratio cap" in text
-    assert "three conjunctive tests" in text
+    assert "four conjunctive conditions" in text
+    assert "instance-content diversity" in text
     assert "adaptive decay" in text
     assert "audit_only row is retained for provenance" in text
+    assert (
+        "test_adaptive_decay_transitions_unrevisited_patterns_to_decayed_state_audit_only_retained"
+        in text
+    )
+    assert "test_adaptive_decay_removes_unrevisited_patterns" not in text
     assert "MIN_RECURRENCES" in text
     assert "VIVIDNESS_RATIO_CAP" in text
     assert "drop:high_blast_generated" in text
@@ -223,7 +230,7 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     # State Ledger dream-pattern lifecycle row
     assert "Dream pattern (U6c)" in text
     assert "`stored/recurring/stabilized/graduated/decayed`" in text
-    assert "no state reaches `graduated` without the three conjunctive tests" in text
+    assert "no state reaches `graduated` without the four conjunctive conditions" in text
 
     # Surface Ledger pattern-store row
     assert "Pattern store (U6c:" in text

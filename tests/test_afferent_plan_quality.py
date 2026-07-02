@@ -202,6 +202,8 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "instance-content diversity" in text
     assert "adaptive decay" in text
     assert "audit_only row is retained for provenance" in text
+    assert "read_visibility=review_only" in text
+    assert "visible on the review queue" in text
     assert (
         "test_adaptive_decay_transitions_unrevisited_patterns_to_decayed_state_audit_only_retained"
         in text
@@ -211,6 +213,7 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "VIVIDNESS_RATIO_CAP" in text
     assert "drop:high_blast_generated" in text
     assert "add the dream pattern_store table" in text
+    assert "instance-content diversity metric" in text
     assert "mnemos/substrate/handlers/dreaming.py" in text
     assert "mnemos/substrate/handlers/wandering.py" in text
     assert "mnemos/inner_life/low_stakes.py" in text
@@ -224,13 +227,14 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert text.count("extended by U6c (dream graduation)") >= 6
 
     # Deferral-≠-re-graduation binding note
-    assert "rejecting it is terminal for the pattern" in text
+    assert "both dispositions are terminal for the pattern" in text
     assert "graduation is one-time" in text
 
     # State Ledger dream-pattern lifecycle row
     assert "Dream pattern (U6c)" in text
     assert "`stored/recurring/stabilized/graduated/decayed`" in text
     assert "no state reaches `graduated` without the four conjunctive conditions" in text
+    assert "graduated is immutable terminal" in text
 
     # Surface Ledger pattern-store row
     assert "Pattern store (U6c:" in text

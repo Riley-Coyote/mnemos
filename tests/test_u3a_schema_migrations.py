@@ -1661,3 +1661,79 @@ def test_substrate_temporal_event_ignores_unauthorized_and_other_agent_rows(
         assert [event.event_type for event in events] == [EventType.SILENCE_EXTENDED]
     finally:
         substrate.store.close()
+
+
+def _create_inner_life_origin_v6_db(path):
+    """Authentic inner-life-origin v6: pre-membrane v5 base + inner_life_events
+    with rows, stamped 6 — the shape a feat/gated-inner-life-soak soak run left
+    before the merge. Membrane (proposal_ledger + read_visibility columns) absent."""
+    import os
+    import sys as _sys
+
+    _tests_dir = os.path.dirname(os.path.abspath(__file__))
+    if _tests_dir not in _sys.path:
+        _sys.path.insert(0, _tests_dir)
+    from test_store import _create_legacy_v5_read_visibility_db
+
+    _create_legacy_v5_read_visibility_db(path)  # pre-membrane v5 base
+    conn = sqlite3.connect(path)
+    try:
+        migrations.apply_u6_6_inner_life_schema_migration(conn)  # inner-life's v6 ledger
+        for i in (1, 2):
+            conn.execute(
+                "INSERT INTO inner_life_events (id, idempotency_key, event_type, "
+                "process_name, content_hash, content_excerpt, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (f"ile-{i}", f"key-{i}", "turn_finalized", "turn-finalizer",
+                 f"hash{i}", f"excerpt {i}", "2026-07-01T00:00:00+00:00",
+                 "2026-07-01T00:00:00+00:00"),
+            )
+        conn.execute("UPDATE meta SET value = '6' WHERE key = 'schema_version'")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_inner_life_origin_v6_upgrades_to_full_membrane(tmp_path):
+    """Regression (review 003b): an inner-life-origin v6 DB (inner_life_events
+    present, membrane absent, stamped 6) must upgrade to the FULL membrane through
+    the real EngramStore boot path — read_visibility on every membrane-guarded
+    table, not just proposal_ledger. The defect lived in the __init__ composition
+    (executescript pre-creates proposal_ledger, defeating v7's self-repair guard),
+    so the test must exercise EngramStore(db), not run_migrations directly."""
+    db_path = tmp_path / "inner-life-origin-v6.db"
+    _create_inner_life_origin_v6_db(db_path)
+
+    # sanity: the fixture is the inner-life-origin shape (membrane absent)
+    pre = sqlite3.connect(db_path)
+    pre.row_factory = sqlite3.Row
+    try:
+        assert pre.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()[0] == "6"
+        tnames = {r[0] for r in pre.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "inner_life_events" in tnames
+        assert "proposal_ledger" not in tnames  # membrane absent
+        assert "read_visibility" not in {r["name"] for r in pre.execute("PRAGMA table_info(engrams)")}
+        before_rows = [dict(r) for r in pre.execute("SELECT * FROM inner_life_events ORDER BY id")]
+        assert len(before_rows) == 2
+    finally:
+        pre.close()
+
+    # upgrade through the REAL boot path
+    store = EngramStore(db_path)
+    conn = store._get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        assert store.get_meta("schema_version") == str(SCHEMA_VERSION)
+        for table in ("engrams", "beliefs", "hypomnema_entries", "functional_memories"):
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            assert "read_visibility" in cols, f"{table} missing read_visibility after upgrade"
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='proposal_ledger'"
+        ).fetchone()
+        after_rows = [dict(r) for r in conn.execute("SELECT * FROM inner_life_events ORDER BY id")]
+        assert after_rows == before_rows  # inner_life_events rows survive byte-identical
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        store.close()

@@ -744,6 +744,10 @@ class EngramStore:
                 f"Database schema version {current_version} is newer than supported "
                 f"{SCHEMA_VERSION}"
             )
+        # NOTE (review 003b): executescript runs before migrations. Migration
+        # self-repair guards must never key on objects SQL_CREATE_TABLES creates —
+        # this boot path pre-creates them, so such a guard would never fire. See
+        # migrate_v7_afferent_u2_5_proposal_contract for the instance this bit.
         conn.executescript(SQL_CREATE_TABLES)
         # Migrate: add impact column if missing (v0.1 → v0.2)
         try:

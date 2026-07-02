@@ -603,10 +603,24 @@ def _repair_stale_v6_hypomnema_visibility(conn: sqlite3.Connection) -> None:
 @register_migration(7, "Afferent U2.5: normalize proposal ledger quarantine contract")
 def migrate_v7_afferent_u2_5_proposal_contract(conn: sqlite3.Connection) -> None:
     """Normalize already-v6 ProposalLedger rows to the RFC quarantine default."""
-    _repair_stale_v6_hypomnema_visibility(conn)
-    if not _has_table(conn, "proposal_ledger"):
+    # Fable review 003b fix — apply the membrane UNCONDITIONALLY as v7's first act.
+    # EngramStore.__init__ runs executescript(SQL_CREATE_TABLES) BEFORE run_migrations,
+    # so any migration self-repair guard that keys on the existence of an object
+    # SQL_CREATE_TABLES also creates (here: proposal_ledger) is permanently defeated:
+    # the boot path pre-creates the sentinel, the guard sees it, the repair never
+    # fires. An inner-life-origin v6 DB (stamped 6, inner_life_events present, membrane
+    # absent) would then reach v8 with proposal_ledger present but read_visibility
+    # absent on engrams/beliefs/hypomnema_entries/functional_memories.
+    # apply_afferent_membrane_v1_schema_migration is idempotent for the SCHEMA
+    # (_add_column_if_missing + CREATE TABLE IF NOT EXISTS), but its backfill UPDATE
+    # (SET operational WHERE NOT candidate) is NOT a no-op on a present-but-stale
+    # membrane: it would downgrade existing review_only rows, violating
+    # never-downgrade-quarantine. So gate the apply on the columns actually being
+    # absent (inner-life-origin v6), and let _repair_stale handle a present-but-
+    # stale membrane (PR4-origin v6).
+    if not _has_column(conn, "engrams", "read_visibility"):
         apply_afferent_membrane_v1_schema_migration(conn)
-        return
+    _repair_stale_v6_hypomnema_visibility(conn)
 
     conn.execute("DROP INDEX IF EXISTS idx_proposal_ledger_status_scope")
     conn.execute("DROP INDEX IF EXISTS idx_proposal_ledger_visibility")

@@ -1202,3 +1202,109 @@ def test_health_does_not_bump_session_or_write_stage(tmp_path):
         runtime.close()
 
     assert "ONBOARDING - first session" in packet
+
+
+# --- T1b: review-only-first-capture-meta-leak (regression) ---
+
+
+def test_review_only_first_capture_withholds_prose_from_meta(tmp_path):
+    """A quarantined first capture records existence only, never prose, in meta.
+
+    Negative test for review-only-first-capture-meta-leak: a non-operational
+    (identity/foundational) capture must not copy its content into first_capture
+    meta, but the note itself must remain present through a review surface.
+    """
+    import json
+
+    from mnemos.store.sqlite_store import EngramStore
+
+    secret = "my childhood dog was named Zephyrus"
+    runtime = _runtime(tmp_path)
+    try:
+        result = runtime.capture(f"Who I am at core: {secret}")
+    finally:
+        runtime.close()
+
+    # Routed to the non-operational quarantine branch.
+    assert "Visibility: review_only" in result
+    note_id = re.search(r"Continuity note ID: (\S+)", result).group(1)
+
+    store = EngramStore(str(tmp_path / "memory.db"))
+    try:
+        raw = store.get_meta("simple:nova:riley:demo:first_capture")
+        # The note stays present and reviewable through a review surface.
+        entry = store.get_hypomnema_entry(
+            note_id,
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility="review_only",
+        )
+    finally:
+        store.close()
+
+    assert raw is not None
+    payload = json.loads(raw)
+    assert payload["note_id"] == note_id
+    assert payload.get("withheld") is True
+    assert "excerpt" not in payload
+    assert "Zephyrus" not in raw  # no prose in the meta side-channel
+
+    assert entry is not None  # visible through the review surface
+    assert "Zephyrus" in entry["content"]  # content preserved for review
+
+
+def test_review_only_first_capture_does_not_leak_into_operational_packet(tmp_path):
+    """A review-only first capture must not reappear in the operational packet.
+
+    The core leak: content copied into first_capture meta was re-quoted by the
+    verification block into context() after a restart, bypassing read-visibility
+    filters. The block must now emit an existence-only line for quarantined
+    captures.
+    """
+    secret = "Zephyrus the lighthouse dog"
+    runtime1 = _runtime(tmp_path)
+    try:
+        runtime1.context()
+        runtime1.introduce("claude-opus-4-6")
+        result = runtime1.capture(f"Who I am: I grew up with {secret}")
+        same_session = runtime1.context()
+    finally:
+        runtime1.close()
+
+    assert "Visibility: review_only" in result
+    assert "MEMORY VERIFIED" not in same_session
+
+    runtime2 = _runtime(tmp_path)
+    try:
+        later_session = runtime2.context()
+    finally:
+        runtime2.close()
+
+    assert "MEMORY VERIFIED" in later_session  # existence-only line still fires
+    assert "pending review" in later_session
+    assert secret not in later_session  # prose stays quarantined
+    assert "Zephyrus" not in later_session
+
+
+def test_operational_first_capture_still_quotes_excerpt(tmp_path):
+    """Positive test: operational captures keep the excerpt-quoting feature."""
+    secret = "a blue kayak in the garage"
+    runtime1 = _runtime(tmp_path)
+    try:
+        runtime1.context()
+        runtime1.introduce("claude-opus-4-6")
+        result = runtime1.capture(f"Riley keeps {secret}")
+    finally:
+        runtime1.close()
+
+    assert "Memory ID:" in result  # operational branch taken
+
+    runtime2 = _runtime(tmp_path)
+    try:
+        later_session = runtime2.context()
+    finally:
+        runtime2.close()
+
+    assert "MEMORY VERIFIED" in later_session
+    assert secret in later_session  # excerpt quoted, feature preserved

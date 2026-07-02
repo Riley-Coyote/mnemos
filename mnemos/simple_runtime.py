@@ -353,8 +353,21 @@ class MnemosRuntime:
         )
         return "\n".join(lines)
 
-    def _record_first_capture(self, note_id: str, engram_id: str, content: str) -> None:
-        """Record the first capture of a fresh scope for later verification."""
+    def _record_first_capture(
+        self,
+        note_id: str,
+        engram_id: str,
+        content: str = "",
+        *,
+        withheld: bool = False,
+    ) -> None:
+        """Record the first capture of a fresh scope for later verification.
+
+        For non-operational (review_only / audit_only) captures the caller
+        passes ``withheld=True`` and no content: only the note id is recorded,
+        never the prose. A quarantined first capture must not re-enter the
+        operational continuity packet through this meta side-channel.
+        """
 
         if self._get_meta("first_capture") is not None or self._get_meta("verified_at") is not None:
             return
@@ -363,8 +376,11 @@ class MnemosRuntime:
             "engram_id": engram_id,
             "session": self._current_session(),
             "captured_at": datetime.now(timezone.utc).isoformat(),
-            "excerpt": content.strip().replace("\n", " ")[:160],
         }
+        if withheld:
+            payload["withheld"] = True
+        else:
+            payload["excerpt"] = content.strip().replace("\n", " ")[:160]
         self._set_meta("first_capture", json.dumps(payload, ensure_ascii=True, sort_keys=True))
 
     def _verification_block(self) -> str | None:
@@ -377,7 +393,6 @@ class MnemosRuntime:
             return None
         try:
             first_capture = json.loads(raw)
-            excerpt = first_capture["excerpt"]
             first_session = int(first_capture["session"])
         except (ValueError, KeyError, TypeError):
             return None
@@ -387,6 +402,22 @@ class MnemosRuntime:
             return None
 
         self._set_meta("verified_at", datetime.now(timezone.utc).isoformat())
+
+        # A quarantined (review_only / audit_only) first capture records no
+        # prose in meta. Emit an existence-only line — count plus note id, never
+        # candidate prose — so review-only content cannot reappear in the
+        # operational packet. R6: counts and IDs may cross the operational
+        # boundary; candidate prose may not.
+        if bool(first_capture.get("withheld")) or "excerpt" not in first_capture:
+            note_id = first_capture.get("note_id") or "unknown"
+            return (
+                "MEMORY VERIFIED - continuity crossed a restart\n"
+                f"1 earlier capture is pending review (note {note_id}); "
+                "its content stays quarantined until you review it.\n"
+                "(This check fires once and will not appear again.)"
+            )
+
+        excerpt = first_capture["excerpt"]
         return (
             "MEMORY VERIFIED - continuity crossed a restart\n"
             f'In an earlier session you captured this about the human: "{excerpt}"\n'
@@ -681,7 +712,9 @@ class MnemosRuntime:
                 salience=salience,
                 foundational=foundational,
             )
-            self._record_first_capture(note_id, "", content)
+            # Quarantined capture: record existence only, never the prose, so
+            # it cannot leak into the operational packet via first_capture meta.
+            self._record_first_capture(note_id, "", withheld=True)
             maintenance = self.maintain(auto=True)
             return (
                 "Captured continuity for review.\n"

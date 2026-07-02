@@ -120,7 +120,9 @@ baseline background behavior.
 - Generated reflection, wandering, and dream candidates must pass the narrative
   gate before persistence. Passed candidates are private, low-confidence,
   `read_visibility="audit_only"`, not voice exemplars, and not consolidation
-  authorized; identity/foundational-domain generated output is dropped.
+  authorized; identity/foundational-domain generated output is dropped. The
+  low-stakes engram and its idempotency ledger row are committed atomically so a
+  retry cannot duplicate a generated row after a partial failure.
 - Inner-life status and soak tick telemetry count generated memory writes,
   belief writes, identity patches, and shared-pool writes so rollbacks can
   verify that belief, identity, and shared-pool counters remain zero.
@@ -128,10 +130,14 @@ baseline background behavior.
   schedule, `soak.tick.enabled`, and `soak.families.*.enabled` disabled.
   Preflight reports missing/disabled kill switches, provider readiness,
   observer reviewer configuration, pre-soak snapshot readiness, launchd paths,
-  halt marker, and rollback commands before activation.
+  halt marker, rollback commands, and known per-process activation blockers
+  before activation. While the `emotional-driver-filter-after-limit` residual is
+  open, `affect` must remain unscheduled; its disabled schedule/activity switch
+  is the safe state rather than a readiness penalty.
 - `inner-life plist` and `soak plist` write launchd plist files but do not call
   `launchctl`. `soak preflight --dry-run-tick` runs the tick against a SQLite
-  backup copy and does not mutate the supplied DB.
+  backup copy, disables real LLM-client construction, and does not mutate the
+  supplied DB.
 
 ## Visual Artifacts
 

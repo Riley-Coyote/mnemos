@@ -9,6 +9,21 @@ from typing import Any
 PROCESS_FAMILIES = ("challenge", "observe", "affect", "reflect", "wander", "dream")
 SOAK_FAMILIES = ("shallow_consolidation",)
 
+# Known unresolved defects that block a scheduled process from full activation
+# until fixed — the machine remembers, so nobody has to. A process listed here
+# reports the issue in its preflight entry, and if it is scheduled-enabled the
+# issue also becomes a global activation blocker (ready_for_full_scheduled_
+# activation goes False). Remove an entry only when its fix lands.
+#
+# affect: `_recent_signal_events` applies the `_event_influences` content filter
+# after the recency limit, so a burst of newer non-influencing rows can evict an
+# older in-window signal (ruling 004, option (c) now / (b) at activation). The
+# paging primitive that closes it is roadmap RM-7; docs/gated-inner-life.md and
+# tests/test_t2_5_safety_gate_repairs.py carry the operator/test contract.
+KNOWN_ACTIVATION_BLOCKERS: dict[str, tuple[str, ...]] = {
+    "affect": ("emotional-driver-filter-after-limit",),
+}
+
 
 def build_inner_life_preflight(
     *,
@@ -39,10 +54,14 @@ def build_inner_life_preflight(
         for family in SOAK_FAMILIES
         if family not in soak_families or "enabled" not in soak_families[family]
     ]
+    # A process with a known activation blocker is exempt from the disabled
+    # penalty: disabling it is the sanctioned operator response to its open issue
+    # (it cannot be safely enabled), not a misconfiguration to flag.
     disabled_schedule_processes = [
         process
         for process in PROCESS_FAMILIES
         if not bool(schedule_processes.get(process, {}).get("enabled", False))
+        and process not in KNOWN_ACTIVATION_BLOCKERS
     ]
     disabled_soak_families = [
         family
@@ -59,6 +78,7 @@ def build_inner_life_preflight(
         process
         for process in PROCESS_FAMILIES
         if not bool(activity_processes.get(process, {}).get("enabled", True))
+        and process not in KNOWN_ACTIVATION_BLOCKERS
     ]
 
     expanded_db_path = Path(db_path).expanduser()
@@ -101,6 +121,13 @@ def build_inner_life_preflight(
             and int(provider.get("observer_reviewer_count", 0) or 0) < 1
         ):
             blockers.append("observer_reviewers_unconfigured")
+
+    # A scheduled process with a known unresolved defect cannot go live until it
+    # is fixed — activation blocks by mechanism, not by anyone remembering.
+    for process, issues in KNOWN_ACTIVATION_BLOCKERS.items():
+        if bool(schedule_processes.get(process, {}).get("enabled", False)):
+            for issue in issues:
+                blockers.append(f"known_open_issue:{process}:{issue}")
 
     artifact_dir = Path(
         activation.get("artifact_dir") or "~/.mnemos/inner-life"
@@ -186,6 +213,7 @@ def build_inner_life_preflight(
                     f"inner_life.schedules.processes.{process}.enabled",
                     f"inner_life.activity_gate.processes.{process}.enabled",
                 ],
+                "known_open_issues": list(KNOWN_ACTIVATION_BLOCKERS.get(process, ())),
             }
             for process in PROCESS_FAMILIES
         },

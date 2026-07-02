@@ -100,6 +100,9 @@ Use this checklist before publishing Mnemos or opening a release PR.
   narrative gate and are written only as private, low-confidence,
   `audit_only` low-stakes engrams; generated identity/foundational-domain
   output is dropped before persistence.
+- Low-stakes generated engrams and their idempotency ledger rows are committed
+  in one transaction, including the concurrent-idempotency race path, so release
+  candidates cannot mint duplicate generated memory after partial failures.
 - Correction/forget behavior is documented.
 
 ## Gated Inner-Life And Soak
@@ -112,14 +115,20 @@ Use this checklist before publishing Mnemos or opening a release PR.
   or disabled kill switches.
 - `inner-life preflight` blocks activation when the representative DB is
   missing, schedules are disabled, activity gates are disabled, the pre-soak
-  snapshot is missing, required provider/reviewer readiness is absent, or
-  rollback/launchd surfaces are incomplete.
+  snapshot is missing, or required provider/reviewer readiness is absent. It
+  reports rollback and launchd surfaces for operator review.
+- `inner-life preflight` also blocks any schedule-enabled process with a known
+  activation residual. `affect` is blocked by
+  `known_open_issue:affect:emotional-driver-filter-after-limit` until RM-7; a
+  disabled `affect` schedule/activity switch is the expected safe state.
 - `inner-life plist` and `soak plist` write plist files atomically, bake
   repo-local `python -m mnemos.cli ...` arguments, and never call `launchctl`.
 - `soak preflight` composes watcher doctor state, soak plist lint, launchd
   not-loaded state, provider/snapshot/family readiness, and optional copy-DB
   tick dry run. It may write the requested JSON artifact but must not mutate
-  the supplied DB.
+  the supplied DB or construct a real LLM client during the dry run.
+- Recency-sensitive inner-life scans filter eligibility in SQL before `LIMIT`
+  for activity signals, cooldowns, and soak family cadence checks.
 - `inner-life status` and soak tick summaries expose generated-memory,
   belief-write, identity-patch, and shared-pool counters; U6.6/U7 validation
   should keep belief, identity, and shared-pool counters at zero.

@@ -364,7 +364,10 @@ review, reflection, dreaming, and wandering.
 The gated inner-life and full-soak commands are operator/pre-soak surfaces, not
 baseline background jobs. They require `--db-path`, refuse live `~/.mnemos`
 databases unless `--allow-live-db` is supplied, and keep generated
-reflection/wandering/dream output private and audit-only. See
+reflection/wandering/dream output private and audit-only. Full scheduled
+activation intentionally keeps `affect` unscheduled until RM-7 closes the
+`emotional-driver-filter-after-limit` residual; enabling it makes preflight
+report a `known_open_issue` blocker. See
 [docs/gated-inner-life.md](docs/gated-inner-life.md) before using them.
 
 ### Dedicated Model Providers
@@ -572,7 +575,8 @@ mnemos soak preflight --db-path ./copy.db --dry-run-tick \
 These commands use the schema v8 `inner_life_events` ledger for provenance,
 gate decisions, skips, and generated-write telemetry. Generated low-stakes
 memory rows are private, `read_visibility="audit_only"`, and excluded from
-ordinary operational retrieval.
+ordinary operational retrieval. `soak preflight --dry-run-tick` runs against a
+SQLite copy and does not construct a real LLM client.
 
 Global options:
 
@@ -668,7 +672,7 @@ Simple MCP Surface      context | capture | recall | correct | maintain
 Continuity Layer        scoped notes | revisions | supersession | promotion
 Mnemos Core             engrams | connections | beliefs | reconsolidation
 Substrate               decay | softening | reflection | modulators | events
-Gated Inner Life        provenance ledger | audit-only low-stakes writes | soak preflight
+Gated Inner Life        provenance ledger | audit-only low-stakes writes | known-blocker preflight
 Cross-Agent Layer       shared pool | bridge | federation | attestation
 Hermes Integration      sidecar MCP | provider shim | identity continuity
 ```

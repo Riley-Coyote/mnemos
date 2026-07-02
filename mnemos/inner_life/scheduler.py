@@ -116,7 +116,14 @@ def run_scheduled_inner_life_process(
         )
 
     if process == "wander":
-        result = _run_wander(store, agent_id=agent_id, llm_client=llm_client)
+        result = _run_wander(
+            store,
+            agent_id=agent_id,
+            llm_client=llm_client,
+            person_id=person_id,
+            project_scope=project_scope,
+            rollout_tag=rollout_tag,
+        )
         return _summary(
             process=process,
             status="ran",
@@ -128,7 +135,14 @@ def run_scheduled_inner_life_process(
         )
 
     if process == "dream":
-        result = _run_dream(store, agent_id=agent_id, llm_client=llm_client)
+        result = _run_dream(
+            store,
+            agent_id=agent_id,
+            llm_client=llm_client,
+            person_id=person_id,
+            project_scope=project_scope,
+            rollout_tag=rollout_tag,
+        )
         if result["status"] == "skipped":
             return _record_scheduled_skip(
                 store,
@@ -305,14 +319,26 @@ def _run_wander(
     *,
     agent_id: str,
     llm_client: Any,
+    person_id: str = "user",
+    project_scope: str = "global",
+    rollout_tag: str = "u6.6",
 ) -> dict[str, Any]:
     from ..substrate.handlers import wandering
 
     before = store.count_engrams(agent_id=agent_id, read_visibility=None)
     config = _substrate_config(store, agent_id=agent_id)
+    # Scope travels via the event payload so the low-stakes writer stamps the
+    # requested person/project/rollout triple (rollout_tag is the rollback unit)
+    # instead of the writer defaults. The substrate tick omits these keys and
+    # keeps the writer defaults.
     event = SubstrateEvent(
         event_type=EventType.SILENCE_EXTENDED,
-        payload={"scheduled": True},
+        payload={
+            "scheduled": True,
+            "person_id": person_id,
+            "project_scope": project_scope,
+            "rollout_tag": rollout_tag,
+        },
         source="inner-life-scheduler",
     )
     wandering.handle(
@@ -330,6 +356,9 @@ def _run_dream(
     *,
     agent_id: str,
     llm_client: Any,
+    person_id: str = "user",
+    project_scope: str = "global",
+    rollout_tag: str = "u6.6",
 ) -> dict[str, Any]:
     from ..substrate.handlers import dreaming
 
@@ -348,9 +377,17 @@ def _run_dream(
     softened = min(candidates, key=lambda e: float(e.accessibility) * float(e.strength))
     before = store.count_engrams(agent_id=agent_id, read_visibility=None)
     config = _substrate_config(store, agent_id=agent_id)
+    # Scope travels via the event payload (see _run_wander) so the low-stakes
+    # writer stamps the requested rollout triple, not the writer defaults.
     event = SubstrateEvent(
         event_type=EventType.MEMORY_SOFTENED,
-        payload={"engram_id": softened.id, "scheduled": True},
+        payload={
+            "engram_id": softened.id,
+            "scheduled": True,
+            "person_id": person_id,
+            "project_scope": project_scope,
+            "rollout_tag": rollout_tag,
+        },
         source="inner-life-scheduler",
     )
     dreaming.handle(

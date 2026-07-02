@@ -24,6 +24,9 @@ DEFAULT_SOAK_LABEL = "com.davidef.mnemos.soak.tick"
 DEFAULT_SOAK_ARTIFACT_DIR = "~/.mnemos/soak"
 DEFAULT_MIN_TICK_INTERVAL_SECONDS = 300
 SHALLOW_CONSOLIDATION = "shallow_consolidation"
+# Soak families that generate text and therefore need an LLM client (mirrors the
+# inner-life `run` CLI). affect/observe/challenge run without one.
+LLM_SOAK_FAMILIES = frozenset({"reflect", "wander", "dream"})
 
 
 def run_scheduled_soak_tick(
@@ -36,9 +39,16 @@ def run_scheduled_soak_tick(
     rollout_tag: str = "u7-soak",
     run_id: str | None = None,
     llm_client: Any | None = None,
+    build_llm_client: bool = True,
     now: datetime | str | None = None,
 ) -> dict[str, Any]:
-    """Run one cheap Polyphonic-style tick over enabled soak families."""
+    """Run one cheap Polyphonic-style tick over enabled soak families.
+
+    ``build_llm_client=False`` disables the auto-wiring below so a caller can
+    guarantee no real LLM is contacted — used by the dry-run preflight, which
+    runs on a DB copy and must never send memory content to a real model before
+    activation.
+    """
     now_dt = _coerce_now(now)
     tick_config = _tick_config(config)
     tick_id = run_id or now_dt.isoformat()
@@ -82,6 +92,22 @@ def run_scheduled_soak_tick(
             rollout_tag=rollout_tag,
             tick_id=tick_id,
         )
+
+    # Wire an LLM client for the generative families (reflect/wander/dream) when
+    # the caller didn't inject one — without it the scheduled soak path can never
+    # actually reflect/wander/dream (it silently no-ops, which is why the soak as
+    # designed had never dreamt through this path). Built only here, after the
+    # enabled + family gates above: this is capability, not activation. A disabled
+    # tick or a tick with no generative family never constructs a client,
+    # per-family kill switches still apply, and an injected client (tests) wins.
+    if (
+        llm_client is None
+        and build_llm_client
+        and any(family in LLM_SOAK_FAMILIES for family, _ in families)
+    ):
+        from ..llm import create_client
+
+        llm_client = create_client()
 
     outcomes: list[dict[str, Any]] = []
     for family, family_config in families:
@@ -444,23 +470,22 @@ def _last_family_attempt_at(
     project_scope: str,
     rollout_tag: str,
 ) -> datetime | None:
+    # Filter to THIS family's real attempts in SQL (process_name + exclude the
+    # not-due skip rows) with LIMIT 1, so other families' rows can never evict
+    # this family's last attempt from the scan and make the cadence expire early.
     rows = store.get_inner_life_events(
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        process_name=family,
+        exclude_gate_decision="skipped:family_not_due",
         rollout_tag=rollout_tag,
-        limit=500,
+        limit=1,
+        recent=True,
     )
-    latest: datetime | None = None
-    for row in rows:
-        if row.get("process_name") != family:
-            continue
-        if row.get("gate_decision") == "skipped:family_not_due":
-            continue
-        created = _coerce_now(row.get("created_at"))
-        if latest is None or created > latest:
-            latest = created
-    return latest
+    if not rows:
+        return None
+    return _coerce_now(rows[0].get("created_at"))
 
 
 def _tick_config(config: dict[str, Any]) -> dict[str, Any]:

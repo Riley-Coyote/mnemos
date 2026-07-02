@@ -154,7 +154,6 @@ def evaluate_activity_gate(
             project_scope=project_scope,
             cooldown_minutes=cooldown_minutes,
             now=now_dt,
-            limit=_positive_int(gate_config.get("max_event_scan"), 500),
         )
         if cooldown_until is not None:
             decision = _decision(
@@ -309,7 +308,10 @@ def _collect_activity_signals(
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        event_types=list(_SIGNAL_EVENT_TYPES),
+        exclude_process_name="activity-gate",
         limit=event_limit,
+        recent=True,  # newest eligible signals; [since, now] window filtered below
     )
     for row in events:
         if row.get("process_name") == "activity-gate":
@@ -356,31 +358,23 @@ def _cooldown_until(
     project_scope: str,
     cooldown_minutes: int,
     now: datetime,
-    limit: int,
 ) -> datetime | None:
-    rows = store.get_inner_life_events(
+    # The full eligibility predicate (activity-gate run for this target_process)
+    # is resolved in SQL with LIMIT 1, so newer runs for other processes can
+    # never evict this process's last run from a scan window.
+    row = store.get_last_activity_gate_run(
+        target_process=process_name,
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
-        event_type="tool_event",
-        limit=limit,
     )
-    for row in reversed(rows):
-        if row.get("process_name") != "activity-gate":
-            continue
-        metadata = row.get("metadata") or {}
-        if metadata.get("target_process") != process_name:
-            continue
-        if row.get("gate_decision") != "run":
-            continue
-        created_at = _parse_datetime(row.get("created_at"))
-        if created_at is None:
-            continue
-        until = created_at + timedelta(minutes=cooldown_minutes)
-        if now < until:
-            return until
+    if row is None:
         return None
-    return None
+    created_at = _parse_datetime(row.get("created_at"))
+    if created_at is None:
+        return None
+    until = created_at + timedelta(minutes=cooldown_minutes)
+    return until if now < until else None
 
 
 def _decision(

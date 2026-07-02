@@ -156,6 +156,9 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     confirms each pin goes red when the corresponding plan edit is stashed.
     """
     text = _read(MAIN_PLAN)
+    u4_section = text.split("### U4. Tiered Review Gates", 1)[1].split(
+        "### U5. DynamicModulation Persistence Bounds", 1
+    )[0]
 
     # AM-U4 Evidence Diversity subsection + review-surface folds
     assert "#### AM-U4 Evidence Diversity" in text
@@ -173,6 +176,12 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "supporting_instance_ids" in text
     assert "evidence_diversity" in text
     assert "consistency_anomaly" in text
+    assert (
+        "Modify: `mnemos/store/migrations.py`" in u4_section
+        or "Modify: mnemos/store/migrations.py" in u4_section
+    )
+    assert "Create: `mnemos/review/evidence_diversity.py`" in u4_section
+    assert "existing v6/v7 database migrates forward" in u4_section
 
     # A-regression rows (three, aligned to 3-col schema)
     assert "Evidence-diversity gate qualifies genuinely diverse support" in text
@@ -192,6 +201,14 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "MIN_RECURRENCES" in text
     assert "VIVIDNESS_RATIO_CAP" in text
     assert "drop:high_blast_generated" in text
+    assert "mnemos/substrate/handlers/dreaming.py" in text
+    assert "mnemos/substrate/handlers/wandering.py" in text
+    assert "mnemos/inner_life/low_stakes.py" in text
+    assert "mnemos/inner_life/narrative_gate.py" in text
+    assert "mnemos/consolidation/dreaming.py" not in text
+    assert "mnemos/consolidation/wandering.py" not in text
+    assert "mnemos/consolidation/narrative_gate.py" not in text
+    assert "mnemos/affect/low_stakes.py" not in text
 
     # R3/R7/R8 U6c extensions (Requirements + Rule Ledger carry U6c, 6 total)
     assert text.count("extended by U6c (dream graduation)") >= 6

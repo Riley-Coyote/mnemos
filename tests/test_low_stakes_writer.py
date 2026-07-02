@@ -171,7 +171,7 @@ def test_low_stakes_idempotency_is_key_based_not_scope_window_based(tmp_path):
         assert first["written"] == 1
         assert second["written"] == 0
         assert second["duplicates"] == 1
-        assert store.count_engrams(agent_id="oliver") == 1
+        assert store.count_engrams(agent_id="oliver", read_visibility=None) == 1
         engram = store.get_engram(first["engram_id"])
         assert engram is not None
         assert engram.source.type == SourceType.REFLECTION

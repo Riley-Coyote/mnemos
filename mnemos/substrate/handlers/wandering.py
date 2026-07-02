@@ -57,8 +57,7 @@ def handle(
         SELECT COUNT(*) FROM engrams
         WHERE state='active' AND content LIKE '%[wandering]%'
         AND owner_agent_id = ?
-        AND consolidation_authorized = 1
-        AND read_visibility = 'operational_context'
+        AND read_visibility = 'audit_only'
         AND created_at > datetime('now', '-7 days')
     """, (agent_id,)).fetchone()[0]
 
@@ -74,8 +73,7 @@ def handle(
         SELECT created_at FROM engrams
         WHERE state='active' AND content LIKE '%[wandering]%'
         AND owner_agent_id = ?
-        AND consolidation_authorized = 1
-        AND read_visibility = 'operational_context'
+        AND read_visibility = 'audit_only'
         ORDER BY created_at DESC LIMIT 1
     """, (agent_id,)).fetchone()
 
@@ -112,8 +110,7 @@ def handle(
         SELECT content FROM engrams
         WHERE state='active' AND content LIKE '%[wandering]%'
         AND owner_agent_id = ?
-        AND consolidation_authorized = 1
-        AND read_visibility = 'operational_context'
+        AND read_visibility = 'audit_only'
         AND created_at > datetime('now', '-30 days')
     """, (agent_id,)).fetchall()
     for hr in hash_rows:
@@ -196,8 +193,7 @@ If something surfaces: {{"thought": "<the wandering thought>", "origin": "<which
                         SELECT content FROM engrams
                         WHERE id = ?
                           AND owner_agent_id = ?
-                          AND consolidation_authorized = 1
-                          AND read_visibility = 'operational_context'
+                          AND read_visibility = 'audit_only'
                         """,
                         (engram_id, agent_id),
                     ).fetchone()

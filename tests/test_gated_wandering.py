@@ -59,14 +59,18 @@ def test_wandering_writes_passed_thought_as_low_stakes_only(tmp_path):
         )
 
         assert "AUTHORIZED-WANDERING-SOURCE" in stub.prompts[0]
+        # Finding A: low-stakes output is audit_only, absent from operational reads.
         generated = [
             engram
-            for engram in store.get_active_engrams(agent_id="oliver", limit=10)
+            for engram in store.get_active_engrams(
+                agent_id="oliver", limit=10, read_visibility="audit_only"
+            )
             if "low-stakes" in engram.tags
         ]
         assert len(generated) == 1
         engram = generated[0]
         assert engram.content == "[wandering] authorized wandering"
+        assert engram.read_visibility == "audit_only"
         assert engram.source.type == SourceType.REFLECTION
         assert engram.source.confidence_source == ConfidenceSource.SPECULATIVE
         assert engram.visibility == Visibility.PRIVATE
@@ -131,6 +135,7 @@ def test_wandering_time_gate_counts_prior_low_stakes_wandering(tmp_path):
         tags=["internal", "low-stakes", "generated", "wandering"],
         owner_agent_id="oliver",
         consolidation_authorized=False,
+        read_visibility="audit_only",  # Finding A: prior low-stakes are audit_only
     )
     store.save_engram(previous)
     stub = StubLLM('{"thought": "should not run", "origin": "authorized"}')
@@ -144,6 +149,6 @@ def test_wandering_time_gate_counts_prior_low_stakes_wandering(tmp_path):
         )
 
         assert stub.prompts == []
-        assert store.count_engrams(agent_id="oliver") == 2
+        assert store.count_engrams(agent_id="oliver", read_visibility=None) == 2
     finally:
         store.close()

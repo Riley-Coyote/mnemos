@@ -1397,7 +1397,7 @@ def test_substrate_dreaming_prompt_excludes_unauthorized_and_other_agent(tmp_pat
         assert "OTHER-AGENT-DREAM-PROMPT-LEAK" not in prompt
         outputs = [
             e.content
-            for e in store.get_active_engrams(agent_id="oliver", limit=20)
+            for e in store.get_active_engrams(agent_id="oliver", limit=20, read_visibility=None)
         ]
         assert "[dream] authorized synthesis" in outputs
     finally:
@@ -1445,7 +1445,7 @@ def test_substrate_wandering_prompt_excludes_unauthorized_and_other_agent(tmp_pa
         assert "OTHER-AGENT-WANDERING-PROMPT-LEAK" not in prompt
         outputs = [
             e.content
-            for e in store.get_active_engrams(agent_id="oliver", limit=20)
+            for e in store.get_active_engrams(agent_id="oliver", limit=20, read_visibility=None)
         ]
         assert "[wandering] authorized wandering" in outputs
     finally:
@@ -1504,7 +1504,7 @@ def test_substrate_initiation_prompt_excludes_unauthorized_and_other_agent(tmp_p
         assert "OTHER-AGENT-INITIATION-PROMPT-LEAK" not in prompt
         outputs = [
             e.content
-            for e in store.get_active_engrams(agent_id="oliver", limit=20)
+            for e in store.get_active_engrams(agent_id="oliver", limit=20, read_visibility=None)
         ]
         assert "[initiation] authorized pattern" in outputs
     finally:

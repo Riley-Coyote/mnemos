@@ -13,6 +13,7 @@ from ..core.types import (
     SourceType,
     Visibility,
 )
+from ..store.read_visibility import READ_VISIBILITY_AUDIT
 from ..store.sqlite_store import EngramStore
 from .turn_finalizer import _excerpt
 
@@ -110,6 +111,11 @@ def write_low_stakes_record(
         lineage=Lineage(parents=source_ids),
         owner_agent_id=agent_id,
         visibility=Visibility.PRIVATE,
+        # Finding A (DAVID-1): the membrane's read_visibility must be stamped at
+        # write time. PRIVATE inner-life output maps to audit_only so it never
+        # enters operational reads; the handlers' quota/dedup queries filter on
+        # this private class (see dreaming.py / wandering.py).
+        read_visibility=READ_VISIBILITY_AUDIT,
         voice_exemplar_eligible=False,
         softening_protected=False,
         consolidation_authorized=False,

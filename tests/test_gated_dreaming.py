@@ -71,14 +71,18 @@ def test_dreaming_writes_passed_recombination_as_low_stakes_only(tmp_path):
 
         assert "AUTHORIZED-DREAM-FADING-SOURCE" in stub.prompts[0]
         assert "AUTHORIZED-DREAM-VIVID-SOURCE" in stub.prompts[0]
+        # Finding A: low-stakes output is audit_only, absent from operational reads.
         generated = [
             engram
-            for engram in store.get_active_engrams(agent_id="oliver", limit=10)
+            for engram in store.get_active_engrams(
+                agent_id="oliver", limit=10, read_visibility="audit_only"
+            )
             if "low-stakes" in engram.tags
         ]
         assert len(generated) == 1
         engram = generated[0]
         assert engram.content == "[dream] authorized synthesis"
+        assert engram.read_visibility == "audit_only"
         assert engram.source.type == SourceType.DREAM
         assert engram.source.confidence_source == ConfidenceSource.SPECULATIVE
         assert engram.visibility == Visibility.PRIVATE
@@ -143,6 +147,7 @@ def test_dreaming_time_gate_counts_prior_low_stakes_dream(tmp_path):
         tags=["internal", "low-stakes", "generated", "dream"],
         owner_agent_id="oliver",
         consolidation_authorized=False,
+        read_visibility="audit_only",  # Finding A: prior low-stakes are audit_only
     )
     store.save_engram(previous)
     stub = StubLLM('{"dream": "should not run", "significance": "none"}')
@@ -156,6 +161,6 @@ def test_dreaming_time_gate_counts_prior_low_stakes_dream(tmp_path):
         )
 
         assert stub.prompts == []
-        assert store.count_engrams(agent_id="oliver") == 3
+        assert store.count_engrams(agent_id="oliver", read_visibility=None) == 3
     finally:
         store.close()

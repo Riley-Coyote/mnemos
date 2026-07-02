@@ -118,13 +118,17 @@ def test_gated_reflection_writes_passed_thought_as_low_stakes_only(tmp_path):
         assert stats["shared_pool_writes"] == 0
         assert store.get_beliefs(agent_id="oliver") == []
 
+        # Finding A: low-stakes output is audit_only, absent from operational reads.
         generated = [
             engram
-            for engram in store.get_active_engrams(agent_id="oliver", limit=10)
+            for engram in store.get_active_engrams(
+                agent_id="oliver", limit=10, read_visibility="audit_only"
+            )
             if "low-stakes" in engram.tags
         ]
         assert len(generated) == 1
         engram = generated[0]
+        assert engram.read_visibility == "audit_only"
         assert engram.source.type == SourceType.REFLECTION
         assert engram.source.confidence_source == ConfidenceSource.SPECULATIVE
         assert engram.visibility == Visibility.PRIVATE

@@ -77,9 +77,18 @@ def register_migration(
     Returns:
         Decorator function.
     """
+
     def decorator(func: Callable[[sqlite3.Connection], None]) -> Callable:
+        if version in _MIGRATIONS:
+            raise ValueError(
+                f"Duplicate schema migration version {version}: already "
+                f"registered as {_MIGRATIONS[version][0]!r}. Two branches "
+                "colliding on a version number must fail loudly, never "
+                "silently discard one migration."
+            )
         _MIGRATIONS[version] = (description, func)
         return func
+
     return decorator
 
 
@@ -95,9 +104,7 @@ def get_current_version(conn: sqlite3.Connection) -> int:
     conn.execute(
         "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
     )
-    row = conn.execute(
-        "SELECT value FROM meta WHERE key = 'schema_version'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
     if row is None:
         return 0
     try:
@@ -109,7 +116,9 @@ def get_current_version(conn: sqlite3.Connection) -> int:
     return version
 
 
-def run_migrations(conn: sqlite3.Connection, target_version: int | None = None) -> list[int]:
+def run_migrations(
+    conn: sqlite3.Connection, target_version: int | None = None
+) -> list[int]:
     """Apply all pending migrations up to target_version.
 
     Args:
@@ -418,7 +427,9 @@ def apply_u3b_hardening_schema_migration(conn: sqlite3.Connection) -> None:
         )
 
 
-@register_migration(5, "U3b hardening: row-map extensions + pai_import_events + tombstone triggers")
+@register_migration(
+    5, "U3b hardening: row-map extensions + pai_import_events + tombstone triggers"
+)
 def migrate_v5_u3b_hardening(conn: sqlite3.Connection) -> None:
     apply_u3b_hardening_schema_migration(conn)
 
@@ -471,7 +482,9 @@ def apply_afferent_membrane_v1_schema_migration(conn: sqlite3.Connection) -> Non
         """
         UPDATE hypomnema_entries
         SET read_visibility = 'review_only'
-        WHERE """ + HYPO_REVIEW_CANDIDATE_SQL + """
+        WHERE """
+        + HYPO_REVIEW_CANDIDATE_SQL
+        + """
         """,
         (HYPO_PROMOTION_MIN_CONFIDENCE, HYPO_PROMOTION_MIN_SALIENCE),
     )
@@ -550,9 +563,12 @@ def _repair_stale_v6_hypomnema_visibility(conn: sqlite3.Connection) -> None:
         conn, "hypomnema_entries", "read_visibility"
     ):
         return
-    if _normalize_default_literal(
-        _column_default(conn, "hypomnema_entries", "read_visibility")
-    ) != READ_VISIBILITY_REVIEW:
+    if (
+        _normalize_default_literal(
+            _column_default(conn, "hypomnema_entries", "read_visibility")
+        )
+        != READ_VISIBILITY_REVIEW
+    ):
         return
 
     row = conn.execute(
@@ -586,7 +602,9 @@ def _repair_stale_v6_hypomnema_visibility(conn: sqlite3.Connection) -> None:
         """
         UPDATE hypomnema_entries
         SET read_visibility = 'review_only'
-        WHERE """ + HYPO_REVIEW_CANDIDATE_SQL + """
+        WHERE """
+        + HYPO_REVIEW_CANDIDATE_SQL
+        + """
           AND read_visibility = 'operational_context'
         """,
         (HYPO_PROMOTION_MIN_CONFIDENCE, HYPO_PROMOTION_MIN_SALIENCE),
@@ -596,10 +614,24 @@ def _repair_stale_v6_hypomnema_visibility(conn: sqlite3.Connection) -> None:
 @register_migration(7, "Afferent U2.5: normalize proposal ledger quarantine contract")
 def migrate_v7_afferent_u2_5_proposal_contract(conn: sqlite3.Connection) -> None:
     """Normalize already-v6 ProposalLedger rows to the RFC quarantine default."""
-    _repair_stale_v6_hypomnema_visibility(conn)
-    if not _has_table(conn, "proposal_ledger"):
+    # Fable review 003b fix — apply the membrane UNCONDITIONALLY as v7's first act.
+    # EngramStore.__init__ runs executescript(SQL_CREATE_TABLES) BEFORE run_migrations,
+    # so any migration self-repair guard that keys on the existence of an object
+    # SQL_CREATE_TABLES also creates (here: proposal_ledger) is permanently defeated:
+    # the boot path pre-creates the sentinel, the guard sees it, the repair never
+    # fires. An inner-life-origin v6 DB (stamped 6, inner_life_events present, membrane
+    # absent) would then reach v8 with proposal_ledger present but read_visibility
+    # absent on engrams/beliefs/hypomnema_entries/functional_memories.
+    # apply_afferent_membrane_v1_schema_migration is idempotent for the SCHEMA
+    # (_add_column_if_missing + CREATE TABLE IF NOT EXISTS), but its backfill UPDATE
+    # (SET operational WHERE NOT candidate) is NOT a no-op on a present-but-stale
+    # membrane: it would downgrade existing review_only rows, violating
+    # never-downgrade-quarantine. So gate the apply on the columns actually being
+    # absent (inner-life-origin v6), and let _repair_stale handle a present-but-
+    # stale membrane (PR4-origin v6).
+    if not _has_column(conn, "engrams", "read_visibility"):
         apply_afferent_membrane_v1_schema_migration(conn)
-        return
+    _repair_stale_v6_hypomnema_visibility(conn)
 
     conn.execute("DROP INDEX IF EXISTS idx_proposal_ledger_status_scope")
     conn.execute("DROP INDEX IF EXISTS idx_proposal_ledger_visibility")
@@ -753,6 +785,85 @@ def migrate_v7_afferent_u2_5_proposal_contract(conn: sqlite3.Connection) -> None
     )
 
 
+INNER_LIFE_EVENT_TYPES = {
+    "session_finalized",
+    "turn_finalized",
+    "turn_message",
+    "tool_event",
+    "file_event",
+    "test_outcome",
+    "skip",
+    "error",
+}
+
+
+def apply_u6_6_inner_life_schema_migration(conn: sqlite3.Connection) -> None:
+    """Apply the U6.6 private inner-life provenance ledger schema.
+
+    Finding C / DAVID-2: ``inner_life_events`` is the formal sub-ledger for the
+    auto-applied episodic-non-identity low-stakes class. Generated
+    dream/wander/reflection writes are recorded here (content-hash, excerpt,
+    source ids, gate decision, zero belief/identity/shared-pool counters) rather
+    than emitting duplicate ProposalLedger rows. The class boundary is
+    guaranteed by two gates landing in the same change: Finding A stamps the
+    written engram ``audit_only`` (quarantined from operational reads), and
+    Finding B drops identity/foundational-domain generated output before any
+    write — so this sub-ledger only ever holds episodic, non-identity, private
+    records.
+    """
+    event_types = "', '".join(sorted(INNER_LIFE_EVENT_TYPES))
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS inner_life_events (
+            id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            event_type TEXT NOT NULL
+                CHECK (event_type IN ('{event_types}')),
+            process_name TEXT NOT NULL,
+            agent_id TEXT NOT NULL DEFAULT 'default',
+            person_id TEXT NOT NULL DEFAULT 'user',
+            project_scope TEXT NOT NULL DEFAULT 'global',
+            session_id TEXT,
+            thread_id TEXT,
+            turn_id TEXT,
+            role TEXT,
+            source_message_id TEXT,
+            source_path TEXT,
+            source_timestamp TEXT,
+            content_hash TEXT NOT NULL DEFAULT '',
+            content_excerpt TEXT NOT NULL DEFAULT '',
+            event_tags_json TEXT NOT NULL DEFAULT '[]',
+            source_ids_json TEXT NOT NULL DEFAULT '[]',
+            metadata_json TEXT NOT NULL DEFAULT '{{}}',
+            rollout_tag TEXT NOT NULL DEFAULT '',
+            gate_decision TEXT NOT NULL DEFAULT 'ledger_only',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inner_life_events_scope "
+        "ON inner_life_events(agent_id, person_id, project_scope, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inner_life_events_session "
+        "ON inner_life_events(session_id, event_type, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inner_life_events_rollout "
+        "ON inner_life_events(rollout_tag, event_type, created_at)"
+    )
+
+
+# Renumbered from inner-life's original v6 to v8 during the PR4 × inner-life
+# merge: PR4 owns v6 (Afferent Membrane) and v7 (U2.5). Two branches must not
+# collide on a version number (see register_migration's duplicate guard).
+@register_migration(8, "U6.6 private inner-life event ledger")
+def migrate_v8_inner_life_events(conn: sqlite3.Connection) -> None:
+    apply_u6_6_inner_life_schema_migration(conn)
+
+
 def insert_pai_import_event(
     conn: sqlite3.Connection,
     *,
@@ -882,8 +993,7 @@ def upsert_pai_import_row(
         same_engram = (existing_engram_id or None) == effective_engram_id
         same_hash = existing_source_hash == source_hash
         same_content = (
-            content_at_last_import is None
-            or existing_content == content_at_last_import
+            content_at_last_import is None or existing_content == content_at_last_import
         )
         same_agent_id = agent_id is None or existing_agent_id == agent_id
         same_project_scope = (

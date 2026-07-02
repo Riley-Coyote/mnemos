@@ -3,7 +3,8 @@ Wandering handler.
 
 Triggered by: SILENCE_EXTENDED
 Effect: During long gaps between memory formation, picks a recent memory
-         and lets the mind wander from it. May produce a wandering thought.
+         and lets the mind wander from it. Passed wandering thoughts are
+         persisted only through the private U6.6 low-stakes audit-only writer.
 
 Dedup gates:
   1. Count throttle — max N wandering entries per 7 days (from config.max_wanderings_per_week)
@@ -23,6 +24,8 @@ from datetime import datetime, timezone
 from ..events import SubstrateEvent
 from ..config import SubstrateConfig
 from ..modulators import ModulatorState
+from ...inner_life.low_stakes import write_low_stakes_record
+from ...inner_life.narrative_gate import gate_narrative_candidate
 
 log = logging.getLogger("mnemos.substrate.wandering")
 
@@ -43,7 +46,7 @@ def handle(
     store,
     llm_client,
 ) -> list[SubstrateEvent]:
-    """Generate a wandering thought from recent memories during silence."""
+    """Generate and gate a private wandering thought from recent memories."""
     produced_events: list[SubstrateEvent] = []
 
     db_path = os.path.expanduser(config.db_path)
@@ -51,31 +54,38 @@ def handle(
     agent_id = config.agent_id
 
     # ── Gate 1: Count throttle ──
-    wandering_count = conn.execute("""
+    wandering_count = conn.execute(
+        """
         SELECT COUNT(*) FROM engrams
         WHERE state='active' AND content LIKE '%[wandering]%'
         AND owner_agent_id = ?
-        AND consolidation_authorized = 1
-        AND read_visibility = 'operational_context'
+        AND read_visibility = 'audit_only'
         AND created_at > datetime('now', '-7 days')
-    """, (agent_id,)).fetchone()[0]
+    """,
+        (agent_id,),
+    ).fetchone()[0]
 
     max_wanderings = config.max_wanderings_per_week
     if wandering_count >= max_wanderings:
-        log.debug("Gate 1 (count): %d wanderings in last 7 days (max %d)",
-                  wandering_count, max_wanderings)
+        log.debug(
+            "Gate 1 (count): %d wanderings in last 7 days (max %d)",
+            wandering_count,
+            max_wanderings,
+        )
         conn.close()
         return produced_events
 
     # ── Gate 5: Time window ──
-    latest_wandering = conn.execute("""
+    latest_wandering = conn.execute(
+        """
         SELECT created_at FROM engrams
         WHERE state='active' AND content LIKE '%[wandering]%'
         AND owner_agent_id = ?
-        AND consolidation_authorized = 1
-        AND read_visibility = 'operational_context'
+        AND read_visibility = 'audit_only'
         ORDER BY created_at DESC LIMIT 1
-    """, (agent_id,)).fetchone()
+    """,
+        (agent_id,),
+    ).fetchone()
 
     if latest_wandering:
         try:
@@ -84,15 +94,19 @@ def handle(
                 last_dt = last_dt.replace(tzinfo=timezone.utc)
             hours_since = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
             if hours_since < MIN_HOURS_BETWEEN_WANDERINGS:
-                log.debug("Gate 5 (time): last wandering %.1fh ago (min %dh)",
-                          hours_since, MIN_HOURS_BETWEEN_WANDERINGS)
+                log.debug(
+                    "Gate 5 (time): last wandering %.1fh ago (min %dh)",
+                    hours_since,
+                    MIN_HOURS_BETWEEN_WANDERINGS,
+                )
                 conn.close()
                 return produced_events
         except (ValueError, TypeError):
             pass  # If parse fails, allow
 
     # ── Gate 4: Seed filtering — exclude wandering/dream from trigger pool ──
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT id, content, impact FROM engrams
         WHERE state='active'
           AND owner_agent_id = ?
@@ -102,18 +116,22 @@ def handle(
           AND content NOT LIKE '%[dream]%'
         ORDER BY created_at DESC
         LIMIT 3
-    """, (agent_id,)).fetchall()
+    """,
+        (agent_id,),
+    ).fetchall()
 
     # Also collect recent wandering content hashes for gate 3
     recent_hashes = set()
-    hash_rows = conn.execute("""
+    hash_rows = conn.execute(
+        """
         SELECT content FROM engrams
         WHERE state='active' AND content LIKE '%[wandering]%'
         AND owner_agent_id = ?
-        AND consolidation_authorized = 1
-        AND read_visibility = 'operational_context'
+        AND read_visibility = 'audit_only'
         AND created_at > datetime('now', '-30 days')
-    """, (agent_id,)).fetchall()
+    """,
+        (agent_id,),
+    ).fetchall()
     for hr in hash_rows:
         recent_hashes.add(_content_hash(hr[0]))
 
@@ -161,10 +179,17 @@ If something surfaces: {{"thought": "<the wandering thought>", "origin": "<which
     thought = result.get("thought")
     if not thought:
         log.debug("Wandering produced no thought — mind is still")
+        gate_narrative_candidate(
+            content="",
+            source_ids=[row[0] for row in rows],
+            process_name="wander",
+            store=store,
+            agent_id=agent_id,
+            candidate_kind="wandering",
+        )
         return produced_events
 
     full_content = f"[wandering] {thought}"
-    origin = result.get("origin", "")
 
     # ── Gate 3: Content hash dedup ──
     new_hash = _content_hash(full_content)
@@ -175,6 +200,7 @@ If something surfaces: {{"thought": "<the wandering thought>", "origin": "<which
     # ── Gate 2: Embedding similarity ──
     try:
         from mnemos.store.embedding_index import EmbeddingIndex
+
         ei = EmbeddingIndex(db_path=db_path)
         if ei.available():
             similar = ei.search(full_content, k=3)
@@ -187,34 +213,40 @@ If something surfaces: {{"thought": "<the wandering thought>", "origin": "<which
                         SELECT content FROM engrams
                         WHERE id = ?
                           AND owner_agent_id = ?
-                          AND consolidation_authorized = 1
-                          AND read_visibility = 'operational_context'
+                          AND read_visibility = 'audit_only'
                         """,
                         (engram_id, agent_id),
                     ).fetchone()
                     check_conn.close()
                     if row and "[wandering]" in row[0]:
-                        log.debug("Gate 2 (embedding): similar wandering found "
-                                  "(id=%s, score=%.3f), skipping", engram_id[:20], score)
+                        log.debug(
+                            "Gate 2 (embedding): similar wandering found "
+                            "(id=%s, score=%.3f), skipping",
+                            engram_id[:20],
+                            score,
+                        )
                         return produced_events
     except Exception as e:
         log.debug(f"Embedding dedup check failed (non-fatal): {e}")
 
-    # ── All gates passed — encode the wandering thought ──
-    log.info(f"Wandering thought (all gates passed): {thought[:80]}...")
-
-    from mnemos.encoding.encoder import Encoder
-    from mnemos.store.embedding_index import EmbeddingIndex as EI
-    ei = EI(db_path=db_path)
-    encoder = Encoder(store, embedding_index=ei, llm_client=llm_client)
-
-    encoder.encode(
+    # ── Final U6.6 gate: only private low-stakes memory may persist ──
+    log.info(f"Wandering thought (gated): {thought[:80]}...")
+    gate_result = gate_narrative_candidate(
         content=full_content,
-        impact=f"Surfaced during silence. Origin: {origin}",
-        kind="episodic",
-        tags=["wandering", "silence"],
+        source_ids=[row[0] for row in rows],
+        process_name="wander",
+        store=store,
         agent_id=agent_id,
-        skip_surprise_detection=True,
+        candidate_kind="wandering",
+    )
+    if not gate_result["allowed"]:
+        return produced_events
+
+    write_low_stakes_record(
+        store,
+        gate_result=gate_result,
+        candidate_kind="wandering",
+        agent_id=agent_id,
     )
 
     return produced_events

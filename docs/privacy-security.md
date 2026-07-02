@@ -106,6 +106,33 @@ material:
   and payload fields so candidate state is inspectable without becoming
   operating context.
 
+## Gated Inner Life And Soak
+
+The U6.6/U7 inner-life and soak surfaces are operator/pre-soak tooling, not
+baseline background behavior.
+
+- `mnemos inner-life ...` and `mnemos soak ...` DB-using commands require
+  `--db-path` and refuse live `~/.mnemos` databases unless `--allow-live-db`
+  is supplied for an explicitly authorized live rollout.
+- Schema v8 `inner_life_events` is a private sub-ledger for provenance,
+  activity-gate decisions, generated-candidate skips/drops, scheduled-run
+  telemetry, and soak tick summaries. It is not an operational context source.
+- Generated reflection, wandering, and dream candidates must pass the narrative
+  gate before persistence. Passed candidates are private, low-confidence,
+  `read_visibility="audit_only"`, not voice exemplars, and not consolidation
+  authorized; identity/foundational-domain generated output is dropped.
+- Inner-life status and soak tick telemetry count generated memory writes,
+  belief writes, identity patches, and shared-pool writes so rollbacks can
+  verify that belief, identity, and shared-pool counters remain zero.
+- Default config keeps `inner_life.schedules.enabled`, every per-process
+  schedule, `soak.tick.enabled`, and `soak.families.*.enabled` disabled.
+  Preflight reports missing/disabled kill switches, provider readiness,
+  observer reviewer configuration, pre-soak snapshot readiness, launchd paths,
+  halt marker, and rollback commands before activation.
+- `inner-life plist` and `soak plist` write launchd plist files but do not call
+  `launchctl`. `soak preflight --dry-run-tick` runs the tick against a SQLite
+  backup copy and does not mutate the supplied DB.
+
 ## Visual Artifacts
 
 Identity graph artifacts are generated from the same scoped local memory data
@@ -171,6 +198,8 @@ Before a release:
 - verify simple mode exposes only seven tools
 - verify advanced mode preserves admin tools
 - verify advanced tools inherit configured agent/person/project scope
+- verify gated inner-life and soak schedules remain disabled unless an
+  authorized activation artifact is being tested
 - verify `mnemos doctor` does not leak secrets
 - verify package artifacts include templates and simple-mode modules
 - verify MCP sampling failures do not break tool calls

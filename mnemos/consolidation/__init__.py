@@ -6,11 +6,11 @@ that maintain, transform, and enrich the memory store:
 1. Decay — recalculate strength/stability/accessibility for all active engrams
 2. Softening — LLM-mediated lossy compression of low-resolution memories
 3. Belief Review — challenge stagnant beliefs that haven't been tested
-4. Reflection — generate thoughts, curiosity questions, narrative self-summary
+4. Reflection — gate low-stakes thoughts and refresh graph-derived identity
 5. Connection Discovery — find and create new semantic connections
 
 The daemon orchestrates these passes in order, respecting activity gates
 and configuration for which passes are enabled.
 """
 
-from .daemon import ConsolidationDaemon
+from .daemon import ConsolidationDaemon as ConsolidationDaemon

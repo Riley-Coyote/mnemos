@@ -113,7 +113,7 @@ mnemos setup-openclaw --agent nova
 |------|----------|-------------|
 | observer-context-sync | Every 30 min | Updates active-context.md from recent sessions |
 | session-indexer | Every 30 min | Extracts memories from conversation transcripts |
-| substrate-tick | Every 4 hours | Runs memory consolidation (decay, dreaming, beliefs) |
+| substrate-tick | Every 4 hours | Runs memory consolidation; generated reflection/dream/wander output is gated and audit-only |
 | memory-maintenance | Every 6 hours | Keeps MEMORY.md current |
 | cross-agent-bridge | Every 2 hours | Syncs context between agents |
 | morning-brief | Daily 10 AM | Generates morning summary and priorities |
@@ -185,7 +185,7 @@ After bootstrap, your workspace looks like:
 │   ├── morning-brief-2025-01-15.md
 │   └── debrief-2025-01-15.md
 └── inner_life/
-    └── (substrate outputs, reflections, dreams)
+    └── (legacy substrate artifacts; U6.6 ledger rows live in SQLite)
 ```
 
 ## Troubleshooting

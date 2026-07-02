@@ -23,6 +23,75 @@ _IDENTITY_COLUMNS = ("id", "target_id", "job_id", "source_path")
 _IDENTITY_COLUMN_PATTERN = "|".join(_IDENTITY_COLUMNS)
 _PERSISTENCE_ALIASES = {"state_path", "plist_path", "target_path", "output_file"}
 _SAFE_WATCHER_WRITE_RECEIVERS = {"tmp", "source", "manifest", "probe"}
+_U6_6_INNER_LIFE_MARKERS = (
+    "inner-life",
+    "inner_life",
+    "inner_life_events",
+    "session-finalize",
+    "turn-finalize",
+    "u6.6",
+)
+_U6_6_INNER_LIFE_SURFACE_FILES = {
+    "mnemos/cli.py",
+    "mnemos/config/defaults.py",
+    "mnemos/store/migrations.py",
+    "mnemos/store/sqlite_store.py",
+}
+_U6_6_INNER_LIFE_SCHEMA_TEST_FILES = {
+    "tests/test_inner_life_ledger.py",
+    "tests/test_u3a_schema_migrations.py",
+}
+_U6_6_INNER_LIFE_FINALIZER_FILES = {
+    "mnemos/inner_life/session_finalizer.py",
+    "mnemos/inner_life/turn_finalizer.py",
+}
+_U6_6_INNER_LIFE_FINALIZER_TEST_FILES = {
+    "tests/test_inner_life_ledger.py",
+    "tests/test_session_finalizer.py",
+    "tests/test_turn_finalizer.py",
+}
+_U6_6_INNER_LIFE_ACTIVITY_TEST_FILES = {
+    "tests/test_inner_life_activity_gate.py",
+}
+_U6_6_INNER_LIFE_CHALLENGE_TEST_FILES = {
+    "tests/test_hypomnema_challenge.py",
+}
+_U6_6_INNER_LIFE_OBSERVER_TEST_FILES = {
+    "tests/test_observer_panel.py",
+}
+_U6_6_INNER_LIFE_EMOTIONAL_TEST_FILES = {
+    "tests/test_emotional_driver.py",
+}
+_U6_6_INNER_LIFE_NARRATIVE_TEST_FILES = {
+    "tests/test_narrative_gate.py",
+}
+_U6_6_INNER_LIFE_PREFLIGHT_FILES = {
+    "mnemos/config/defaults.py",
+    "mnemos/inner_life/preflight.py",
+}
+_U6_6_INNER_LIFE_PREFLIGHT_TEST_FILES = {
+    "tests/test_inner_life_preflight.py",
+}
+_U6_6_INNER_LIFE_SCHEDULER_TEST_FILES = {
+    "tests/test_inner_life_scheduler.py",
+}
+_U7_SOAK_TICK_MARKERS = (
+    "soak",
+    "soak_tick",
+    "scheduled tick",
+    "tick orchestrator",
+    "shallow_consolidation",
+    "u7",
+)
+_U7_SOAK_TICK_SURFACE_FILES = {
+    "mnemos/soak/tick.py",
+    "mnemos/config/defaults.py",
+    "mnemos/inner_life/preflight.py",
+    "mnemos/cli.py",
+}
+_U7_SOAK_TICK_TEST_FILES = {
+    "tests/test_soak_tick.py",
+}
 
 
 @dataclass(frozen=True)
@@ -131,7 +200,13 @@ def evaluate_pai_diff_review(
     changed = set(changed_files)
     findings: list[PaiReviewFinding] = []
     findings.extend(_intent_findings(intent_text))
-    findings.extend(_proof_surface_findings(changed))
+    findings.extend(
+        _proof_surface_findings(
+            changed,
+            file_texts=file_texts,
+            diff_text=diff_text,
+        )
+    )
     findings.extend(_forbidden_diff_findings(diff_text))
     findings.extend(
         _repository_content_findings(
@@ -206,8 +281,23 @@ def _intent_findings(intent_text: str) -> list[PaiReviewFinding]:
     ]
 
 
-def _proof_surface_findings(changed: set[str]) -> list[PaiReviewFinding]:
+def _proof_surface_findings(
+    changed: set[str],
+    *,
+    file_texts: Mapping[str, str] | None = None,
+    diff_text: str = "",
+) -> list[PaiReviewFinding]:
     findings: list[PaiReviewFinding] = []
+    u66_inner_life = _is_u6_6_inner_life_diff(
+        changed,
+        file_texts=file_texts,
+        diff_text=diff_text,
+    )
+    u7_soak_tick = _is_u7_soak_tick_diff(
+        changed,
+        file_texts=file_texts,
+        diff_text=diff_text,
+    )
     rules = [
         (
             _is_watcher_surface_file,
@@ -226,7 +316,10 @@ def _proof_surface_findings(changed: set[str]) -> list[PaiReviewFinding]:
             "operator backup/live-DB behavior changed without an operator/doctor regression test in the diff",
         ),
         (
-            lambda path: path in {"mnemos/importer/pai.py", "mnemos/store/migrations.py"},
+            lambda path: (
+                path == "mnemos/importer/pai.py"
+                or (path == "mnemos/store/migrations.py" and not u66_inner_life)
+            ),
             {
                 "tests/test_u3b_pai_importer.py",
                 "tests/test_u3c_pai_watch.py",
@@ -235,7 +328,9 @@ def _proof_surface_findings(changed: set[str]) -> list[PaiReviewFinding]:
             "schema or lifecycle behavior changed without row-map/lifecycle regression coverage in the diff",
         ),
         (
-            lambda path: path == "mnemos/cli.py",
+            lambda path: (
+                path == "mnemos/cli.py" and not (u66_inner_life or u7_soak_tick)
+            ),
             {
                 "tests/test_u3b_pai_operator.py",
                 "tests/test_u3c_pai_operator.py",
@@ -264,7 +359,273 @@ def _proof_surface_findings(changed: set[str]) -> list[PaiReviewFinding]:
                     action="must-test",
                 )
             )
+    if u66_inner_life:
+        schema_touched = bool(
+            changed
+            & {
+                "mnemos/store/migrations.py",
+                "mnemos/store/sqlite_store.py",
+            }
+        )
+        finalizer_touched = bool(changed & _U6_6_INNER_LIFE_FINALIZER_FILES)
+        activity_gate_touched = "mnemos/inner_life/activity_gate.py" in changed
+        challenge_touched = "mnemos/inner_life/hypomnema_challenge.py" in changed
+        observer_touched = "mnemos/inner_life/observer_panel.py" in changed
+        emotional_touched = "mnemos/inner_life/emotional_driver.py" in changed
+        narrative_touched = "mnemos/inner_life/narrative_gate.py" in changed
+        preflight_touched = bool(changed & _U6_6_INNER_LIFE_PREFLIGHT_FILES)
+        scheduler_touched = "mnemos/inner_life/scheduler.py" in changed
+        if schema_touched and not (_U6_6_INNER_LIFE_SCHEMA_TEST_FILES <= changed):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file=", ".join(
+                        sorted(
+                            changed
+                            & {
+                                "mnemos/store/migrations.py",
+                                "mnemos/store/sqlite_store.py",
+                            }
+                        )
+                    ),
+                    description="U6.6 inner-life schema changed without ledger/schema regression tests in the diff",
+                    required_proof="tests/test_inner_life_ledger.py and tests/test_u3a_schema_migrations.py appear in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if finalizer_touched and not (changed & _U6_6_INNER_LIFE_FINALIZER_TEST_FILES):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file=", ".join(
+                        sorted(
+                            path
+                            for path in changed
+                            if path.startswith("mnemos/inner_life/")
+                        )
+                    ),
+                    description="U6.6 inner-life finalizer changed without finalizer regression tests in the diff",
+                    required_proof="inner-life finalizer regression file appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if activity_gate_touched and not (
+            changed & _U6_6_INNER_LIFE_ACTIVITY_TEST_FILES
+        ):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/inner_life/activity_gate.py",
+                    description="U6.6 activity gate changed without activity-gate regression tests in the diff",
+                    required_proof="tests/test_inner_life_activity_gate.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if challenge_touched and not (changed & _U6_6_INNER_LIFE_CHALLENGE_TEST_FILES):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/inner_life/hypomnema_challenge.py",
+                    description="U6.6 hypomnema challenge changed without challenge regression tests in the diff",
+                    required_proof="tests/test_hypomnema_challenge.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if observer_touched and not (changed & _U6_6_INNER_LIFE_OBSERVER_TEST_FILES):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/inner_life/observer_panel.py",
+                    description="U6.6 observer panel changed without observer-panel regression tests in the diff",
+                    required_proof="tests/test_observer_panel.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if emotional_touched and not (changed & _U6_6_INNER_LIFE_EMOTIONAL_TEST_FILES):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/inner_life/emotional_driver.py",
+                    description="U6.6 emotional driver changed without emotional-driver regression tests in the diff",
+                    required_proof="tests/test_emotional_driver.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if narrative_touched and not (changed & _U6_6_INNER_LIFE_NARRATIVE_TEST_FILES):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/inner_life/narrative_gate.py",
+                    description="U6.6 narrative gate changed without narrative-gate regression tests in the diff",
+                    required_proof="tests/test_narrative_gate.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if preflight_touched and not (changed & _U6_6_INNER_LIFE_PREFLIGHT_TEST_FILES):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file=", ".join(sorted(changed & _U6_6_INNER_LIFE_PREFLIGHT_FILES)),
+                    description="U6.6 inner-life preflight/config changed without preflight regression tests in the diff",
+                    required_proof="tests/test_inner_life_preflight.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if scheduler_touched and not (changed & _U6_6_INNER_LIFE_SCHEDULER_TEST_FILES):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/inner_life/scheduler.py",
+                    description="U6.6 inner-life scheduled runner changed without scheduler regression tests in the diff",
+                    required_proof="tests/test_inner_life_scheduler.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if "mnemos/cli.py" in changed and "tests/test_cli_simple.py" not in changed:
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/cli.py",
+                    description="U6.6 inner-life CLI changed without command-level regression tests in the diff",
+                    required_proof="tests/test_cli_simple.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+    if u7_soak_tick:
+        soak_tick_touched = any(path.startswith("mnemos/soak/") for path in changed)
+        preflight_touched = bool(
+            changed & {"mnemos/config/defaults.py", "mnemos/inner_life/preflight.py"}
+        )
+        cli_touched = "mnemos/cli.py" in changed
+        if soak_tick_touched and not (changed & _U7_SOAK_TICK_TEST_FILES):
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file=", ".join(
+                        sorted(
+                            path for path in changed if path.startswith("mnemos/soak/")
+                        )
+                    ),
+                    description="U7 soak tick orchestrator changed without soak tick regression tests in the diff",
+                    required_proof="tests/test_soak_tick.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if preflight_touched and "tests/test_inner_life_preflight.py" not in changed:
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file=", ".join(
+                        sorted(
+                            changed
+                            & {
+                                "mnemos/config/defaults.py",
+                                "mnemos/inner_life/preflight.py",
+                            }
+                        )
+                    ),
+                    description="U7 soak tick preflight/config changed without preflight regression tests in the diff",
+                    required_proof="tests/test_inner_life_preflight.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
+        if cli_touched and "tests/test_cli_simple.py" not in changed:
+            findings.append(
+                PaiReviewFinding(
+                    ident=f"RG-proof-{len(findings) + 1}",
+                    severity="high",
+                    file="mnemos/cli.py",
+                    description="U7 soak tick CLI changed without command-level regression tests in the diff",
+                    required_proof="tests/test_cli_simple.py appears in this diff",
+                    status="missing",
+                    action="must-test",
+                )
+            )
     return findings
+
+
+def _is_u6_6_inner_life_diff(
+    changed: set[str],
+    *,
+    file_texts: Mapping[str, str] | None = None,
+    diff_text: str = "",
+) -> bool:
+    """True for the U6.6 private-ledger lane, not PAI lifecycle work."""
+    if changed & {"mnemos/importer/pai.py", "mnemos/importer/operator.py"}:
+        return False
+    if any(_is_watcher_surface_file(path) for path in changed):
+        return False
+    has_u66_surface = bool(changed & _U6_6_INNER_LIFE_SURFACE_FILES) or any(
+        path.startswith("mnemos/inner_life/") for path in changed
+    )
+    if not has_u66_surface:
+        return False
+
+    marker_text = diff_text
+    if not marker_text and file_texts:
+        marker_text = "\n".join(file_texts.get(path, "") for path in sorted(changed))
+    if not marker_text:
+        marker_text = "\n".join(sorted(changed))
+
+    lowered = marker_text.lower()
+    return any(marker in lowered for marker in _U6_6_INNER_LIFE_MARKERS)
+
+
+def _is_u7_soak_tick_diff(
+    changed: set[str],
+    *,
+    file_texts: Mapping[str, str] | None = None,
+    diff_text: str = "",
+) -> bool:
+    """True for the U7 scheduled tick/fanout lane."""
+    has_surface = any(path.startswith("mnemos/soak/") for path in changed) or bool(
+        changed & _U7_SOAK_TICK_SURFACE_FILES
+    )
+    if not has_surface:
+        return False
+
+    source_paths = sorted(
+        path
+        for path in changed
+        if path.startswith("mnemos/soak/") or path in _U7_SOAK_TICK_SURFACE_FILES
+    )
+    marker_text = ""
+    if diff_text:
+        added = _added_text_by_file(diff_text)
+        marker_text = "\n".join(added.get(path, "") for path in source_paths)
+    if not marker_text and file_texts:
+        marker_text = "\n".join(file_texts.get(path, "") for path in source_paths)
+    if not marker_text:
+        marker_text = "\n".join(source_paths)
+
+    lowered = marker_text.lower()
+    return "soak" in lowered and any(
+        marker in lowered for marker in _U7_SOAK_TICK_MARKERS
+    )
 
 
 def _forbidden_diff_findings(diff_text: str) -> list[PaiReviewFinding]:
@@ -305,7 +666,9 @@ def _forbidden_diff_findings(diff_text: str) -> list[PaiReviewFinding]:
     for index, raw_line in enumerate(diff_lines):
         if raw_line.startswith("diff --git "):
             parts = raw_line.split()
-            current_file = parts[3][2:] if len(parts) >= 4 and parts[3].startswith("b/") else ""
+            current_file = (
+                parts[3][2:] if len(parts) >= 4 and parts[3].startswith("b/") else ""
+            )
             continue
         if not raw_line.startswith("+") or raw_line.startswith("+++"):
             continue
@@ -314,7 +677,9 @@ def _forbidden_diff_findings(diff_text: str) -> list[PaiReviewFinding]:
         line = raw_line[1:]
         additions.setdefault(current_file, []).append((index, line))
         if re.search(r"allow_live_db\s*=\s*True", line) and not (
-            _allow_live_db_true_is_intentional_test_probe(current_file, diff_lines, index)
+            _allow_live_db_true_is_intentional_test_probe(
+                current_file, diff_lines, index
+            )
         ):
             add_finding(
                 severity="critical",
@@ -326,9 +691,7 @@ def _forbidden_diff_findings(diff_text: str) -> list[PaiReviewFinding]:
                 required_proof="no runtime diff may make live DB writes the default",
             )
         if _is_runtime_source_file(current_file):
-            review_text = _lifecycle_review_text_for_added_line(
-                line, diff_lines, index
-            )
+            review_text = _lifecycle_review_text_for_added_line(line, diff_lines, index)
             mutation_description = (
                 _lifecycle_mutation_violation(review_text) if review_text else None
             )
@@ -343,10 +706,9 @@ def _forbidden_diff_findings(diff_text: str) -> list[PaiReviewFinding]:
                     ),
                 )
         if (
-            _is_runtime_source_file(current_file)
-            or current_file.endswith(".md")
+            _is_runtime_source_file(current_file) or current_file.endswith(".md")
         ) and re.search(r"content_at_last_import\s*=\s*NULL", line, re.IGNORECASE):
-            window = "\n".join(diff_lines[max(0, index - 5): index + 6]).lower()
+            window = "\n".join(diff_lines[max(0, index - 5) : index + 6]).lower()
             if "destructive" not in window:
                 add_finding(
                     severity="high",
@@ -376,40 +738,39 @@ def _forbidden_diff_findings(diff_text: str) -> list[PaiReviewFinding]:
                     required_proof="state and plist writes must use tmp.replace atomicity",
                 )
         lowered = line.lower()
-        if (
-            _is_runtime_source_file(current_file)
-            and _has_runtime_safety_claim(line)
-        ):
+        if _is_runtime_source_file(current_file) and _has_runtime_safety_claim(line):
             add_finding(
                 severity="medium",
                 file=current_file,
                 description="Diff adds runtime safety claim in comment without reviewable enforcement link",
                 required_proof="runtime safety claims must point at enforcement/test evidence",
             )
-        if _is_runtime_source_file(current_file) and any(
-            term in lowered
-            for term in (
-                "time_window",
-                "lookback",
-                "between",
-                "created_at >",
-                "updated_at >",
-                "event_at >",
-                "last_seen <",
-                "seen_at <",
-                "mtime <",
-                "modified_at <",
-                "cutoff",
-                "older than",
+        if (
+            _is_runtime_source_file(current_file)
+            and any(
+                term in lowered
+                for term in (
+                    "time_window",
+                    "lookback",
+                    "between",
+                    "created_at >",
+                    "updated_at >",
+                    "event_at >",
+                    "last_seen <",
+                    "seen_at <",
+                    "mtime <",
+                    "modified_at <",
+                    "cutoff",
+                    "older than",
+                )
             )
-        ) and ("select" in lowered or "where" in lowered or "execute(" in lowered):
-            window = "\n".join(diff_lines[max(0, index - 5): index + 6]).lower()
+            and ("select" in lowered or "where" in lowered or "execute(" in lowered)
+        ):
+            window = "\n".join(diff_lines[max(0, index - 5) : index + 6]).lower()
             if (
                 ("tombstone" in window or "lifecycle" in window)
                 and re.search(r"\b(update|delete|insert)\b", window)
-                and (
-                "select" in window or "where" in window
-                )
+                and ("select" in window or "where" in window)
             ):
                 add_finding(
                     severity="critical",
@@ -469,7 +830,7 @@ def _line_has_lifecycle_mutation_surface(line: str) -> bool:
 
 
 def _inside_added_execute_call(diff_lines: Sequence[str], index: int) -> bool:
-    for raw_line in reversed(diff_lines[max(0, index - 8): index + 1]):
+    for raw_line in reversed(diff_lines[max(0, index - 8) : index + 1]):
         if raw_line.startswith("diff --git ") or raw_line.startswith("@@"):
             return False
         if not raw_line.startswith("+") or raw_line.startswith("+++"):
@@ -487,8 +848,10 @@ def _allow_live_db_true_is_intentional_test_probe(
     if not current_file.startswith("tests/"):
         return False
     lines = [
-        raw_line[1:] if raw_line.startswith("+") and not raw_line.startswith("+++") else raw_line
-        for raw_line in diff_lines[max(0, index - 40): index + 20]
+        raw_line[1:]
+        if raw_line.startswith("+") and not raw_line.startswith("+++")
+        else raw_line
+        for raw_line in diff_lines[max(0, index - 40) : index + 20]
         if not raw_line.startswith("-")
     ]
     context = "\n".join(lines)
@@ -507,7 +870,7 @@ def _added_diff_line_window(
 ) -> str:
     return "\n".join(
         raw_line[1:]
-        for raw_line in diff_lines[max(0, index - radius): index + radius + 1]
+        for raw_line in diff_lines[max(0, index - radius) : index + radius + 1]
         if raw_line.startswith("+") and not raw_line.startswith("+++")
     )
 
@@ -519,9 +882,7 @@ def _added_text_by_file(diff_text: str) -> dict[str, str]:
         if raw_line.startswith("diff --git "):
             parts = raw_line.split()
             current_file = (
-                parts[3][2:]
-                if len(parts) >= 4 and parts[3].startswith("b/")
-                else ""
+                parts[3][2:] if len(parts) >= 4 and parts[3].startswith("b/") else ""
             )
             continue
         if not current_file:
@@ -547,14 +908,39 @@ def _repository_content_findings(
     operator_tests = file_texts.get("tests/test_u3b_pai_operator.py", "")
     operator_u3c_tests = file_texts.get("tests/test_u3c_pai_operator.py", "")
     review_gate_tests = file_texts.get("tests/test_u3c_pai_review_gate.py", "")
+    cli_simple_tests = file_texts.get("tests/test_cli_simple.py", "")
+    activity_gate_tests = file_texts.get("tests/test_inner_life_activity_gate.py", "")
+    preflight_tests = file_texts.get("tests/test_inner_life_preflight.py", "")
+    scheduler_tests = file_texts.get("tests/test_inner_life_scheduler.py", "")
+    soak_tick_tests = file_texts.get("tests/test_soak_tick.py", "")
+    hypomnema_challenge_tests = file_texts.get("tests/test_hypomnema_challenge.py", "")
+    observer_panel_tests = file_texts.get("tests/test_observer_panel.py", "")
+    emotional_driver_tests = file_texts.get("tests/test_emotional_driver.py", "")
+    narrative_gate_tests = file_texts.get("tests/test_narrative_gate.py", "")
+    inner_life_ledger_tests = file_texts.get("tests/test_inner_life_ledger.py", "")
+    schema_migration_tests = file_texts.get("tests/test_u3a_schema_migrations.py", "")
+    session_finalizer_tests = file_texts.get("tests/test_session_finalizer.py", "")
+    turn_finalizer_tests = file_texts.get("tests/test_turn_finalizer.py", "")
     watcher = file_texts.get("mnemos/importer/watcher.py", "")
     launch_doc = file_texts.get("docs/u3c-step3-launch-gate.md", "")
-    changed_workflows = sorted(path for path in changed if path.startswith(".github/workflows/"))
+    changed_workflows = sorted(
+        path for path in changed if path.startswith(".github/workflows/")
+    )
     workflow = "\n".join(file_texts.get(path, "") for path in changed_workflows)
     workflow += "\n" + file_texts.get(".github/workflows/release-hardening.yml", "")
     workflow_effective = _non_comment_text(workflow)
     workflow_proofs = _workflow_proof_statuses(workflow)
     watcher_changed = any(_is_watcher_surface_file(path) for path in changed)
+    u66_inner_life = _is_u6_6_inner_life_diff(
+        changed,
+        file_texts=file_texts,
+        diff_text=diff_text,
+    )
+    u7_soak_tick = _is_u7_soak_tick_diff(
+        changed,
+        file_texts=file_texts,
+        diff_text=diff_text,
+    )
 
     if watcher_changed:
         findings.extend(
@@ -562,35 +948,186 @@ def _repository_content_findings(
                 surface="mnemos/importer/watcher.py",
                 severity="high",
                 requirements=[
-                    _ProofRequirement("watch-plist-lint", "plist lint", "tests/test_u3c_pai_watch_doctor.py", (("test_u3c_watch_doctor_passes_with_representative_db_and_plist", tests), ("launchd plist static readiness", watcher))),
-                    _ProofRequirement("watch-stale-clone", "stale clone rejection", "tests/test_u3c_pai_watch_doctor.py", (("test_u3c_watch_doctor_fails_stale_clone_plist", tests), ("PYTHONPATH must point at this repo root", watcher))),
-                    _ProofRequirement("watch-env", "HOME/PATH/PYTHONPATH checks", "tests/test_u3c_pai_watcher.py", (("EnvironmentVariables", watcher_tests), ("HOME", watcher_tests), ("PATH", watcher_tests), ("PYTHONPATH", watcher_tests))),
-                    _ProofRequirement("watch-log-writable", "stdout/stderr log writability", "mnemos/importer/watcher.py", (("StandardOutPath", watcher), ("StandardErrorPath", watcher), ("_assert_writable_directory(log_path.parent)", watcher))),
-                    _ProofRequirement("watch-copy-unchanged", "copy-apply source DB unchanged", "mnemos/importer/watcher.py", (("_file_fingerprint(db)", watcher), ("source_unchanged=1", watcher))),
-                    _ProofRequirement("watch-state-crash", "state crash replay", "tests/test_u3c_pai_watch_doctor.py", (("test_u3c_crash_before_state_write_does_not_hide_changed_source", tests),)),
-                    _ProofRequirement("watch-source-delete", "source delete tombstone", "mnemos/importer/watcher.py", (("_doctor_destructive_delete_probe", watcher), ("tombstoned", watcher))),
+                    _ProofRequirement(
+                        "watch-plist-lint",
+                        "plist lint",
+                        "tests/test_u3c_pai_watch_doctor.py",
+                        (
+                            (
+                                "test_u3c_watch_doctor_passes_with_representative_db_and_plist",
+                                tests,
+                            ),
+                            ("launchd plist static readiness", watcher),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "watch-stale-clone",
+                        "stale clone rejection",
+                        "tests/test_u3c_pai_watch_doctor.py",
+                        (
+                            ("test_u3c_watch_doctor_fails_stale_clone_plist", tests),
+                            ("PYTHONPATH must point at this repo root", watcher),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "watch-env",
+                        "HOME/PATH/PYTHONPATH checks",
+                        "tests/test_u3c_pai_watcher.py",
+                        (
+                            ("EnvironmentVariables", watcher_tests),
+                            ("HOME", watcher_tests),
+                            ("PATH", watcher_tests),
+                            ("PYTHONPATH", watcher_tests),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "watch-log-writable",
+                        "stdout/stderr log writability",
+                        "mnemos/importer/watcher.py",
+                        (
+                            ("StandardOutPath", watcher),
+                            ("StandardErrorPath", watcher),
+                            ("_assert_writable_directory(log_path.parent)", watcher),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "watch-copy-unchanged",
+                        "copy-apply source DB unchanged",
+                        "mnemos/importer/watcher.py",
+                        (
+                            ("_file_fingerprint(db)", watcher),
+                            ("source_unchanged=1", watcher),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "watch-state-crash",
+                        "state crash replay",
+                        "tests/test_u3c_pai_watch_doctor.py",
+                        (
+                            (
+                                "test_u3c_crash_before_state_write_does_not_hide_changed_source",
+                                tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "watch-source-delete",
+                        "source delete tombstone",
+                        "mnemos/importer/watcher.py",
+                        (
+                            ("_doctor_destructive_delete_probe", watcher),
+                            ("tombstoned", watcher),
+                        ),
+                    ),
                 ],
             )
         )
 
-    if watcher_changed or changed & {
-        "mnemos/importer/operator.py",
-        "mnemos/cli.py",
-        "tests/test_u3c_pai_watch_doctor.py",
-    }:
+    if (
+        watcher_changed
+        or "mnemos/importer/operator.py" in changed
+        or ("mnemos/cli.py" in changed and not (u66_inner_life or u7_soak_tick))
+        or "tests/test_u3c_pai_watch_doctor.py" in changed
+    ):
         findings.extend(
             _missing_required_proofs(
                 surface="Step 3 launch gate",
                 severity="high",
                 requirements=[
-                    _ProofRequirement("tripwire-backup-keep", "missing --backup-keep tripwire", "tests/test_u3c_pai_watch_doctor.py", (("test_u3c_watch_doctor_requires_backup_keep_in_plist", tests),)),
-                    _ProofRequirement("tripwire-stale-clone", "stale clone plist tripwire", "tests/test_u3c_pai_watch_doctor.py", (("test_u3c_watch_doctor_fails_stale_clone_plist", tests),)),
-                    _ProofRequirement("tripwire-stateful", "stateful lifecycle invariant machine", "tests/test_u3c_pai_watch_doctor.py", (("TestPaiLifecycleMachine", tests),)),
-                    _ProofRequirement("tripwire-broad-delete", "broad lifecycle delete tripwire", "tests/test_u3c_pai_review_gate.py", (("test_u3c_review_gate_fails_broad_lifecycle_delete_in_diff", review_gate_tests), ("test_u3c_review_gate_fails_dynamic_broad_lifecycle_delete_in_diff", review_gate_tests))),
-                    _ProofRequirement("tripwire-null-baseline", "bare NULL-baseline tripwire", "tests/test_u3c_pai_review_gate.py", (("test_u3c_review_gate_fails_bare_null_baseline_in_diff", review_gate_tests), ("test_u3c_review_gate_fails_bare_null_baseline_in_docs_diff", review_gate_tests))),
-                    _ProofRequirement("tripwire-atomic-write", "non-atomic watcher write tripwire", "tests/test_u3c_pai_review_gate.py", (("test_u3c_review_gate_fails_direct_state_write_in_diff", review_gate_tests), ("test_u3c_review_gate_fails_renamed_direct_state_write_in_diff", review_gate_tests))),
-                    _ProofRequirement("tripwire-time-window", "time-window lifecycle tripwire", "tests/test_u3c_pai_review_gate.py", (("test_u3c_review_gate_fails_time_window_lifecycle_selection_in_diff", review_gate_tests), ("test_u3c_review_gate_fails_last_seen_lifecycle_selection_in_diff", review_gate_tests))),
-                    _ProofRequirement("tripwire-preview", "preview mutates neither DB nor state", "tests/test_u3c_pai_watcher.py", (("test_u3c_watch_once_preview_does_not_advance_state", watcher_tests),)),
+                    _ProofRequirement(
+                        "tripwire-backup-keep",
+                        "missing --backup-keep tripwire",
+                        "tests/test_u3c_pai_watch_doctor.py",
+                        (
+                            (
+                                "test_u3c_watch_doctor_requires_backup_keep_in_plist",
+                                tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "tripwire-stale-clone",
+                        "stale clone plist tripwire",
+                        "tests/test_u3c_pai_watch_doctor.py",
+                        (("test_u3c_watch_doctor_fails_stale_clone_plist", tests),),
+                    ),
+                    _ProofRequirement(
+                        "tripwire-stateful",
+                        "stateful lifecycle invariant machine",
+                        "tests/test_u3c_pai_watch_doctor.py",
+                        (("TestPaiLifecycleMachine", tests),),
+                    ),
+                    _ProofRequirement(
+                        "tripwire-broad-delete",
+                        "broad lifecycle delete tripwire",
+                        "tests/test_u3c_pai_review_gate.py",
+                        (
+                            (
+                                "test_u3c_review_gate_fails_broad_lifecycle_delete_in_diff",
+                                review_gate_tests,
+                            ),
+                            (
+                                "test_u3c_review_gate_fails_dynamic_broad_lifecycle_delete_in_diff",
+                                review_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "tripwire-null-baseline",
+                        "bare NULL-baseline tripwire",
+                        "tests/test_u3c_pai_review_gate.py",
+                        (
+                            (
+                                "test_u3c_review_gate_fails_bare_null_baseline_in_diff",
+                                review_gate_tests,
+                            ),
+                            (
+                                "test_u3c_review_gate_fails_bare_null_baseline_in_docs_diff",
+                                review_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "tripwire-atomic-write",
+                        "non-atomic watcher write tripwire",
+                        "tests/test_u3c_pai_review_gate.py",
+                        (
+                            (
+                                "test_u3c_review_gate_fails_direct_state_write_in_diff",
+                                review_gate_tests,
+                            ),
+                            (
+                                "test_u3c_review_gate_fails_renamed_direct_state_write_in_diff",
+                                review_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "tripwire-time-window",
+                        "time-window lifecycle tripwire",
+                        "tests/test_u3c_pai_review_gate.py",
+                        (
+                            (
+                                "test_u3c_review_gate_fails_time_window_lifecycle_selection_in_diff",
+                                review_gate_tests,
+                            ),
+                            (
+                                "test_u3c_review_gate_fails_last_seen_lifecycle_selection_in_diff",
+                                review_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "tripwire-preview",
+                        "preview mutates neither DB nor state",
+                        "tests/test_u3c_pai_watcher.py",
+                        (
+                            (
+                                "test_u3c_watch_once_preview_does_not_advance_state",
+                                watcher_tests,
+                            ),
+                        ),
+                    ),
                 ],
             )
         )
@@ -601,47 +1138,872 @@ def _repository_content_findings(
                 surface="mnemos/importer/operator.py",
                 severity="high",
                 requirements=[
-                    _ProofRequirement("operator-live-db", "live DB refusal", "tests/test_u3b_pai_operator.py", (("test_u3b_cli_refuses_default_live_db_without_override", operator_tests), ("refuses the default live database", operator_tests))),
-                    _ProofRequirement("operator-backup-integrity", "backup integrity", "tests/test_u3c_pai_watch_doctor.py", (("PRAGMA integrity_check", tests),)),
-                    _ProofRequirement("operator-backup-restore", "backup restore drill", "mnemos/importer/watcher.py", (("_assert_sqlite_restore_drill", watcher),)),
-                    _ProofRequirement("operator-retention", "backup retention bounded", "tests/test_u3c_pai_watch_doctor.py", (("test_u3c_backup_keep_prunes_old_matching_backups", tests),)),
-                    _ProofRequirement("operator-unrelated-backups", "unrelated job backups preserved", "tests/test_u3c_pai_watch_doctor.py", (("test_u3c_backup_keep_does_not_prune_unrelated_jobs", tests),)),
+                    _ProofRequirement(
+                        "operator-live-db",
+                        "live DB refusal",
+                        "tests/test_u3b_pai_operator.py",
+                        (
+                            (
+                                "test_u3b_cli_refuses_default_live_db_without_override",
+                                operator_tests,
+                            ),
+                            ("refuses the default live database", operator_tests),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "operator-backup-integrity",
+                        "backup integrity",
+                        "tests/test_u3c_pai_watch_doctor.py",
+                        (("PRAGMA integrity_check", tests),),
+                    ),
+                    _ProofRequirement(
+                        "operator-backup-restore",
+                        "backup restore drill",
+                        "mnemos/importer/watcher.py",
+                        (("_assert_sqlite_restore_drill", watcher),),
+                    ),
+                    _ProofRequirement(
+                        "operator-retention",
+                        "backup retention bounded",
+                        "tests/test_u3c_pai_watch_doctor.py",
+                        (("test_u3c_backup_keep_prunes_old_matching_backups", tests),),
+                    ),
+                    _ProofRequirement(
+                        "operator-unrelated-backups",
+                        "unrelated job backups preserved",
+                        "tests/test_u3c_pai_watch_doctor.py",
+                        (
+                            (
+                                "test_u3c_backup_keep_does_not_prune_unrelated_jobs",
+                                tests,
+                            ),
+                        ),
+                    ),
                 ],
             )
         )
 
     if changed & {"mnemos/importer/pai.py", "mnemos/store/migrations.py"}:
+        if (
+            u66_inner_life
+            and "mnemos/store/migrations.py" in changed
+            and "mnemos/importer/pai.py" not in changed
+        ):
+            findings.extend(
+                _missing_required_proofs(
+                    surface="U6.6 inner-life schema",
+                    severity="high",
+                    requirements=[
+                        _ProofRequirement(
+                            "u66-inner-life-private-ledger",
+                            "private/idempotent ledger coverage",
+                            "tests/test_inner_life_ledger.py",
+                            (
+                                (
+                                    "test_inner_life_ledger_schema_is_private_and_idempotent",
+                                    inner_life_ledger_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u66-inner-life-schema-five-copy",
+                            "schema-five copy migration preserving memory rows",
+                            "tests/test_inner_life_ledger.py",
+                            (
+                                (
+                                    "test_inner_life_ledger_migrates_schema_five_copy_without_touching_memory",
+                                    inner_life_ledger_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u66-inner-life-bootstrap",
+                            "current schema bootstrap includes inner_life_events",
+                            "tests/test_u3a_schema_migrations.py",
+                            (
+                                (
+                                    "test_migration_version_guards",
+                                    schema_migration_tests,
+                                ),
+                                ("inner_life_events", schema_migration_tests),
+                                ("SCHEMA_VERSION", schema_migration_tests),
+                            ),
+                        ),
+                    ],
+                )
+            )
+        else:
+            findings.extend(
+                _missing_required_proofs(
+                    surface="PAI lifecycle/schema",
+                    severity="high",
+                    requirements=[
+                        _ProofRequirement(
+                            "pai-row-map",
+                            "row-map coherence",
+                            "tests/test_u3c_pai_watch_doctor.py",
+                            (("row_map_targets_are_coherent", tests),),
+                        ),
+                        _ProofRequirement(
+                            "pai-manual-archive",
+                            "manual archive non-resurrection",
+                            "tests/test_u3c_pai_watch.py",
+                            (
+                                (
+                                    "test_u3c_manually_archived_engram_still_refuses_reactivation",
+                                    watch_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "pai-null-carveout",
+                            "pre-v5 NULL carve-out",
+                            "tests/test_u3c_pai_watch.py",
+                            (
+                                (
+                                    "test_u3c_legacy_pai_tombstoned_engram_reactivates_without_row_map_tombstone",
+                                    watch_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "pai-tombstone-reactivation",
+                            "tombstone/reactivation path",
+                            "tests/test_u3c_pai_watch.py",
+                            (
+                                (
+                                    "test_u3c_returned_pai_tombstoned_engram_reactivates",
+                                    watch_tests,
+                                ),
+                                (
+                                    "test_u3c_removed_engram_section_tombstones_target_idempotently",
+                                    watch_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "pai-no-clobber",
+                            "no silent clobber",
+                            "tests/test_u3b_pai_importer.py",
+                            (
+                                (
+                                    "test_u3b_target_content_drift_refuses_clobber_on_operator_edit",
+                                    importer_tests,
+                                ),
+                            ),
+                        ),
+                    ],
+                )
+            )
+
+    if u66_inner_life and (
+        changed
+        & {
+            "mnemos/inner_life/session_finalizer.py",
+            "mnemos/inner_life/turn_finalizer.py",
+        }
+    ):
         findings.extend(
             _missing_required_proofs(
-                surface="PAI lifecycle/schema",
+                surface="U6.6 inner-life finalizers",
                 severity="high",
                 requirements=[
-                    _ProofRequirement("pai-row-map", "row-map coherence", "tests/test_u3c_pai_watch_doctor.py", (("row_map_targets_are_coherent", tests),)),
-                    _ProofRequirement("pai-manual-archive", "manual archive non-resurrection", "tests/test_u3c_pai_watch.py", (("test_u3c_manually_archived_engram_still_refuses_reactivation", watch_tests),)),
-                    _ProofRequirement("pai-null-carveout", "pre-v5 NULL carve-out", "tests/test_u3c_pai_watch.py", (("test_u3c_legacy_pai_tombstoned_engram_reactivates_without_row_map_tombstone", watch_tests),)),
-                    _ProofRequirement("pai-tombstone-reactivation", "tombstone/reactivation path", "tests/test_u3c_pai_watch.py", (("test_u3c_returned_pai_tombstoned_engram_reactivates", watch_tests), ("test_u3c_removed_engram_section_tombstones_target_idempotently", watch_tests))),
-                    _ProofRequirement("pai-no-clobber", "no silent clobber", "tests/test_u3b_pai_importer.py", (("test_u3b_target_content_drift_refuses_clobber_on_operator_edit", importer_tests),)),
+                    _ProofRequirement(
+                        "u66-inner-life-session-finalizer",
+                        "bounded transcript finalizer writes no memory",
+                        "tests/test_session_finalizer.py",
+                        (
+                            (
+                                "test_session_finalizer_writes_bounded_provenance_below_memory",
+                                session_finalizer_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-inner-life-turn-finalizer",
+                        "turn finalizer writes one idempotent ledger row",
+                        "tests/test_turn_finalizer.py",
+                        (
+                            (
+                                "test_turn_finalizer_writes_one_idempotent_provenance_row_only",
+                                turn_finalizer_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u66_inner_life and "mnemos/inner_life/activity_gate.py" in changed:
+        findings.extend(
+            _missing_required_proofs(
+                surface="U6.6 activity gate",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u66-activity-gate-recent-signal",
+                        "recent turn signal allows a run without memory writes",
+                        "tests/test_inner_life_activity_gate.py",
+                        (
+                            (
+                                "test_activity_gate_allows_recent_turn_signal_and_records_run_without_memory",
+                                activity_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-activity-gate-no-signal",
+                        "no recent signal records a skip reason",
+                        "tests/test_inner_life_activity_gate.py",
+                        (
+                            (
+                                "test_activity_gate_skips_without_recent_signal_and_records_reason",
+                                activity_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-activity-gate-cooldown",
+                        "per-process cooldown",
+                        "tests/test_inner_life_activity_gate.py",
+                        (
+                            (
+                                "test_activity_gate_enforces_process_cooldown",
+                                activity_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-activity-gate-consolidation-signal",
+                        "existing Mnemos consolidation activity counts as signal",
+                        "tests/test_inner_life_activity_gate.py",
+                        (
+                            (
+                                "test_activity_gate_uses_consolidation_log_as_existing_mnemos_signal",
+                                activity_gate_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u66_inner_life and "mnemos/inner_life/hypomnema_challenge.py" in changed:
+        findings.extend(
+            _missing_required_proofs(
+                surface="U6.6 hypomnema challenge",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u66-hypomnema-challenge-revise-down",
+                        "revise_down lowers confidence and preserves history",
+                        "tests/test_hypomnema_challenge.py",
+                        (
+                            (
+                                "test_hypomnema_challenge_revise_down_lowers_confidence_and_preserves_history",
+                                hypomnema_challenge_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-hypomnema-challenge-retire",
+                        "retire archives without deleting",
+                        "tests/test_hypomnema_challenge.py",
+                        (
+                            (
+                                "test_hypomnema_challenge_retire_archives_without_deleting",
+                                hypomnema_challenge_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-hypomnema-challenge-malformed",
+                        "malformed critic output records error without change",
+                        "tests/test_hypomnema_challenge.py",
+                        (
+                            (
+                                "test_hypomnema_challenge_malformed_output_records_error_without_change",
+                                hypomnema_challenge_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-hypomnema-challenge-idempotent",
+                        "duplicate key does not reapply revision",
+                        "tests/test_hypomnema_challenge.py",
+                        (
+                            (
+                                "test_hypomnema_challenge_duplicate_key_does_not_reapply_revision",
+                                hypomnema_challenge_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u66_inner_life and "mnemos/inner_life/observer_panel.py" in changed:
+        findings.extend(
+            _missing_required_proofs(
+                surface="U6.6 observer panel",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u66-observer-panel-no-reviewers",
+                        "no reviewers records a clean skip",
+                        "tests/test_observer_panel.py",
+                        (
+                            (
+                                "test_observer_panel_no_reviewers_records_clean_skip",
+                                observer_panel_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-observer-panel-source-required",
+                        "missing source ids skip before client call",
+                        "tests/test_observer_panel.py",
+                        (
+                            (
+                                "test_observer_panel_missing_source_ids_skips_before_client_call",
+                                observer_panel_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-observer-panel-failure-isolation",
+                        "failed reviewer does not discard successful findings",
+                        "tests/test_observer_panel.py",
+                        (
+                            (
+                                "test_observer_panel_failed_reviewer_does_not_discard_successful_finding",
+                                observer_panel_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-observer-panel-bounds",
+                        "findings and excerpts are bounded",
+                        "tests/test_observer_panel.py",
+                        (
+                            (
+                                "test_observer_panel_bounds_findings_and_excerpts",
+                                observer_panel_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u66_inner_life and "mnemos/inner_life/emotional_driver.py" in changed:
+        findings.extend(
+            _missing_required_proofs(
+                surface="U6.6 emotional driver",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u66-emotional-driver-real-events",
+                        "real turn and verification events update affect",
+                        "tests/test_emotional_driver.py",
+                        (
+                            (
+                                "test_emotional_driver_updates_from_real_turn_and_verification_events",
+                                emotional_driver_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-emotional-driver-no-events",
+                        "no recent events records skip",
+                        "tests/test_emotional_driver.py",
+                        (
+                            (
+                                "test_emotional_driver_skips_without_recent_events",
+                                emotional_driver_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-emotional-driver-threshold",
+                        "below movement threshold does not save affect",
+                        "tests/test_emotional_driver.py",
+                        (
+                            (
+                                "test_emotional_driver_skips_below_meaningful_movement_threshold",
+                                emotional_driver_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-emotional-driver-error-event",
+                        "error event increases restlessness",
+                        "tests/test_emotional_driver.py",
+                        (
+                            (
+                                "test_emotional_driver_error_event_increases_restlessness",
+                                emotional_driver_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u66_inner_life and "mnemos/inner_life/narrative_gate.py" in changed:
+        findings.extend(
+            _missing_required_proofs(
+                surface="U6.6 narrative gate",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u66-narrative-gate-null-output",
+                        "null output records skip without memory",
+                        "tests/test_narrative_gate.py",
+                        (
+                            (
+                                "test_narrative_gate_null_output_records_skip_without_memory",
+                                narrative_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-narrative-gate-source-required",
+                        "missing source ids drop before introspection",
+                        "tests/test_narrative_gate.py",
+                        (
+                            (
+                                "test_narrative_gate_missing_source_ids_drops_before_introspection",
+                                narrative_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-narrative-gate-manufacture",
+                        "manufactured inner state is dropped",
+                        "tests/test_narrative_gate.py",
+                        (
+                            (
+                                "test_narrative_gate_drops_manufactured_inner_state",
+                                narrative_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-narrative-gate-introspection",
+                        "introspection reject is dropped",
+                        "tests/test_narrative_gate.py",
+                        (
+                            (
+                                "test_narrative_gate_drops_introspection_reject",
+                                narrative_gate_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-narrative-gate-pass",
+                        "grounded candidate passes with source ids",
+                        "tests/test_narrative_gate.py",
+                        (
+                            (
+                                "test_narrative_gate_passes_grounded_candidate_with_introspection",
+                                narrative_gate_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u66_inner_life and (changed & _U6_6_INNER_LIFE_PREFLIGHT_FILES):
+        findings.extend(
+            _missing_required_proofs(
+                surface="U6.6 full-scheduled preflight",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u66-preflight-provider-snapshot-blockers",
+                        "enabled schedules require snapshot and provider readiness",
+                        "tests/test_inner_life_preflight.py",
+                        (
+                            (
+                                "test_preflight_enabled_schedules_require_snapshot_and_provider_readiness",
+                                preflight_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-preflight-ready-with-snapshot-provider",
+                        "preflight goes green only with snapshot, provider, and kill switches",
+                        "tests/test_inner_life_preflight.py",
+                        (
+                            (
+                                "test_preflight_ready_when_enabled_snapshot_provider_and_kill_switches_exist",
+                                preflight_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u66_inner_life and "mnemos/inner_life/scheduler.py" in changed:
+        findings.extend(
+            _missing_required_proofs(
+                surface="U6.6 scheduled inner-life runner",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u66-scheduler-activity-skip",
+                        "scheduled runner records activity-gate skips without memory",
+                        "tests/test_inner_life_scheduler.py",
+                        (
+                            (
+                                "test_scheduled_runner_activity_gate_skip_writes_no_memory",
+                                scheduler_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-scheduler-affect-run",
+                        "scheduled affect runs after activity gate without memory writes",
+                        "tests/test_inner_life_scheduler.py",
+                        (
+                            (
+                                "test_scheduled_runner_affect_runs_after_activity_gate_without_memory_write",
+                                scheduler_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-scheduler-reviewer-backed-skip",
+                        "reviewer-backed scheduled families skip without memory when reviewers are absent",
+                        "tests/test_inner_life_scheduler.py",
+                        (
+                            (
+                                "test_scheduled_runner_observe_skips_without_reviewers_or_memory_write",
+                                scheduler_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u66-scheduler-launchd-plist",
+                        "launchd plist invokes inner-life run without loading",
+                        "tests/test_inner_life_scheduler.py",
+                        (
+                            (
+                                "test_inner_life_launchd_plist_invokes_scheduled_runner_without_loading",
+                                scheduler_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u7_soak_tick and any(path.startswith("mnemos/soak/") for path in changed):
+        findings.extend(
+            _missing_required_proofs(
+                surface="U7 soak tick orchestrator",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u7-soak-tick-disabled",
+                        "disabled tick skips without memory or beliefs",
+                        "tests/test_soak_tick.py",
+                        (
+                            (
+                                "test_soak_tick_disabled_skips_without_memory_or_beliefs",
+                                soak_tick_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u7-soak-tick-shallow-only",
+                        "shallow consolidation family excludes deep passes",
+                        "tests/test_soak_tick.py",
+                        (
+                            (
+                                "test_soak_tick_runs_shallow_consolidation_family_without_deep_passes",
+                                soak_tick_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u7-soak-tick-inner-life-fanout",
+                        "inner-life family fanout runs through existing gate",
+                        "tests/test_soak_tick.py",
+                        (
+                            (
+                                "test_soak_tick_fans_out_inner_life_family_through_existing_gate",
+                                soak_tick_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u7-soak-tick-launchd-plist",
+                        "launchd plist invokes soak tick without loading",
+                        "tests/test_soak_tick.py",
+                        (
+                            (
+                                "test_soak_tick_launchd_plist_invokes_orchestrator_without_loading",
+                                soak_tick_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u7-soak-preflight-blocked",
+                        "activation preflight blocks without watcher, plist, and copy tick proof",
+                        "tests/test_soak_tick.py",
+                        (
+                            (
+                                "test_soak_activation_preflight_blocks_without_watcher_plist_or_dry_run",
+                                soak_tick_tests,
+                            ),
+                        ),
+                    ),
+                    _ProofRequirement(
+                        "u7-soak-preflight-ready",
+                        "activation preflight requires watcher proof, plist lint, launchd not-loaded, and copy tick",
+                        "tests/test_soak_tick.py",
+                        (
+                            (
+                                "test_soak_activation_preflight_ready_after_watch_plist_launchd_and_copy_tick",
+                                soak_tick_tests,
+                            ),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    if u7_soak_tick and (
+        changed & {"mnemos/config/defaults.py", "mnemos/inner_life/preflight.py"}
+    ):
+        findings.extend(
+            _missing_required_proofs(
+                surface="U7 soak tick preflight/config",
+                severity="high",
+                requirements=[
+                    _ProofRequirement(
+                        "u7-soak-preflight-tick-disabled",
+                        "preflight blocks when the soak tick is disabled",
+                        "tests/test_inner_life_preflight.py",
+                        (("soak_tick_disabled", preflight_tests),),
+                    ),
+                    _ProofRequirement(
+                        "u7-soak-preflight-ready",
+                        "preflight ready requires enabled tick and shallow family",
+                        "tests/test_inner_life_preflight.py",
+                        (
+                            (
+                                "test_preflight_ready_when_enabled_snapshot_provider_and_kill_switches_exist",
+                                preflight_tests,
+                            ),
+                            ("soak_tick_enabled", preflight_tests),
+                            ("shallow_consolidation", preflight_tests),
+                        ),
+                    ),
                 ],
             )
         )
 
     if "mnemos/cli.py" in changed:
-        findings.extend(
-            _missing_required_proofs(
-                surface="mnemos/cli.py",
-                severity="high",
-                requirements=[
-                    _ProofRequirement("cli-smoke", "CLI smoke", "tests/test_u3c_pai_operator.py", (("test_u3c_cli_watch_preview_and_apply", operator_u3c_tests),)),
-                    _ProofRequirement("cli-missing-arg", "missing-arg failure", "tests/test_u3b_pai_operator.py", (("requires --db-path", operator_tests),)),
-                    _ProofRequirement("cli-bad-arg", "bad-arg failure", "tests/test_u3c_pai_watch_doctor.py", (("invalid --backup-keep", watcher), ("test_u3c_watch_doctor_requires_backup_keep_in_plist", tests))),
-                    _ProofRequirement("cli-live-db", "no live DB default path", "tests/test_u3b_pai_operator.py", (("test_u3b_cli_refuses_default_live_db_without_override", operator_tests),)),
-                    _ProofRequirement("cli-review-gate", "review-gate CLI smoke", "tests/test_u3c_pai_review_gate.py", (("test_u3c_review_gate_cli_reports_green", review_gate_tests),)),
-                ],
+        if u66_inner_life:
+            findings.extend(
+                _missing_required_proofs(
+                    surface="U6.6 inner-life CLI",
+                    severity="high",
+                    requirements=[
+                        _ProofRequirement(
+                            "u66-inner-life-cli-session",
+                            "session-finalize CLI writes private ledger",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_inner_life_session_finalize_cli_writes_private_ledger",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u66-inner-life-cli-db-required",
+                            "representative DB required",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_inner_life_cli_requires_representative_db",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u66-inner-life-cli-live-refusal",
+                            "live DB refusal",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_inner_life_cli_refuses_default_live_db_without_override",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u66-inner-life-cli-run",
+                            "scheduled run CLI exercises a gated process without memory writes",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_inner_life_run_cli_executes_scheduled_affect_without_memory",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u66-inner-life-cli-plist",
+                            "plist CLI writes launchd artifact without loading",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_inner_life_plist_cli_writes_without_loading",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                    ],
+                )
             )
-        )
+        if u7_soak_tick:
+            findings.extend(
+                _missing_required_proofs(
+                    surface="U7 soak tick CLI",
+                    severity="high",
+                    requirements=[
+                        _ProofRequirement(
+                            "u7-soak-cli-db-required",
+                            "representative DB required",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_soak_tick_cli_requires_representative_db",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u7-soak-cli-live-refusal",
+                            "live DB refusal",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_soak_tick_cli_refuses_default_live_db_without_override",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u7-soak-cli-disabled-tick",
+                            "disabled tick reports no memory writes",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_soak_tick_cli_reports_disabled_tick_without_memory",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u7-soak-cli-plist",
+                            "plist CLI writes orchestrator artifact without loading",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_soak_plist_cli_writes_orchestrator_without_loading",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "u7-soak-cli-preflight-artifact",
+                            "preflight CLI writes artifact without activation",
+                            "tests/test_cli_simple.py",
+                            (
+                                (
+                                    "test_soak_preflight_cli_writes_artifact_without_live_activation",
+                                    cli_simple_tests,
+                                ),
+                            ),
+                        ),
+                    ],
+                )
+            )
+        if not (u66_inner_life or u7_soak_tick):
+            findings.extend(
+                _missing_required_proofs(
+                    surface="mnemos/cli.py",
+                    severity="high",
+                    requirements=[
+                        _ProofRequirement(
+                            "cli-smoke",
+                            "CLI smoke",
+                            "tests/test_u3c_pai_operator.py",
+                            (
+                                (
+                                    "test_u3c_cli_watch_preview_and_apply",
+                                    operator_u3c_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "cli-missing-arg",
+                            "missing-arg failure",
+                            "tests/test_u3b_pai_operator.py",
+                            (("requires --db-path", operator_tests),),
+                        ),
+                        _ProofRequirement(
+                            "cli-bad-arg",
+                            "bad-arg failure",
+                            "tests/test_u3c_pai_watch_doctor.py",
+                            (
+                                ("invalid --backup-keep", watcher),
+                                (
+                                    "test_u3c_watch_doctor_requires_backup_keep_in_plist",
+                                    tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "cli-live-db",
+                            "no live DB default path",
+                            "tests/test_u3b_pai_operator.py",
+                            (
+                                (
+                                    "test_u3b_cli_refuses_default_live_db_without_override",
+                                    operator_tests,
+                                ),
+                            ),
+                        ),
+                        _ProofRequirement(
+                            "cli-review-gate",
+                            "review-gate CLI smoke",
+                            "tests/test_u3c_pai_review_gate.py",
+                            (
+                                (
+                                    "test_u3c_review_gate_cli_reports_green",
+                                    review_gate_tests,
+                                ),
+                            ),
+                        ),
+                    ],
+                )
+            )
 
     if "docs/u3c-step3-launch-gate.md" in changed:
-        for marker in ("Anti-Criteria", "Riley/Daniel Test Taxonomy Crosswalk", "Code Graders"):
+        for marker in (
+            "Anti-Criteria",
+            "Riley/Daniel Test Taxonomy Crosswalk",
+            "Code Graders",
+        ):
             if marker not in launch_doc:
                 findings.append(
                     PaiReviewFinding(
@@ -684,8 +2046,7 @@ def _repository_content_findings(
             "documentation-only risk" in launch_doc_review_text.lower()
         )
         if safety_claim and (
-            docs_only
-            or (not has_enforcement_links and not explicit_docs_only_risk)
+            docs_only or (not has_enforcement_links and not explicit_docs_only_risk)
         ):
             findings.append(
                 PaiReviewFinding(
@@ -741,7 +2102,9 @@ def _repository_content_findings(
             )
         )
 
-    packaging_changed = bool(changed_workflows) or bool(changed & {"pyproject.toml", "uv.lock"})
+    packaging_changed = bool(changed_workflows) or bool(
+        changed & {"pyproject.toml", "uv.lock"}
+    )
     if packaging_changed:
         for ident, label in (
             ("ci-local-build", "local build"),
@@ -816,7 +2179,9 @@ def _missing_required_proofs(
                 ),
                 required_proof=requirement.label,
                 status="missing",
-                action="must-test" if requirement.file.startswith("tests/") else "must-fix",
+                action="must-test"
+                if requirement.file.startswith("tests/")
+                else "must-fix",
             )
         )
     return findings
@@ -880,7 +2245,10 @@ def _test_class_has_proof(text: str, name: str) -> bool:
     for node in getattr(tree, "body", []):
         if not isinstance(node, ast.Assign):
             continue
-        if not any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
+        if not any(
+            isinstance(target, ast.Name) and target.id == name
+            for target in node.targets
+        ):
             continue
         value = node.value
         if (
@@ -987,7 +2355,9 @@ def _has_empty_parametrize(
             continue
         if _call_name(decorator) != "parametrize":
             continue
-        values: ast.expr | None = decorator.args[1] if len(decorator.args) >= 2 else None
+        values: ast.expr | None = (
+            decorator.args[1] if len(decorator.args) >= 2 else None
+        )
         for keyword in decorator.keywords:
             if keyword.arg == "argvalues":
                 values = keyword.value
@@ -1015,7 +2385,8 @@ def _is_empty_sequence(node: ast.AST) -> bool:
 
 def _body_has_substantive_proof(body: Sequence[ast.stmt]) -> bool:
     substantive = [
-        node for node in body
+        node
+        for node in body
         if not (
             isinstance(node, ast.Pass)
             or (
@@ -1060,7 +2431,9 @@ def _statement_has_substantive_proof(node: ast.stmt) -> bool:
             return _reachable_body_has_proof(node.body)
         if truth is False:
             return _reachable_body_has_proof(node.orelse)
-        return _reachable_body_has_proof(node.body) or _reachable_body_has_proof(node.orelse)
+        return _reachable_body_has_proof(node.body) or _reachable_body_has_proof(
+            node.orelse
+        )
     if isinstance(node, ast.Try):
         return (
             _reachable_body_has_proof(node.body)
@@ -1076,7 +2449,14 @@ def _statement_has_substantive_proof(node: ast.stmt) -> bool:
 def _statement_values(node: ast.AST) -> tuple[ast.AST, ...]:
     values: list[ast.AST] = []
     for field_name, value in ast.iter_fields(node):
-        if field_name in {"body", "orelse", "finalbody", "handlers", "cases", "decorator_list"}:
+        if field_name in {
+            "body",
+            "orelse",
+            "finalbody",
+            "handlers",
+            "cases",
+            "decorator_list",
+        }:
             continue
         if isinstance(value, ast.AST):
             values.append(value)
@@ -1141,7 +2521,11 @@ def _statement_is_terminal(node: ast.stmt) -> bool:
             return _body_is_terminal(node.body)
         if truth is False:
             return _body_is_terminal(node.orelse)
-        return bool(node.orelse) and _body_is_terminal(node.body) and _body_is_terminal(node.orelse)
+        return (
+            bool(node.orelse)
+            and _body_is_terminal(node.body)
+            and _body_is_terminal(node.orelse)
+        )
     if isinstance(node, ast.Try):
         if _body_is_terminal(node.finalbody):
             return True
@@ -1168,8 +2552,7 @@ def _strip_python_comments(text: str) -> str:
 
 def _is_watcher_surface_file(path: str) -> bool:
     return path == "mnemos/importer/watcher.py" or (
-        path.startswith("mnemos/importer/watcher")
-        and path.endswith(".py")
+        path.startswith("mnemos/importer/watcher") and path.endswith(".py")
     )
 
 
@@ -1198,7 +2581,9 @@ def _update_persistence_aliases(line: str, aliases: set[str]) -> None:
         return
     target, expression = call_match.groups()
     lowered = expression.lower()
-    if any(marker in lowered for marker in ("state", "plist", "target_path", "output_file")):
+    if any(
+        marker in lowered for marker in ("state", "plist", "target_path", "output_file")
+    ):
         aliases.add(target)
 
 
@@ -1229,7 +2614,9 @@ def _has_direct_persistence_write(line: str, aliases: set[str]) -> bool:
         line,
     ):
         return True
-    if re.search(r"\bPath\(args\.(?:state|plist)\)\.open\(\s*(?:mode\s*=\s*)?['\"]w", line):
+    if re.search(
+        r"\bPath\(args\.(?:state|plist)\)\.open\(\s*(?:mode\s*=\s*)?['\"]w", line
+    ):
         return True
     receiver_open = re.search(r"\b(\w+)\.open\(\s*['\"]w", line)
     return bool(receiver_open and receiver_open.group(1) in aliases)
@@ -1276,7 +2663,10 @@ def _lifecycle_mutation_violation(text: str) -> str | None:
                 f"identity scoping (table: {table})"
             )
         if (
-            re.search(rf"\bupdate\s+{re.escape(table)}\b(?:\s+(?:as\s+)?\w+)?\s+set\b", lowered)
+            re.search(
+                rf"\bupdate\s+{re.escape(table)}\b(?:\s+(?:as\s+)?\w+)?\s+set\b",
+                lowered,
+            )
             or f"update{table}set" in compact
         ):
             return (
@@ -1323,7 +2713,9 @@ def _where_clause_is_identity_scoped(where: str, target_qualifiers: set[str]) ->
     )
 
 
-def _where_disjunct_has_identity_scope(disjunct: str, target_qualifiers: set[str]) -> bool:
+def _where_disjunct_has_identity_scope(
+    disjunct: str, target_qualifiers: set[str]
+) -> bool:
     for match in re.finditer(
         rf"(?<![\w.])(?:(?P<qualifier>[A-Za-z_][A-Za-z0-9_]*)\.)?"
         rf"(?P<column>{_IDENTITY_COLUMN_PATTERN})\b\s*"
@@ -1504,7 +2896,7 @@ def _added_text_lifecycle_mutation_violation(text: str) -> str | None:
             or _execute_call_starts_sql_literal_block(lines, index)
         ):
             continue
-        window = "\n".join(lines[max(0, index - 4): index + 12])
+        window = "\n".join(lines[max(0, index - 4) : index + 12])
         violation = _lifecycle_mutation_violation(window)
         if violation:
             return violation
@@ -1522,7 +2914,7 @@ def _execute_call_starts_sql_literal_block(
     line = lines[index].strip()
     if not re.search(r"\b(?:execute|executescript)\s*\(\s*$", line):
         return False
-    for following in lines[index + 1: index + 4]:
+    for following in lines[index + 1 : index + 4]:
         stripped = following.strip()
         if not stripped:
             continue
@@ -1656,12 +3048,10 @@ def _context_has_enforcement_links(
         text,
     )
     test_exists = any(
-        _repo_path_exists(path, file_texts, repo_root=repo_root)
-        for path in test_paths
+        _repo_path_exists(path, file_texts, repo_root=repo_root) for path in test_paths
     )
     code_exists = any(
-        _repo_path_exists(path, file_texts, repo_root=repo_root)
-        for path in code_paths
+        _repo_path_exists(path, file_texts, repo_root=repo_root) for path in code_paths
     )
     code_exists = code_exists or any(
         _dotted_module_path_exists(
@@ -1703,7 +3093,9 @@ def _dotted_module_path_exists(
 def _workflow_proof_statuses(workflow_text: str) -> dict[str, bool]:
     run_blocks = _active_workflow_run_blocks(workflow_text)
     return {
-        "ci-local-build": any(_run_block_executes(block, ("uv build",)) for block in run_blocks),
+        "ci-local-build": any(
+            _run_block_executes(block, ("uv build",)) for block in run_blocks
+        ),
         "ci-wheel-content": any(
             _run_block_executes(
                 block,
@@ -1712,8 +3104,7 @@ def _workflow_proof_statuses(workflow_text: str) -> dict[str, bool]:
             for block in run_blocks
         ),
         "ci-twine-check": any(
-            _run_block_executes(block, ("twine check",))
-            for block in run_blocks
+            _run_block_executes(block, ("twine check",)) for block in run_blocks
         ),
     }
 
@@ -1759,7 +3150,7 @@ def _extract_workflow_run(block_lines: Sequence[str]) -> str:
         if rest and rest not in {"|", ">"}:
             return rest
         collected: list[str] = []
-        for following in block_lines[index + 1:]:
+        for following in block_lines[index + 1 :]:
             if not following.strip():
                 collected.append("")
                 continue
@@ -1776,8 +3167,7 @@ def _run_block_executes(block: str, markers: Sequence[str]) -> bool:
     if ">/dev/null" in lowered or "cat <<eof" in lowered:
         return False
     executable_lines = [
-        _strip_shell_comment(line).strip()
-        for line in block.splitlines()
+        _strip_shell_comment(line).strip() for line in block.splitlines()
     ]
     executable_lines = [line for line in executable_lines if line]
     return all(
@@ -1817,13 +3207,26 @@ def _files_needed_for_review(changed_files: Sequence[str]) -> set[str]:
             "docs/u3c-step3-launch-gate.md",
             "mnemos/cli.py",
             "mnemos/importer/watcher.py",
+            "tests/test_emotional_driver.py",
+            "tests/test_hypomnema_challenge.py",
+            "tests/test_cli_simple.py",
+            "tests/test_inner_life_activity_gate.py",
+            "tests/test_inner_life_ledger.py",
+            "tests/test_inner_life_preflight.py",
+            "tests/test_inner_life_scheduler.py",
+            "tests/test_narrative_gate.py",
+            "tests/test_observer_panel.py",
             "tests/test_u3b_pai_importer.py",
             "tests/test_u3b_pai_operator.py",
+            "tests/test_u3a_schema_migrations.py",
             "tests/test_u3c_pai_operator.py",
             "tests/test_u3c_pai_review_gate.py",
             "tests/test_u3c_pai_watch.py",
             "tests/test_u3c_pai_watch_doctor.py",
             "tests/test_u3c_pai_watcher.py",
+            "tests/test_session_finalizer.py",
+            "tests/test_soak_tick.py",
+            "tests/test_turn_finalizer.py",
         }
     )
     return files

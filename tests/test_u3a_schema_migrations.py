@@ -22,7 +22,7 @@ from mnemos.store.migrations import (
     run_migrations,
     upsert_pai_import_row,
 )
-from mnemos.store.sqlite_store import EngramStore
+from mnemos.store.sqlite_store import EngramStore, SCHEMA_VERSION
 from mnemos.substrate.config import SubstrateConfig
 from mnemos.substrate.handlers import dreaming, initiation, wandering
 from mnemos.substrate.modulators import ModulatorState, compute_modulators
@@ -169,7 +169,9 @@ def _table_sql(conn, table: str) -> str:
 
 
 def _column_map(conn, table: str):
-    return {row["name"]: dict(row) for row in conn.execute(f"PRAGMA table_info({table})")}
+    return {
+        row["name"]: dict(row) for row in conn.execute(f"PRAGMA table_info({table})")
+    }
 
 
 def test_u3a_schema_fields_roundtrip(tmp_path):
@@ -272,7 +274,9 @@ def test_u3a_schema_shape_is_introspected(tmp_path):
         assert "CHECK (confidence_pending_review IN (0, 1))" in belief_sql
 
         row_map_sql = _table_sql(conn, "pai_import_row_map")
-        assert "target_table IN ('engrams', 'beliefs', 'hypomnema_entries')" in row_map_sql
+        assert (
+            "target_table IN ('engrams', 'beliefs', 'hypomnema_entries')" in row_map_sql
+        )
 
         indexes = {
             row["name"]
@@ -325,8 +329,13 @@ def test_decay_and_softening_protection_flags_have_distinct_semantics(tmp_path):
         assert after_decay_only_decay.accessibility == pytest.approx(
             before_decay_only.accessibility
         )
-        assert after_decay_only_decay.strength == pytest.approx(before_decay_only.strength)
-        assert after_softening_only_decay.accessibility < before_softening_only.accessibility
+        assert after_decay_only_decay.strength == pytest.approx(
+            before_decay_only.strength
+        )
+        assert (
+            after_softening_only_decay.accessibility
+            < before_softening_only.accessibility
+        )
 
         stub = StubLLM("a blurred contract row")
         run_softening_pass(store, {"softening_threshold": 0.9}, stub, agent_id="oliver")
@@ -345,9 +354,9 @@ def test_u3a_migration_and_row_map_are_idempotent(tmp_path):
     conn = store._get_conn()
     try:
         assert any(m["version"] == 4 for m in list_migrations())
-        # Re-run target_version=7 (current SCHEMA_VERSION) — should be no-op
+        # Re-run current SCHEMA_VERSION — should be no-op
         # since EngramStore.__init__ already migrated to latest.
-        assert run_migrations(conn, target_version=7) == []
+        assert run_migrations(conn, target_version=SCHEMA_VERSION) == []
         apply_u3a_schema_migration(conn)
         apply_u3a_schema_migration(conn)
 
@@ -417,9 +426,24 @@ def test_u3a_migration_and_row_map_are_idempotent(tmp_path):
             timestamp=700,
         )
 
-        assert first == {"inserted": True, "updated": False, "created_at": 100, "updated_at": 100}
-        assert same == {"inserted": False, "updated": False, "created_at": 100, "updated_at": 100}
-        assert changed == {"inserted": False, "updated": True, "created_at": 100, "updated_at": 300}
+        assert first == {
+            "inserted": True,
+            "updated": False,
+            "created_at": 100,
+            "updated_at": 100,
+        }
+        assert same == {
+            "inserted": False,
+            "updated": False,
+            "created_at": 100,
+            "updated_at": 100,
+        }
+        assert changed == {
+            "inserted": False,
+            "updated": True,
+            "created_at": 100,
+            "updated_at": 300,
+        }
         assert new_path["inserted"] is True
         assert belief_first == {
             "inserted": True,
@@ -485,9 +509,7 @@ def test_u3a_migration_and_row_map_are_idempotent(tmp_path):
         }
 
         with pytest.raises(ValueError):
-            upsert_pai_import_row(
-                conn, job_id="A", source_path="z.md", target_id="   "
-            )
+            upsert_pai_import_row(conn, job_id="A", source_path="z.md", target_id="   ")
         with pytest.raises(ValueError):
             upsert_pai_import_row(
                 conn,
@@ -545,8 +567,18 @@ def test_u3b_import_row_map_reruns_preserve_target_identity(tmp_path):
             timestamp=300,
         )
 
-        assert first == {"inserted": True, "updated": False, "created_at": 100, "updated_at": 100}
-        assert same == {"inserted": False, "updated": False, "created_at": 100, "updated_at": 100}
+        assert first == {
+            "inserted": True,
+            "updated": False,
+            "created_at": 100,
+            "updated_at": 100,
+        }
+        assert same == {
+            "inserted": False,
+            "updated": False,
+            "created_at": 100,
+            "updated_at": 100,
+        }
         assert changed_source == {
             "inserted": False,
             "updated": True,
@@ -641,7 +673,7 @@ def test_legacy_v3_db_opens_and_migrates_through_engram_store(tmp_path):
 
     store = EngramStore(db_path)
     try:
-        assert store.get_meta("schema_version") == "7"
+        assert store.get_meta("schema_version") == str(SCHEMA_VERSION)
         legacy = store.get_engram("legacy_e")
         assert legacy is not None
         assert legacy.voice_exemplar_eligible is True
@@ -665,9 +697,12 @@ def test_backed_up_legacy_db_rehearsal_preserves_u3a_sentinels(tmp_path, monkeyp
 
     source_conn = sqlite3.connect(source_db)
     try:
-        assert source_conn.execute(
-            "SELECT value FROM meta WHERE key = 'schema_version'"
-        ).fetchone()[0] == "3"
+        assert (
+            source_conn.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'"
+            ).fetchone()[0]
+            == "3"
+        )
         legacy_columns = {
             row[1] for row in source_conn.execute("PRAGMA table_info(engrams)")
         }
@@ -678,7 +713,7 @@ def test_backed_up_legacy_db_rehearsal_preserves_u3a_sentinels(tmp_path, monkeyp
     store = EngramStore(backup_db)
     sentinel_ids: set[str] = set()
     try:
-        assert store.get_meta("schema_version") == "7"
+        assert store.get_meta("schema_version") == str(SCHEMA_VERSION)
         assert store._get_conn().execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert store.get_engram("legacy_e") is not None
 
@@ -794,11 +829,12 @@ def test_migration_version_guards(tmp_path):
     empty = sqlite3.connect(tmp_path / "empty.db")
     empty.row_factory = sqlite3.Row
     try:
-        # Bootstrap empty DB to the current latest schema (v7).
-        assert run_migrations(empty, target_version=7) == [4, 5, 6, 7]
+        # Bootstrap empty DB to the current latest schema (v8 after the
+        # PR4 × inner-life merge: v6 membrane, v7 U2.5, v8 inner-life ledger).
+        assert run_migrations(empty, target_version=SCHEMA_VERSION) == [4, 5, 6, 7, 8]
         assert empty.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
-        ).fetchone()["value"] == "7"
+        ).fetchone()["value"] == str(SCHEMA_VERSION)
         row_map_cols = _column_map(empty, "pai_import_row_map")
         assert "content_at_last_import" in row_map_cols
         assert "tombstone_at" in row_map_cols
@@ -806,7 +842,11 @@ def test_migration_version_guards(tmp_path):
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pai_import_events'"
         ).fetchone()
         assert empty.execute(
-            """
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'inner_life_events'"
+        ).fetchone()
+        assert (
+            empty.execute(
+                """
             SELECT COUNT(*) FROM sqlite_master
             WHERE type = 'trigger' AND name IN (
                 'pai_import_engrams_tombstone',
@@ -814,7 +854,9 @@ def test_migration_version_guards(tmp_path):
                 'pai_import_hypomnema_entries_tombstone'
             )
             """
-        ).fetchone()[0] == 3
+            ).fetchone()[0]
+            == 3
+        )
     finally:
         empty.close()
 
@@ -840,7 +882,9 @@ def test_migration_version_guards(tmp_path):
 
     malformed = sqlite3.connect(tmp_path / "malformed.db")
     try:
-        malformed.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        malformed.execute(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
         malformed.execute("INSERT INTO meta VALUES ('schema_version', 'bad')")
         malformed.commit()
         with pytest.raises(RuntimeError, match="Malformed schema_version"):
@@ -850,16 +894,17 @@ def test_migration_version_guards(tmp_path):
 
 
 def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
-    """v7 is real now; use slot 8 to test failure isolation.
+    """v8 is real now (v6 membrane, v7 U2.5, v8 inner-life ledger); use slot 9
+    to test failure isolation.
 
-    The DB rolls back to v7 (current latest) when a hypothetical v8 migration
+    The DB rolls back to v8 (current latest) when a hypothetical v9 migration
     fails partway through.
     """
     db_path = tmp_path / "rollback.db"
     store = EngramStore(db_path)
     store.close()
 
-    previous = migrations._MIGRATIONS.get(8)
+    previous = migrations._MIGRATIONS.get(9)
 
     def fail_after_writes(conn):
         conn.execute("CREATE TABLE u3a_failure_probe (id TEXT PRIMARY KEY)")
@@ -868,14 +913,14 @@ def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
         )
         raise ValueError("synthetic migration failure")
 
-    migrations._MIGRATIONS[8] = ("synthetic failing migration", fail_after_writes)
+    migrations._MIGRATIONS[9] = ("synthetic failing migration", fail_after_writes)
     conn = sqlite3.connect(db_path)
     try:
-        with pytest.raises(RuntimeError, match="Migration 8 failed"):
-            run_migrations(conn, target_version=8)
+        with pytest.raises(RuntimeError, match="Migration 9 failed"):
+            run_migrations(conn, target_version=9)
         assert conn.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
-        ).fetchone()[0] == "7"
+        ).fetchone()[0] == str(SCHEMA_VERSION)
         assert not conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'u3a_failure_probe'"
         ).fetchone()
@@ -885,9 +930,9 @@ def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
     finally:
         conn.close()
         if previous is None:
-            del migrations._MIGRATIONS[8]
+            del migrations._MIGRATIONS[9]
         else:
-            migrations._MIGRATIONS[8] = previous
+            migrations._MIGRATIONS[9] = previous
 
 
 def test_future_schema_store_open_fails_before_mutating_schema(tmp_path):
@@ -1039,7 +1084,9 @@ def test_decay_protected_is_excluded_from_substrate_tick_decay(tmp_path, monkeyp
         substrate.store.close()
 
 
-def test_substrate_tick_softening_events_exclude_protected_and_unauthorized(tmp_path, monkeypatch):
+def test_substrate_tick_softening_events_exclude_protected_and_unauthorized(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("MNEMOS_DISABLE_DOTENV", "1")
     db_path = tmp_path / "tick-softening.db"
     store = EngramStore(db_path)
@@ -1163,7 +1210,12 @@ def test_connection_discovery_skips_unauthorized_sources_and_targets(tmp_path):
         "shared alpha beta phrase for connection discovery other agent",
         owner_agent_id="claude",
     )
-    for engram in (source, unauthorized_target, unauthorized_source, other_agent_target):
+    for engram in (
+        source,
+        unauthorized_target,
+        unauthorized_source,
+        other_agent_target,
+    ):
         store.save_engram(engram)
 
     try:
@@ -1214,15 +1266,19 @@ def test_connection_discovery_excludes_review_only_embedding_candidates(tmp_path
     try:
         stats = run_connection_discovery(
             store,
-            embedding_index=StubEmbeddingIndex([
-                (review_candidate.id, 0.95),
-                (operational_candidate.id, 0.95),
-            ]),
+            embedding_index=StubEmbeddingIndex(
+                [
+                    (review_candidate.id, 0.95),
+                    (operational_candidate.id, 0.95),
+                ]
+            ),
             config={"max_engrams_per_discovery_pass": 1},
             llm_client=None,
             agent_id="oliver",
         )
-        targets = {connection.target_id for connection in store.get_connections(source.id)}
+        targets = {
+            connection.target_id for connection in store.get_connections(source.id)
+        }
         assert stats["embedding_candidates"] == 1
         assert operational_candidate.id in targets
         assert review_candidate.id not in targets
@@ -1294,7 +1350,9 @@ def test_connection_discovery_counts_only_operational_existing_edges(tmp_path):
                 read_visibility="operational_context",
             )
         }
-        all_targets = {connection.target_id for connection in store.get_connections(source.id)}
+        all_targets = {
+            connection.target_id for connection in store.get_connections(source.id)
+        }
 
         assert stats["engrams_processed"] == 1
         assert stats["embedding_candidates"] == 1
@@ -1392,7 +1450,9 @@ def test_substrate_dreaming_prompt_excludes_unauthorized_and_other_agent(tmp_pat
         assert "OTHER-AGENT-DREAM-PROMPT-LEAK" not in prompt
         outputs = [
             e.content
-            for e in store.get_active_engrams(agent_id="oliver", limit=20)
+            for e in store.get_active_engrams(
+                agent_id="oliver", limit=20, read_visibility=None
+            )
         ]
         assert "[dream] authorized synthesis" in outputs
     finally:
@@ -1440,7 +1500,9 @@ def test_substrate_wandering_prompt_excludes_unauthorized_and_other_agent(tmp_pa
         assert "OTHER-AGENT-WANDERING-PROMPT-LEAK" not in prompt
         outputs = [
             e.content
-            for e in store.get_active_engrams(agent_id="oliver", limit=20)
+            for e in store.get_active_engrams(
+                agent_id="oliver", limit=20, read_visibility=None
+            )
         ]
         assert "[wandering] authorized wandering" in outputs
     finally:
@@ -1499,7 +1561,9 @@ def test_substrate_initiation_prompt_excludes_unauthorized_and_other_agent(tmp_p
         assert "OTHER-AGENT-INITIATION-PROMPT-LEAK" not in prompt
         outputs = [
             e.content
-            for e in store.get_active_engrams(agent_id="oliver", limit=20)
+            for e in store.get_active_engrams(
+                agent_id="oliver", limit=20, read_visibility=None
+            )
         ]
         assert "[initiation] authorized pattern" in outputs
     finally:
@@ -1539,7 +1603,9 @@ def test_substrate_modulators_scope_to_authorized_agent_rows(tmp_path):
     assert modulators.resolution == pytest.approx(0.2)
 
 
-def test_substrate_modulator_connection_density_scopes_to_authorized_agent_edges(tmp_path):
+def test_substrate_modulator_connection_density_scopes_to_authorized_agent_edges(
+    tmp_path,
+):
     db_path = tmp_path / "modulator_connections.db"
     store = EngramStore(db_path)
     authorized_source = _old_engram("authorized source")
@@ -1656,3 +1722,104 @@ def test_substrate_temporal_event_ignores_unauthorized_and_other_agent_rows(
         assert [event.event_type for event in events] == [EventType.SILENCE_EXTENDED]
     finally:
         substrate.store.close()
+
+
+def _create_inner_life_origin_v6_db(path):
+    """Authentic inner-life-origin v6: pre-membrane v5 base + inner_life_events
+    with rows, stamped 6 — the shape a feat/gated-inner-life-soak soak run left
+    before the merge. Membrane (proposal_ledger + read_visibility columns) absent."""
+    import os
+    import sys as _sys
+
+    _tests_dir = os.path.dirname(os.path.abspath(__file__))
+    if _tests_dir not in _sys.path:
+        _sys.path.insert(0, _tests_dir)
+    from test_store import _create_legacy_v5_read_visibility_db
+
+    _create_legacy_v5_read_visibility_db(path)  # pre-membrane v5 base
+    conn = sqlite3.connect(path)
+    try:
+        migrations.apply_u6_6_inner_life_schema_migration(
+            conn
+        )  # inner-life's v6 ledger
+        for i in (1, 2):
+            conn.execute(
+                "INSERT INTO inner_life_events (id, idempotency_key, event_type, "
+                "process_name, content_hash, content_excerpt, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"ile-{i}",
+                    f"key-{i}",
+                    "turn_finalized",
+                    "turn-finalizer",
+                    f"hash{i}",
+                    f"excerpt {i}",
+                    "2026-07-01T00:00:00+00:00",
+                    "2026-07-01T00:00:00+00:00",
+                ),
+            )
+        conn.execute("UPDATE meta SET value = '6' WHERE key = 'schema_version'")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_inner_life_origin_v6_upgrades_to_full_membrane(tmp_path):
+    """Regression (review 003b): an inner-life-origin v6 DB (inner_life_events
+    present, membrane absent, stamped 6) must upgrade to the FULL membrane through
+    the real EngramStore boot path — read_visibility on every membrane-guarded
+    table, not just proposal_ledger. The defect lived in the __init__ composition
+    (executescript pre-creates proposal_ledger, defeating v7's self-repair guard),
+    so the test must exercise EngramStore(db), not run_migrations directly."""
+    db_path = tmp_path / "inner-life-origin-v6.db"
+    _create_inner_life_origin_v6_db(db_path)
+
+    # sanity: the fixture is the inner-life-origin shape (membrane absent)
+    pre = sqlite3.connect(db_path)
+    pre.row_factory = sqlite3.Row
+    try:
+        assert (
+            pre.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[
+                0
+            ]
+            == "6"
+        )
+        tnames = {
+            r[0]
+            for r in pre.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert "inner_life_events" in tnames
+        assert "proposal_ledger" not in tnames  # membrane absent
+        assert "read_visibility" not in {
+            r["name"] for r in pre.execute("PRAGMA table_info(engrams)")
+        }
+        before_rows = [
+            dict(r) for r in pre.execute("SELECT * FROM inner_life_events ORDER BY id")
+        ]
+        assert len(before_rows) == 2
+    finally:
+        pre.close()
+
+    # upgrade through the REAL boot path
+    store = EngramStore(db_path)
+    conn = store._get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        assert store.get_meta("schema_version") == str(SCHEMA_VERSION)
+        for table in ("engrams", "beliefs", "hypomnema_entries", "functional_memories"):
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            assert "read_visibility" in cols, (
+                f"{table} missing read_visibility after upgrade"
+            )
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='proposal_ledger'"
+        ).fetchone()
+        after_rows = [
+            dict(r) for r in conn.execute("SELECT * FROM inner_life_events ORDER BY id")
+        ]
+        assert (
+            after_rows == before_rows
+        )  # inner_life_events rows survive byte-identical
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        store.close()

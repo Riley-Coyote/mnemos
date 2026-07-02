@@ -28,6 +28,7 @@ from ..core.identity import AgentIdentity
 from .migrations import (
     apply_u3a_schema_migration,
     apply_u3b_hardening_schema_migration,
+    apply_u6_6_inner_life_schema_migration,
     get_current_version,
     run_migrations,
 )
@@ -44,7 +45,7 @@ from .read_visibility import (
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 VALID_PROPOSAL_AUTHORITIES = {
     "user_stated",
@@ -119,24 +120,71 @@ VALID_HYPO_DOMAINS = {
     "situational",
 }
 
+VALID_INNER_LIFE_EVENT_TYPES = {
+    "session_finalized",
+    "turn_finalized",
+    "turn_message",
+    "tool_event",
+    "file_event",
+    "test_outcome",
+    "skip",
+    "error",
+}
+
 # Allowed column names for engrams table — prevents SQL injection via to_dict() keys
-_ENGRAM_COLUMNS = frozenset({
-    "id", "content", "content_at_encoding", "impact", "resolution", "kind", "tags",
-    "schema_refs", "strength", "stability", "accessibility", "encoding_context",
-    "source", "lineage", "owner_agent_id", "visibility", "state", "created_at",
-    "last_accessed", "access_count", "reconsolidation_count",
-    "voice_exemplar_eligible", "softening_protected", "original_substrate",
-    "original_timestamp", "consolidation_authorized", "decay_protected",
-    "read_visibility",
-})
+_ENGRAM_COLUMNS = frozenset(
+    {
+        "id",
+        "content",
+        "content_at_encoding",
+        "impact",
+        "resolution",
+        "kind",
+        "tags",
+        "schema_refs",
+        "strength",
+        "stability",
+        "accessibility",
+        "encoding_context",
+        "source",
+        "lineage",
+        "owner_agent_id",
+        "visibility",
+        "state",
+        "created_at",
+        "last_accessed",
+        "access_count",
+        "reconsolidation_count",
+        "voice_exemplar_eligible",
+        "softening_protected",
+        "original_substrate",
+        "original_timestamp",
+        "consolidation_authorized",
+        "decay_protected",
+        "read_visibility",
+    }
+)
 
 # Allowed column names for beliefs table
-_BELIEF_COLUMNS = frozenset({
-    "id", "agent_id", "content", "confidence", "domain", "created_at",
-    "last_revised", "last_challenged", "revision_history", "superseded_by",
-    "supporting_engram_ids", "tier", "needs_review", "confidence_pending_review",
-    "read_visibility",
-})
+_BELIEF_COLUMNS = frozenset(
+    {
+        "id",
+        "agent_id",
+        "content",
+        "confidence",
+        "domain",
+        "created_at",
+        "last_revised",
+        "last_challenged",
+        "revision_history",
+        "superseded_by",
+        "supporting_engram_ids",
+        "tier",
+        "needs_review",
+        "confidence_pending_review",
+        "read_visibility",
+    }
+)
 
 SQL_CREATE_TABLES = """
 -- Core engram storage
@@ -344,6 +392,39 @@ CREATE TABLE IF NOT EXISTS consolidation_log (
     stats TEXT NOT NULL DEFAULT '{}'
 );
 
+-- Private U6.6 inner-life provenance ledger. These rows are operational
+-- evidence below memory; they are not engrams, hypomnema, beliefs, identity
+-- patches, candidates, or shared-pool publications.
+CREATE TABLE IF NOT EXISTS inner_life_events (
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    event_type TEXT NOT NULL
+        CHECK (event_type IN (
+            'session_finalized', 'turn_finalized', 'turn_message',
+            'tool_event', 'file_event', 'test_outcome', 'skip', 'error'
+        )),
+    process_name TEXT NOT NULL,
+    agent_id TEXT NOT NULL DEFAULT 'default',
+    person_id TEXT NOT NULL DEFAULT 'user',
+    project_scope TEXT NOT NULL DEFAULT 'global',
+    session_id TEXT,
+    thread_id TEXT,
+    turn_id TEXT,
+    role TEXT,
+    source_message_id TEXT,
+    source_path TEXT,
+    source_timestamp TEXT,
+    content_hash TEXT NOT NULL DEFAULT '',
+    content_excerpt TEXT NOT NULL DEFAULT '',
+    event_tags_json TEXT NOT NULL DEFAULT '[]',
+    source_ids_json TEXT NOT NULL DEFAULT '[]',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    rollout_tag TEXT NOT NULL DEFAULT '',
+    gate_decision TEXT NOT NULL DEFAULT 'ledger_only',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- PAI import source-to-row map for idempotent importer re-runs and repair
 CREATE TABLE IF NOT EXISTS pai_import_row_map (
     job_id TEXT NOT NULL,
@@ -436,6 +517,12 @@ CREATE INDEX IF NOT EXISTS idx_proposal_ledger_status_scope
 CREATE INDEX IF NOT EXISTS idx_proposal_ledger_visibility
     ON proposal_ledger(read_visibility, status);
 CREATE INDEX IF NOT EXISTS idx_emotional_history_agent ON emotional_state_history(agent_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_inner_life_events_scope
+    ON inner_life_events(agent_id, person_id, project_scope, created_at);
+CREATE INDEX IF NOT EXISTS idx_inner_life_events_session
+    ON inner_life_events(session_id, event_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_inner_life_events_rollout
+    ON inner_life_events(rollout_tag, event_type, created_at);
 """
 
 
@@ -628,17 +715,37 @@ def _stricter_hypomnema_visibility(
     return _stricter_read_visibility(existing_visibility, classified_visibility)
 
 
-def _classify_hypomnema_domain_from_text(text: str, *, fallback: str = "situational") -> str:
+def _classify_hypomnema_domain_from_text(
+    text: str, *, fallback: str = "situational"
+) -> str:
     lowered = text.lower()
-    if any(marker in lowered for marker in ("identity", "who i am", "who you are", "selfhood", "soul.md")):
+    if any(
+        marker in lowered
+        for marker in ("identity", "who i am", "who you are", "selfhood", "soul.md")
+    ):
         return "identity"
-    if any(marker in lowered for marker in ("always", "preference", "prefers", "principle", "boundary", "foundational")):
+    if any(
+        marker in lowered
+        for marker in (
+            "always",
+            "preference",
+            "prefers",
+            "principle",
+            "boundary",
+            "foundational",
+        )
+    ):
         return "foundational"
     if any(marker in lowered for marker in ("again", "recurring", "usually", "often")):
         return "recurring"
-    if any(marker in lowered for marker in ("roadmap", "long term", "long-term", "future", "arc")):
+    if any(
+        marker in lowered
+        for marker in ("roadmap", "long term", "long-term", "future", "arc")
+    ):
         return "long-arc"
-    if any(marker in lowered for marker in ("current", "today", "temporary", "session")):
+    if any(
+        marker in lowered for marker in ("current", "today", "temporary", "session")
+    ):
         return "situational"
     return fallback
 
@@ -693,16 +800,23 @@ class EngramStore:
                 f"Database schema version {current_version} is newer than supported "
                 f"{SCHEMA_VERSION}"
             )
+        # NOTE (review 003b): executescript runs before migrations. Migration
+        # self-repair guards must never key on objects SQL_CREATE_TABLES creates —
+        # this boot path pre-creates them, so such a guard would never fire. See
+        # migrate_v7_afferent_u2_5_proposal_contract for the instance this bit.
         conn.executescript(SQL_CREATE_TABLES)
         # Migrate: add impact column if missing (v0.1 → v0.2)
         try:
-            conn.execute("ALTER TABLE engrams ADD COLUMN impact TEXT NOT NULL DEFAULT ''")
+            conn.execute(
+                "ALTER TABLE engrams ADD COLUMN impact TEXT NOT NULL DEFAULT ''"
+            )
         except sqlite3.OperationalError:
             pass  # Column already exists
         conn.commit()
         run_migrations(conn, target_version=SCHEMA_VERSION)
         apply_u3a_schema_migration(conn)
         apply_u3b_hardening_schema_migration(conn)
+        apply_u6_6_inner_life_schema_migration(conn)
         # Set schema version
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
@@ -820,9 +934,7 @@ class EngramStore:
         if normalized is not None:
             query += " AND read_visibility = ?"
             params.append(normalized)
-        row = conn.execute(
-            query, params
-        ).fetchone()
+        row = conn.execute(query, params).fetchone()
         if row is None:
             return None
 
@@ -936,7 +1048,9 @@ class EngramStore:
             query = "SELECT COUNT(*) FROM engrams WHERE state = ?"
         else:
             params = [agent_id, state]
-            query = "SELECT COUNT(*) FROM engrams WHERE owner_agent_id = ? AND state = ?"
+            query = (
+                "SELECT COUNT(*) FROM engrams WHERE owner_agent_id = ? AND state = ?"
+            )
         query = _append_read_visibility_filter(
             query,
             params,
@@ -1046,7 +1160,9 @@ class EngramStore:
                SET relation = ?, strength = ?, formed_by = ?
                WHERE source_id = ? AND target_id = ?""",
             (
-                connection.relation.value if hasattr(connection.relation, 'value') else str(connection.relation),
+                connection.relation.value
+                if hasattr(connection.relation, "value")
+                else str(connection.relation),
                 connection.strength,
                 connection.formed_by,
                 source_id,
@@ -1111,7 +1227,6 @@ class EngramStore:
         conn = self._get_conn()
         rows = conn.execute(query, params).fetchall()
         return [Engram.from_dict(dict(r)) for r in rows]
-
 
     def get_connected_engram_ids(
         self,
@@ -1392,7 +1507,9 @@ class EngramStore:
             )
 
         now = int(datetime.now(timezone.utc).timestamp())
-        provenance = [str(item).strip() for item in (provenance_ids or []) if str(item).strip()]
+        provenance = [
+            str(item).strip() for item in (provenance_ids or []) if str(item).strip()
+        ]
         payload_json = _encode_json(payload or {})
         decided_at = now if status in {"deferred", "rejected"} else None
         applied_at = None
@@ -1478,10 +1595,14 @@ class EngramStore:
 
     def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
         """Load one proposal ledger row by ID."""
-        row = self._get_conn().execute(
-            "SELECT * FROM proposal_ledger WHERE id = ?",
-            (proposal_id,),
-        ).fetchone()
+        row = (
+            self._get_conn()
+            .execute(
+                "SELECT * FROM proposal_ledger WHERE id = ?",
+                (proposal_id,),
+            )
+            .fetchone()
+        )
         if row is None:
             return None
         return self._hydrate_proposal_row(dict(row))
@@ -1627,10 +1748,14 @@ class EngramStore:
 
     def get_memory_session(self, session_id: str) -> dict[str, Any] | None:
         """Load a functional memory session by ID."""
-        row = self._get_conn().execute(
-            "SELECT * FROM memory_sessions WHERE id = ?",
-            (session_id,),
-        ).fetchone()
+        row = (
+            self._get_conn()
+            .execute(
+                "SELECT * FROM memory_sessions WHERE id = ?",
+                (session_id,),
+            )
+            .fetchone()
+        )
         return dict(row) if row else None
 
     def close_memory_session(
@@ -1912,9 +2037,7 @@ class EngramStore:
             content = synthesis.strip()
         else:
             chosen = memories[:8]
-            details = "; ".join(
-                f"{m['memory_type']}: {m['content']}" for m in chosen
-            )
+            details = "; ".join(f"{m['memory_type']}: {m['content']}" for m in chosen)
             title = session.get("title") or session_id
             content = (
                 f"Session continuity from {title}: {details}"
@@ -1955,9 +2078,7 @@ class EngramStore:
                 read_visibility=None,
             )
             hypomnema_visibility = (
-                hypomnema.get("read_visibility")
-                if hypomnema is not None
-                else None
+                hypomnema.get("read_visibility") if hypomnema is not None else None
             )
 
         now = _utc_now()
@@ -2203,7 +2324,9 @@ class EngramStore:
             normalized_visibility,
             required_visibility,
         ):
-            raise ValueError("Hypomnema requires review visibility before operational use")
+            raise ValueError(
+                "Hypomnema requires review visibility before operational use"
+            )
         conn.execute(
             """
             INSERT INTO hypomnema_entries(
@@ -2431,17 +2554,19 @@ class EngramStore:
                 "reason": reason.strip(),
             }
         )
-        new_confidence = _clamp(confidence if confidence is not None else row["confidence"])
+        new_confidence = _clamp(
+            confidence if confidence is not None else row["confidence"]
+        )
         new_salience = _clamp(salience if salience is not None else row["salience"])
         new_revision_count = int(row["revision_count"] or 0) + 1
         new_domain = _classify_hypomnema_domain_from_text(
             new_content,
             fallback=row["domain"],
         )
-        new_foundational = (
-            bool(row["foundational"])
-            or new_domain in {"identity", "foundational"}
-        )
+        new_foundational = bool(row["foundational"]) or new_domain in {
+            "identity",
+            "foundational",
+        }
         classified_visibility = classify_hypomnema_read_visibility(
             confidence=new_confidence,
             salience=new_salience,
@@ -2509,10 +2634,10 @@ class EngramStore:
             new_content,
             fallback=row["domain"],
         )
-        new_foundational = (
-            bool(row["foundational"])
-            or new_domain in {"identity", "foundational"}
-        )
+        new_foundational = bool(row["foundational"]) or new_domain in {
+            "identity",
+            "foundational",
+        }
         replacement_visibility = (
             row["read_visibility"]
             if row["read_visibility"] != READ_VISIBILITY_OPERATIONAL
@@ -2698,8 +2823,7 @@ class EngramStore:
         ).fetchone()
         candidate_params = list(params)
         candidate_query = _append_hypomnema_review_candidate_filter(
-            "SELECT COUNT(*) FROM hypomnema_entries "
-            f"WHERE {where_sql}",
+            f"SELECT COUNT(*) FROM hypomnema_entries WHERE {where_sql}",
             candidate_params,
         )
         candidate_row = conn.execute(candidate_query, candidate_params).fetchone()
@@ -2792,9 +2916,7 @@ class EngramStore:
     def get_meta(self, key: str, default: str | None = None) -> str | None:
         """Read a meta value. Returns default when the key is absent."""
         conn = self._get_conn()
-        row = conn.execute(
-            "SELECT value FROM meta WHERE key = ?", (key,)
-        ).fetchone()
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         return row[0] if row else default
 
     def set_meta(self, key: str, value: str) -> None:
@@ -2826,9 +2948,7 @@ class EngramStore:
         )
         conn.commit()
 
-    def get_consolidation_runs(
-        self, pass_name: str, limit: int = 5
-    ) -> list[dict]:
+    def get_consolidation_runs(self, pass_name: str, limit: int = 5) -> list[dict]:
         """Most recent consolidation_log rows for a pass, newest first.
 
         The stats column is JSON-decoded. The table has no agent_id
@@ -2850,6 +2970,168 @@ class EngramStore:
             out.append(item)
         return out
 
+    # ── Inner-Life Event Ledger ──
+
+    def upsert_inner_life_event(
+        self,
+        *,
+        idempotency_key: str,
+        event_type: str,
+        process_name: str,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        session_id: str | None = None,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+        role: str | None = None,
+        source_message_id: str | None = None,
+        source_path: str | None = None,
+        source_timestamp: str | None = None,
+        content_hash: str = "",
+        content_excerpt: str = "",
+        event_tags: list[str] | tuple[str, ...] | str | None = None,
+        source_ids: list[str] | tuple[str, ...] | None = None,
+        metadata: dict[str, Any] | None = None,
+        rollout_tag: str = "",
+        gate_decision: str = "ledger_only",
+    ) -> dict[str, Any]:
+        """Insert or update a private U6.6 event-ledger row.
+
+        This helper intentionally writes only to `inner_life_events`. It never
+        encodes memory or touches beliefs, hypomnema, identity, candidates, or
+        sharing surfaces.
+        """
+        if event_type not in VALID_INNER_LIFE_EVENT_TYPES:
+            raise ValueError(f"Unsupported inner-life event_type: {event_type}")
+        idempotency_key = idempotency_key.strip()
+        process_name = process_name.strip()
+        if not idempotency_key:
+            raise ValueError("idempotency_key is required")
+        if not process_name:
+            raise ValueError("process_name is required")
+
+        conn = self._get_conn()
+        now = _utc_now()
+        existing = conn.execute(
+            """
+            SELECT id, created_at FROM inner_life_events
+            WHERE idempotency_key = ?
+            """,
+            (idempotency_key,),
+        ).fetchone()
+        event_id = existing["id"] if existing is not None else _new_id()
+        created_at = existing["created_at"] if existing is not None else now
+        conn.execute(
+            """
+            INSERT INTO inner_life_events (
+                id, idempotency_key, event_type, process_name, agent_id,
+                person_id, project_scope, session_id, thread_id, turn_id,
+                role, source_message_id, source_path, source_timestamp,
+                content_hash, content_excerpt, event_tags_json,
+                source_ids_json, metadata_json, rollout_tag, gate_decision,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(idempotency_key) DO UPDATE SET
+                event_type = excluded.event_type,
+                process_name = excluded.process_name,
+                agent_id = excluded.agent_id,
+                person_id = excluded.person_id,
+                project_scope = excluded.project_scope,
+                session_id = excluded.session_id,
+                thread_id = excluded.thread_id,
+                turn_id = excluded.turn_id,
+                role = excluded.role,
+                source_message_id = excluded.source_message_id,
+                source_path = excluded.source_path,
+                source_timestamp = excluded.source_timestamp,
+                content_hash = excluded.content_hash,
+                content_excerpt = excluded.content_excerpt,
+                event_tags_json = excluded.event_tags_json,
+                source_ids_json = excluded.source_ids_json,
+                metadata_json = excluded.metadata_json,
+                rollout_tag = excluded.rollout_tag,
+                gate_decision = excluded.gate_decision,
+                updated_at = excluded.updated_at
+            """,
+            (
+                event_id,
+                idempotency_key,
+                event_type,
+                process_name,
+                agent_id,
+                person_id,
+                project_scope,
+                session_id,
+                thread_id,
+                turn_id,
+                role,
+                source_message_id,
+                source_path,
+                source_timestamp,
+                content_hash,
+                content_excerpt,
+                _encode_json(_split_tags(event_tags)),
+                _encode_json([str(item) for item in (source_ids or [])]),
+                _encode_json(metadata or {}),
+                rollout_tag,
+                gate_decision,
+                created_at,
+                now,
+            ),
+        )
+        conn.commit()
+        return {
+            "id": event_id,
+            "inserted": existing is None,
+            "updated": existing is not None,
+            "created_at": created_at,
+            "updated_at": now,
+        }
+
+    def get_inner_life_events(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        session_id: str | None = None,
+        event_type: str | None = None,
+        rollout_tag: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return private U6.6 event-ledger rows, oldest first."""
+        conn = self._get_conn()
+        predicates = ["agent_id = ?", "person_id = ?", "project_scope = ?"]
+        params: list[Any] = [agent_id, person_id, project_scope]
+        if session_id is not None:
+            predicates.append("session_id = ?")
+            params.append(session_id)
+        if event_type is not None:
+            predicates.append("event_type = ?")
+            params.append(event_type)
+        if rollout_tag is not None:
+            predicates.append("rollout_tag = ?")
+            params.append(rollout_tag)
+        params.append(max(1, limit))
+        rows = conn.execute(
+            f"""
+            SELECT * FROM inner_life_events
+            WHERE {" AND ".join(predicates)}
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [self._hydrate_inner_life_event_row(dict(row)) for row in rows]
+
+    @staticmethod
+    def _hydrate_inner_life_event_row(row: dict[str, Any]) -> dict[str, Any]:
+        row["event_tags"] = _decode_json(row.pop("event_tags_json", "[]"), [])
+        row["source_ids"] = _decode_json(row.pop("source_ids_json", "[]"), [])
+        row["metadata"] = _decode_json(row.pop("metadata_json", "{}"), {})
+        return row
+
     # ── Stats ──
 
     def get_stats(
@@ -2869,8 +3151,7 @@ class EngramStore:
         # Engram counts by state
         for state in ("active", "consolidating", "dormant", "archived"):
             query = (
-                "SELECT COUNT(*) FROM engrams "
-                "WHERE owner_agent_id = ? AND state = ?"
+                "SELECT COUNT(*) FROM engrams WHERE owner_agent_id = ? AND state = ?"
             )
             params: list[Any] = [agent_id, state]
             query = _append_read_visibility_filter(
@@ -2903,8 +3184,7 @@ class EngramStore:
 
         # Belief count
         belief_query = (
-            "SELECT COUNT(*) FROM beliefs "
-            "WHERE agent_id = ? AND superseded_by IS NULL"
+            "SELECT COUNT(*) FROM beliefs WHERE agent_id = ? AND superseded_by IS NULL"
         )
         belief_params: list[Any] = [agent_id]
         if not include_pending_review:

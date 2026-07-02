@@ -3,8 +3,8 @@ Reflection pass: autonomous thought generation and narrative identity update.
 
 The most creative consolidation step:
 1. Reviews recent memories and finds patterns/themes
-2. Generates "thoughts" — new semantic engrams synthesizing insights
-3. Updates the narrative self-summary (the agent's story of who it is)
+2. Gates generated thoughts through the U6.6 narrative/low-stakes path
+3. Updates the self-summary from the measured graph identity profile
 
 Requires an LLM client for full functionality. Without one, uses
 template-based fallbacks that still produce useful (if less creative) output.
@@ -18,7 +18,8 @@ from typing import TYPE_CHECKING, Any
 
 from ..core.emotional_state import EmotionalState
 from ..core.identity import AgentIdentity, IdentityProfile
-from ..core.types import EngramKind, SourceType
+from ..inner_life.low_stakes import write_low_stakes_record
+from ..inner_life.narrative_gate import gate_narrative_candidate
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -61,7 +62,11 @@ def run_reflection_pass(
     llm_client: Any | None,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Generate thoughts, curiosity questions, and update narrative self-summary.
+    """Gate generated thoughts and update the graph-derived self-summary.
+
+    Generated thoughts that pass the narrative gate are written as private,
+    low-stakes audit-only engrams; rejected candidates are logged below memory
+    in the inner-life event ledger.
 
     Args:
         store: The engram store.
@@ -81,8 +86,15 @@ def run_reflection_pass(
     stats = {
         "engrams_reviewed": 0,
         "thoughts_generated": 0,
+        "thoughts_dropped": 0,
+        "thoughts_skipped": 0,
+        "generated_memory_writes": 0,
+        "belief_writes": 0,
+        "identity_patches": 0,
+        "shared_pool_writes": 0,
         "narrative_updated": False,
         "narrative_length": 0,
+        "reflection_gate": "low_stakes",
     }
 
     # 1. LOAD RECENT ENGRAMS
@@ -91,10 +103,7 @@ def run_reflection_pass(
         limit=200,
         require_consolidation_authorized=True,
     )
-    recent = [
-        e for e in all_engrams
-        if _hours_since(e.created_at) < lookback_hours
-    ]
+    recent = [e for e in all_engrams if _hours_since(e.created_at) < lookback_hours]
 
     stats["engrams_reviewed"] = len(recent)
 
@@ -112,20 +121,26 @@ def run_reflection_pass(
     else:
         thought_lines = _generate_template_thoughts(recent)
 
-    # Encode thoughts as new engrams
-    from ..encoding.encoder import Encoder
-    encoder = Encoder(store)
-
+    source_ids = [engram.id for engram in recent[:20]]
     for thought in thought_lines[:max_thoughts]:
-        if thought and len(thought.strip()) > 10:
-            encoder.encode(
-                content=thought.strip(),
-                kind=EngramKind.SEMANTIC,
-                tags=["reflection", "synthesized"],
-                source=SourceType.REFLECTION,
-                agent_id=agent_id,
-            )
+        result = _persist_gated_thought(
+            store,
+            thought=thought,
+            source_ids=source_ids,
+            agent_id=agent_id,
+            config=config,
+        )
+        if result["written"]:
             stats["thoughts_generated"] += 1
+            stats["generated_memory_writes"] += result["generated_memory_writes"]
+        elif result["reason"].startswith("drop:") or result["reason"] in {
+            "manufactured_inner_state",
+            "introspection_failed",
+            "introspection_reject",
+        }:
+            stats["thoughts_dropped"] += 1
+        else:
+            stats["thoughts_skipped"] += 1
 
     # 3. SHIFT 5: Compute identity from graph (not narrative generation)
     profile = compute_identity_profile(store, all_engrams, identity)
@@ -142,6 +157,74 @@ def run_reflection_pass(
     return stats
 
 
+def _persist_gated_thought(
+    store: EngramStore,
+    *,
+    thought: str,
+    source_ids: list[str],
+    agent_id: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    clean = " ".join((thought or "").split())
+    if not clean or len(clean) <= 10:
+        gate_result = gate_narrative_candidate(
+            content="",
+            source_ids=source_ids,
+            process_name="reflect",
+            store=store,
+            agent_id=agent_id,
+            person_id=_inner_life_person_id(config),
+            project_scope=_inner_life_project_scope(config),
+            candidate_kind="reflection",
+            rollout_tag=_inner_life_rollout_tag(config),
+        )
+        return {
+            "written": 0,
+            "reason": gate_result["reason"],
+            "generated_memory_writes": 0,
+        }
+
+    gate_result = gate_narrative_candidate(
+        content=clean,
+        source_ids=source_ids,
+        process_name="reflect",
+        store=store,
+        agent_id=agent_id,
+        person_id=_inner_life_person_id(config),
+        project_scope=_inner_life_project_scope(config),
+        candidate_kind="reflection",
+        introspector=config.get("inner_life_introspector"),
+        rollout_tag=_inner_life_rollout_tag(config),
+    )
+    if not gate_result["allowed"]:
+        return {
+            "written": 0,
+            "reason": gate_result["reason"],
+            "generated_memory_writes": 0,
+        }
+    return write_low_stakes_record(
+        store,
+        gate_result=gate_result,
+        candidate_kind="reflection",
+        agent_id=agent_id,
+        person_id=_inner_life_person_id(config),
+        project_scope=_inner_life_project_scope(config),
+        rollout_tag=_inner_life_rollout_tag(config),
+    )
+
+
+def _inner_life_person_id(config: dict[str, Any]) -> str:
+    return str(config.get("inner_life_person_id") or "user")
+
+
+def _inner_life_project_scope(config: dict[str, Any]) -> str:
+    return str(config.get("inner_life_project_scope") or "global")
+
+
+def _inner_life_rollout_tag(config: dict[str, Any]) -> str:
+    return str(config.get("inner_life_rollout_tag") or "u6.6")
+
+
 def _llm_generate_thoughts(
     memory_summary: str,
     emotional_state: EmotionalState,
@@ -156,7 +239,11 @@ def _llm_generate_thoughts(
     )
     try:
         raw = llm_client.complete(prompt)
-        return [line.strip().lstrip("- ") for line in raw.strip().split("\n") if line.strip()]
+        return [
+            line.strip().lstrip("- ")
+            for line in raw.strip().split("\n")
+            if line.strip()
+        ]
     except Exception:
         return []
 
@@ -210,7 +297,9 @@ def compute_identity_profile(
     living_questions = []
     for b in beliefs:
         if 0.2 < b.confidence < 0.5:
-            living_questions.append(f"Uncertain: {b.content} ({int(b.confidence*100)}%)")
+            living_questions.append(
+                f"Uncertain: {b.content} ({int(b.confidence * 100)}%)"
+            )
 
     # Also find engrams tagged as questions or unresolved
     for e in all_engrams:

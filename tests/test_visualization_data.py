@@ -194,4 +194,4 @@ def test_dashboard_extracts_legacy_db_after_store_migration(tmp_path):
     assert "read_visibility" in engram_columns
     assert "read_visibility" in belief_columns
     assert "confidence_pending_review" in belief_columns
-    assert schema_version == "7"
+    assert schema_version == "8"

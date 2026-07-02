@@ -139,3 +139,31 @@ def test_inner_life_launchd_plist_invokes_scheduled_runner_without_loading(tmp_p
     # hardcoded checkout name — report 003b). Not weakened to "any dir".
     assert Path(payload["WorkingDirectory"]).resolve() == Path.cwd().resolve()
     assert Path(payload["StandardOutPath"]).parent == artifact_dir
+
+
+def test_scheduled_wander_counts_audit_only_low_stakes_write(tmp_path):
+    """Finding A completeness (review 003d): the generated_memory_writes rollback
+    counter must count audit_only low-stakes writes, not just operational engrams —
+    otherwise a successful scheduled wander/dream reports 0 and blinds the rollout
+    monitoring the gated-inner-life spec depends on."""
+    from mnemos.core.engram import Engram
+    from mnemos.inner_life.scheduler import _run_wander
+
+    class _StubLLM:
+        def structured_complete(self, system, user, temperature):
+            return '{"thought": "a quiet grounded wandering", "origin": "authorized"}'
+
+    store = EngramStore(tmp_path / "sched-count.db")
+    try:
+        store.save_engram(
+            Engram(content="AUTHORIZED-WANDER-SEED", impact="src", owner_agent_id="oliver")
+        )
+        result = _run_wander(store, agent_id="oliver", llm_client=_StubLLM())
+
+        assert result["generated_memory_writes"] == 1
+        # the write landed audit_only — invisible to the operational default count,
+        # visible to the read_visibility=None accounting the fix now uses.
+        assert store.count_engrams(agent_id="oliver") == 1  # only the operational seed
+        assert store.count_engrams(agent_id="oliver", read_visibility=None) == 2
+    finally:
+        store.close()

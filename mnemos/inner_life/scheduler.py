@@ -306,7 +306,7 @@ def _run_wander(
 ) -> dict[str, Any]:
     from ..substrate.handlers import wandering
 
-    before = store.count_engrams(agent_id=agent_id)
+    before = store.count_engrams(agent_id=agent_id, read_visibility=None)
     config = _substrate_config(store, agent_id=agent_id)
     event = SubstrateEvent(
         event_type=EventType.SILENCE_EXTENDED,
@@ -314,7 +314,7 @@ def _run_wander(
         source="inner-life-scheduler",
     )
     wandering.handle(event, config, _modulators(store, agent_id=agent_id), store, llm_client)
-    after = store.count_engrams(agent_id=agent_id)
+    after = store.count_engrams(agent_id=agent_id, read_visibility=None)
     return {
         "reason": "wander_complete",
         "generated_memory_writes": max(0, after - before),
@@ -342,7 +342,7 @@ def _run_dream(
             "source_ids": [engram.id for engram in candidates],
         }
     softened = min(candidates, key=lambda e: float(e.accessibility) * float(e.strength))
-    before = store.count_engrams(agent_id=agent_id)
+    before = store.count_engrams(agent_id=agent_id, read_visibility=None)
     config = _substrate_config(store, agent_id=agent_id)
     event = SubstrateEvent(
         event_type=EventType.MEMORY_SOFTENED,
@@ -350,7 +350,7 @@ def _run_dream(
         source="inner-life-scheduler",
     )
     dreaming.handle(event, config, _modulators(store, agent_id=agent_id), store, llm_client)
-    after = store.count_engrams(agent_id=agent_id)
+    after = store.count_engrams(agent_id=agent_id, read_visibility=None)
     return {
         "status": "ran",
         "reason": "dream_complete",

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,10 +31,69 @@ from .migrations import (
     get_current_version,
     run_migrations,
 )
+from .read_visibility import (
+    HYPO_PROMOTION_MIN_CONFIDENCE,
+    HYPO_PROMOTION_MIN_SALIENCE,
+    HYPO_REVIEW_CANDIDATE_SQL,
+    READ_VISIBILITY_AUDIT as READ_VISIBILITY_AUDIT,
+    READ_VISIBILITY_OPERATIONAL,
+    READ_VISIBILITY_REVIEW,
+    VALID_READ_VISIBILITIES,
+    classify_hypomnema_read_visibility,
+)
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
+
+VALID_PROPOSAL_AUTHORITIES = {
+    "user_stated",
+    "imported",
+    "observed",
+    "generated",
+}
+VALID_PROPOSAL_KINDS = {
+    "episodic",
+    "semantic",
+    "procedural",
+    "prospective",
+}
+PROPOSAL_AUTHORITY_ALIASES = {
+    "agent_generated": "generated",
+    "agent_observed": "observed",
+    "system_policy": "generated",
+    "operator_review": "observed",
+}
+PROPOSAL_KIND_ALIASES = {
+    "belief": "semantic",
+    "engram": "episodic",
+    "hypomnema": "semantic",
+    "functional_memory": "prospective",
+    "identity": "semantic",
+    "modulation": "prospective",
+    "correction": "semantic",
+    "promotion": "semantic",
+}
+VALID_PROPOSAL_TARGET_SURFACES = {
+    "engrams",
+    "beliefs",
+    "hypomnema_entries",
+    "functional_memories",
+    "dynamic_modulations",
+    "identity_profile",
+    "runtime_context",
+}
+VALID_PROPOSAL_BLAST_RADII = {"low", "medium", "high", "identity", "foundational"}
+VALID_PROPOSAL_STATUSES = {
+    "pending_review",
+    "deferred",
+    "approved",
+    "rejected",
+    "applied",
+    "superseded",
+}
+RAW_PROPOSAL_STATUSES = {"pending_review", "deferred", "rejected"}
+PROPOSAL_TERMINAL_STATUSES = VALID_PROPOSAL_STATUSES - {"pending_review"}
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -67,6 +127,7 @@ _ENGRAM_COLUMNS = frozenset({
     "last_accessed", "access_count", "reconsolidation_count",
     "voice_exemplar_eligible", "softening_protected", "original_substrate",
     "original_timestamp", "consolidation_authorized", "decay_protected",
+    "read_visibility",
 })
 
 # Allowed column names for beliefs table
@@ -74,6 +135,7 @@ _BELIEF_COLUMNS = frozenset({
     "id", "agent_id", "content", "confidence", "domain", "created_at",
     "last_revised", "last_challenged", "revision_history", "superseded_by",
     "supporting_engram_ids", "tier", "needs_review", "confidence_pending_review",
+    "read_visibility",
 })
 
 SQL_CREATE_TABLES = """
@@ -95,6 +157,8 @@ CREATE TABLE IF NOT EXISTS engrams (
     lineage TEXT NOT NULL DEFAULT '{}',
     owner_agent_id TEXT NOT NULL DEFAULT 'default',
     visibility TEXT NOT NULL DEFAULT 'private',
+    read_visibility TEXT NOT NULL DEFAULT 'operational_context'
+        CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only')),
     state TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL,
     last_accessed TEXT NOT NULL,
@@ -156,7 +220,9 @@ CREATE TABLE IF NOT EXISTS beliefs (
     tier TEXT CHECK (tier IS NULL OR tier IN ('foundational', 'operational', 'tactical')),
     needs_review INTEGER NOT NULL DEFAULT 0 CHECK (needs_review IN (0, 1)),
     confidence_pending_review INTEGER NOT NULL DEFAULT 0
-        CHECK (confidence_pending_review IN (0, 1))
+        CHECK (confidence_pending_review IN (0, 1)),
+    read_visibility TEXT NOT NULL DEFAULT 'operational_context'
+        CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only'))
 );
 
 -- Hypomnema: scoped durable continuity that can revise before promotion
@@ -171,6 +237,8 @@ CREATE TABLE IF NOT EXISTS hypomnema_entries (
     density REAL NOT NULL DEFAULT 0.5,
     domain TEXT NOT NULL DEFAULT 'topical'
         CHECK (domain IN ('foundational', 'identity', 'recurring', 'long-arc', 'topical', 'situational')),
+    read_visibility TEXT NOT NULL DEFAULT 'operational_context'
+        CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only')),
     tags_json TEXT NOT NULL DEFAULT '[]',
     confidence REAL NOT NULL DEFAULT 0.5,
     salience REAL NOT NULL DEFAULT 0.5,
@@ -221,6 +289,8 @@ CREATE TABLE IF NOT EXISTS functional_memories (
     needs_confirmation INTEGER NOT NULL DEFAULT 0,
     pinned INTEGER NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT 'agent_observed',
+    read_visibility TEXT NOT NULL DEFAULT 'operational_context'
+        CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only')),
     metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -290,6 +360,41 @@ CREATE TABLE IF NOT EXISTS pai_import_row_map (
     PRIMARY KEY (job_id, source_path, source_anchor, target_table)
 );
 
+-- Afferent Membrane proposal ledger: generated candidates and durable transitions
+CREATE TABLE IF NOT EXISTS proposal_ledger (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL DEFAULT 'default',
+    person_id TEXT NOT NULL DEFAULT 'user',
+    project_scope TEXT NOT NULL DEFAULT 'global',
+    source_authority TEXT NOT NULL
+        CHECK (source_authority IN ('user_stated', 'imported', 'observed', 'generated')),
+    kind TEXT NOT NULL
+        CHECK (kind IN ('episodic', 'semantic', 'procedural', 'prospective')),
+    domain TEXT NOT NULL DEFAULT 'general',
+    target_surface TEXT NOT NULL
+        CHECK (target_surface IN (
+            'engrams', 'beliefs', 'hypomnema_entries',
+            'functional_memories', 'dynamic_modulations',
+            'identity_profile', 'runtime_context'
+        )),
+    transition TEXT NOT NULL,
+    blast_radius TEXT NOT NULL DEFAULT 'medium'
+        CHECK (blast_radius IN ('low', 'medium', 'high', 'identity', 'foundational')),
+    read_visibility TEXT NOT NULL DEFAULT 'audit_only'
+        CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only')),
+    status TEXT NOT NULL DEFAULT 'pending_review'
+        CHECK (status IN ('pending_review', 'deferred', 'approved', 'rejected', 'applied', 'superseded')),
+    reason TEXT NOT NULL DEFAULT '',
+    gate_version TEXT NOT NULL DEFAULT 'affmem-v1',
+    target_id TEXT,
+    provenance_ids_json TEXT NOT NULL DEFAULT '[]',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    applied_at INTEGER
+);
+
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -326,6 +431,10 @@ CREATE INDEX IF NOT EXISTS idx_functional_session
 CREATE INDEX IF NOT EXISTS idx_functional_review
     ON functional_memories(agent_id, person_id, project_scope, updated_at DESC)
     WHERE is_deleted = 0 AND needs_confirmation = 1;
+CREATE INDEX IF NOT EXISTS idx_proposal_ledger_status_scope
+    ON proposal_ledger(agent_id, person_id, project_scope, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_proposal_ledger_visibility
+    ON proposal_ledger(read_visibility, status);
 CREATE INDEX IF NOT EXISTS idx_emotional_history_agent ON emotional_state_history(agent_id, timestamp);
 """
 
@@ -376,6 +485,162 @@ def _lexical_score(query: str, text: str) -> float:
     if not text_terms:
         return 0.0
     return len(query_terms & text_terms) / max(1, len(query_terms))
+
+
+_READ_VISIBILITY_DEFAULT = object()
+
+_READ_VISIBILITY_ORDER = {
+    READ_VISIBILITY_OPERATIONAL: 0,
+    READ_VISIBILITY_REVIEW: 1,
+    READ_VISIBILITY_AUDIT: 2,
+}
+
+
+def _normalize_read_visibility(
+    value: str | None,
+    *,
+    allow_all: bool = True,
+    default: str = READ_VISIBILITY_OPERATIONAL,
+) -> str | None:
+    if value is None and allow_all:
+        return None
+    read_visibility = (value if value is not None else default).strip()
+    if not read_visibility:
+        read_visibility = default
+    if read_visibility not in VALID_READ_VISIBILITIES:
+        raise ValueError(f"Unsupported read_visibility: {read_visibility}")
+    return read_visibility
+
+
+def _normalize_read_visibility_values(
+    value: str | Sequence[str] | None,
+    *,
+    allow_all: bool = True,
+    default: str = READ_VISIBILITY_OPERATIONAL,
+) -> tuple[str, ...] | None:
+    if value is None:
+        return None if allow_all else (default,)
+    if isinstance(value, str):
+        return (_normalize_read_visibility(value, allow_all=False, default=default),)
+    values = tuple(
+        _normalize_read_visibility(item, allow_all=False, default=default)
+        for item in value
+    )
+    if not values:
+        raise ValueError("read_visibility must include at least one visibility")
+    return values
+
+
+def _append_read_visibility_filter(
+    sql: str,
+    params: list[Any],
+    column: str,
+    values: tuple[str, ...] | None,
+) -> str:
+    if values is None:
+        return sql
+    placeholders = ", ".join("?" for _ in values)
+    params.extend(values)
+    return f"{sql} AND {column} IN ({placeholders})"
+
+
+def _append_hypomnema_review_candidate_filter(
+    sql: str,
+    params: list[Any],
+    *,
+    negate: bool = False,
+) -> str:
+    params.extend([HYPO_PROMOTION_MIN_CONFIDENCE, HYPO_PROMOTION_MIN_SALIENCE])
+    if negate:
+        return f"{sql} AND NOT ({HYPO_REVIEW_CANDIDATE_SQL})"
+    return f"{sql} AND ({HYPO_REVIEW_CANDIDATE_SQL})"
+
+
+def _apply_read_visibility_filter(
+    sql: str,
+    params: list[Any],
+    column: str,
+    read_visibility: str | Sequence[str] | None,
+) -> str:
+    normalized = _normalize_read_visibility_values(read_visibility)
+    return _append_read_visibility_filter(sql, params, column, normalized)
+
+
+def _stricter_read_visibility(
+    existing_visibility: str,
+    incoming_visibility: str,
+) -> str:
+    return max(
+        (existing_visibility, incoming_visibility),
+        key=lambda value: _READ_VISIBILITY_ORDER.get(value, 0),
+    )
+
+
+def _strictest_read_visibility_sql(table_name: str) -> str:
+    return (
+        "CASE "
+        f"WHEN {table_name}.read_visibility = '{READ_VISIBILITY_AUDIT}' "
+        f"OR excluded.read_visibility = '{READ_VISIBILITY_AUDIT}' "
+        f"THEN '{READ_VISIBILITY_AUDIT}' "
+        f"WHEN {table_name}.read_visibility = '{READ_VISIBILITY_REVIEW}' "
+        f"OR excluded.read_visibility = '{READ_VISIBILITY_REVIEW}' "
+        f"THEN '{READ_VISIBILITY_REVIEW}' "
+        f"ELSE '{READ_VISIBILITY_OPERATIONAL}' "
+        "END"
+    )
+
+
+def _preserved_quarantined_flag_sql(table_name: str, column_name: str) -> str:
+    strictest_visibility = _strictest_read_visibility_sql(table_name)
+    return (
+        "CASE "
+        f"WHEN {strictest_visibility} != '{READ_VISIBILITY_OPERATIONAL}' "
+        f"THEN MAX({table_name}.{column_name}, excluded.{column_name}) "
+        f"ELSE excluded.{column_name} "
+        "END"
+    )
+
+
+def _clean_choice(value: str, allowed: set[str], label: str) -> str:
+    cleaned = (value or "").strip()
+    if cleaned not in allowed:
+        raise ValueError(f"Unsupported {label}: {cleaned}")
+    return cleaned
+
+
+def _clean_choice_with_aliases(
+    value: str,
+    allowed: set[str],
+    aliases: dict[str, str],
+    label: str,
+) -> str:
+    cleaned = (value or "").strip()
+    canonical = aliases.get(cleaned, cleaned)
+    if canonical not in allowed:
+        raise ValueError(f"Unsupported {label}: {cleaned}")
+    return canonical
+
+
+def _stricter_hypomnema_visibility(
+    existing_visibility: str,
+    classified_visibility: str,
+) -> str:
+    return _stricter_read_visibility(existing_visibility, classified_visibility)
+
+
+def _classify_hypomnema_domain_from_text(text: str, *, fallback: str = "situational") -> str:
+    lowered = text.lower()
+    if any(marker in lowered for marker in ("identity", "who i am", "who you are", "selfhood", "soul.md")):
+        return "identity"
+    if any(marker in lowered for marker in ("always", "preference", "prefers", "principle", "boundary", "foundational")):
+        return "foundational"
+    if any(marker in lowered for marker in ("again", "recurring", "usually", "often")):
+        return "recurring"
+    if any(marker in lowered for marker in ("roadmap", "long term", "long-term", "future", "arc")):
+        return "long-arc"
+    if any(marker in lowered for marker in ("current", "today", "temporary", "session")):
+        return "situational"
+    return fallback
 
 
 class EngramStore:
@@ -505,7 +770,15 @@ class EngramStore:
         safe_data = {k: v for k, v in data.items() if k in _ENGRAM_COLUMNS}
         columns = ", ".join(safe_data.keys())
         placeholders = ", ".join("?" for _ in safe_data)
-        updates = ", ".join(f"{k}=excluded.{k}" for k in safe_data if k != "id")
+        updates = ", ".join(
+            (
+                f"{k}={_strictest_read_visibility_sql('engrams')}"
+                if k == "read_visibility"
+                else f"{k}=excluded.{k}"
+            )
+            for k in safe_data
+            if k != "id"
+        )
 
         conn.execute(
             f"INSERT INTO engrams ({columns}) VALUES ({placeholders}) "
@@ -528,11 +801,27 @@ class EngramStore:
         for version in engram.versions:
             self._save_version_no_commit(conn, engram.id, version)
 
-    def get_engram(self, engram_id: str) -> Engram | None:
-        """Load an engram by ID, including connections and versions."""
+    def get_engram(
+        self,
+        engram_id: str,
+        *,
+        read_visibility: str | None = None,
+    ) -> Engram | None:
+        """Load an engram by ID, including connections and versions.
+
+        ``read_visibility`` is an explicit access filter. Pass
+        ``READ_VISIBILITY_OPERATIONAL`` for operating-context reads; the
+        default ``None`` performs no visibility filter for direct/admin lookup.
+        """
         conn = self._get_conn()
+        query = "SELECT * FROM engrams WHERE id = ?"
+        params: list[Any] = [engram_id]
+        normalized = _normalize_read_visibility(read_visibility)
+        if normalized is not None:
+            query += " AND read_visibility = ?"
+            params.append(normalized)
         row = conn.execute(
-            "SELECT * FROM engrams WHERE id = ?", (engram_id,)
+            query, params
         ).fetchone()
         if row is None:
             return None
@@ -540,7 +829,10 @@ class EngramStore:
         engram = Engram.from_dict(dict(row))
 
         # Load connections
-        engram.connections = self.get_connections(engram_id)
+        engram.connections = self.get_connections(
+            engram_id,
+            read_visibility=read_visibility,
+        )
 
         # Load versions
         engram.versions = self._get_versions(engram_id)
@@ -554,6 +846,7 @@ class EngramStore:
         load_connections: bool = True,
         include_decay_protected: bool = True,
         require_consolidation_authorized: bool = False,
+        read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
     ) -> list[Engram]:
         """Get all active engrams for an agent, sorted by accessibility.
 
@@ -567,6 +860,8 @@ class EngramStore:
                 decay pass must not mutate.
             require_consolidation_authorized: If True, exclude read-only
                 imported engrams from consolidation mutation candidates.
+            read_visibility: Defaults to operational-context rows. Pass None
+                only for explicit review/audit callers that need all rows.
         """
         conn = self._get_conn()
         predicates = ["state = 'active'"]
@@ -578,6 +873,11 @@ class EngramStore:
             predicates.append("decay_protected = 0")
         if require_consolidation_authorized:
             predicates.append("consolidation_authorized = 1")
+        visibility_values = _normalize_read_visibility_values(read_visibility)
+        if visibility_values is not None:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            predicates.append(f"read_visibility IN ({placeholders})")
+            params.extend(visibility_values)
         where = " AND ".join(predicates)
         params.append(limit)
 
@@ -596,7 +896,10 @@ class EngramStore:
         engrams = [Engram.from_dict(dict(r)) for r in rows]
         if load_connections:
             for engram in engrams:
-                engram.connections = self.get_connections(engram.id)
+                engram.connections = self.get_connections(
+                    engram.id,
+                    read_visibility=read_visibility,
+                )
                 engram.versions = self._get_versions(engram.id)
         return engrams
 
@@ -612,37 +915,62 @@ class EngramStore:
         conn.execute("DELETE FROM versions WHERE engram_id = ?", (engram_id,))
         conn.commit()
 
-    def count_engrams(self, agent_id: str | None = "default", state: str = "active") -> int:
+    def count_engrams(
+        self,
+        agent_id: str | None = "default",
+        state: str = "active",
+        read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
+    ) -> int:
         """Count engrams for an agent in a given state.
 
         Args:
             agent_id: Agent to count for. If None, counts all agents.
             state: Engram state to filter by.
+            read_visibility: Defaults to operational-context rows. Pass None
+                only for explicit audit/admin counts across all visibility tiers.
         """
         conn = self._get_conn()
+        visibility_values = _normalize_read_visibility_values(read_visibility)
         if agent_id is None:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM engrams WHERE state = ?",
-                (state,),
-            ).fetchone()
+            params: list[Any] = [state]
+            query = "SELECT COUNT(*) FROM engrams WHERE state = ?"
         else:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM engrams WHERE owner_agent_id = ? AND state = ?",
-                (agent_id, state),
-            ).fetchone()
+            params = [agent_id, state]
+            query = "SELECT COUNT(*) FROM engrams WHERE owner_agent_id = ? AND state = ?"
+        query = _append_read_visibility_filter(
+            query,
+            params,
+            "read_visibility",
+            visibility_values,
+        )
+        row = conn.execute(query, params).fetchone()
         return row[0] if row else 0
 
     # ── Full-Text Search ──
 
-    def search_fts(self, query: str, limit: int = 50) -> list[Engram]:
+    def search_fts(
+        self,
+        query: str,
+        limit: int = 50,
+        *,
+        read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
+    ) -> list[Engram]:
         """Search engrams using FTS5 full-text search."""
         conn = self._get_conn()
+        visibility_values = _normalize_read_visibility_values(read_visibility)
+        predicates = ["engrams_fts MATCH ?", "e.state = 'active'"]
+        params: list[Any] = [query]
+        if visibility_values is not None:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            predicates.append(f"e.read_visibility IN ({placeholders})")
+            params.extend(visibility_values)
+        params.append(limit)
         rows = conn.execute(
             "SELECT e.* FROM engrams e "
             "JOIN engrams_fts f ON e.id = f.id "
-            "WHERE engrams_fts MATCH ? AND e.state = 'active' "
+            f"WHERE {' AND '.join(predicates)} "
             "ORDER BY rank LIMIT ?",
-            (query, limit),
+            params,
         ).fetchall()
         return [Engram.from_dict(dict(r)) for r in rows]
 
@@ -672,12 +1000,33 @@ class EngramStore:
             ),
         )
 
-    def get_connections(self, engram_id: str) -> list[Connection]:
+    def get_connections(
+        self,
+        engram_id: str,
+        *,
+        read_visibility: str | Sequence[str] | None = None,
+    ) -> list[Connection]:
         """Get all connections FROM an engram."""
         conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT * FROM connections WHERE source_id = ?", (engram_id,)
-        ).fetchall()
+        visibility_values = _normalize_read_visibility_values(read_visibility)
+        params: list[Any] = [engram_id]
+        if visibility_values is None:
+            rows = conn.execute(
+                "SELECT * FROM connections WHERE source_id = ?", params
+            ).fetchall()
+        else:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            params.extend(visibility_values)
+            params.extend(visibility_values)
+            rows = conn.execute(
+                "SELECT c.* FROM connections c "
+                "JOIN engrams source ON source.id = c.source_id "
+                "JOIN engrams target ON target.id = c.target_id "
+                "WHERE c.source_id = ? "
+                f"AND source.read_visibility IN ({placeholders}) "
+                f"AND target.read_visibility IN ({placeholders})",
+                params,
+            ).fetchall()
         return [
             Connection(
                 target_id=r["target_id"],
@@ -721,6 +1070,7 @@ class EngramStore:
         since: "datetime | None" = None,
         limit: int = 50,
         require_consolidation_authorized: bool = False,
+        read_visibility: str | None = READ_VISIBILITY_OPERATIONAL,
     ) -> list:
         """Get recently created engrams, optionally filtered by agent and time.
 
@@ -730,12 +1080,15 @@ class EngramStore:
             limit: Maximum number to return.
             require_consolidation_authorized: If True, exclude read-only
                 imported engrams from consolidation review inputs.
+            read_visibility: Defaults to operational-context rows. Pass None
+                for explicit review/audit scans.
 
         Returns:
             List of Engram objects, most recent first.
         """
         query = "SELECT * FROM engrams WHERE state = 'active'"
         params: list = []
+        normalized_visibility = _normalize_read_visibility(read_visibility)
 
         if agent_id:
             query += " AND owner_agent_id = ?"
@@ -747,6 +1100,10 @@ class EngramStore:
 
         if require_consolidation_authorized:
             query += " AND consolidation_authorized = 1"
+
+        if normalized_visibility is not None:
+            query += " AND read_visibility = ?"
+            params.append(normalized_visibility)
 
         query += " ORDER BY created_at DESC LIMIT ?"
         params.append(limit)
@@ -866,14 +1223,39 @@ class EngramStore:
         self._save_belief_no_commit(conn, belief)
         conn.commit()
 
-    def _save_belief_no_commit(self, conn: sqlite3.Connection, belief: Belief) -> None:
+    def save_reviewed_belief(self, belief: Belief) -> None:
+        """Insert or update a belief after an explicit review decision."""
+        conn = self._get_conn()
+        self._save_belief_no_commit(conn, belief, allow_visibility_promotion=True)
+        conn.commit()
+
+    def _save_belief_no_commit(
+        self,
+        conn: sqlite3.Connection,
+        belief: Belief,
+        *,
+        allow_visibility_promotion: bool = False,
+    ) -> None:
         data = belief.to_dict()
 
         # Validate column names
         safe_data = {k: v for k, v in data.items() if k in _BELIEF_COLUMNS}
         columns = ", ".join(safe_data.keys())
         placeholders = ", ".join("?" for _ in safe_data)
-        updates = ", ".join(f"{k}=excluded.{k}" for k in safe_data if k != "id")
+        updates = ", ".join(
+            (
+                f"{k}={_strictest_read_visibility_sql('beliefs')}"
+                if k == "read_visibility" and not allow_visibility_promotion
+                else f"{k}={_preserved_quarantined_flag_sql('beliefs', k)}"
+                if (
+                    k in {"needs_review", "confidence_pending_review"}
+                    and not allow_visibility_promotion
+                )
+                else f"{k}=excluded.{k}"
+            )
+            for k in safe_data
+            if k != "id"
+        )
 
         conn.execute(
             f"INSERT INTO beliefs ({columns}) VALUES ({placeholders}) "
@@ -887,6 +1269,7 @@ class EngramStore:
         domain: str | None = None,
         active_only: bool = True,
         include_pending_review: bool = False,
+        read_visibility: str | Sequence[str] | None | object = _READ_VISIBILITY_DEFAULT,
     ) -> list[Belief]:
         """Get beliefs, excluding pending-confidence rows unless opted in.
 
@@ -897,6 +1280,14 @@ class EngramStore:
         conn = self._get_conn()
         query = "SELECT * FROM beliefs WHERE agent_id = ?"
         params: list[Any] = [agent_id]
+        if read_visibility is _READ_VISIBILITY_DEFAULT:
+            visibility_values = (
+                (READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW)
+                if include_pending_review
+                else (READ_VISIBILITY_OPERATIONAL,)
+            )
+        else:
+            visibility_values = _normalize_read_visibility_values(read_visibility)  # type: ignore[arg-type]
 
         if domain:
             query += " AND domain = ?"
@@ -908,9 +1299,279 @@ class EngramStore:
         if not include_pending_review:
             query += " AND confidence_pending_review = 0"
 
+        query = _append_read_visibility_filter(
+            query,
+            params,
+            "read_visibility",
+            visibility_values,
+        )
+
         query += " ORDER BY confidence DESC"
         rows = conn.execute(query, params).fetchall()
         return [Belief.from_dict(dict(r)) for r in rows]
+
+    # ── Proposal Ledger ──
+
+    def write_proposal(
+        self,
+        *,
+        source_authority: str,
+        kind: str,
+        target_surface: str,
+        transition: str,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        domain: str = "general",
+        blast_radius: str = "medium",
+        read_visibility: str = READ_VISIBILITY_AUDIT,
+        status: str = "pending_review",
+        reason: str = "",
+        gate_version: str = "affmem-v1",
+        target_id: str | None = None,
+        provenance_ids: list[str] | tuple[str, ...] | None = None,
+        payload: dict[str, Any] | None = None,
+        proposal_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Record a durable-affecting candidate in the proposal ledger.
+
+        Proposal rows are review artifacts: they preserve authority, target
+        surface, transition, blast radius, gate version, provenance, payload,
+        visibility, and lifecycle status without making candidate prose part of
+        operational context.
+        """
+        source_authority = _clean_choice_with_aliases(
+            source_authority,
+            VALID_PROPOSAL_AUTHORITIES,
+            PROPOSAL_AUTHORITY_ALIASES,
+            "source authority",
+        )
+        kind = _clean_choice_with_aliases(
+            kind,
+            VALID_PROPOSAL_KINDS,
+            PROPOSAL_KIND_ALIASES,
+            "proposal kind",
+        )
+        target_surface = _clean_choice(
+            target_surface,
+            VALID_PROPOSAL_TARGET_SURFACES,
+            "target surface",
+        )
+        blast_radius = _clean_choice(
+            blast_radius,
+            VALID_PROPOSAL_BLAST_RADII,
+            "blast radius",
+        )
+        if status not in VALID_PROPOSAL_STATUSES:
+            raise ValueError(f"Unsupported proposal status: {status}")
+        if status not in RAW_PROPOSAL_STATUSES:
+            raise ValueError(
+                f"Proposal status {status!r} cannot be created directly before review gates"
+            )
+        normalized_visibility = _normalize_read_visibility(
+            read_visibility,
+            allow_all=False,
+            default=READ_VISIBILITY_AUDIT,
+        )
+        if normalized_visibility == READ_VISIBILITY_OPERATIONAL:
+            raise ValueError(
+                "Proposal rows cannot be operational until applied by a reviewed gate"
+            )
+        if not transition.strip():
+            raise ValueError("Proposal transition cannot be empty")
+
+        pid = (proposal_id or "").strip() or _new_id()
+        conn = self._get_conn()
+        existing = conn.execute(
+            "SELECT status FROM proposal_ledger WHERE id = ?",
+            (pid,),
+        ).fetchone()
+        if existing is not None and existing["status"] in PROPOSAL_TERMINAL_STATUSES:
+            raise ValueError(
+                "Terminal proposal rows are immutable; use a new proposal_id"
+            )
+
+        now = int(datetime.now(timezone.utc).timestamp())
+        provenance = [str(item).strip() for item in (provenance_ids or []) if str(item).strip()]
+        payload_json = _encode_json(payload or {})
+        decided_at = now if status in {"deferred", "rejected"} else None
+        applied_at = None
+        cursor = conn.execute(
+            f"""
+            INSERT INTO proposal_ledger (
+                id, agent_id, person_id, project_scope, source_authority, kind,
+                domain, target_surface, transition, blast_radius, read_visibility,
+                status, reason, gate_version, target_id, provenance_ids_json,
+                payload_json, created_at, updated_at, decided_at, applied_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                agent_id = excluded.agent_id,
+                person_id = excluded.person_id,
+                project_scope = excluded.project_scope,
+                source_authority = excluded.source_authority,
+                kind = excluded.kind,
+                domain = excluded.domain,
+                target_surface = excluded.target_surface,
+                transition = excluded.transition,
+                blast_radius = excluded.blast_radius,
+                read_visibility = {_strictest_read_visibility_sql("proposal_ledger")},
+                status = CASE
+                    WHEN proposal_ledger.status IN (
+                        'deferred', 'approved', 'rejected', 'applied', 'superseded'
+                    )
+                    THEN proposal_ledger.status
+                    ELSE excluded.status
+                END,
+                reason = excluded.reason,
+                gate_version = excluded.gate_version,
+                target_id = excluded.target_id,
+                provenance_ids_json = excluded.provenance_ids_json,
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at,
+                decided_at = CASE
+                    WHEN proposal_ledger.status IN (
+                        'deferred', 'approved', 'rejected', 'applied', 'superseded'
+                    )
+                    THEN proposal_ledger.decided_at
+                    WHEN excluded.status IN ('deferred', 'rejected')
+                    THEN excluded.updated_at
+                    ELSE proposal_ledger.decided_at
+                END,
+                applied_at = proposal_ledger.applied_at
+            WHERE proposal_ledger.status NOT IN (
+                'deferred', 'approved', 'rejected', 'applied', 'superseded'
+            )
+            """,
+            (
+                pid,
+                agent_id,
+                person_id,
+                project_scope,
+                source_authority,
+                kind,
+                domain.strip() or "general",
+                target_surface,
+                transition.strip(),
+                blast_radius,
+                normalized_visibility,
+                status,
+                reason.strip(),
+                gate_version.strip() or "affmem-v1",
+                (target_id or "").strip() or None,
+                _encode_json(provenance),
+                payload_json,
+                now,
+                now,
+                decided_at,
+                applied_at,
+            ),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(
+                "Terminal proposal rows are immutable; use a new proposal_id"
+            )
+        conn.commit()
+        proposal = self.get_proposal(pid)
+        if proposal is None:
+            raise RuntimeError(f"Failed to write proposal: {pid}")
+        return proposal
+
+    def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        """Load one proposal ledger row by ID."""
+        row = self._get_conn().execute(
+            "SELECT * FROM proposal_ledger WHERE id = ?",
+            (proposal_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._hydrate_proposal_row(dict(row))
+
+    def list_proposals(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        status: str | None = "pending_review",
+        read_visibility: str | None = READ_VISIBILITY_REVIEW,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """List proposal ledger rows for an explicit review surface.
+
+        ``read_visibility`` defaults to the ordinary review surface. Pass
+        ``None`` only from explicit audit/admin code paths that intentionally
+        inspect all proposal rows.
+        """
+        if status is not None and status not in VALID_PROPOSAL_STATUSES:
+            raise ValueError(f"Unsupported proposal status: {status}")
+        normalized_visibility = _normalize_read_visibility(read_visibility)
+        sql = (
+            "SELECT * FROM proposal_ledger "
+            "WHERE agent_id = ? AND person_id = ? AND project_scope = ?"
+        )
+        params: list[Any] = [agent_id, person_id, project_scope]
+        if status is not None:
+            sql += " AND status = ?"
+            params.append(status)
+        if normalized_visibility is not None:
+            sql += " AND read_visibility = ?"
+            params.append(normalized_visibility)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, limit))
+        rows = self._get_conn().execute(sql, params).fetchall()
+        return [self._hydrate_proposal_row(dict(row)) for row in rows]
+
+    def count_proposals(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        status: str | None = "pending_review",
+        read_visibility: str | None = READ_VISIBILITY_REVIEW,
+    ) -> int:
+        """Count proposal ledger rows for a specific visibility surface."""
+        if status is not None and status not in VALID_PROPOSAL_STATUSES:
+            raise ValueError(f"Unsupported proposal status: {status}")
+        normalized_visibility = _normalize_read_visibility(read_visibility)
+        sql = (
+            "SELECT COUNT(*) FROM proposal_ledger "
+            "WHERE agent_id = ? AND person_id = ? AND project_scope = ?"
+        )
+        params: list[Any] = [agent_id, person_id, project_scope]
+        if status is not None:
+            sql += " AND status = ?"
+            params.append(status)
+        if normalized_visibility is not None:
+            sql += " AND read_visibility = ?"
+            params.append(normalized_visibility)
+        row = self._get_conn().execute(sql, params).fetchone()
+        return int(row[0] or 0)
+
+    def list_audit_proposals(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        status: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """List audit-only proposal rows for a deliberate audit/admin surface."""
+        return self.list_proposals(
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope=project_scope,
+            status=status,
+            read_visibility=READ_VISIBILITY_AUDIT,
+            limit=limit,
+        )
+
+    @staticmethod
+    def _hydrate_proposal_row(row: dict[str, Any]) -> dict[str, Any]:
+        row["provenance_ids"] = _decode_json(row.pop("provenance_ids_json", "[]"), [])
+        row["payload"] = _decode_json(row.pop("payload_json", "{}"), {})
+        return row
 
     # ── Functional Memory ──
 
@@ -1010,6 +1671,7 @@ class EngramStore:
         needs_confirmation: bool = False,
         pinned: bool = False,
         source: str = "agent_observed",
+        read_visibility: str | None = None,
         metadata: dict[str, Any] | None = None,
         expires_at: str | None = None,
     ) -> dict[str, Any]:
@@ -1018,6 +1680,8 @@ class EngramStore:
         Functional memory is the live, revisable working layer. It is useful
         for current task state, open questions, corrections, commitments, and
         preferences that have not yet earned hypomnema or engram status.
+        Entries with ``needs_confirmation=True`` default to ``review_only`` so
+        they do not enter operational packets until confirmed.
         """
         if memory_type not in VALID_FUNCTIONAL_TYPES:
             raise ValueError(f"Unsupported functional memory type: {memory_type}")
@@ -1027,6 +1691,21 @@ class EngramStore:
         now = _utc_now()
         fid = (memory_id or "").strip() or _new_id()
         session = (session_id or "").strip() or None
+        existing = self.get_functional_memory(fid, include_deleted=True)
+        default_visibility = (
+            existing["read_visibility"]
+            if existing is not None and read_visibility is None
+            else (
+                READ_VISIBILITY_REVIEW
+                if needs_confirmation
+                else READ_VISIBILITY_OPERATIONAL
+            )
+        )
+        normalized_visibility = _normalize_read_visibility(
+            read_visibility,
+            allow_all=False,
+            default=default_visibility,
+        )
         conn = self._get_conn()
         if session and self.get_memory_session(session) is None:
             self.start_memory_session(
@@ -1038,14 +1717,15 @@ class EngramStore:
                 source=source,
             )
 
+        functional_visibility = _strictest_read_visibility_sql("functional_memories")
         conn.execute(
-            """
+            f"""
             INSERT INTO functional_memories(
                 id, session_id, agent_id, person_id, project_scope, content,
                 memory_type, confidence, salience, needs_confirmation, pinned,
-                source, metadata_json, created_at, updated_at, expires_at,
+                source, read_visibility, metadata_json, created_at, updated_at, expires_at,
                 is_deleted
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT(id) DO UPDATE SET
                 session_id = excluded.session_id,
                 agent_id = excluded.agent_id,
@@ -1055,9 +1735,15 @@ class EngramStore:
                 memory_type = excluded.memory_type,
                 confidence = excluded.confidence,
                 salience = excluded.salience,
-                needs_confirmation = excluded.needs_confirmation,
+                needs_confirmation = CASE
+                    WHEN functional_memories.needs_confirmation = 1
+                    AND ({functional_visibility}) != '{READ_VISIBILITY_OPERATIONAL}'
+                    THEN 1
+                    ELSE excluded.needs_confirmation
+                END,
                 pinned = excluded.pinned,
                 source = excluded.source,
+                read_visibility = {functional_visibility},
                 metadata_json = excluded.metadata_json,
                 updated_at = excluded.updated_at,
                 expires_at = excluded.expires_at,
@@ -1076,6 +1762,7 @@ class EngramStore:
                 int(needs_confirmation),
                 int(pinned),
                 source.strip() or "agent_observed",
+                normalized_visibility,
                 _encode_json(metadata or {}),
                 now,
                 now,
@@ -1121,18 +1808,37 @@ class EngramStore:
         project_scope: str = "global",
         memory_type: str | None = None,
         needs_confirmation_only: bool = False,
+        exclude_needs_confirmation: bool = False,
         include_deleted: bool = False,
         limit: int = 12,
+        read_visibility: str | Sequence[str] | None | object = _READ_VISIBILITY_DEFAULT,
     ) -> list[dict[str, Any]]:
-        """Search functional memories for the current scope/session."""
+        """Search functional memories for the current scope/session.
+
+        Normal loads default to operational-context rows. Confirmation queues
+        default to operational plus review-only rows, excluding audit-only
+        unless ``read_visibility`` is explicitly supplied.
+        """
         if memory_type and memory_type not in VALID_FUNCTIONAL_TYPES:
             raise ValueError(f"Unsupported functional memory type: {memory_type}")
+        if needs_confirmation_only and exclude_needs_confirmation:
+            raise ValueError(
+                "needs_confirmation_only and exclude_needs_confirmation conflict"
+            )
 
         sql = (
             "SELECT * FROM functional_memories "
             "WHERE agent_id = ? AND person_id = ? AND project_scope = ?"
         )
         params: list[Any] = [agent_id, person_id, project_scope]
+        if read_visibility is _READ_VISIBILITY_DEFAULT:
+            visibility_values = (
+                (READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW)
+                if needs_confirmation_only
+                else (READ_VISIBILITY_OPERATIONAL,)
+            )
+        else:
+            visibility_values = _normalize_read_visibility_values(read_visibility)  # type: ignore[arg-type]
         if session_id:
             sql += " AND session_id = ?"
             params.append(session_id)
@@ -1141,8 +1847,16 @@ class EngramStore:
             params.append(memory_type)
         if needs_confirmation_only:
             sql += " AND needs_confirmation = 1"
+        if exclude_needs_confirmation:
+            sql += " AND needs_confirmation = 0"
         if not include_deleted:
             sql += " AND is_deleted = 0"
+        sql = _append_read_visibility_filter(
+            sql,
+            params,
+            "read_visibility",
+            visibility_values,
+        )
         sql += " ORDER BY pinned DESC, updated_at DESC LIMIT 200"
 
         rows = self._get_conn().execute(sql, params).fetchall()
@@ -1214,7 +1928,10 @@ class EngramStore:
             else 0.55
         )
         salience = max((float(m["salience"]) for m in memories), default=0.45)
+        domain = _classify_hypomnema_domain_from_text(content, fallback="situational")
+        foundational = domain in {"identity", "foundational"}
         hypomnema_id = None
+        hypomnema_visibility = None
         if memories or synthesis.strip():
             hypomnema_id = self.write_hypomnema_entry(
                 content,
@@ -1223,25 +1940,45 @@ class EngramStore:
                 project_scope=project_scope,
                 source="synthesized",
                 density=0.72,
-                domain="situational",
+                domain=domain,
                 tags=["session-close", "functional-memory", project_scope],
                 confidence=confidence,
                 salience=salience,
+                foundational=foundational,
                 related_session_id=session_id,
+            )
+            hypomnema = self.get_hypomnema_entry(
+                hypomnema_id,
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+                read_visibility=None,
+            )
+            hypomnema_visibility = (
+                hypomnema.get("read_visibility")
+                if hypomnema is not None
+                else None
             )
 
         now = _utc_now()
         conn = self._get_conn()
-        if hypomnema_id:
+        promoted_memory_ids = [m["id"] for m in memories]
+        if (
+            hypomnema_id
+            and promoted_memory_ids
+            and hypomnema_visibility == READ_VISIBILITY_OPERATIONAL
+        ):
+            placeholders = ", ".join("?" for _ in promoted_memory_ids)
             conn.execute(
-                """
+                f"""
                 UPDATE functional_memories
                 SET is_deleted = 1,
                     promoted_to_hypomnema_id = ?,
                     updated_at = ?
                 WHERE session_id = ? AND is_deleted = 0
+                  AND id IN ({placeholders})
                 """,
-                (hypomnema_id, now, session_id),
+                (hypomnema_id, now, session_id, *promoted_memory_ids),
             )
         conn.execute(
             """
@@ -1265,17 +2002,30 @@ class EngramStore:
         agent_id: str = "default",
         person_id: str | None = None,
         project_scope: str | None = None,
+        read_visibility: str | Sequence[str] | None = None,
     ) -> dict[str, int]:
         """Count active functional memory and session state."""
-        where = ["agent_id = ?"]
-        params: list[Any] = [agent_id]
+        functional_where = ["agent_id = ?"]
+        session_where = ["agent_id = ?"]
+        functional_params: list[Any] = [agent_id]
+        session_params: list[Any] = [agent_id]
         if person_id is not None:
-            where.append("person_id = ?")
-            params.append(person_id)
+            functional_where.append("person_id = ?")
+            session_where.append("person_id = ?")
+            functional_params.append(person_id)
+            session_params.append(person_id)
         if project_scope is not None:
-            where.append("project_scope = ?")
-            params.append(project_scope)
-        where_sql = " AND ".join(where)
+            functional_where.append("project_scope = ?")
+            session_where.append("project_scope = ?")
+            functional_params.append(project_scope)
+            session_params.append(project_scope)
+        visibility_values = _normalize_read_visibility_values(read_visibility)
+        if visibility_values is not None:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            functional_where.append(f"read_visibility IN ({placeholders})")
+            functional_params.extend(visibility_values)
+        functional_where_sql = " AND ".join(functional_where)
+        session_where_sql = " AND ".join(session_where)
         conn = self._get_conn()
         row = conn.execute(
             f"""
@@ -1285,9 +2035,9 @@ class EngramStore:
               SUM(CASE WHEN is_deleted = 0 AND pinned = 1 THEN 1 ELSE 0 END) AS pinned,
               SUM(CASE WHEN is_deleted = 0 AND needs_confirmation = 1 THEN 1 ELSE 0 END) AS needs_confirmation
             FROM functional_memories
-            WHERE {where_sql}
+            WHERE {functional_where_sql}
             """,
-            params,
+            functional_params,
         ).fetchone()
         session_row = conn.execute(
             f"""
@@ -1295,9 +2045,9 @@ class EngramStore:
               SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
               SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) AS closed
             FROM memory_sessions
-            WHERE {where_sql}
+            WHERE {session_where_sql}
             """,
-            params,
+            session_params,
         ).fetchone()
         return {
             "functional_total": int(row["total"] or 0),
@@ -1333,6 +2083,7 @@ class EngramStore:
         confidence: float = 0.6,
         salience: float = 0.5,
         foundational: bool = False,
+        read_visibility: str | None = None,
         original_timestamp: int | None = None,
         related_session_id: str | None = None,
         related_engram_id: str | None = None,
@@ -1340,7 +2091,9 @@ class EngramStore:
         """Write a scoped hypomnema continuity entry.
 
         Hypomnema is durable, relationship-scoped continuity that can be
-        revised before it graduates into shared Mnemos engrams.
+        revised before it graduates into shared Mnemos engrams. New stable or
+        foundational promotion candidates default to review visibility; callers
+        may set explicit visibility when a gate has already classified them.
         """
         conn = self._get_conn()
         entry_id = self._write_hypomnema_entry_no_commit(
@@ -1357,6 +2110,7 @@ class EngramStore:
             confidence=confidence,
             salience=salience,
             foundational=foundational,
+            read_visibility=read_visibility,
             original_timestamp=original_timestamp,
             related_session_id=related_session_id,
             related_engram_id=related_engram_id,
@@ -1380,6 +2134,7 @@ class EngramStore:
         confidence: float = 0.6,
         salience: float = 0.5,
         foundational: bool = False,
+        read_visibility: str | None = None,
         original_timestamp: int | None = None,
         related_session_id: str | None = None,
         related_engram_id: str | None = None,
@@ -1396,7 +2151,7 @@ class EngramStore:
         existing = conn.execute(
             """
             SELECT agent_id, person_id, project_scope, content, revision_count,
-                   revisions_json
+                   revisions_json, read_visibility
             FROM hypomnema_entries
             WHERE id = ?
             """,
@@ -1425,20 +2180,45 @@ class EngramStore:
                 )
                 revision_count += 1
             revisions_json = _encode_json(revisions)
+        classified_visibility = classify_hypomnema_read_visibility(
+            confidence=confidence,
+            salience=salience,
+            foundational=foundational,
+            revision_count=revision_count,
+            domain=domain,
+        )
+        required_visibility = classified_visibility
+        if existing is not None:
+            required_visibility = _stricter_hypomnema_visibility(
+                existing["read_visibility"],
+                classified_visibility,
+            )
+        default_visibility = required_visibility
+        normalized_visibility = _normalize_read_visibility(
+            read_visibility,
+            allow_all=False,
+            default=default_visibility,
+        )
+        if normalized_visibility != _stricter_hypomnema_visibility(
+            normalized_visibility,
+            required_visibility,
+        ):
+            raise ValueError("Hypomnema requires review visibility before operational use")
         conn.execute(
             """
             INSERT INTO hypomnema_entries(
                 id, agent_id, person_id, project_scope, content, source,
-                density, domain, tags_json, confidence, salience,
+                density, domain, read_visibility, tags_json, confidence, salience,
                 active, foundational, revision_count, revisions_json,
                 original_timestamp, related_session_id, related_engram_id,
                 created_at, last_revised_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 content = excluded.content,
                 source = excluded.source,
                 density = excluded.density,
                 domain = excluded.domain,
+                read_visibility = excluded.read_visibility,
                 tags_json = excluded.tags_json,
                 confidence = excluded.confidence,
                 salience = excluded.salience,
@@ -1460,6 +2240,7 @@ class EngramStore:
                 source,
                 _clamp(density),
                 domain,
+                normalized_visibility,
                 _encode_json(_split_tags(tags)),
                 _clamp(confidence),
                 _clamp(salience),
@@ -1483,6 +2264,7 @@ class EngramStore:
         person_id: str = "user",
         project_scope: str = "global",
         active_only: bool = False,
+        read_visibility: str | None = None,
     ) -> dict[str, Any] | None:
         """Load a hypomnema entry by scoped ID."""
         conn = self._get_conn()
@@ -1493,6 +2275,12 @@ class EngramStore:
         params: list[Any] = [entry_id, agent_id, person_id, project_scope]
         if active_only:
             query += " AND active = 1"
+        query = _apply_read_visibility_filter(
+            query,
+            params,
+            "read_visibility",
+            read_visibility,
+        )
         row = conn.execute(query, params).fetchone()
         if row is None:
             return None
@@ -1507,16 +2295,36 @@ class EngramStore:
         project_scope: str = "global",
         limit: int = 8,
         include_inactive: bool = False,
+        exclude_promotion_candidates: bool = False,
+        read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
     ) -> list[dict[str, Any]]:
-        """Search scoped hypomnema entries by text, confidence, and salience."""
+        """Search scoped hypomnema entries by text, confidence, and salience.
+
+        The default read surface is operational context. Operational packet and
+        runtime callers can also exclude promotion candidates so stable-but-
+        unreviewed continuity does not steer the agent as prose.
+        """
         conn = self._get_conn()
         sql = (
             "SELECT * FROM hypomnema_entries "
             "WHERE agent_id = ? AND person_id = ? AND project_scope = ?"
         )
         params: list[Any] = [agent_id, person_id, project_scope]
+        visibility_values = _normalize_read_visibility_values(read_visibility)
         if not include_inactive:
             sql += " AND active = 1"
+        sql = _append_read_visibility_filter(
+            sql,
+            params,
+            "read_visibility",
+            visibility_values,
+        )
+        if exclude_promotion_candidates:
+            sql = _append_hypomnema_review_candidate_filter(
+                sql,
+                params,
+                negate=True,
+            )
         sql += " ORDER BY foundational DESC, last_revised_at DESC LIMIT 100"
         rows = conn.execute(sql, params).fetchall()
 
@@ -1553,6 +2361,7 @@ class EngramStore:
         project_scope: str = "global",
         active_only: bool = True,
         limit: int = 5,
+        read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
     ) -> list[dict[str, Any]]:
         """Scoped hypomnema entries carrying an exact tag, newest first."""
         conn = self._get_conn()
@@ -1564,8 +2373,15 @@ class EngramStore:
         # Quote-delimited match keeps the tag token-exact inside the JSON
         # array (so "dream" never matches "dream-journal").
         params: list[Any] = [agent_id, person_id, project_scope, f'%"{tag}"%']
+        visibility_values = _normalize_read_visibility_values(read_visibility)
         if active_only:
             sql += " AND active = 1"
+        sql = _append_read_visibility_filter(
+            sql,
+            params,
+            "read_visibility",
+            visibility_values,
+        )
         sql += " ORDER BY last_revised_at DESC LIMIT ?"
         params.append(max(1, limit))
         rows = conn.execute(sql, params).fetchall()
@@ -1582,6 +2398,7 @@ class EngramStore:
         project_scope: str = "global",
         confidence: float | None = None,
         salience: float | None = None,
+        read_visibility: str | Sequence[str] | None = None,
     ) -> str:
         """Revise an existing hypomnema entry while preserving the old version."""
         if not new_content.strip():
@@ -1591,13 +2408,18 @@ class EngramStore:
 
         now = _utc_now()
         conn = self._get_conn()
-        row = conn.execute(
-            """
-            SELECT * FROM hypomnema_entries
-            WHERE id = ? AND agent_id = ? AND person_id = ? AND project_scope = ?
-            """,
-            (entry_id, agent_id, person_id, project_scope),
-        ).fetchone()
+        sql = (
+            "SELECT * FROM hypomnema_entries "
+            "WHERE id = ? AND agent_id = ? AND person_id = ? AND project_scope = ?"
+        )
+        params: list[Any] = [entry_id, agent_id, person_id, project_scope]
+        sql = _apply_read_visibility_filter(
+            sql,
+            params,
+            "read_visibility",
+            read_visibility,
+        )
+        row = conn.execute(sql, params).fetchone()
         if row is None:
             raise KeyError(f"Hypomnema entry not found for scope: {entry_id}")
 
@@ -1609,21 +2431,49 @@ class EngramStore:
                 "reason": reason.strip(),
             }
         )
+        new_confidence = _clamp(confidence if confidence is not None else row["confidence"])
+        new_salience = _clamp(salience if salience is not None else row["salience"])
+        new_revision_count = int(row["revision_count"] or 0) + 1
+        new_domain = _classify_hypomnema_domain_from_text(
+            new_content,
+            fallback=row["domain"],
+        )
+        new_foundational = (
+            bool(row["foundational"])
+            or new_domain in {"identity", "foundational"}
+        )
+        classified_visibility = classify_hypomnema_read_visibility(
+            confidence=new_confidence,
+            salience=new_salience,
+            foundational=new_foundational,
+            revision_count=new_revision_count,
+            domain=new_domain,
+        )
+        new_read_visibility = _stricter_hypomnema_visibility(
+            row["read_visibility"],
+            classified_visibility,
+        )
         conn.execute(
             """
             UPDATE hypomnema_entries
             SET content = ?,
                 confidence = ?,
                 salience = ?,
+                domain = ?,
+                foundational = ?,
                 revision_count = revision_count + 1,
+                read_visibility = ?,
                 revisions_json = ?,
                 last_revised_at = ?
             WHERE id = ?
             """,
             (
                 new_content.strip(),
-                _clamp(confidence if confidence is not None else row["confidence"]),
-                _clamp(salience if salience is not None else row["salience"]),
+                new_confidence,
+                new_salience,
+                new_domain,
+                int(new_foundational),
+                new_read_visibility,
                 _encode_json(revisions),
                 now,
                 entry_id,
@@ -1641,6 +2491,7 @@ class EngramStore:
         agent_id: str = "default",
         person_id: str = "user",
         project_scope: str = "global",
+        read_visibility: str | Sequence[str] | None = None,
     ) -> str:
         """Replace an active hypomnema entry with a new entry and audit link."""
         row = self.get_hypomnema_entry(
@@ -1649,10 +2500,24 @@ class EngramStore:
             person_id=person_id,
             project_scope=project_scope,
             active_only=True,
+            read_visibility=read_visibility,
         )
         if row is None:
             raise KeyError(f"Active hypomnema entry not found for scope: {entry_id}")
 
+        new_domain = _classify_hypomnema_domain_from_text(
+            new_content,
+            fallback=row["domain"],
+        )
+        new_foundational = (
+            bool(row["foundational"])
+            or new_domain in {"identity", "foundational"}
+        )
+        replacement_visibility = (
+            row["read_visibility"]
+            if row["read_visibility"] != READ_VISIBILITY_OPERATIONAL
+            else None
+        )
         new_id = self.write_hypomnema_entry(
             new_content,
             agent_id=agent_id,
@@ -1660,11 +2525,12 @@ class EngramStore:
             project_scope=project_scope,
             source="synthesized",
             density=row["density"],
-            domain=row["domain"],
+            domain=new_domain,
             tags=row["tags"],
             confidence=row["confidence"],
             salience=row["salience"],
-            foundational=row["foundational"],
+            foundational=new_foundational,
+            read_visibility=replacement_visibility,
             original_timestamp=row["original_timestamp"],
             related_session_id=row["related_session_id"],
             related_engram_id=row["related_engram_id"],
@@ -1703,6 +2569,7 @@ class EngramStore:
         agent_id: str = "default",
         person_id: str = "user",
         project_scope: str = "global",
+        read_visibility: str | Sequence[str] | None = None,
     ) -> str:
         """Deactivate a scoped hypomnema entry while preserving its revision trail."""
         if not reason.strip():
@@ -1714,6 +2581,7 @@ class EngramStore:
             person_id=person_id,
             project_scope=project_scope,
             active_only=True,
+            read_visibility=read_visibility,
         )
         if row is None:
             raise KeyError(f"Active hypomnema entry not found for scope: {entry_id}")
@@ -1758,23 +2626,38 @@ class EngramStore:
         person_id: str = "user",
         project_scope: str = "global",
         limit: int = 10,
+        read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
     ) -> list[dict[str, Any]]:
-        """List stable hypomnema entries ready to become Mnemos engrams."""
+        """List stable hypomnema entries ready to become Mnemos engrams.
+
+        Defaults to operational-context candidates; explicit review surfaces
+        may include review-only candidates. Audit-only candidates require an
+        explicit audit visibility read.
+        """
         conn = self._get_conn()
-        rows = conn.execute(
-            """
+        visibility_values = _normalize_read_visibility_values(read_visibility)
+        sql = """
             SELECT * FROM hypomnema_entries
             WHERE agent_id = ? AND person_id = ? AND project_scope = ?
-              AND active = 1
-              AND graduated_to_engram_id IS NULL
-              AND confidence >= 0.82
-              AND salience >= 0.65
-              AND (revision_count >= 1 OR foundational = 1)
-            ORDER BY foundational DESC, confidence DESC, salience DESC, created_at ASC
-            LIMIT ?
-            """,
-            (agent_id, person_id, project_scope, limit),
-        ).fetchall()
+        """
+        params: list[Any] = [
+            agent_id,
+            person_id,
+            project_scope,
+        ]
+        sql = _append_hypomnema_review_candidate_filter(sql, params)
+        sql = _append_read_visibility_filter(
+            sql,
+            params,
+            "read_visibility",
+            visibility_values,
+        )
+        sql += (
+            " ORDER BY foundational DESC, confidence DESC, salience DESC, created_at ASC"
+            " LIMIT ?"
+        )
+        params.append(limit)
+        rows = conn.execute(sql, params).fetchall()
         return [self._hydrate_hypomnema_row(dict(row)) for row in rows]
 
     def get_hypomnema_stats(
@@ -1783,17 +2666,23 @@ class EngramStore:
         agent_id: str = "default",
         person_id: str | None = None,
         project_scope: str | None = None,
+        read_visibility: str | Sequence[str] | None = None,
     ) -> dict[str, int]:
         """Count hypomnema entries for a scope."""
         conn = self._get_conn()
         where = ["agent_id = ?"]
         params: list[Any] = [agent_id]
+        visibility_values = _normalize_read_visibility_values(read_visibility)
         if person_id is not None:
             where.append("person_id = ?")
             params.append(person_id)
         if project_scope is not None:
             where.append("project_scope = ?")
             params.append(project_scope)
+        if visibility_values is not None:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            where.append(f"read_visibility IN ({placeholders})")
+            params.extend(visibility_values)
         where_sql = " AND ".join(where)
         row = conn.execute(
             f"""
@@ -1807,16 +2696,13 @@ class EngramStore:
             """,
             params,
         ).fetchone()
-        candidate_query = (
+        candidate_params = list(params)
+        candidate_query = _append_hypomnema_review_candidate_filter(
             "SELECT COUNT(*) FROM hypomnema_entries "
-            f"WHERE {where_sql} "
-            "AND active = 1 "
-            "AND graduated_to_engram_id IS NULL "
-            "AND confidence >= 0.82 "
-            "AND salience >= 0.65 "
-            "AND (revision_count >= 1 OR foundational = 1)"
+            f"WHERE {where_sql}",
+            candidate_params,
         )
-        candidate_row = conn.execute(candidate_query, params).fetchone()
+        candidate_row = conn.execute(candidate_query, candidate_params).fetchone()
         candidates = int(candidate_row[0] or 0)
         return {
             "hypomnema_total": int(row["total"] or 0),
@@ -1970,22 +2856,49 @@ class EngramStore:
         self,
         agent_id: str = "default",
         include_pending_review: bool = False,
+        *,
+        person_id: str | None = None,
+        project_scope: str | None = None,
+        read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
     ) -> dict:
         """Get summary statistics for an agent's memory."""
         conn = self._get_conn()
         stats = {}
+        visibility_values = _normalize_read_visibility_values(read_visibility)
 
         # Engram counts by state
         for state in ("active", "consolidating", "dormant", "archived"):
-            row = conn.execute(
+            query = (
                 "SELECT COUNT(*) FROM engrams "
-                "WHERE owner_agent_id = ? AND state = ?",
-                (agent_id, state),
+                "WHERE owner_agent_id = ? AND state = ?"
+            )
+            params: list[Any] = [agent_id, state]
+            query = _append_read_visibility_filter(
+                query,
+                params,
+                "read_visibility",
+                visibility_values,
+            )
+            row = conn.execute(
+                query,
+                params,
             ).fetchone()
             stats[f"engrams_{state}"] = row[0] if row else 0
 
         # Connection count
-        row = conn.execute("SELECT COUNT(*) FROM connections").fetchone()
+        if visibility_values is None:
+            row = conn.execute("SELECT COUNT(*) FROM connections").fetchone()
+        else:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM connections c "
+                "JOIN engrams source ON source.id = c.source_id "
+                "JOIN engrams target ON target.id = c.target_id "
+                "WHERE source.owner_agent_id = ? "
+                f"AND source.read_visibility IN ({placeholders}) "
+                f"AND target.read_visibility IN ({placeholders})",
+                [agent_id, *visibility_values, *visibility_values],
+            ).fetchone()
         stats["connections"] = row[0] if row else 0
 
         # Belief count
@@ -1993,34 +2906,81 @@ class EngramStore:
             "SELECT COUNT(*) FROM beliefs "
             "WHERE agent_id = ? AND superseded_by IS NULL"
         )
+        belief_params: list[Any] = [agent_id]
         if not include_pending_review:
             belief_query += " AND confidence_pending_review = 0"
-        row = conn.execute(belief_query, (agent_id,)).fetchone()
+        belief_query = _append_read_visibility_filter(
+            belief_query,
+            belief_params,
+            "read_visibility",
+            visibility_values,
+        )
+        row = conn.execute(belief_query, belief_params).fetchone()
         stats["beliefs_active"] = row[0] if row else 0
 
         # Version count (reconsolidation events)
-        row = conn.execute("SELECT COUNT(*) FROM versions").fetchone()
+        if visibility_values is None:
+            row = conn.execute("SELECT COUNT(*) FROM versions").fetchone()
+        else:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM versions v "
+                "JOIN engrams e ON e.id = v.engram_id "
+                "WHERE e.owner_agent_id = ? "
+                f"AND e.read_visibility IN ({placeholders})",
+                [agent_id, *visibility_values],
+            ).fetchone()
         stats["reconsolidation_events"] = row[0] if row else 0
 
         # Archive count
-        row = conn.execute("SELECT COUNT(*) FROM archive").fetchone()
+        if visibility_values is None:
+            row = conn.execute("SELECT COUNT(*) FROM archive").fetchone()
+        else:
+            placeholders = ", ".join("?" for _ in visibility_values)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM engrams "
+                "WHERE owner_agent_id = ? AND state = 'archived' "
+                f"AND read_visibility IN ({placeholders})",
+                [agent_id, *visibility_values],
+            ).fetchone()
         stats["archived"] = row[0] if row else 0
 
         # Hypomnema counts use the default person/project scope for status.
-        stats.update(self.get_hypomnema_stats(agent_id=agent_id))
+        stats.update(
+            self.get_hypomnema_stats(
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+                read_visibility=read_visibility,
+            )
+        )
 
         # Functional memory counts cover active working context and review load.
-        stats.update(self.get_functional_stats(agent_id=agent_id))
+        stats.update(
+            self.get_functional_stats(
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+                read_visibility=read_visibility,
+            )
+        )
 
         # Accessibility distribution
-        rows = conn.execute(
+        accessibility_query = (
             "SELECT "
             "AVG(accessibility) as avg_acc, "
             "MIN(accessibility) as min_acc, "
             "MAX(accessibility) as max_acc "
-            "FROM engrams WHERE owner_agent_id = ? AND state = 'active'",
-            (agent_id,),
-        ).fetchone()
+            "FROM engrams WHERE owner_agent_id = ? AND state = 'active'"
+        )
+        accessibility_params: list[Any] = [agent_id]
+        accessibility_query = _append_read_visibility_filter(
+            accessibility_query,
+            accessibility_params,
+            "read_visibility",
+            visibility_values,
+        )
+        rows = conn.execute(accessibility_query, accessibility_params).fetchone()
         if rows and rows["avg_acc"] is not None:
             stats["accessibility_avg"] = round(rows["avg_acc"], 3)
             stats["accessibility_min"] = round(rows["min_acc"], 3)

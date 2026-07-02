@@ -19,6 +19,14 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from .read_visibility import (
+    HYPO_PROMOTION_MIN_CONFIDENCE,
+    HYPO_PROMOTION_MIN_SALIENCE,
+    HYPO_REVIEW_CANDIDATE_SQL,
+    READ_VISIBILITY_OPERATIONAL,
+    READ_VISIBILITY_REVIEW,
+)
+
 
 # Migration registry: version -> (description, migration_function)
 _MIGRATIONS: dict[int, tuple[str, Callable[[sqlite3.Connection], None]]] = {}
@@ -195,6 +203,19 @@ def _add_column_if_missing(
 ) -> None:
     if not _has_column(conn, table, column):
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _column_default(conn: sqlite3.Connection, table: str, column: str) -> str | None:
+    for row in conn.execute(f"PRAGMA table_info({table})"):
+        if _row_value(row, "name", 1) == column:
+            return _row_value(row, "dflt_value", 4)
+    return None
+
+
+def _normalize_default_literal(value: str | None) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().strip("'\"")
 
 
 def _row_value(row: sqlite3.Row | tuple, name: str, index: int):
@@ -400,6 +421,336 @@ def apply_u3b_hardening_schema_migration(conn: sqlite3.Connection) -> None:
 @register_migration(5, "U3b hardening: row-map extensions + pai_import_events + tombstone triggers")
 def migrate_v5_u3b_hardening(conn: sqlite3.Connection) -> None:
     apply_u3b_hardening_schema_migration(conn)
+
+
+def apply_afferent_membrane_v1_schema_migration(conn: sqlite3.Connection) -> None:
+    """Apply U2 proposal-ledger and read-visibility schema additions."""
+    visibility_check = "CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only'))"
+    for table, default_visibility in (
+        ("engrams", READ_VISIBILITY_OPERATIONAL),
+        ("beliefs", READ_VISIBILITY_OPERATIONAL),
+        ("hypomnema_entries", READ_VISIBILITY_OPERATIONAL),
+        ("functional_memories", READ_VISIBILITY_OPERATIONAL),
+    ):
+        _add_column_if_missing(
+            conn,
+            table,
+            "read_visibility",
+            f"TEXT NOT NULL DEFAULT '{default_visibility}' {visibility_check}",
+        )
+
+    conn.execute(
+        """
+        UPDATE beliefs
+        SET read_visibility = 'review_only'
+        WHERE needs_review = 1 OR confidence_pending_review = 1
+        """
+    )
+    conn.execute(
+        """
+        UPDATE functional_memories
+        SET read_visibility = 'review_only'
+        WHERE needs_confirmation = 1
+        """
+    )
+    conn.execute(
+        """
+        UPDATE hypomnema_entries
+        SET read_visibility = 'operational_context'
+        WHERE NOT (
+            active = 1
+            AND graduated_to_engram_id IS NULL
+            AND confidence >= ?
+            AND salience >= ?
+            AND (revision_count >= 1 OR foundational = 1)
+        )
+        """,
+        (HYPO_PROMOTION_MIN_CONFIDENCE, HYPO_PROMOTION_MIN_SALIENCE),
+    )
+    conn.execute(
+        """
+        UPDATE hypomnema_entries
+        SET read_visibility = 'review_only'
+        WHERE """ + HYPO_REVIEW_CANDIDATE_SQL + """
+        """,
+        (HYPO_PROMOTION_MIN_CONFIDENCE, HYPO_PROMOTION_MIN_SALIENCE),
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS proposal_ledger (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL DEFAULT 'default',
+            person_id TEXT NOT NULL DEFAULT 'user',
+            project_scope TEXT NOT NULL DEFAULT 'global',
+            source_authority TEXT NOT NULL
+                CHECK (source_authority IN ('user_stated', 'imported', 'observed', 'generated')),
+            kind TEXT NOT NULL
+                CHECK (kind IN ('episodic', 'semantic', 'procedural', 'prospective')),
+            domain TEXT NOT NULL DEFAULT 'general',
+            target_surface TEXT NOT NULL
+                CHECK (target_surface IN (
+                    'engrams', 'beliefs', 'hypomnema_entries',
+                    'functional_memories', 'dynamic_modulations',
+                    'identity_profile', 'runtime_context'
+                )),
+            transition TEXT NOT NULL,
+            blast_radius TEXT NOT NULL DEFAULT 'medium'
+                CHECK (blast_radius IN ('low', 'medium', 'high', 'identity', 'foundational')),
+            read_visibility TEXT NOT NULL DEFAULT 'audit_only'
+                CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only')),
+            status TEXT NOT NULL DEFAULT 'pending_review'
+                CHECK (status IN ('pending_review', 'deferred', 'approved', 'rejected', 'applied', 'superseded')),
+            reason TEXT NOT NULL DEFAULT '',
+            gate_version TEXT NOT NULL DEFAULT 'affmem-v1',
+            target_id TEXT,
+            provenance_ids_json TEXT NOT NULL DEFAULT '[]',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            decided_at INTEGER,
+            applied_at INTEGER
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proposal_ledger_status_scope "
+        "ON proposal_ledger(agent_id, person_id, project_scope, status, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proposal_ledger_visibility "
+        "ON proposal_ledger(read_visibility, status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_engrams_read_visibility "
+        "ON engrams(owner_agent_id, read_visibility, state)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_beliefs_read_visibility "
+        "ON beliefs(agent_id, read_visibility, superseded_by)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_hypomnema_read_visibility "
+        "ON hypomnema_entries(agent_id, person_id, project_scope, read_visibility)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_functional_read_visibility "
+        "ON functional_memories(agent_id, person_id, project_scope, read_visibility)"
+    )
+
+
+@register_migration(6, "Afferent Membrane v1: proposal ledger + read visibility")
+def migrate_v6_afferent_membrane_v1(conn: sqlite3.Connection) -> None:
+    apply_afferent_membrane_v1_schema_migration(conn)
+
+
+def _repair_stale_v6_hypomnema_visibility(conn: sqlite3.Connection) -> None:
+    """Repair stale v6 hypomnema schema defaults without promoting review rows."""
+    if not _has_table(conn, "hypomnema_entries") or not _has_column(
+        conn, "hypomnema_entries", "read_visibility"
+    ):
+        return
+    if _normalize_default_literal(
+        _column_default(conn, "hypomnema_entries", "read_visibility")
+    ) != READ_VISIBILITY_REVIEW:
+        return
+
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'hypomnema_entries'"
+    ).fetchone()
+    if row is None:
+        return
+    table_sql = row[0]
+    old_default = "read_visibility TEXT NOT NULL DEFAULT 'review_only'"
+    new_default = "read_visibility TEXT NOT NULL DEFAULT 'operational_context'"
+    if old_default not in table_sql:
+        return
+
+    new_table_sql = table_sql.replace(old_default, new_default, 1)
+    try:
+        conn.execute("PRAGMA writable_schema=ON")
+        conn.execute(
+            """
+            UPDATE sqlite_master
+            SET sql = ?
+            WHERE type = 'table' AND name = 'hypomnema_entries'
+            """,
+            (new_table_sql,),
+        )
+        schema_version = conn.execute("PRAGMA schema_version").fetchone()[0]
+        conn.execute(f"PRAGMA schema_version = {int(schema_version) + 1}")
+    finally:
+        conn.execute("PRAGMA writable_schema=OFF")
+
+    conn.execute(
+        """
+        UPDATE hypomnema_entries
+        SET read_visibility = 'review_only'
+        WHERE """ + HYPO_REVIEW_CANDIDATE_SQL + """
+          AND read_visibility = 'operational_context'
+        """,
+        (HYPO_PROMOTION_MIN_CONFIDENCE, HYPO_PROMOTION_MIN_SALIENCE),
+    )
+
+
+@register_migration(7, "Afferent U2.5: normalize proposal ledger quarantine contract")
+def migrate_v7_afferent_u2_5_proposal_contract(conn: sqlite3.Connection) -> None:
+    """Normalize already-v6 ProposalLedger rows to the RFC quarantine default."""
+    _repair_stale_v6_hypomnema_visibility(conn)
+    if not _has_table(conn, "proposal_ledger"):
+        apply_afferent_membrane_v1_schema_migration(conn)
+        return
+
+    conn.execute("DROP INDEX IF EXISTS idx_proposal_ledger_status_scope")
+    conn.execute("DROP INDEX IF EXISTS idx_proposal_ledger_visibility")
+    conn.execute("ALTER TABLE proposal_ledger RENAME TO proposal_ledger_v6")
+    conn.execute(
+        """
+        CREATE TABLE proposal_ledger (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL DEFAULT 'default',
+            person_id TEXT NOT NULL DEFAULT 'user',
+            project_scope TEXT NOT NULL DEFAULT 'global',
+            source_authority TEXT NOT NULL
+                CHECK (source_authority IN ('user_stated', 'imported', 'observed', 'generated')),
+            kind TEXT NOT NULL
+                CHECK (kind IN ('episodic', 'semantic', 'procedural', 'prospective')),
+            domain TEXT NOT NULL DEFAULT 'general',
+            target_surface TEXT NOT NULL
+                CHECK (target_surface IN (
+                    'engrams', 'beliefs', 'hypomnema_entries',
+                    'functional_memories', 'dynamic_modulations',
+                    'identity_profile', 'runtime_context'
+                )),
+            transition TEXT NOT NULL,
+            blast_radius TEXT NOT NULL DEFAULT 'medium'
+                CHECK (blast_radius IN ('low', 'medium', 'high', 'identity', 'foundational')),
+            read_visibility TEXT NOT NULL DEFAULT 'audit_only'
+                CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only')),
+            status TEXT NOT NULL DEFAULT 'pending_review'
+                CHECK (status IN ('pending_review', 'deferred', 'approved', 'rejected', 'applied', 'superseded')),
+            reason TEXT NOT NULL DEFAULT '',
+            gate_version TEXT NOT NULL DEFAULT 'affmem-v1',
+            target_id TEXT,
+            provenance_ids_json TEXT NOT NULL DEFAULT '[]',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            decided_at INTEGER,
+            applied_at INTEGER
+        )
+        """
+    )
+    now = int(time.time())
+    conn.execute(
+        """
+        INSERT INTO proposal_ledger (
+            id, agent_id, person_id, project_scope, source_authority, kind,
+            domain, target_surface, transition, blast_radius, read_visibility,
+            status, reason, gate_version, target_id, provenance_ids_json,
+            payload_json, created_at, updated_at, decided_at, applied_at
+        )
+        SELECT
+            id,
+            COALESCE(NULLIF(agent_id, ''), 'default'),
+            COALESCE(NULLIF(person_id, ''), 'user'),
+            COALESCE(NULLIF(project_scope, ''), 'global'),
+            CASE COALESCE(NULLIF(source_authority, ''), 'generated')
+                WHEN 'user_stated' THEN 'user_stated'
+                WHEN 'imported' THEN 'imported'
+                WHEN 'observed' THEN 'observed'
+                WHEN 'generated' THEN 'generated'
+                WHEN 'agent_generated' THEN 'generated'
+                WHEN 'agent_observed' THEN 'observed'
+                WHEN 'system_policy' THEN 'generated'
+                WHEN 'operator_review' THEN 'observed'
+                ELSE 'generated'
+            END,
+            CASE COALESCE(NULLIF(kind, ''), 'semantic')
+                WHEN 'episodic' THEN 'episodic'
+                WHEN 'semantic' THEN 'semantic'
+                WHEN 'procedural' THEN 'procedural'
+                WHEN 'prospective' THEN 'prospective'
+                WHEN 'belief' THEN 'semantic'
+                WHEN 'engram' THEN 'episodic'
+                WHEN 'hypomnema' THEN 'semantic'
+                WHEN 'functional_memory' THEN 'prospective'
+                WHEN 'identity' THEN 'semantic'
+                WHEN 'modulation' THEN 'prospective'
+                WHEN 'correction' THEN 'semantic'
+                WHEN 'promotion' THEN 'semantic'
+                ELSE 'semantic'
+            END,
+            COALESCE(NULLIF(domain, ''), 'general'),
+            CASE
+                WHEN target_surface IN (
+                    'engrams', 'beliefs', 'hypomnema_entries',
+                    'functional_memories', 'dynamic_modulations',
+                    'identity_profile', 'runtime_context'
+                ) THEN target_surface
+                ELSE 'runtime_context'
+            END,
+            COALESCE(NULLIF(transition, ''), 'unclassified_candidate'),
+            CASE
+                WHEN blast_radius IN ('low', 'medium', 'high', 'identity', 'foundational')
+                THEN blast_radius
+                ELSE 'medium'
+            END,
+            CASE
+                WHEN status IN ('approved', 'applied', 'superseded')
+                THEN 'audit_only'
+                WHEN read_visibility = 'review_only' THEN 'review_only'
+                WHEN read_visibility = 'audit_only' THEN 'audit_only'
+                ELSE 'audit_only'
+            END,
+            CASE
+                WHEN status IN (
+                    'pending_review', 'deferred', 'rejected',
+                    'approved', 'applied', 'superseded'
+                )
+                THEN status
+                ELSE 'pending_review'
+            END,
+            CASE
+                WHEN status IN ('approved', 'applied', 'superseded')
+                THEN
+                    COALESCE(NULLIF(reason, ''), '') ||
+                    CASE WHEN COALESCE(NULLIF(reason, ''), '') = '' THEN '' ELSE ' ' END ||
+                    '[u2.5 migrated legacy terminal proposal status=' || status ||
+                    ' as audit/history; U4 review gate not represented]'
+                ELSE COALESCE(reason, '')
+            END,
+            COALESCE(NULLIF(gate_version, ''), 'affmem-v1'),
+            target_id,
+            COALESCE(provenance_ids_json, '[]'),
+            COALESCE(payload_json, '{}'),
+            COALESCE(created_at, ?),
+            COALESCE(updated_at, ?),
+            CASE
+                WHEN status IN (
+                    'deferred', 'rejected', 'approved', 'applied', 'superseded'
+                )
+                THEN COALESCE(decided_at, updated_at, created_at, ?)
+                ELSE NULL
+            END,
+            CASE
+                WHEN status IN ('approved', 'applied', 'superseded')
+                THEN applied_at
+                ELSE NULL
+            END
+        FROM proposal_ledger_v6
+        """,
+        (now, now, now),
+    )
+    conn.execute("DROP TABLE proposal_ledger_v6")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proposal_ledger_status_scope "
+        "ON proposal_ledger(agent_id, person_id, project_scope, status, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proposal_ledger_visibility "
+        "ON proposal_ledger(read_visibility, status)"
+    )
 
 
 def insert_pai_import_event(

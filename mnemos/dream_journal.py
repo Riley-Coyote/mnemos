@@ -13,6 +13,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from .store.read_visibility import READ_VISIBILITY_OPERATIONAL
+
 if TYPE_CHECKING:
     from .simple_scope import MnemosScope
     from .store.sqlite_store import EngramStore
@@ -215,4 +217,5 @@ def polish_dream_entry(
         agent_id=scope.agent_id,
         person_id=scope.person_id,
         project_scope=scope.project_scope,
+        read_visibility=READ_VISIBILITY_OPERATIONAL,
     )

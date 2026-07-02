@@ -169,3 +169,9 @@ from mnemos.multiagent.bridge import (
 ```
 
 The shared directory path defaults to `~/shared/` and can be overridden with the `MNEMOS_SHARED_DIR` environment variable.
+
+Mnemos' SQLite `SharedPool` uses the same read-visibility boundary as the rest
+of the memory system: shared reads and conflict resolution consider only
+`operational_context` rows. Review-only and audit-only memories require their
+explicit review/admin surfaces and should not be published through ordinary
+cross-agent context.

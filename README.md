@@ -86,8 +86,8 @@ Simple mode exposes seven user-facing tools:
 | Tool | Purpose |
 |---|---|
 | `mnemos_context` | Startup continuity packet. Auto-creates local storage, runs lightweight maintenance, and can optionally include an identity graph artifact. |
-| `mnemos_capture` | Capture durable preferences, decisions, project state, workflows, and context. |
-| `mnemos_recall` | Search scoped continuity and durable memory with natural language. |
+| `mnemos_capture` | Capture continuity; high-blast identity/foundational captures may be held for review instead of promoted. |
+| `mnemos_recall` | Search operational scoped continuity and durable memory with natural language. |
 | `mnemos_correct` | Update, supersede, or archive stale memory. |
 | `mnemos_maintain` | Run the best available maintenance without requiring setup. |
 | `mnemos_introduce` | Let the agent declare its own model id and name so memory maintenance stays kin from day one. |
@@ -164,6 +164,7 @@ You have access to Mnemos MCP memory tools.
 At the start of this session, call mnemos_context.
 If Mnemos asks you to introduce yourself, call mnemos_introduce with your own model id and name.
 Use mnemos_capture for stable preferences, decisions, project state, workflows, corrections, and context I should not have to repeat.
+If Mnemos says a capture is for review, treat it as pending and do not quote its prose from ordinary context.
 Use mnemos_recall before relying on memory from prior sessions.
 Use mnemos_correct when a remembered fact is stale, wrong, superseded, or should be forgotten.
 Use mnemos_health if I ask whether memory is working.
@@ -200,24 +201,49 @@ Advanced tools include:
 | Tool | Description |
 |---|---|
 | `mnemos_setup` | Legacy guided setup and seeding flow. |
+| `mnemos_session_start` | Start or resume a functional-memory session. |
+| `mnemos_functional_update` | Write live working context, optionally as confirmation-needed review material. |
+| `mnemos_functional_list` | List scoped functional memory and explicit confirmation queues. |
+| `mnemos_session_close` | Compress active functional memory into scoped hypomnema. |
+| `mnemos_context_packet` | Build a full context packet; `packet_mode="operational"` redacts review prose, while `packet_mode="review"` exposes it with labels. |
+| `mnemos_review_queue` | Inspect confirmation and promotion candidates through an explicit review surface. |
+| `mnemos_proposal_audit` | Inspect audit-only proposal ledger rows through an explicit admin/audit surface. |
+| `mnemos_visual_snapshot` | Render an inline Mermaid memory map with review prose withheld. |
 | `mnemos_remember` | Encode a memory with explicit fields. |
 | `mnemos_ingest` | Ingest external knowledge with provenance. |
 | `mnemos_recall` | Retrieve memories. |
 | `mnemos_inspect` | View full memory details. |
+| `mnemos_introspect` | Audit text for metacognitive pattern markers. |
 | `mnemos_status` | Show memory system statistics. |
 | `mnemos_beliefs` | List reviewed current beliefs. |
 | `mnemos_shared` | Read shared memory pool entries. |
 | `mnemos_hypomnema_write` | Write scoped continuity manually. |
-| `mnemos_hypomnema_search` | Search scoped continuity manually. |
+| `mnemos_hypomnema_search` | Search operational scoped continuity manually. |
 | `mnemos_hypomnema_revise` | Revise a continuity entry. |
 | `mnemos_hypomnema_supersede` | Replace an active continuity entry. |
-| `mnemos_hypomnema_candidates` | List promotion-ready continuity. |
+| `mnemos_hypomnema_candidates` | List operational promotion-ready continuity; use `mnemos_review_queue` for review-only candidates. |
 | `mnemos_hypomnema_promote` | Promote continuity into a durable engram. |
 | `mnemos_forget` | Archive a memory. |
 | `mnemos_consolidate` | Trigger explicit consolidation. |
 
 Use simple mode for normal continuity. Use advanced mode when the agent or
 operator needs direct access to Mnemos internals.
+
+Advanced context packets default to operational mode: review queues expose
+counts and source IDs, but not pending prose. Use
+`mnemos_context_packet(packet_mode="review")` or `mnemos_review_queue` when a
+human/operator intentionally needs review-only content. Audit-only rows stay
+out of both ordinary operational packets and ordinary review queues.
+Use `mnemos_proposal_audit` only for deliberate audit/admin inspection of
+audit-only proposal ledger rows.
+
+Direct-ID and operational hypomnema tools (`mnemos_inspect`, `mnemos_forget`,
+`mnemos_hypomnema_search`, `mnemos_hypomnema_candidates`, and the
+`mnemos_hypomnema_revise` / `mnemos_hypomnema_supersede` /
+`mnemos_hypomnema_promote` mutators) operate only on operational rows: a
+review-only or audit-only ID returns a "not found" response, or is absent from
+ordinary search/candidate output, so review prose is never mutated or promoted
+through an operational tool call.
 
 ### Prompt For An Advanced MCP Agent
 
@@ -397,10 +423,21 @@ mnemos init                           # Initialize a database
 mnemos remember "Prefers tabs"        # Capture continuity from the CLI
 mnemos stats                          # Memory statistics
 mnemos search "debugging strategies"  # Search memories
-mnemos inspect <engram-id>            # Inspect memory details
+mnemos inspect <engram-id>            # Inspect operational memory details
+mnemos inspect --review <engram-id>   # Explicit review-only inspection
+mnemos inspect --audit <engram-id>    # Explicit audit-only inspection
+mnemos inspect --admin <engram-id>    # Ignore read visibility for admin inspection
+mnemos snapshot                       # Inline operational Mermaid snapshot
 mnemos consolidate                    # Local deterministic maintenance
 mnemos consolidate --deep             # Deep maintenance when a provider exists
 mnemos substrate-tick                 # Run one substrate cycle
+```
+
+Dashboard module:
+
+```bash
+python -m mnemos.visualization.app --build-only
+python -m mnemos.visualization.app --audit --build-only  # include review/audit rows
 ```
 
 Workspace, identity, and automation commands:
@@ -554,14 +591,15 @@ With no provider key and no extra setup, Mnemos can still run:
 
 - local SQLite memory graph
 - scoped continuity notes
-- durable engram capture
-- recall with reconsolidation
+- durable engram capture for operational rows, with review-only continuity for high-blast captures
+- recall with reconsolidation and operational read-visibility filtering before ranking
 - strength, stability, and accessibility updates
 - local decay
 - lightweight connection discovery
 - promotion bookkeeping
 - correction, supersession, and archiving
-- startup context packet generation
+- startup context packet generation with review prose withheld by default
+- cross-session verification that quotes operational first captures but emits only an existence cue for review-only first captures
 - optional SVG identity graph snapshots
 - maintenance during normal tool calls
 

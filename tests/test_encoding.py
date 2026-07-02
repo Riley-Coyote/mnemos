@@ -1,7 +1,8 @@
 """Tests for the encoding pipeline."""
 import pytest
 
-from mnemos.core.types import SourceType
+from mnemos.core.engram import Engram
+from mnemos.core.types import BOOTSTRAP_STABILITY, BOOTSTRAP_STRENGTH, SourceType
 
 
 class TestEncoder:
@@ -19,6 +20,25 @@ class TestEncoder:
         assert engram.content == "Riley prefers dark mode in all applications"
         assert "preference" in engram.tags
         assert engram.state == "active"
+
+    def test_quarantined_engrams_do_not_end_bootstrap_policy(self, store, encoder):
+        """Review/audit rows should not count toward operational encoding thresholds."""
+        for index in range(60):
+            store.save_engram(
+                Engram(
+                    content=f"Quarantined memory {index}",
+                    read_visibility="review_only" if index % 2 else "audit_only",
+                )
+            )
+
+        engram = encoder.encode(
+            content="Operational memory still receives bootstrap values",
+            source=SourceType.SESSION,
+            skip_surprise_detection=True,
+        )
+
+        assert engram.strength == BOOTSTRAP_STRENGTH
+        assert engram.stability == BOOTSTRAP_STABILITY
 
     def test_encode_rejects_empty(self, encoder):
         """Empty content should raise ValueError."""

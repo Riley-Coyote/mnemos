@@ -25,7 +25,8 @@ from .retrieval.reactive import ReactiveRetriever
 # remain importable from here for existing consumers.
 from .simple_scope import MnemosScope, resolve_scope  # noqa: F401
 from .store.embedding_index import EmbeddingIndex
-from .store.sqlite_store import EngramStore
+from .store.sqlite_store import EngramStore, READ_VISIBILITY_OPERATIONAL
+from .store.read_visibility import classify_hypomnema_read_visibility
 
 
 SIMPLE_TOOL_NAMES = (
@@ -255,7 +256,12 @@ class MnemosRuntime:
     def _stats(self) -> dict[str, Any]:
         self._ensure_init()
         assert self._store is not None
-        return self._store.get_stats(self.scope.agent_id)
+        return self._store.get_stats(
+            self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
+        )
 
     def _meta_key(self, name: str) -> str:
         return f"simple:{self.scope.agent_id}:{self.scope.person_id}:{self.scope.project_scope}:{name}"
@@ -347,8 +353,21 @@ class MnemosRuntime:
         )
         return "\n".join(lines)
 
-    def _record_first_capture(self, note_id: str, engram_id: str, content: str) -> None:
-        """Record the first capture of a fresh scope for later verification."""
+    def _record_first_capture(
+        self,
+        note_id: str,
+        engram_id: str,
+        content: str = "",
+        *,
+        withheld: bool = False,
+    ) -> None:
+        """Record the first capture of a fresh scope for later verification.
+
+        For non-operational (review_only / audit_only) captures the caller
+        passes ``withheld=True`` and no content: only the note id is recorded,
+        never the prose. A quarantined first capture must not re-enter the
+        operational continuity packet through this meta side-channel.
+        """
 
         if self._get_meta("first_capture") is not None or self._get_meta("verified_at") is not None:
             return
@@ -357,8 +376,11 @@ class MnemosRuntime:
             "engram_id": engram_id,
             "session": self._current_session(),
             "captured_at": datetime.now(timezone.utc).isoformat(),
-            "excerpt": content.strip().replace("\n", " ")[:160],
         }
+        if withheld:
+            payload["withheld"] = True
+        else:
+            payload["excerpt"] = content.strip().replace("\n", " ")[:160]
         self._set_meta("first_capture", json.dumps(payload, ensure_ascii=True, sort_keys=True))
 
     def _verification_block(self) -> str | None:
@@ -371,7 +393,6 @@ class MnemosRuntime:
             return None
         try:
             first_capture = json.loads(raw)
-            excerpt = first_capture["excerpt"]
             first_session = int(first_capture["session"])
         except (ValueError, KeyError, TypeError):
             return None
@@ -381,6 +402,22 @@ class MnemosRuntime:
             return None
 
         self._set_meta("verified_at", datetime.now(timezone.utc).isoformat())
+
+        # A quarantined (review_only / audit_only) first capture records no
+        # prose in meta. Emit an existence-only line — count plus note id, never
+        # candidate prose — so review-only content cannot reappear in the
+        # operational packet. R6: counts and IDs may cross the operational
+        # boundary; candidate prose may not.
+        if bool(first_capture.get("withheld")) or "excerpt" not in first_capture:
+            note_id = first_capture.get("note_id") or "unknown"
+            return (
+                "MEMORY VERIFIED - continuity crossed a restart\n"
+                f"1 earlier capture is pending review (note {note_id}); "
+                "its content stays quarantined until you review it.\n"
+                "(This check fires once and will not appear again.)"
+            )
+
+        excerpt = first_capture["excerpt"]
         return (
             "MEMORY VERIFIED - continuity crossed a restart\n"
             f'In an earlier session you captured this about the human: "{excerpt}"\n'
@@ -452,6 +489,7 @@ class MnemosRuntime:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=max_results + 1,
+            exclude_promotion_candidates=True,
         )
         continuity = _filter_continuity(query, continuity)
         continuity = [
@@ -520,6 +558,7 @@ class MnemosRuntime:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=max_nodes,
+            exclude_promotion_candidates=True,
         )
         engrams = self._store.get_active_engrams(
             agent_id=self.scope.agent_id,
@@ -628,7 +667,12 @@ class MnemosRuntime:
         context: str = "",
         importance: str | float = "auto",
     ) -> str:
-        """Capture durable continuity without exposing Mnemos internals."""
+        """Capture continuity without exposing Mnemos internals.
+
+        Operational captures are encoded and promoted immediately. Identity,
+        foundational, or promotion-ready captures are held as review-only
+        continuity and do not enter ordinary context or first-capture prose.
+        """
 
         if not content.strip():
             return "Nothing captured: content was empty."
@@ -652,6 +696,39 @@ class MnemosRuntime:
         tags = _simple_tags(content, context)
         confidence, salience = _importance_scores(importance, domain)
         impact = _impact_for(content, domain)
+        foundational = domain in {"foundational", "identity"}
+        read_visibility = classify_hypomnema_read_visibility(
+            confidence=confidence,
+            salience=salience,
+            foundational=foundational,
+            domain=domain,
+        )
+
+        if read_visibility != READ_VISIBILITY_OPERATIONAL:
+            note_id = self._store.write_hypomnema_entry(
+                full_content,
+                agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+                source="observed",
+                domain=domain,
+                tags=tags,
+                confidence=confidence,
+                salience=salience,
+                foundational=foundational,
+            )
+            # Quarantined capture: record existence only, never the prose, so
+            # it cannot leak into the operational packet via first_capture meta.
+            self._record_first_capture(note_id, "", withheld=True)
+            maintenance = self.maintain(auto=True)
+            return (
+                "Captured continuity for review.\n"
+                f"Continuity note ID: {note_id}\n"
+                f"Visibility: {read_visibility}\n"
+                f"Scope: {self.scope.agent_id}/{self.scope.person_id}/{self.scope.project_scope}\n"
+                "Maintenance:\n"
+                f"{_indent(maintenance)}"
+            )
 
         engram = self._encoder.encode(
             content=full_content,
@@ -673,8 +750,9 @@ class MnemosRuntime:
             tags=tags,
             confidence=confidence,
             salience=salience,
-            foundational=domain in {"foundational", "identity"},
+            foundational=foundational,
             related_engram_id=engram.id,
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
         )
         self._store.mark_hypomnema_promoted(note_id, engram.id)
         self._record_first_capture(note_id, engram.id, content)
@@ -690,7 +768,7 @@ class MnemosRuntime:
         )
 
     def recall(self, query: str, max_results: int = 5) -> str:
-        """Recall relevant continuity and durable memories."""
+        """Recall relevant operational continuity and durable memories."""
 
         if not query.strip():
             return "Recall needs a query."
@@ -704,6 +782,7 @@ class MnemosRuntime:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=max_results,
+            exclude_promotion_candidates=True,
         )
         continuity = _filter_continuity(query, continuity)
         memories = self._retrieve(query, max_results=max_results)
@@ -745,6 +824,7 @@ class MnemosRuntime:
                 agent_id=self.scope.agent_id,
                 person_id=self.scope.person_id,
                 project_scope=self.scope.project_scope,
+                read_visibility=READ_VISIBILITY_OPERATIONAL,
             )
             if hypo is not None:
                 if action in {"forget", "archive", "remove", "delete"}:
@@ -754,10 +834,14 @@ class MnemosRuntime:
                         agent_id=self.scope.agent_id,
                         person_id=self.scope.person_id,
                         project_scope=self.scope.project_scope,
+                        read_visibility=READ_VISIBILITY_OPERATIONAL,
                     )
                     related_engram_id = hypo.get("related_engram_id") or hypo.get("graduated_to_engram_id")
                     if related_engram_id:
-                        related = self._store.get_engram(related_engram_id)
+                        related = self._store.get_engram(
+                            related_engram_id,
+                            read_visibility=READ_VISIBILITY_OPERATIONAL,
+                        )
                         if related is not None:
                             self._store.archive_engram(related, reason=f"simple_correction_{action}")
                     return f"Archived continuity note {target}."
@@ -771,10 +855,20 @@ class MnemosRuntime:
                     project_scope=self.scope.project_scope,
                     confidence=0.92,
                     salience=0.75,
+                    read_visibility=READ_VISIBILITY_OPERATIONAL,
                 )
-                return f"Updated continuity note {target}."
+                return self._finish_hypomnema_correction(
+                    target,
+                    hypo.get("related_engram_id") or hypo.get("graduated_to_engram_id"),
+                    correction,
+                    action,
+                    label="continuity note",
+                )
 
-            engram = self._store.get_engram(target)
+            engram = self._store.get_engram(
+                target,
+                read_visibility=READ_VISIBILITY_OPERATIONAL,
+            )
             if engram is not None:
                 self._store.archive_engram(engram, reason=f"simple_correction_{action}")
                 if action in {"forget", "archive", "remove", "delete"} and not correction.strip():
@@ -813,10 +907,14 @@ class MnemosRuntime:
                         agent_id=self.scope.agent_id,
                         person_id=self.scope.person_id,
                         project_scope=self.scope.project_scope,
+                        read_visibility=READ_VISIBILITY_OPERATIONAL,
                     )
                     related_engram_id = match.get("related_engram_id") or match.get("graduated_to_engram_id")
                     if related_engram_id:
-                        related = self._store.get_engram(related_engram_id)
+                        related = self._store.get_engram(
+                            related_engram_id,
+                            read_visibility=READ_VISIBILITY_OPERATIONAL,
+                        )
                         if related is not None:
                             self._store.archive_engram(related, reason=f"simple_correction_{action}")
                     maintenance = self.maintain(auto=True)
@@ -835,6 +933,7 @@ class MnemosRuntime:
                         agent_id=self.scope.agent_id,
                         person_id=self.scope.person_id,
                         project_scope=self.scope.project_scope,
+                        read_visibility=READ_VISIBILITY_OPERATIONAL,
                     )
                 else:
                     self._store.revise_hypomnema_entry(
@@ -846,31 +945,15 @@ class MnemosRuntime:
                         project_scope=self.scope.project_scope,
                         confidence=0.92,
                         salience=0.75,
+                        read_visibility=READ_VISIBILITY_OPERATIONAL,
                     )
 
-                related_engram_id = match.get("related_engram_id") or match.get("graduated_to_engram_id")
-                if related_engram_id:
-                    related = self._store.get_engram(related_engram_id)
-                    if related is not None:
-                        self._store.archive_engram(related, reason=f"simple_correction_{action}")
-
-                replacement = self._encoder.encode(
-                    content=correction.strip(),
-                    impact="Corrected continuity for future interactions.",
-                    kind=_classify_kind(correction),
-                    tags=sorted(set(["continuity", "correction", *_simple_tags(correction)])),
-                    source=SourceType.SESSION,
-                    agent_id=self.scope.agent_id,
-                    override_confidence=0.92,
-                    skip_surprise_detection=True,
-                )
-                self._store.mark_hypomnema_promoted(note_id, replacement.id)
-                maintenance = self.maintain(auto=True)
-                return (
-                    f"Updated closest continuity note {note_id}.\n"
-                    f"Memory ID: {replacement.id}\n"
-                    "Maintenance:\n"
-                    f"{_indent(maintenance)}"
+                return self._finish_hypomnema_correction(
+                    note_id,
+                    match.get("related_engram_id") or match.get("graduated_to_engram_id"),
+                    correction,
+                    action,
+                    label="closest continuity note",
                 )
 
         if action in {"forget", "archive", "remove", "delete"} and search_text:
@@ -884,6 +967,69 @@ class MnemosRuntime:
             correction.strip(),
             context=f"Correction supplied through mnemos_correct. Prior query: {query.strip()}",
             importance="high",
+        )
+
+    def _finish_hypomnema_correction(
+        self,
+        note_id: str,
+        related_engram_id: str | None,
+        correction: str,
+        action: str,
+        *,
+        label: str,
+    ) -> str:
+        assert self._store is not None
+        assert self._encoder is not None
+
+        if related_engram_id:
+            related = self._store.get_engram(
+                related_engram_id,
+                read_visibility=READ_VISIBILITY_OPERATIONAL,
+            )
+            if related is not None:
+                self._store.archive_engram(related, reason=f"simple_correction_{action}")
+
+        updated_note = self._store.get_hypomnema_entry(
+            note_id,
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+            read_visibility=None,
+        )
+        if (
+            updated_note is None
+            or updated_note.get("read_visibility") != READ_VISIBILITY_OPERATIONAL
+        ):
+            maintenance = self.maintain(auto=True)
+            visibility = (
+                updated_note.get("read_visibility")
+                if updated_note is not None
+                else "unavailable"
+            )
+            return (
+                f"Updated {label} {note_id} for review.\n"
+                f"Visibility: {visibility}\n"
+                "Maintenance:\n"
+                f"{_indent(maintenance)}"
+            )
+
+        replacement = self._encoder.encode(
+            content=correction.strip(),
+            impact="Corrected continuity for future interactions.",
+            kind=_classify_kind(correction),
+            tags=sorted(set(["continuity", "correction", *_simple_tags(correction)])),
+            source=SourceType.SESSION,
+            agent_id=self.scope.agent_id,
+            override_confidence=0.92,
+            skip_surprise_detection=True,
+        )
+        self._store.mark_hypomnema_promoted(note_id, replacement.id)
+        maintenance = self.maintain(auto=True)
+        return (
+            f"Updated {label} {note_id}.\n"
+            f"Memory ID: {replacement.id}\n"
+            "Maintenance:\n"
+            f"{_indent(maintenance)}"
         )
 
     def maintain(self, deep: bool = False, auto: bool = False) -> str:
@@ -1107,6 +1253,7 @@ class MnemosRuntime:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=limit,
+            read_visibility="operational_context",
         )
         promoted = 0
         for entry in candidates:
@@ -1278,4 +1425,3 @@ def format_health_card(data: dict[str, Any]) -> str:
         line("Last dream", dream_line),
         "Everything on this card is safe to relay to the human in plain words.",
     ])
-

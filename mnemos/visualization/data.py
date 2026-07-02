@@ -3,6 +3,8 @@ Data extraction for the Mnemos visualization dashboard.
 
 Reads engrams, connections, beliefs, and consolidation history from the
 SQLite database. Computes timeline, project groupings, and session mappings.
+Default extraction uses operational-context rows only; pass
+``include_non_operational=True`` only for explicit audit/admin dashboards.
 """
 
 from __future__ import annotations
@@ -13,18 +15,27 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from mnemos.store.read_visibility import READ_VISIBILITY_OPERATIONAL
 
-def extract_all(db_path: str, agent_id: str = "default") -> dict[str, Any]:
+
+def extract_all(
+    db_path: str,
+    agent_id: str = "default",
+    *,
+    include_non_operational: bool = False,
+) -> dict[str, Any]:
     """Extract all data needed for the dashboard from the Mnemos database."""
+    _ensure_dashboard_schema(db_path)
     db = sqlite3.connect(db_path)
     db.row_factory = sqlite3.Row
 
-    engrams = _extract_engrams(db)
-    connections = _extract_connections(db, {e["id"] for e in engrams})
-    beliefs = _extract_beliefs(db)
-    consolidation_log = _extract_consolidation_log(db)
-
-    db.close()
+    try:
+        engrams = _extract_engrams(db, include_non_operational=include_non_operational)
+        connections = _extract_connections(db, {e["id"] for e in engrams})
+        beliefs = _extract_beliefs(db, include_non_operational=include_non_operational)
+        consolidation_log = _extract_consolidation_log(db)
+    finally:
+        db.close()
 
     # Indexing state
     state_path = Path(db_path).parent / f"{agent_id}_indexing_state.json"
@@ -49,13 +60,86 @@ def extract_all(db_path: str, agent_id: str = "default") -> dict[str, Any]:
     }
 
 
-def _extract_engrams(db: sqlite3.Connection) -> list[dict]:
+def _ensure_dashboard_schema(db_path: str) -> None:
+    path = Path(db_path).expanduser()
+    if not path.exists():
+        return
+    if not _dashboard_schema_needs_migration(path):
+        return
+    from mnemos.store.sqlite_store import EngramStore
+
+    store = EngramStore(path)
+    store.close()
+
+
+def _dashboard_schema_needs_migration(path: Path) -> bool:
+    db = sqlite3.connect(path)
+    try:
+        if not _table_exists(db, "engrams"):
+            return False
+
+        from mnemos.store.sqlite_store import SCHEMA_VERSION
+
+        schema_version = _read_schema_version(db)
+        if schema_version < SCHEMA_VERSION:
+            return True
+        if schema_version > SCHEMA_VERSION:
+            return False
+
+        if not _column_exists(db, "engrams", "read_visibility"):
+            return True
+        if _table_exists(db, "beliefs") and (
+            not _column_exists(db, "beliefs", "read_visibility")
+            or not _column_exists(db, "beliefs", "confidence_pending_review")
+        ):
+            return True
+        return False
+    finally:
+        db.close()
+
+
+def _read_schema_version(db: sqlite3.Connection) -> int:
+    if not _table_exists(db, "meta"):
+        return 0
+    row = db.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+    if row is None:
+        return 0
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return -1
+
+
+def _table_exists(db: sqlite3.Connection, table: str) -> bool:
+    row = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _column_exists(db: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(row[1] == column for row in db.execute(f"PRAGMA table_info({table})"))
+
+
+def _extract_engrams(
+    db: sqlite3.Connection,
+    *,
+    include_non_operational: bool = False,
+) -> list[dict]:
     engrams = []
-    for r in db.execute(
+    query = (
         "SELECT id, content, impact, kind, tags, strength, stability, accessibility, "
         "source, created_at, last_accessed, access_count, encoding_context, "
-        "reconsolidation_count, state FROM engrams ORDER BY created_at DESC"
-    ).fetchall():
+        "reconsolidation_count, state FROM engrams"
+    )
+    params: list[Any] = []
+    if not include_non_operational:
+        query += " WHERE read_visibility = ?"
+        params.append(READ_VISIBILITY_OPERATIONAL)
+    query += " ORDER BY created_at DESC"
+
+    for r in db.execute(query, params).fetchall():
         source = _parse_json(r["source"], {})
         tags = _parse_json(r["tags"], [])
         enc_ctx = _parse_json(r["encoding_context"], {})
@@ -106,12 +190,25 @@ def _extract_connections(db: sqlite3.Connection, engram_ids: set[str]) -> list[d
     return connections
 
 
-def _extract_beliefs(db: sqlite3.Connection) -> list[dict]:
+def _extract_beliefs(
+    db: sqlite3.Connection,
+    *,
+    include_non_operational: bool = False,
+) -> list[dict]:
     beliefs = []
     try:
+        predicates = ["superseded_by IS NULL"]
+        params: list[Any] = []
+        if not include_non_operational:
+            predicates.append("read_visibility = ?")
+            predicates.append("confidence_pending_review = 0")
+            params.append(READ_VISIBILITY_OPERATIONAL)
         for r in db.execute(
             "SELECT id, content, confidence, domain, created_at, last_revised, "
-            "revision_history FROM beliefs WHERE superseded_by IS NULL ORDER BY confidence DESC"
+            "revision_history FROM beliefs WHERE "
+            + " AND ".join(predicates)
+            + " ORDER BY confidence DESC",
+            params,
         ).fetchall():
             beliefs.append({
                 "id": r["id"],
@@ -240,17 +337,23 @@ def _compute_stats(engrams: list, connections: list, beliefs: list, state: dict)
     acc_buckets = {"high (>0.7)": 0, "medium (0.3-0.7)": 0, "low (<0.3)": 0}
     for e in active:
         a = e["accessibility"]
-        if a > 0.7: acc_buckets["high (>0.7)"] += 1
-        elif a >= 0.3: acc_buckets["medium (0.3-0.7)"] += 1
-        else: acc_buckets["low (<0.3)"] += 1
+        if a > 0.7:
+            acc_buckets["high (>0.7)"] += 1
+        elif a >= 0.3:
+            acc_buckets["medium (0.3-0.7)"] += 1
+        else:
+            acc_buckets["low (<0.3)"] += 1
 
     # Strength distribution
     str_buckets = {"strong (>0.7)": 0, "moderate (0.4-0.7)": 0, "weak (<0.4)": 0}
     for e in active:
         s = e["strength"]
-        if s > 0.7: str_buckets["strong (>0.7)"] += 1
-        elif s >= 0.4: str_buckets["moderate (0.4-0.7)"] += 1
-        else: str_buckets["weak (<0.4)"] += 1
+        if s > 0.7:
+            str_buckets["strong (>0.7)"] += 1
+        elif s >= 0.4:
+            str_buckets["moderate (0.4-0.7)"] += 1
+        else:
+            str_buckets["weak (<0.4)"] += 1
 
     # Avg connections
     conn_per: Counter = Counter()

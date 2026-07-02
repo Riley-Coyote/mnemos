@@ -69,6 +69,16 @@ def _bool_from_db(value: Any, field_name: str, default: bool) -> bool:
     raise ValueError(f"{field_name} must be stored as 0 or 1")
 
 
+_VALID_READ_VISIBILITIES = {"operational_context", "review_only", "audit_only"}
+
+
+def _validate_read_visibility(value: str | None) -> str:
+    read_visibility = (value or "operational_context").strip()
+    if read_visibility not in _VALID_READ_VISIBILITIES:
+        raise ValueError(f"Unsupported read_visibility: {read_visibility}")
+    return read_visibility
+
+
 @dataclass
 class EncodingContext:
     """What was happening when this engram was formed.
@@ -317,6 +327,8 @@ class Engram:
     # Multi-agent
     owner_agent_id: str = "default"
     visibility: str = Visibility.PRIVATE
+    read_visibility: str = "operational_context"
+    """Which read surfaces may consume this engram as context."""
 
     # Lifecycle
     state: str = EngramState.ACTIVE
@@ -326,6 +338,7 @@ class Engram:
         """Ensure content_at_encoding is set from content if not provided."""
         if not self.content_at_encoding and self.content:
             self.content_at_encoding = self.content
+        self.read_visibility = _validate_read_visibility(self.read_visibility)
 
     def record_access(self) -> None:
         """Record an access event (called by retrieval pipeline)."""
@@ -405,6 +418,7 @@ class Engram:
             "lineage": json.dumps(self.lineage.to_dict()),
             "owner_agent_id": self.owner_agent_id,
             "visibility": self.visibility,
+            "read_visibility": self.read_visibility,
             "state": self.state,
         }
 
@@ -467,6 +481,7 @@ class Engram:
             lineage=Lineage.from_dict(lineage),
             owner_agent_id=d.get("owner_agent_id", "default"),
             visibility=d.get("visibility", Visibility.PRIVATE),
+            read_visibility=d.get("read_visibility", "operational_context"),
             state=d.get("state", EngramState.ACTIVE),
             connections=[],  # Loaded separately from connections table
             versions=[],  # Loaded separately from versions table

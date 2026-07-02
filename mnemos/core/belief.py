@@ -56,6 +56,16 @@ def _validate_tier(value: str | None) -> str | None:
     return value
 
 
+_VALID_READ_VISIBILITIES = {"operational_context", "review_only", "audit_only"}
+
+
+def _validate_read_visibility(value: str | None) -> str:
+    read_visibility = (value or "operational_context").strip()
+    if read_visibility not in _VALID_READ_VISIBILITIES:
+        raise ValueError(f"Unsupported read_visibility: {read_visibility}")
+    return read_visibility
+
+
 @dataclass
 class BeliefRevision:
     """A record of how a belief changed."""
@@ -139,6 +149,17 @@ class Belief:
     confidence_pending_review: bool = False
     """Set when confidence should be excluded or degraded until review."""
 
+    read_visibility: str = "operational_context"
+    """Which read surfaces may consume this belief as context."""
+
+    def __post_init__(self) -> None:
+        if (
+            self.read_visibility == "operational_context"
+            and (self.needs_review or self.confidence_pending_review)
+        ):
+            self.read_visibility = "review_only"
+        self.read_visibility = _validate_read_visibility(self.read_visibility)
+
     def revise(
         self,
         new_confidence: float,
@@ -184,6 +205,7 @@ class Belief:
             "confidence_pending_review": _bool_to_int(
                 self.confidence_pending_review, "confidence_pending_review"
             ),
+            "read_visibility": self.read_visibility,
         }
 
     @classmethod
@@ -215,4 +237,5 @@ class Belief:
                 "confidence_pending_review",
                 False,
             ),
+            read_visibility=d.get("read_visibility", "operational_context"),
         )

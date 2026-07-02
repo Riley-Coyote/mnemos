@@ -7,6 +7,10 @@ other agents to access. Respects visibility controls:
 - SHARED: all agents in the same instance can see it
 - PUBLIC: available for federation across instances
 
+Shared reads also enforce Mnemos read visibility: only
+``operational_context`` rows participate in ordinary shared-pool reads and
+conflict resolution.
+
 The shared pool handles conflict resolution when multiple agents
 create memories about the same topic with different content.
 
@@ -19,7 +23,6 @@ Architecture:
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -102,10 +105,10 @@ class SharedPool:
         query: str | None = None,
         kind: str | None = None,
     ) -> list[Engram]:
-        """Get shared memories visible to an agent.
+        """Get operational shared memories visible to an agent.
 
         Returns engrams from all agents that have been published to the
-        shared pool. The caller can check owner_agent_id to see who
+        shared pool and are operational-context rows. The caller can check owner_agent_id to see who
         created each memory.
 
         Args:
@@ -136,7 +139,8 @@ class SharedPool:
         conn = self._store._get_conn()
         sql = (
             "SELECT * FROM engrams WHERE state = 'active' "
-            "AND visibility IN ('shared', 'public')"
+            "AND visibility IN ('shared', 'public') "
+            "AND read_visibility = 'operational_context'"
         )
         params: list[Any] = []
 
@@ -155,7 +159,7 @@ class SharedPool:
         agent_id: str,
         limit: int = 20,
     ) -> list[Engram]:
-        """Get shared engrams from a specific agent.
+        """Get operational shared engrams from a specific agent.
 
         Args:
             agent_id: The agent whose shared memories to retrieve.
@@ -169,7 +173,9 @@ class SharedPool:
         conn = self._store._get_conn()
         rows = conn.execute(
             "SELECT * FROM engrams WHERE owner_agent_id = ? "
-            "AND state = 'active' ORDER BY created_at DESC LIMIT ?",
+            "AND state = 'active' "
+            "AND read_visibility = 'operational_context' "
+            "ORDER BY created_at DESC LIMIT ?",
             (agent_id, limit),
         ).fetchall()
         return [Engram.from_dict(dict(r)) for r in rows]
@@ -193,8 +199,8 @@ class SharedPool:
         """
         from ..core.engram import Connection
 
-        a = self._store.get_engram(engram_a_id)
-        b = self._store.get_engram(engram_b_id)
+        a = self._store.get_engram(engram_a_id, read_visibility="operational_context")
+        b = self._store.get_engram(engram_b_id, read_visibility="operational_context")
 
         if a is None or b is None:
             missing = engram_a_id if a is None else engram_b_id

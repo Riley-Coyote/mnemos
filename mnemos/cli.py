@@ -4,7 +4,10 @@ CLI entry point for Mnemos.
 Commands:
     mnemos init                  Initialize a new memory database
     mnemos serve                 Start MCP server (stdio mode)
-    mnemos inspect ID            Inspect a specific engram
+    mnemos inspect ID            Inspect a specific operational engram
+    mnemos inspect --review ID   Inspect a review-only engram explicitly
+    mnemos inspect --audit ID    Inspect an audit-only engram explicitly
+    mnemos inspect --admin ID    Inspect an engram regardless of read visibility
     mnemos stats                 Show memory statistics
     mnemos snapshot              Print an inline Mermaid memory snapshot
     mnemos search QUERY          Search memories
@@ -22,7 +25,7 @@ Commands:
     mnemos pai-import watch-plist    Write a launchd plist for watch-once
     mnemos pai-import watch-doctor   Run the Step 3 launch-readiness gate
     mnemos pai-import review-gate    Run diff-focused adversarial U3c gate
-    mnemos remember CONTENT      Capture durable continuity from the CLI
+    mnemos remember CONTENT      Capture continuity from the CLI
     mnemos hermes install        Install Mnemos for Hermes Agent
     mnemos hermes quickstart     Safely install Mnemos for Hermes Agent
 """
@@ -37,6 +40,11 @@ import sys
 from pathlib import Path
 
 from .config.loader import load_config
+from .store.read_visibility import (
+    READ_VISIBILITY_AUDIT,
+    READ_VISIBILITY_OPERATIONAL,
+    READ_VISIBILITY_REVIEW,
+)
 
 
 def _resolve_default_mode() -> str:
@@ -100,6 +108,29 @@ def main(argv: list[str] | None = None) -> int:
     # ── inspect ──
     p_inspect = sub.add_parser("inspect", help="Inspect a specific engram")
     p_inspect.add_argument("engram_id", help="The engram ID to inspect")
+    inspect_visibility = p_inspect.add_mutually_exclusive_group()
+    inspect_visibility.add_argument(
+        "--review",
+        action="store_const",
+        const=READ_VISIBILITY_REVIEW,
+        dest="read_visibility",
+        help="Inspect an explicitly review-only engram",
+    )
+    inspect_visibility.add_argument(
+        "--audit",
+        action="store_const",
+        const=READ_VISIBILITY_AUDIT,
+        dest="read_visibility",
+        help="Inspect an explicitly audit-only engram",
+    )
+    inspect_visibility.add_argument(
+        "--admin",
+        action="store_const",
+        const=None,
+        dest="read_visibility",
+        help="Inspect an engram regardless of read visibility",
+    )
+    p_inspect.set_defaults(read_visibility=READ_VISIBILITY_OPERATIONAL)
 
     # ── stats ──
     sub.add_parser("stats", help="Show memory statistics")
@@ -160,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── remember ──
     p_remember = sub.add_parser(
-        "remember", help="Capture durable continuity from the command line"
+        "remember", help="Capture continuity from the command line"
     )
     p_remember.add_argument("content", help="What to remember")
     p_remember.add_argument("--context", default="", help="Where/why this came up")
@@ -595,7 +626,10 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 def _cmd_inspect(args: argparse.Namespace) -> int:
     """Inspect a specific engram."""
     store = _get_store(args)
-    engram = store.get_engram(args.engram_id)
+    engram = store.get_engram(
+        args.engram_id,
+        read_visibility=getattr(args, "read_visibility", READ_VISIBILITY_OPERATIONAL),
+    )
     if engram is None:
         print(f"Engram not found: {args.engram_id}", file=sys.stderr)
         store.close()

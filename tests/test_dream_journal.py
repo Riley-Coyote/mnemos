@@ -6,6 +6,7 @@ import pytest
 
 from mnemos.core.belief import Belief, BeliefRevision
 from mnemos.dream_journal import (
+    DREAM_DOMAIN,
     DREAM_JOURNAL_TAG,
     MAX_NARRATIVE_CHARS,
     collect_belief_deltas,
@@ -28,18 +29,28 @@ def _runtime(tmp_path) -> MnemosRuntime:
 
 
 def _seed_promotion_candidate(runtime: MnemosRuntime) -> None:
-    """Plant a foundational note that _promote_candidates will graduate."""
+    """Plant a legacy operational candidate that _promote_candidates can graduate."""
 
     runtime._ensure_init()
-    runtime._store.write_hypomnema_entry(
-        "Riley always wants the dream journal verified by tests.",
+    assert runtime._store is not None
+    entry_id = runtime._store.write_hypomnema_entry(
+        "Riley uses the dream journal verification tests.",
         agent_id="nova",
         person_id="riley",
         project_scope="demo",
-        foundational=True,
-        confidence=0.9,
-        salience=0.8,
     )
+    runtime._store._get_conn().execute(
+        """
+        UPDATE hypomnema_entries
+        SET confidence = 0.9,
+            salience = 0.8,
+            foundational = 1,
+            read_visibility = 'operational_context'
+        WHERE id = ?
+        """,
+        (entry_id,),
+    )
+    runtime._store._get_conn().commit()
 
 
 def test_compose_returns_none_when_nothing_noteworthy():
@@ -202,6 +213,36 @@ def test_dream_failure_never_breaks_maintain(tmp_path, monkeypatch):
         assert "Dream journal: skipped (write failed)" in result
         assert runtime.last_dream_note_id is None
         assert runtime.last_dream_narrative is None
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("read_visibility", ["review_only", "audit_only"])
+def test_polish_dream_only_revises_operational_entries(tmp_path, read_visibility):
+    runtime = _runtime(tmp_path)
+    try:
+        runtime._ensure_init()
+        note_id = runtime._store.write_hypomnema_entry(
+            f"{read_visibility} dream",
+            agent_id=runtime.scope.agent_id,
+            person_id=runtime.scope.person_id,
+            project_scope=runtime.scope.project_scope,
+            source="synthesized",
+            domain=DREAM_DOMAIN,
+            tags=[DREAM_JOURNAL_TAG],
+            read_visibility=read_visibility,
+        )
+
+        assert runtime.polish_dream(note_id, "attempted polish") is False
+        entry = runtime._store.get_hypomnema_entry(
+            note_id,
+            agent_id=runtime.scope.agent_id,
+            person_id=runtime.scope.person_id,
+            project_scope=runtime.scope.project_scope,
+            read_visibility=None,
+        )
+        assert entry is not None
+        assert entry["content"] == f"{read_visibility} dream"
     finally:
         runtime.close()
 

@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any
 import ulid as _ulid_mod
 
 from .core.identity import AgentIdentity, MemoryProfile
+from .store.read_visibility import READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW
 
 if TYPE_CHECKING:
     from .simple_runtime import MnemosScope
@@ -665,6 +666,7 @@ def _find_active_note(store: EngramStore, scope: MnemosScope) -> dict | None:
         person_id=scope.person_id,
         project_scope=scope.project_scope,
         limit=50,
+        read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
     )
     for entry in entries:
         if NOTE_TAG in (entry.get("tags") or []):
@@ -941,7 +943,7 @@ def run_diff_command(args: argparse.Namespace) -> int:
             if note_id:
                 print(
                     f"Continuity note written ({note_id}): divergences will "
-                    "surface at next mnemos_context."
+                    "stay in explicit identity review/acceptance surfaces."
                 )
             if report.divergences:
                 print(

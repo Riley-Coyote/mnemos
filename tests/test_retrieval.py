@@ -1,5 +1,9 @@
 """Tests for reactive retrieval."""
-import pytest
+
+from mnemos.core.belief import Belief
+from mnemos.core.engram import Engram
+from mnemos.core.types import ConnectionRelation
+from mnemos.interface.prompt_builder import PromptBuilder
 
 
 class TestReactiveRetriever:
@@ -55,3 +59,168 @@ class TestReactiveRetriever:
         assert retrieval_edges, "co-retrieval created no edges"
         assert all(c.relation == "co_activated" for c in retrieval_edges)
         assert not any(c.relation == "supports" for c in retrieval_edges)
+
+    def test_retrieval_excludes_review_only_fts_and_propagation(
+        self, store, retriever
+    ):
+        """Review-only engrams cannot enter retrieval as seeds or graph targets."""
+        operational = Engram(
+            content="Operational afferent membrane seed",
+            owner_agent_id="default",
+            read_visibility="operational_context",
+        )
+        review_seed = Engram(
+            content="Review-only afferent membrane seed with hidden prose",
+            owner_agent_id="default",
+            read_visibility="review_only",
+        )
+        review_target = Engram(
+            content="Review-only propagation target with hidden prose",
+            owner_agent_id="default",
+            read_visibility="review_only",
+        )
+        operational.add_connection(
+            review_target.id,
+            ConnectionRelation.SUPPORTS,
+            strength=1.0,
+            formed_by="test",
+        )
+        store.save_engram(review_target)
+        store.save_engram(review_seed)
+        store.save_engram(operational)
+
+        results = retriever.retrieve(
+            "afferent membrane seed",
+            agent_id="default",
+            max_results=10,
+        )
+        contents = [result.engram.content for result in results]
+
+        assert "Operational afferent membrane seed" in contents
+        assert "Review-only afferent membrane seed with hidden prose" not in contents
+        assert "Review-only propagation target with hidden prose" not in contents
+
+        review_results = retriever.retrieve(
+            "afferent membrane seed",
+            agent_id="default",
+            max_results=10,
+            read_visibility="review_only",
+        )
+        assert [result.engram.id for result in review_results] == [review_seed.id]
+
+    def test_review_and_audit_rows_do_not_seed_operational_retrieval(
+        self, store, retriever
+    ):
+        operational = Engram(
+            content="Operational retrieval seed for afferent proof",
+            owner_agent_id="default",
+            read_visibility="operational_context",
+        )
+        review_seed = Engram(
+            content="Review-only retrieval seed must not operationally rank",
+            owner_agent_id="default",
+            read_visibility="review_only",
+        )
+        audit_seed = Engram(
+            content="Audit-only retrieval seed must not operationally rank",
+            owner_agent_id="default",
+            read_visibility="audit_only",
+        )
+        audit_target = Engram(
+            content="Audit-only propagation target must not operationally rank",
+            owner_agent_id="default",
+            read_visibility="audit_only",
+        )
+        operational.add_connection(
+            audit_target.id,
+            ConnectionRelation.SUPPORTS,
+            strength=1.0,
+            formed_by="test",
+        )
+        store.save_engram(review_seed)
+        store.save_engram(audit_seed)
+        store.save_engram(audit_target)
+        store.save_engram(operational)
+
+        results = retriever.retrieve(
+            "retrieval seed afferent proof",
+            agent_id="default",
+            max_results=10,
+        )
+        contents = {result.engram.content for result in results}
+
+        assert "Operational retrieval seed for afferent proof" in contents
+        assert "Review-only retrieval seed must not operationally rank" not in contents
+        assert "Audit-only retrieval seed must not operationally rank" not in contents
+        assert "Audit-only propagation target must not operationally rank" not in contents
+
+    def test_retrieval_does_not_bridge_through_review_only_engram(
+        self, store, retriever
+    ):
+        operational_seed = Engram(
+            content="Operational membrane bridge seed",
+            owner_agent_id="default",
+            read_visibility="operational_context",
+        )
+        review_bridge = Engram(
+            content="Review-only membrane bridge hidden middle",
+            owner_agent_id="default",
+            read_visibility="review_only",
+        )
+        operational_downstream = Engram(
+            content="Operational downstream should not rank",
+            owner_agent_id="default",
+            read_visibility="operational_context",
+        )
+        operational_seed.add_connection(
+            review_bridge.id,
+            ConnectionRelation.SUPPORTS,
+            strength=1.0,
+            formed_by="test",
+        )
+        review_bridge.add_connection(
+            operational_downstream.id,
+            ConnectionRelation.SUPPORTS,
+            strength=1.0,
+            formed_by="test",
+        )
+        store.save_engram(operational_downstream)
+        store.save_engram(review_bridge)
+        store.save_engram(operational_seed)
+
+        results = retriever.retrieve(
+            "membrane bridge seed",
+            agent_id="default",
+            max_results=10,
+        )
+        result_ids = {result.engram.id for result in results}
+
+        assert operational_seed.id in result_ids
+        assert review_bridge.id not in result_ids
+        assert operational_downstream.id not in result_ids
+
+    def test_prompt_builder_hides_review_only_beliefs_and_engrams(self, store):
+        """PromptBuilder inherits operational visibility for all producer reads."""
+        store.save_belief(
+            Belief(
+                content="Review-only belief must not enter the prompt",
+                confidence=0.99,
+                read_visibility="review_only",
+            )
+        )
+        store.save_engram(
+            Engram(
+                content="Review-only prompt leak anchor",
+                owner_agent_id="default",
+                read_visibility="review_only",
+            )
+        )
+
+        prompt = PromptBuilder(store).build(
+            "prompt leak anchor",
+            agent_id="default",
+            token_budget=1000,
+        )
+
+        assert "Review-only belief" not in prompt
+        assert "Review-only prompt leak anchor" not in prompt

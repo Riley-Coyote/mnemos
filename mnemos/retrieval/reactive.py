@@ -9,19 +9,17 @@ and what lights up after N hops is what's relevant.
 The graph structure IS the relevance model. No formula needed.
 
 Pipeline:
-1. FTS search → seed nodes
-2. Spreading activation through connection graph (3 hops)
+1. Read-visibility filter → FTS search seed nodes
+2. Spreading activation through visible connection graph (3 hops)
 3. Emotional bias applied multiplicatively
 4. Threshold → return activated engrams
-5. Reconsolidation on all returned engrams
+5. Reconsolidation on all returned visible engrams
 """
 
 from __future__ import annotations
 
-import math
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from ..core.engram import Engram
@@ -65,8 +63,9 @@ class ReactiveRetriever:
 
     Instead of scoring candidates with a weighted formula, retrieval
     works through spreading activation in the connection graph. FTS
-    finds seed nodes, activation spreads through typed connections,
-    and what lights up is what's relevant.
+    finds visible seed nodes, activation spreads through typed connections
+    whose targets are visible to the requested read surface, and what lights up
+    is what's relevant.
 
     Usage:
         retriever = ReactiveRetriever(store)
@@ -99,15 +98,20 @@ class ReactiveRetriever:
         agent_id: str = "default",
         max_results: int = 10,
         emotional_state: EmotionalState | None = None,
+        read_visibility: str | None = "operational_context",
     ) -> list[RetrievalResult]:
-        """Retrieve memories via resonance — spreading activation through the graph.
+        """Retrieve memories via resonance through the visible graph.
 
         Pipeline:
-        1. FTS search → seed nodes (entry points into the graph)
-        2. Spreading activation (3 hops, decay per hop, weighted by relation)
+        1. FTS search with read visibility → seed nodes
+        2. Spreading activation through visible targets
         3. Emotional bias (multiplicative boost for congruent tags)
         4. Filter by threshold + confidence floor
         5. Reconsolidate returned engrams
+
+        ``read_visibility`` defaults to ``operational_context``. Pass
+        ``review_only`` only for explicit review surfaces; pass ``None`` only
+        for audit/admin scans that intentionally include all visibilities.
 
         Returns:
             List of RetrievalResult sorted by activation level (descending).
@@ -120,7 +124,11 @@ class ReactiveRetriever:
 
         # FTS seeds (keyword matching)
         fts_query = _to_fts_query(cue)
-        fts_results = self._store.search_fts(fts_query, limit=30)
+        fts_results = self._store.search_fts(
+            fts_query,
+            limit=30,
+            read_visibility=read_visibility,
+        )
         for engram in fts_results:
             if engram.owner_agent_id == agent_id:
                 seeds[engram.id] = engram
@@ -128,7 +136,11 @@ class ReactiveRetriever:
         # Shared DB seeds (cross-agent shared memories)
         if self._shared_store:
             try:
-                shared_fts = self._shared_store.search_fts(fts_query, limit=20)
+                shared_fts = self._shared_store.search_fts(
+                    fts_query,
+                    limit=20,
+                    read_visibility=read_visibility,
+                )
                 for engram in shared_fts:
                     if engram.visibility in ("shared", "public") and engram.id not in seeds:
                         seeds[engram.id] = engram
@@ -143,7 +155,10 @@ class ReactiveRetriever:
                 )
                 for eid, similarity in embedding_hits:
                     if similarity > 0.3 and eid not in seeds:  # Threshold for relevance
-                        engram = self._store.get_engram(eid)
+                        engram = self._store.get_engram(
+                            eid,
+                            read_visibility=read_visibility,
+                        )
                         if engram and engram.state == "active" and engram.owner_agent_id == agent_id:
                             seeds[eid] = engram
             except Exception:
@@ -154,6 +169,20 @@ class ReactiveRetriever:
 
         # 2. PROPAGATE: Spreading activation through connection graph
         activation: dict[str, float] = {}
+        visible_engrams: dict[str, Engram] = dict(seeds)
+        hidden_engram_ids: set[str] = set()
+
+        def visible_engram(eid: str) -> Engram | None:
+            if eid in visible_engrams:
+                return visible_engrams[eid]
+            if eid in hidden_engram_ids:
+                return None
+            engram = self._load_visible_engram(eid, agent_id, read_visibility)
+            if engram is None:
+                hidden_engram_ids.add(eid)
+                return None
+            visible_engrams[eid] = engram
+            return engram
 
         # Seeds start at activation 1.0
         for seed_id in seeds:
@@ -166,6 +195,8 @@ class ReactiveRetriever:
 
             for engram_id, current_act in list(activation.items()):
                 if current_act < self._threshold:
+                    continue
+                if visible_engram(engram_id) is None:
                     continue
 
                 connections = self._store.get_connections(engram_id)
@@ -181,6 +212,9 @@ class ReactiveRetriever:
                     propagated = current_act * hop_decay * conn.strength * relation_weight
 
                     if propagated > self._threshold * 0.5:
+                        target = visible_engram(conn.target_id)
+                        if target is None:
+                            continue
                         new_activation[conn.target_id] += propagated
 
             # Merge new activations (additive — multiple paths reinforce)
@@ -192,7 +226,7 @@ class ReactiveRetriever:
             bias = emotional_state.get_retrieval_bias()
             if bias:
                 for eid in list(activation.keys()):
-                    engram = seeds.get(eid) or self._store.get_engram(eid)
+                    engram = visible_engram(eid)
                     if engram and engram.tags:
                         overlap = sum(bias.get(tag, 0.0) for tag in engram.tags)
                         if overlap > 0:
@@ -204,17 +238,8 @@ class ReactiveRetriever:
             if act_level < self._threshold:
                 continue
 
-            engram = seeds.get(eid)
+            engram = visible_engram(eid)
             if not engram:
-                engram = self._store.get_engram(eid)
-            # Cross-DB: check shared store if not found in private
-            if not engram and self._shared_store:
-                engram = self._shared_store.get_engram(eid)
-
-            if not engram or engram.state != "active":
-                continue
-            # Allow own engrams + shared/public from other agents
-            if engram.owner_agent_id != agent_id and engram.visibility == "private":
                 continue
 
             if engram.source.confidence < self._confidence_floor:
@@ -258,6 +283,33 @@ class ReactiveRetriever:
                 )
 
         return top_results
+
+    def _load_visible_engram(
+        self,
+        eid: str,
+        agent_id: str,
+        read_visibility: str | None,
+    ) -> Engram | None:
+        engram = self._store.get_engram(eid, read_visibility=read_visibility)
+        if engram and self._can_retrieve(engram, agent_id):
+            return engram
+        if self._shared_store:
+            try:
+                engram = self._shared_store.get_engram(
+                    eid,
+                    read_visibility=read_visibility,
+                )
+            except Exception:
+                engram = None
+            if engram and self._can_retrieve(engram, agent_id):
+                return engram
+        return None
+
+    @staticmethod
+    def _can_retrieve(engram: Engram, agent_id: str) -> bool:
+        if engram.state != "active":
+            return False
+        return engram.owner_agent_id == agent_id or engram.visibility != "private"
 
 
 def _to_fts_query(cue: str) -> str:

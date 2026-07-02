@@ -129,6 +129,7 @@ You have access to Mnemos MCP memory tools.
 At the start of this session, call mnemos_context.
 If Mnemos asks you to introduce yourself, call mnemos_introduce with your own model id and name.
 Use mnemos_capture for stable preferences, decisions, project state, workflows, corrections, and context I should not have to repeat.
+If Mnemos says a capture is for review, leave that prose pending until an explicit review surface exposes it.
 Use mnemos_recall before relying on memory from prior sessions.
 Use mnemos_correct when a remembered fact is stale, wrong, superseded, or should be forgotten.
 Use mnemos_health if I ask whether memory is working.

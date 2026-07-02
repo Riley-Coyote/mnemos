@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..core.types import ConnectionRelation, DEFAULT_AGENT_ID
 from ..encoding.llm_classifier import classify_connections
+from ..store.read_visibility import READ_VISIBILITY_OPERATIONAL
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -73,7 +74,10 @@ def run_connection_discovery(
     # ── Phase A: Discover new connections for underconnected engrams ──
     underconnected = []
     for engram in all_active:
-        existing = store.get_connections(engram.id)
+        existing = store.get_connections(
+            engram.id,
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
+        )
         if len(existing) < max_per_engram:
             underconnected.append((engram, existing))
 
@@ -89,7 +93,10 @@ def run_connection_discovery(
             )
             for eid, score in emb_results:
                 if eid not in existing_target_ids and score > 0.3:
-                    candidate = store.get_engram(eid)
+                    candidate = store.get_engram(
+                        eid,
+                        read_visibility="operational_context",
+                    )
                     if _same_mutable_scope(engram, candidate):
                         candidates.append(candidate)
                         stats["embedding_candidates"] += 1
@@ -99,7 +106,11 @@ def run_connection_discovery(
         if words:
             query = " OR ".join(f'"{w}"' for w in words[:8])
             try:
-                fts_results = store.search_fts(query, limit=10)
+                fts_results = store.search_fts(
+                    query,
+                    limit=10,
+                    read_visibility=READ_VISIBILITY_OPERATIONAL,
+                )
                 for match in fts_results:
                     if (
                         match.id != engram.id
@@ -193,7 +204,10 @@ def _reclassify_old_connections(
         if reclassified_count >= batch_size:
             break
 
-        connections = store.get_connections(engram.id)
+        connections = store.get_connections(
+            engram.id,
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
+        )
         raw_connections = [
             c for c in connections
             if c.relation in _RECLASSIFIABLE_RELATIONS
@@ -205,7 +219,10 @@ def _reclassify_old_connections(
         # Load the target engrams
         targets = []
         for conn in raw_connections:
-            target = store.get_engram(conn.target_id)
+            target = store.get_engram(
+                conn.target_id,
+                read_visibility="operational_context",
+            )
             if _same_mutable_scope(engram, target):
                 targets.append(target)
 
@@ -243,6 +260,8 @@ def _same_mutable_scope(source: Any, candidate: Any | None) -> bool:
     if candidate is None:
         return False
     return (
-        bool(candidate.consolidation_authorized)
+        getattr(source, "read_visibility", "operational_context") == "operational_context"
+        and getattr(candidate, "read_visibility", "operational_context") == "operational_context"
+        and bool(candidate.consolidation_authorized)
         and candidate.owner_agent_id == source.owner_agent_id
     )

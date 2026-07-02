@@ -203,6 +203,7 @@ class Substrate:
               AND accessibility > 0.1
               AND decay_protected = 0
               AND consolidation_authorized = 1
+              AND read_visibility = 'operational_context'
         """, (self.config.decay_rate, self.config.decay_rate, self.config.agent_id))
         decay_count = decayed.rowcount
         conn.commit()
@@ -216,6 +217,7 @@ class Substrate:
               AND (accessibility * strength) > 0.01
               AND softening_protected = 0
               AND consolidation_authorized = 1
+              AND read_visibility = 'operational_context'
             ORDER BY RANDOM()
             LIMIT 3
         """, (self.config.agent_id,)).fetchall()
@@ -238,6 +240,7 @@ class Substrate:
             WHERE state = 'active'
               AND owner_agent_id = ?
               AND consolidation_authorized = 1
+              AND read_visibility = 'operational_context'
             ORDER BY created_at DESC
             LIMIT ?
         """, (self.config.agent_id, self.config.connection_discovery_limit)).fetchall()
@@ -245,14 +248,20 @@ class Substrate:
 
         new_connections = 0
         for row in recent[:5]:
-            engram = self.store.get_engram(row[0])
+            engram = self.store.get_engram(
+                row[0],
+                read_visibility="operational_context",
+            )
             if not engram:
                 continue
             try:
                 similar = self.embedding_index.search(engram.content, limit=3)
                 for match in similar:
                     if match["id"] != row[0]:
-                        matched_engram = self.store.get_engram(match["id"])
+                        matched_engram = self.store.get_engram(
+                            match["id"],
+                            read_visibility="operational_context",
+                        )
                         if (
                             not matched_engram
                             or matched_engram.owner_agent_id != self.config.agent_id
@@ -292,7 +301,10 @@ class Substrate:
                 results = self.embedding_index.search(belief.content, limit=3)
                 for match in results:
                     if match.get("score", 0) > 0.6:
-                        engram = self.store.get_engram(match["id"])
+                        engram = self.store.get_engram(
+                            match["id"],
+                            read_visibility="operational_context",
+                        )
                         if engram and engram.impact:
                             reviewed += 1
             except Exception:
@@ -312,6 +324,7 @@ class Substrate:
             WHERE state = 'active'
               AND owner_agent_id = ?
               AND consolidation_authorized = 1
+              AND read_visibility = 'operational_context'
             ORDER BY created_at DESC
             LIMIT 1
         """, (self.config.agent_id,)).fetchone()

@@ -49,6 +49,18 @@ The fundamental unit of memory. Each engram has:
   `voice_exemplar_eligible`, and consolidation/substrate mutation paths require
   `consolidation_authorized` so imported identity material is not silently
   rewritten by background maintenance.
+- **Afferent Membrane controls** (schema v6/v7): producer-fed rows carry
+  `read_visibility` (`operational_context`, `review_only`, or `audit_only`).
+  Operational retrieval, packets, consolidation, substrate producers, and
+  modulators read only `operational_context` rows by default; review APIs opt
+  in explicitly. Stable promotion candidates and identity/foundational live
+  hypomnema writes classify to `review_only` by default, while the bare
+  hypomnema SQL default stays `operational_context` for legacy compatibility;
+  omitted-visibility callers still pass through the write-time classifier
+  before ordinary use. Proposed
+  durable transitions are tracked in
+  `proposal_ledger` with authority, target surface, transition, blast radius,
+  visibility, status, reason, gate version, provenance, and payload fields.
 - **PAI coordinate guard**: before imported text becomes retrievable rows, the
   splitter strips Strict-B eigenvalue, vivezza, coordinate-target, and
   persona-signature tuple-value lines from any source kind. These values are
@@ -75,7 +87,8 @@ Higher-order knowledge structures extracted from patterns across engrams:
   `needs_review`, and `confidence_pending_review` mark beliefs whose
   upstream source has changed but has not been re-reviewed by the operator.
   Default `get_beliefs()` consumers exclude pending-confidence beliefs;
-  belief review opts in so it can resolve them and clear the pending flags.
+  belief review opts in so it can resolve them, clear the pending flags, and
+  move approved rows back to operational read visibility.
 
 ### Encoding Pipeline
 
@@ -83,9 +96,33 @@ Content → LLM classification → engram creation → connection discovery → 
 
 ### Retrieval
 
-Cue → FTS5 search + embedding similarity → scoring (accessibility, emotional congruence, recency) → reconsolidation → results
+Cue → read-visibility prefilter → FTS5 search + embedding similarity → graph
+activation/scoring → reconsolidation → results
 
-Every retrieval updates the memory — access count, strength, new connections. Memories are living traces.
+Operational retrieval uses `read_visibility="operational_context"` before FTS,
+embedding hits, graph propagation, scoring, and reconsolidation. Explicit
+review callers can request `review_only`; audit-only rows stay out of normal
+review flows.
+
+Every retrieval updates the returned visible memory — access count, strength,
+new connections. Operational paths return operational rows. Memories are living
+traces.
+
+### Operational Context And Review
+
+Context packets have two modes:
+
+- `operational`: the default for agents. It includes normal functional memory,
+  hypomnema, beliefs, and engrams, plus review counts/source IDs with prose
+  withheld.
+- `review`: the explicit operator surface. It can include review-only
+  confirmation and promotion-candidate prose with labels and provenance cues.
+
+`proposal_ledger` holds candidate durable transitions separately from the
+operational packet so generated or review-shaped material can be audited before
+it becomes operating context. Audit-only proposal rows require the explicit
+`mnemos_proposal_audit` admin/audit surface and do not appear in ordinary
+operational or review packets.
 
 ## Layer 2: Substrate (Inner Life / Consolidation)
 

@@ -11,6 +11,7 @@ from mnemos.core.emotional_state import EmotionalState
 from mnemos.core.belief import Belief
 from mnemos.core.engram import Connection, Engram
 from mnemos.core.identity import AgentIdentity
+from mnemos.core.types import ConnectionRelation
 from mnemos.substrate.events import EventType, SubstrateEvent
 from mnemos.store.migrations import (
     U3A_PHASE0_DECAY_FINDING,
@@ -344,9 +345,9 @@ def test_u3a_migration_and_row_map_are_idempotent(tmp_path):
     conn = store._get_conn()
     try:
         assert any(m["version"] == 4 for m in list_migrations())
-        # Re-run target_version=5 (current SCHEMA_VERSION) — should be no-op
+        # Re-run target_version=7 (current SCHEMA_VERSION) — should be no-op
         # since EngramStore.__init__ already migrated to latest.
-        assert run_migrations(conn, target_version=5) == []
+        assert run_migrations(conn, target_version=7) == []
         apply_u3a_schema_migration(conn)
         apply_u3a_schema_migration(conn)
 
@@ -640,7 +641,7 @@ def test_legacy_v3_db_opens_and_migrates_through_engram_store(tmp_path):
 
     store = EngramStore(db_path)
     try:
-        assert store.get_meta("schema_version") == "5"
+        assert store.get_meta("schema_version") == "7"
         legacy = store.get_engram("legacy_e")
         assert legacy is not None
         assert legacy.voice_exemplar_eligible is True
@@ -677,7 +678,7 @@ def test_backed_up_legacy_db_rehearsal_preserves_u3a_sentinels(tmp_path, monkeyp
     store = EngramStore(backup_db)
     sentinel_ids: set[str] = set()
     try:
-        assert store.get_meta("schema_version") == "5"
+        assert store.get_meta("schema_version") == "7"
         assert store._get_conn().execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert store.get_engram("legacy_e") is not None
 
@@ -793,11 +794,11 @@ def test_migration_version_guards(tmp_path):
     empty = sqlite3.connect(tmp_path / "empty.db")
     empty.row_factory = sqlite3.Row
     try:
-        # Bootstrap empty DB to the current latest schema (v5).
-        assert run_migrations(empty, target_version=5) == [4, 5]
+        # Bootstrap empty DB to the current latest schema (v7).
+        assert run_migrations(empty, target_version=7) == [4, 5, 6, 7]
         assert empty.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
-        ).fetchone()["value"] == "5"
+        ).fetchone()["value"] == "7"
         row_map_cols = _column_map(empty, "pai_import_row_map")
         assert "content_at_last_import" in row_map_cols
         assert "tombstone_at" in row_map_cols
@@ -849,15 +850,16 @@ def test_migration_version_guards(tmp_path):
 
 
 def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
-    """v5 hardening exists as a real migration now; use slot 6 to test failure
-    isolation — the DB rolls back to v5 (current latest) when a hypothetical
-    v6 migration fails partway through.
+    """v7 is real now; use slot 8 to test failure isolation.
+
+    The DB rolls back to v7 (current latest) when a hypothetical v8 migration
+    fails partway through.
     """
     db_path = tmp_path / "rollback.db"
     store = EngramStore(db_path)
     store.close()
 
-    previous = migrations._MIGRATIONS.get(6)
+    previous = migrations._MIGRATIONS.get(8)
 
     def fail_after_writes(conn):
         conn.execute("CREATE TABLE u3a_failure_probe (id TEXT PRIMARY KEY)")
@@ -866,14 +868,14 @@ def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
         )
         raise ValueError("synthetic migration failure")
 
-    migrations._MIGRATIONS[6] = ("synthetic failing migration", fail_after_writes)
+    migrations._MIGRATIONS[8] = ("synthetic failing migration", fail_after_writes)
     conn = sqlite3.connect(db_path)
     try:
-        with pytest.raises(RuntimeError, match="Migration 6 failed"):
-            run_migrations(conn, target_version=6)
+        with pytest.raises(RuntimeError, match="Migration 8 failed"):
+            run_migrations(conn, target_version=8)
         assert conn.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
-        ).fetchone()[0] == "5"
+        ).fetchone()[0] == "7"
         assert not conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'u3a_failure_probe'"
         ).fetchone()
@@ -883,9 +885,9 @@ def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
     finally:
         conn.close()
         if previous is None:
-            del migrations._MIGRATIONS[6]
+            del migrations._MIGRATIONS[8]
         else:
-            migrations._MIGRATIONS[6] = previous
+            migrations._MIGRATIONS[8] = previous
 
 
 def test_future_schema_store_open_fails_before_mutating_schema(tmp_path):
@@ -1175,6 +1177,129 @@ def test_connection_discovery_skips_unauthorized_sources_and_targets(tmp_path):
         assert stats["engrams_processed"] == 1
         assert store.get_connections(source.id) == []
         assert store.get_connections(unauthorized_source.id) == []
+    finally:
+        store.close()
+
+
+def test_connection_discovery_excludes_review_only_embedding_candidates(tmp_path):
+    class StubEmbeddingIndex:
+        available = True
+
+        def __init__(self, hits):
+            self.hits = hits
+
+        def search(self, _query, k=10, exclude_ids=None):
+            excluded = exclude_ids or set()
+            return [(eid, score) for eid, score in self.hits if eid not in excluded][:k]
+
+    store = EngramStore(tmp_path / "connections-visibility.db")
+    source = _old_engram(
+        "operational source for embedding discovery",
+        owner_agent_id="oliver",
+        accessibility=0.95,
+    )
+    review_candidate = _old_engram(
+        "review only embedding candidate hidden from producers",
+        owner_agent_id="oliver",
+        read_visibility="review_only",
+    )
+    operational_candidate = _old_engram(
+        "operational embedding candidate can connect",
+        owner_agent_id="oliver",
+        read_visibility="operational_context",
+    )
+    for engram in (source, review_candidate, operational_candidate):
+        store.save_engram(engram)
+
+    try:
+        stats = run_connection_discovery(
+            store,
+            embedding_index=StubEmbeddingIndex([
+                (review_candidate.id, 0.95),
+                (operational_candidate.id, 0.95),
+            ]),
+            config={"max_engrams_per_discovery_pass": 1},
+            llm_client=None,
+            agent_id="oliver",
+        )
+        targets = {connection.target_id for connection in store.get_connections(source.id)}
+        assert stats["embedding_candidates"] == 1
+        assert operational_candidate.id in targets
+        assert review_candidate.id not in targets
+    finally:
+        store.close()
+
+
+def test_connection_discovery_counts_only_operational_existing_edges(tmp_path):
+    class StubEmbeddingIndex:
+        available = True
+
+        def __init__(self, hits):
+            self.hits = hits
+
+        def search(self, _query, k=10, exclude_ids=None):
+            excluded = exclude_ids or set()
+            return [(eid, score) for eid, score in self.hits if eid not in excluded][:k]
+
+    store = EngramStore(tmp_path / "connections-hidden-edge-count.db")
+    source = _old_engram(
+        "operational source with hidden existing edges",
+        owner_agent_id="oliver",
+        accessibility=0.99,
+    )
+    review_target = _old_engram(
+        "review only existing target should not satisfy connectivity",
+        owner_agent_id="oliver",
+        read_visibility="review_only",
+        accessibility=0.4,
+    )
+    audit_target = _old_engram(
+        "audit only existing target should not satisfy connectivity",
+        owner_agent_id="oliver",
+        read_visibility="audit_only",
+        accessibility=0.4,
+    )
+    operational_target = _old_engram(
+        "operational target should be discovered despite hidden edges",
+        owner_agent_id="oliver",
+        accessibility=0.3,
+    )
+    for engram in (source, review_target, audit_target, operational_target):
+        store.save_engram(engram)
+    for target in (review_target, audit_target):
+        store.save_connection(
+            source.id,
+            Connection(
+                target_id=target.id,
+                relation=ConnectionRelation.SUPPORTS,
+                strength=0.7,
+            ),
+        )
+
+    try:
+        stats = run_connection_discovery(
+            store,
+            embedding_index=StubEmbeddingIndex([(operational_target.id, 0.95)]),
+            config={
+                "max_engrams_per_discovery_pass": 1,
+                "max_connections_per_engram": 2,
+            },
+            llm_client=None,
+            agent_id="oliver",
+        )
+        operational_targets = {
+            connection.target_id
+            for connection in store.get_connections(
+                source.id,
+                read_visibility="operational_context",
+            )
+        }
+        all_targets = {connection.target_id for connection in store.get_connections(source.id)}
+
+        assert stats["engrams_processed"] == 1
+        assert stats["embedding_candidates"] == 1
+        assert operational_targets == {operational_target.id}
+        assert all_targets == {review_target.id, audit_target.id, operational_target.id}
     finally:
         store.close()
 

@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### Afferent Membrane v1
+- Schema v6 adds first-class `read_visibility` to `engrams`, `beliefs`,
+  `hypomnema_entries`, and `functional_memories`, plus a `proposal_ledger`
+  table for durable-affecting candidates with authority, target surface,
+  transition, blast radius, status, gate version, provenance, and payload
+  fields.
+- Schema v7 normalizes the U2.5 proposal quarantine contract: unclassified
+  proposal rows default to `audit_only`, raw proposal writes cannot mint
+  approved/applied terminal states, and terminal proposal rows are immutable.
+- Operational reads now filter to `operational_context` before retrieval
+  ranking, context packet assembly, prompt building, simple runtime context
+  and recall, visual snapshots, shared-pool reads, substrate/consolidation
+  producers, and modulators. Explicit review surfaces can opt into
+  `review_only`; `audit_only` remains excluded from ordinary review queues.
+- `mnemos_context_packet` accepts `packet_mode="operational"|"review"`.
+  Operational packets keep review counts and source IDs while withholding
+  pending prose; review packets expose candidate prose with review-only
+  labels. Visual snapshots apply the same redaction boundary.
+- `mnemos_proposal_audit` is the explicit audit/admin MCP surface for
+  audit-only proposal ledger rows; ordinary operational packets, review
+  packets, review queues, and visual snapshots still omit them.
+- Functional memories needing confirmation and hypomnema promotion candidates
+  are quarantined from operational packet bodies and simple runtime recall
+  until they are reviewed or promoted through an explicit surface.
+- Simple-mode first-capture verification stores no prose for non-operational
+  captures. After restart, review-only first captures emit an existence-only
+  review cue; operational first captures still quote the original excerpt.
+- Live hypomnema writes now classify stable promotion candidates and
+  identity/foundational rows as `review_only` unless the caller explicitly
+  supplies a visibility. The raw `hypomnema_entries` SQL default remains
+  `operational_context` for legacy compatibility; omitted-visibility callers
+  still go through the store classifier before rows can enter ordinary context.
+- Direct-ID advanced MCP tools (`mnemos_inspect`, `mnemos_forget`, and the
+  hypomnema revise/supersede/promote mutators), shared-pool connect helpers,
+  and substrate handlers (insight, reflection, surprise, wandering, dreaming,
+  initiation) now look up engrams with `read_visibility="operational_context"`
+  so review-only and audit-only rows cannot be mutated, dreamt over, or
+  reflected on through an operational call path.
+
 ### MCP Server
 - Advanced MCP tools now inherit the server's configured `agent_id`,
   `person_id`, and `project_scope` when callers leave scope args at their
@@ -22,7 +61,7 @@
 ### Simple Mode Magic UX (5 → 7 tools)
 - Onboarding ritual — a fresh scope's first context packet walks the agent through a short get-to-know-you script (name, current work, durable facts); stores that predate onboarding are grandfathered and never see it
 - mnemos_introduce — the agent declares its own model id and name; the declaration feeds the substrate-affinity gate so maintenance stays kin (an explicit MNEMOS_AGENT_MODEL still takes precedence)
-- Cross-session memory verification — the first context packet after a real restart quotes the very first capture back to the human, once, as proof that memory survived the goodbye
+- Cross-session memory verification — the first context packet after a real restart quotes an operational first capture back once, or emits an existence-only review cue when the first capture is review-only
 - Dream journal — consolidation cycles that did meaningful work leave a short first-person narrative, surfaced in the next context packet ("While you were away") and optionally polished by the host model via MCP sampling
 - mnemos_health — truly read-only, human-relayable health card: store location and size, memory counts, last maintenance cycle and who performed it, affinity verdict, onboarding and verification progress, latest dream entry
 

@@ -37,6 +37,8 @@ At the start of a meaningful work block:
 During the session:
 
 - Use `mnemos_capture` for stable preferences, decisions, lessons, project state, workflows, corrections, commitments, and context the human should not have to repeat.
+- If `mnemos_capture` reports `Captured continuity for review`, treat the note
+  as pending: do not quote or act on its prose from ordinary context.
 - Use `mnemos_recall` before relying on memory from prior sessions.
 - Use `mnemos_correct` when remembered continuity is stale, wrong, superseded, or should be forgotten.
 - Use `mnemos_health` when the human asks whether memory is working.
@@ -53,6 +55,9 @@ At the end of a work block:
 - If a memory is inferred, say so in the capture text or ask the human before storing it.
 - If the human corrects a memory, use `mnemos_correct` immediately.
 - If two memories conflict, prefer the most recent explicit human correction.
+- Treat review-only items as pending decisions. Operational packets may show
+  counts and source IDs, but the prose should only be inspected through an
+  explicit review surface.
 
 ## Visual Checks
 
@@ -62,7 +67,7 @@ Use `mnemos_context(include_graph=true)` to show the current architecture:
 - hypomnema scope and promotion candidates
 - Mnemos graph size
 - identity signals and beliefs
-- review queue
+- review queue counts/source IDs, with prose withheld from operational views
 
 The graph is returned as an SVG artifact plus structured data for clients that
 support visual tool results. Advanced mode still provides `mnemos_visual_snapshot`

@@ -4,6 +4,7 @@ from dataclasses import replace
 import pytest
 
 from mnemos.consolidation.belief_review import run_belief_review
+from mnemos.core.belief import Belief
 from mnemos.core.engram import Engram
 from mnemos.importer import PaiImportSource, apply_pai_import, preview_pai_import
 from mnemos.store.sqlite_store import EngramStore
@@ -74,7 +75,7 @@ def _belief_row(store: EngramStore, belief_id: str):
     return store._get_conn().execute(
         """
         SELECT confidence, needs_review, confidence_pending_review,
-               revision_history
+               read_visibility, revision_history
         FROM beliefs
         WHERE id = ?
         """,
@@ -173,5 +174,47 @@ def test_u3b_pai_belief_review_excludes_quarantined_imported_engrams(tmp_path):
         row = _belief_row(store, target_id)
         assert bool(row["needs_review"]) is False
         assert bool(row["confidence_pending_review"]) is False
+    finally:
+        store.close()
+
+
+def test_belief_review_leaves_audit_only_pending_beliefs_quarantined(tmp_path):
+    store = EngramStore(tmp_path / "u3b-review.db")
+    try:
+        review_belief = Belief(
+            id="review-belief",
+            agent_id="oliver",
+            content="Review pending belief can be accepted.",
+            confidence=0.7,
+            confidence_pending_review=True,
+            read_visibility="review_only",
+        )
+        audit_belief = Belief(
+            id="audit-belief",
+            agent_id="oliver",
+            content="Audit pending belief must not be accepted by default.",
+            confidence=0.95,
+            confidence_pending_review=True,
+            read_visibility="audit_only",
+        )
+        store.save_belief(review_belief)
+        store.save_belief(audit_belief)
+        _age_belief_for_review(store, review_belief.id)
+        _age_belief_for_review(store, audit_belief.id)
+        _add_review_engram(store)
+
+        run_belief_review(
+            store,
+            config={},
+            llm_client=ReviewLLM(review_belief.id, "NO_BEARING"),
+            agent_id="oliver",
+        )
+
+        review_row = _belief_row(store, review_belief.id)
+        audit_row = _belief_row(store, audit_belief.id)
+        assert bool(review_row["confidence_pending_review"]) is False
+        assert review_row["read_visibility"] == "operational_context"
+        assert bool(audit_row["confidence_pending_review"]) is True
+        assert audit_row["read_visibility"] == "audit_only"
     finally:
         store.close()

@@ -97,6 +97,10 @@ It exposes only:
 
 The user does not need to set up a database, choose tags, pass agent IDs, learn
 engram/hypomnema terminology, configure OpenClaw, or supply a model key.
+Most captures become operational continuity automatically. Captures that look
+like identity/foundational or otherwise promotion-ready material can return
+`Captured continuity for review`; those notes stay out of ordinary context and
+recall until an explicit review surface handles them.
 
 Optional visual-capable clients can ask `mnemos_context` for an identity graph:
 
@@ -172,13 +176,18 @@ mnemos serve --mode advanced
 ```
 
 Advanced mode preserves the full tool surface: explicit remember/ingest/recall,
-hypomnema management, beliefs, shared memory, inspect, forget, and explicit
-consolidation.
+hypomnema management, functional-memory sessions, context packets, review
+queues, proposal audit, visual snapshots, beliefs, shared memory, inspect,
+forget, and explicit consolidation.
 
 Scope-taking advanced tools inherit the server scope when their `agent_id`,
 `person_id`, and `project_scope` args are left at defaults. Launch with
 `--agent-id`, `--person-id`, and `--project-scope` (or the matching
 environment variables) once, then omit those args in normal advanced tool calls.
+`mnemos_context_packet` defaults to operational packet mode, which shows review
+counts/source IDs but withholds confirmation and promotion-candidate prose; pass
+`packet_mode="review"` only for an explicit review pass. Audit-only proposal
+ledger rows require the separate `mnemos_proposal_audit` admin/audit surface.
 
 OpenClaw, crons, Forge, substrate ticks, and full agent workspaces are advanced
 integrations. They are no longer part of the baseline setup.
@@ -220,7 +229,9 @@ Review generated commands before enabling them.
 
 That is normal on first run. The first `mnemos_context` creates storage and
 returns an empty continuity packet. Use `mnemos_capture` to store preferences,
-decisions, project state, and corrections.
+decisions, project state, and corrections. If a capture is held for review,
+ordinary context and recall will show only review cues until an operator
+inspects it through a review surface.
 
 ### Deep maintenance says it used local maintenance
 

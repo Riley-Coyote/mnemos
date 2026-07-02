@@ -20,7 +20,9 @@ Simple mode tools have these local side effects:
 - `mnemos_context` can create the database and log maintenance
 - `mnemos_context(include_graph=true)` can return a scoped SVG identity graph
   artifact and structured graph data
-- `mnemos_capture` writes continuity and durable memories
+- `mnemos_capture` writes continuity and, for operational captures, durable
+  memories; high-blast identity/foundational captures can stay review-only
+  instead of being promoted
 - `mnemos_recall` can reconsolidate access metadata
 - `mnemos_correct` can archive, revise, or supersede memory
 - `mnemos_maintain` runs consolidation and bookkeeping
@@ -74,13 +76,43 @@ agent/person/project scope when callers leave the scope args at their default
 sentinels. Pass non-default scope args only for an intentional per-call
 override.
 
+## Afferent Membrane Read Visibility
+
+Schema v6/v7 separates ordinary operating context from review and audit
+material:
+
+- `read_visibility="operational_context"` is the default surface for retrieval,
+  context packets, simple runtime context/recall, prompt building, visual
+  snapshots, shared-pool reads, consolidation producers, substrate producers,
+  modulators, and direct-ID advanced lookups (`mnemos_inspect`,
+  `mnemos_forget`, and the hypomnema revise/supersede/promote mutators).
+- `read_visibility="review_only"` keeps pending functional confirmations,
+  hypomnema promotion candidates, and other review-shaped material out of
+  operating context while leaving it visible to explicit review tools.
+- Simple-mode first-capture verification stores only the note ID for
+  non-operational captures. The restart proof may show a pending-review cue,
+  but it must not re-quote review-only or audit-only prose into operational
+  context.
+- Live hypomnema writes classify stable promotion candidates and
+  identity/foundational rows as `review_only` at write time. The bare
+  `hypomnema_entries` SQL default is `operational_context` for legacy
+  compatibility; callers that omit `read_visibility` still go through the
+  store's write-time classifier before durable rows can enter ordinary context.
+- `read_visibility="audit_only"` is excluded from ordinary operational reads
+  and ordinary review queues; ProposalLedger audit rows require the explicit
+  `mnemos_proposal_audit` admin/audit surface.
+- `proposal_ledger` records durable-affecting candidates with authority,
+  target surface, transition, blast radius, status, gate version, provenance,
+  and payload fields so candidate state is inspectable without becoming
+  operating context.
+
 ## Visual Artifacts
 
 Identity graph artifacts are generated from the same scoped local memory data
 used by `mnemos_context`. They should not include raw database paths, provider
-keys, or unscoped cross-agent memories. Hosts that render images may display
-the SVG inline; hosts that do not can ignore it and continue using the text and
-structured content.
+keys, unscoped cross-agent memories, or review-only prose in operational views.
+Hosts that render images may display the SVG inline; hosts that do not can
+ignore it and continue using the text and structured content.
 
 ## PAI Importer
 
@@ -112,8 +144,9 @@ Safety boundaries enforced by the importer:
 - Imported rows carry `decay_protected`, `softening_protected`, and
   `consolidation_authorized` flags so the consolidation and substrate passes
   cannot silently rewrite imported identity material.
-- Imported beliefs carry `confidence_pending_review` and are excluded from
-  default belief consumers until belief review clears the flag.
+- Imported beliefs carry `confidence_pending_review` and `review_only`
+  read visibility, so they are excluded from default belief consumers until
+  belief review clears the flag and restores `operational_context`.
 - Enforcement links: `mnemos/importer/operator.py`, `mnemos/importer/watcher.py`,
   `mnemos/importer/review_gate.py`, `tests/test_u3b_pai_operator.py`,
   `tests/test_u3c_pai_watch_doctor.py`, and

@@ -39,7 +39,7 @@ def test_capture_recall_and_correction_without_provider_key(tmp_path):
 
     try:
         captured = runtime.capture(
-            "Riley prefers Mnemos simple mode to work without OpenRouter.",
+            "Riley uses Mnemos simple mode to work without OpenRouter.",
             importance="high",
         )
         memory_id = re.search(r"Memory ID: (engram_[A-Za-z0-9]+)", captured).group(1)
@@ -57,6 +57,278 @@ def test_capture_recall_and_correction_without_provider_key(tmp_path):
     assert "Mnemos recall for: OpenRouter simple mode" in recall
     assert "Riley wants OpenRouter" in corrected
     assert "baseline continuity" in corrected_recall
+
+
+def test_context_and_recall_hide_review_only_prose(tmp_path):
+    from mnemos.core.engram import Engram
+    from mnemos.store.sqlite_store import EngramStore
+
+    db_path = str(tmp_path / "simple.db")
+    seed = EngramStore(db_path)
+    try:
+        seed.save_engram(
+            Engram(
+                content="Review-only runtime engram phrase should stay hidden.",
+                owner_agent_id="nova",
+                read_visibility="review_only",
+            )
+        )
+        seed.write_hypomnema_entry(
+            "Review-only runtime continuity phrase should stay hidden.",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            confidence=0.95,
+            salience=0.9,
+            foundational=True,
+            read_visibility="review_only",
+        )
+    finally:
+        seed.close()
+
+    runtime = MnemosRuntime(
+        db_path=db_path,
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+
+    try:
+        context = runtime.context("runtime phrase", max_results=6)
+        recall = runtime.recall("runtime phrase", max_results=6)
+    finally:
+        runtime.close()
+
+    assert "Review-only runtime engram phrase" not in context
+    assert "Review-only runtime continuity phrase" not in context
+    assert "Review-only runtime engram phrase" not in recall
+    assert "Review-only runtime continuity phrase" not in recall
+
+
+def test_context_and_health_counts_use_operational_scope(tmp_path):
+    from mnemos.core.engram import Engram
+    from mnemos.store.sqlite_store import EngramStore
+
+    db_path = str(tmp_path / "simple.db")
+    seed = EngramStore(db_path)
+    try:
+        seed.save_engram(
+            Engram(content="Operational memory count.", owner_agent_id="nova")
+        )
+        seed.save_engram(
+            Engram(
+                content="Review-only memory count.",
+                owner_agent_id="nova",
+                read_visibility="review_only",
+            )
+        )
+        seed.write_hypomnema_entry(
+            "Operational scoped continuity count.",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility="operational_context",
+        )
+        seed.write_hypomnema_entry(
+            "Review-only scoped continuity count.",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility="review_only",
+        )
+        seed.write_hypomnema_entry(
+            "Operational other-project continuity count.",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="other",
+            read_visibility="operational_context",
+        )
+    finally:
+        seed.close()
+
+    runtime = MnemosRuntime(
+        db_path=db_path,
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+
+    try:
+        context = runtime.context()
+        health = runtime.health()
+    finally:
+        runtime.close()
+
+    assert "Status: 1 memories, 1 continuity notes" in context
+    assert health["counts"]["memories_active"] == 1
+    assert health["counts"]["continuity_notes_active"] == 1
+
+
+def test_context_and_recall_hide_operational_promotion_candidates(tmp_path, monkeypatch):
+    from mnemos.store.sqlite_store import EngramStore
+
+    db_path = str(tmp_path / "simple.db")
+    seed = EngramStore(db_path)
+    try:
+        legacy_id = seed.write_hypomnema_entry(
+            "Promotion candidate runtime phrase should stay quarantined.",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+        )
+        seed._get_conn().execute(
+            """
+            UPDATE hypomnema_entries
+            SET confidence = 0.95,
+                salience = 0.9,
+                foundational = 1,
+                read_visibility = 'operational_context'
+            WHERE id = ?
+            """,
+            (legacy_id,),
+        )
+        seed._get_conn().commit()
+    finally:
+        seed.close()
+
+    runtime = MnemosRuntime(
+        db_path=db_path,
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "maintain",
+        lambda deep=False, auto=False: "maintenance skipped",
+    )
+
+    try:
+        context = runtime.context("promotion candidate runtime", max_results=6)
+        recall = runtime.recall("promotion candidate runtime", max_results=6)
+    finally:
+        runtime.close()
+
+    assert "Promotion candidate runtime phrase" not in context
+    assert "Promotion candidate runtime phrase" not in recall
+
+
+def test_direct_id_correction_does_not_mutate_non_operational_hypomnema(tmp_path):
+    from mnemos.store.sqlite_store import EngramStore
+
+    db_path = str(tmp_path / "simple.db")
+    seed = EngramStore(db_path)
+    try:
+        review_id = seed.write_hypomnema_entry(
+            "Review-only correction target must not be mutated.",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            confidence=0.95,
+            salience=0.9,
+            read_visibility="review_only",
+        )
+        audit_id = seed.write_hypomnema_entry(
+            "Audit-only correction target must not be mutated.",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            confidence=0.95,
+            salience=0.9,
+            read_visibility="audit_only",
+        )
+    finally:
+        seed.close()
+
+    runtime = MnemosRuntime(
+        db_path=db_path,
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+
+    try:
+        review_result = runtime.correct("", target_id=review_id, action="forget")
+        audit_result = runtime.correct("", target_id=audit_id, action="forget")
+        assert runtime._store is not None
+        review_entry = runtime._store.get_hypomnema_entry(
+            review_id,
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+        )
+        audit_entry = runtime._store.get_hypomnema_entry(
+            audit_id,
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+        )
+    finally:
+        runtime.close()
+
+    assert "Archived continuity note" not in review_result
+    assert "Archived continuity note" not in audit_result
+    assert "Review-only correction target" not in review_result
+    assert "Audit-only correction target" not in audit_result
+    assert review_entry is not None
+    assert audit_entry is not None
+    assert review_entry["active"] is True
+    assert audit_entry["active"] is True
+    assert review_entry["content"] == "Review-only correction target must not be mutated."
+    assert audit_entry["content"] == "Audit-only correction target must not be mutated."
+
+
+def test_direct_id_correction_does_not_mutate_non_operational_engram(tmp_path):
+    from mnemos.core.engram import Engram
+    from mnemos.store.sqlite_store import EngramStore
+
+    db_path = str(tmp_path / "simple.db")
+    seed = EngramStore(db_path)
+    try:
+        review = Engram(
+            content="Review-only engram target must not be archived.",
+            owner_agent_id="nova",
+            read_visibility="review_only",
+        )
+        audit = Engram(
+            content="Audit-only engram target must not be archived.",
+            owner_agent_id="nova",
+            read_visibility="audit_only",
+        )
+        seed.save_engram(review)
+        seed.save_engram(audit)
+    finally:
+        seed.close()
+
+    runtime = MnemosRuntime(
+        db_path=db_path,
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+
+    try:
+        review_result = runtime.correct("", target_id=review.id, action="forget")
+        audit_result = runtime.correct("", target_id=audit.id, action="forget")
+        assert runtime._store is not None
+        loaded_review = runtime._store.get_engram(review.id)
+        loaded_audit = runtime._store.get_engram(audit.id)
+    finally:
+        runtime.close()
+
+    assert "Archived memory" not in review_result
+    assert "Archived memory" not in audit_result
+    assert "Review-only engram target" not in review_result
+    assert "Audit-only engram target" not in audit_result
+    assert loaded_review is not None
+    assert loaded_audit is not None
+    assert loaded_review.state == "active"
+    assert loaded_audit.state == "active"
 
 
 def test_identity_scope_does_not_leak_between_agents(tmp_path):
@@ -130,6 +402,146 @@ def test_capture_accepts_numeric_importance_for_agent_clients(tmp_path):
     assert "Numeric salience" in recall
 
 
+def test_capture_foundational_identity_note_is_review_only_and_not_promoted(
+    tmp_path,
+    monkeypatch,
+):
+    runtime = MnemosRuntime(
+        db_path=str(tmp_path / "simple.db"),
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "maintain",
+        lambda deep=False, auto=False: "maintenance skipped",
+    )
+
+    try:
+        captured = runtime.capture(
+            "My identity is anchored by careful test-first engineering.",
+            importance="critical",
+        )
+        assert runtime._store is not None
+        entries = runtime._store.search_hypomnema(
+            "test-first engineering",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility=None,
+        )
+        operational = runtime._store.search_hypomnema(
+            "test-first engineering",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+        )
+        recall = runtime.recall("test-first engineering", max_results=6)
+        engrams = runtime._store.get_active_engrams(agent_id="nova")
+    finally:
+        runtime.close()
+
+    assert "Captured continuity for review" in captured
+    assert "Memory ID:" not in captured
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["read_visibility"] == "review_only"
+    assert entry["related_engram_id"] is None
+    assert entry["graduated_to_engram_id"] is None
+    assert operational == []
+    assert all("test-first engineering" not in engram.content for engram in engrams)
+    assert "test-first engineering" not in recall
+
+
+def test_review_capture_persists_context_in_review_only_hypomnema(
+    tmp_path,
+    monkeypatch,
+):
+    runtime = MnemosRuntime(
+        db_path=str(tmp_path / "simple.db"),
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "maintain",
+        lambda deep=False, auto=False: "maintenance skipped",
+    )
+
+    try:
+        captured = runtime.capture(
+            "My identity is anchored by source-aware review decisions.",
+            context="Review context source: operator intake ticket 42.",
+            importance="critical",
+        )
+        assert runtime._store is not None
+        entries = runtime._store.search_hypomnema(
+            "operator intake ticket 42",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility="review_only",
+        )
+    finally:
+        runtime.close()
+
+    assert "Captured continuity for review" in captured
+    assert len(entries) == 1
+    assert (
+        "Context: Review context source: operator intake ticket 42."
+        in entries[0]["content"]
+    )
+    assert entries[0]["read_visibility"] == "review_only"
+
+
+def test_maintain_does_not_promote_fresh_default_review_only_foundational_hypomnema(tmp_path):
+    runtime = MnemosRuntime(
+        db_path=str(tmp_path / "simple.db"),
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+
+    try:
+        captured = runtime.capture(
+            "My identity is anchored by careful maintenance verification.",
+            importance="critical",
+        )
+        maintained = runtime.maintain()
+        assert runtime._store is not None
+        entries = runtime._store.search_hypomnema(
+            "maintenance verification",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility=None,
+        )
+        operational = runtime._store.search_hypomnema(
+            "maintenance verification",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+        )
+        recall = runtime.recall("maintenance verification", max_results=6)
+        engrams = runtime._store.get_active_engrams(agent_id="nova")
+    finally:
+        runtime.close()
+
+    assert "Captured continuity for review" in captured
+    assert "Promoted continuity notes: 0" in maintained
+    assert len(entries) == 1
+    assert entries[0]["read_visibility"] == "review_only"
+    assert entries[0]["graduated_to_engram_id"] is None
+    assert operational == []
+    assert all("maintenance verification" not in engram.content for engram in engrams)
+    assert "maintenance verification" not in recall
+
+
 def test_query_only_correction_updates_closest_continuity(tmp_path):
     runtime = MnemosRuntime(
         db_path=str(tmp_path / "simple.db"),
@@ -149,13 +561,128 @@ def test_query_only_correction_updates_closest_continuity(tmp_path):
             query="long release reports security caveats",
             action="revise",
         )
+        assert runtime._store is not None
+        entries = runtime._store.search_hypomnema(
+            "release reports security caveats",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility=None,
+            limit=10,
+        )
         recall = runtime.recall("release reports security caveats", max_results=6)
+        engrams = runtime._store.get_active_engrams(agent_id="nova")
     finally:
         runtime.close()
 
     assert "Updated closest continuity note" in corrected
-    assert "concise release reports" in recall
+    assert "for review" in corrected
+    assert "Visibility: review_only" in corrected
+    assert "Memory ID:" not in corrected
+    assert any(
+        "concise release reports" in entry["content"]
+        and entry["read_visibility"] == "review_only"
+        for entry in entries
+    )
+    assert all("concise release reports" not in engram.content for engram in engrams)
+    assert "concise release reports" not in recall
     assert "hide security caveats" not in recall
+
+
+def test_direct_note_correction_reports_review_and_archives_stale_memory(tmp_path):
+    runtime = MnemosRuntime(
+        db_path=str(tmp_path / "simple.db"),
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+
+    try:
+        captured = runtime.capture(
+            "Nova should write long release reports and hide security caveats.",
+        )
+        memory_id = re.search(r"Memory ID: (\S+)", captured).group(1)
+        note_id = re.search(r"Continuity note ID: (\S+)", captured).group(1)
+        corrected = runtime.correct(
+            "Nova should write concise release reports and call out security caveats explicitly.",
+            target_id=note_id,
+            action="revise",
+        )
+        assert runtime._store is not None
+        entry = runtime._store.get_hypomnema_entry(
+            note_id,
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility=None,
+        )
+        stale = runtime._store.get_engram(memory_id)
+        recall = runtime.recall("release reports security caveats", max_results=6)
+        engrams = runtime._store.get_active_engrams(agent_id="nova")
+    finally:
+        runtime.close()
+
+    assert "Updated continuity note" in corrected
+    assert "for review" in corrected
+    assert "Visibility: review_only" in corrected
+    assert "Memory ID:" not in corrected
+    assert entry is not None
+    assert "concise release reports" in entry["content"]
+    assert entry["read_visibility"] == "review_only"
+    assert stale is not None
+    assert stale.state == "archived"
+    assert all("release reports" not in engram.content for engram in engrams)
+    assert "concise release reports" not in recall
+    assert "hide security caveats" not in recall
+
+
+def test_query_only_supersede_reclassifies_identity_replacement_for_review(tmp_path):
+    runtime = MnemosRuntime(
+        db_path=str(tmp_path / "simple.db"),
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+
+    try:
+        runtime.capture(
+            "Nova uses release report continuity notes.",
+            importance=0.65,
+        )
+        corrected = runtime.correct(
+            "My identity is anchored by release report caution.",
+            query="release report continuity",
+            action="replace",
+        )
+        assert runtime._store is not None
+        entries = runtime._store.search_hypomnema(
+            "release report caution",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility=None,
+            include_inactive=True,
+            limit=10,
+        )
+        recall = runtime.recall("release report caution", max_results=6)
+        engrams = runtime._store.get_active_engrams(agent_id="nova")
+    finally:
+        runtime.close()
+
+    active_review = [
+        entry for entry in entries
+        if entry["active"] and "release report caution" in entry["content"]
+    ]
+    assert "for review" in corrected
+    assert "Visibility: review_only" in corrected
+    assert "Memory ID:" not in corrected
+    assert len(active_review) == 1
+    assert active_review[0]["domain"] == "identity"
+    assert active_review[0]["read_visibility"] == "review_only"
+    assert "release report caution" not in recall
+    assert all("release report caution" not in engram.content for engram in engrams)
 
 
 def test_query_only_forget_archives_closest_continuity_and_memory(tmp_path):
@@ -223,8 +750,8 @@ def test_identity_graph_snapshot_contains_svg_and_structured_data(tmp_path):
     )
 
     try:
-        runtime.capture("Nova prefers clear memory visualizations.", importance=0.9)
-        runtime.capture("Decision: the identity graph should be an optional artifact.", importance=0.85)
+        runtime.capture("Nova uses clear memory visualizations.", importance=0.9)
+        runtime.capture("Nova keeps graph snapshots as optional memory artifacts.", importance=0.85)
         graph = runtime.identity_graph(max_nodes=12)
     finally:
         runtime.close()
@@ -602,7 +1129,7 @@ def test_session_counter_bumps_once_per_instance(tmp_path):
 def test_health_returns_structured_dict(tmp_path):
     runtime = _runtime(tmp_path)
     try:
-        runtime.capture("Riley prefers health cards that read like plain words")
+        runtime.capture("Riley stores health card wording in plain words")
         data = runtime.health()
     finally:
         runtime.close()
@@ -675,3 +1202,109 @@ def test_health_does_not_bump_session_or_write_stage(tmp_path):
         runtime.close()
 
     assert "ONBOARDING - first session" in packet
+
+
+# --- T1b: review-only-first-capture-meta-leak (regression) ---
+
+
+def test_review_only_first_capture_withholds_prose_from_meta(tmp_path):
+    """A quarantined first capture records existence only, never prose, in meta.
+
+    Negative test for review-only-first-capture-meta-leak: a non-operational
+    (identity/foundational) capture must not copy its content into first_capture
+    meta, but the note itself must remain present through a review surface.
+    """
+    import json
+
+    from mnemos.store.sqlite_store import EngramStore
+
+    secret = "my childhood dog was named Zephyrus"
+    runtime = _runtime(tmp_path)
+    try:
+        result = runtime.capture(f"Who I am at core: {secret}")
+    finally:
+        runtime.close()
+
+    # Routed to the non-operational quarantine branch.
+    assert "Visibility: review_only" in result
+    note_id = re.search(r"Continuity note ID: (\S+)", result).group(1)
+
+    store = EngramStore(str(tmp_path / "memory.db"))
+    try:
+        raw = store.get_meta("simple:nova:riley:demo:first_capture")
+        # The note stays present and reviewable through a review surface.
+        entry = store.get_hypomnema_entry(
+            note_id,
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility="review_only",
+        )
+    finally:
+        store.close()
+
+    assert raw is not None
+    payload = json.loads(raw)
+    assert payload["note_id"] == note_id
+    assert payload.get("withheld") is True
+    assert "excerpt" not in payload
+    assert "Zephyrus" not in raw  # no prose in the meta side-channel
+
+    assert entry is not None  # visible through the review surface
+    assert "Zephyrus" in entry["content"]  # content preserved for review
+
+
+def test_review_only_first_capture_does_not_leak_into_operational_packet(tmp_path):
+    """A review-only first capture must not reappear in the operational packet.
+
+    The core leak: content copied into first_capture meta was re-quoted by the
+    verification block into context() after a restart, bypassing read-visibility
+    filters. The block must now emit an existence-only line for quarantined
+    captures.
+    """
+    secret = "Zephyrus the lighthouse dog"
+    runtime1 = _runtime(tmp_path)
+    try:
+        runtime1.context()
+        runtime1.introduce("claude-opus-4-6")
+        result = runtime1.capture(f"Who I am: I grew up with {secret}")
+        same_session = runtime1.context()
+    finally:
+        runtime1.close()
+
+    assert "Visibility: review_only" in result
+    assert "MEMORY VERIFIED" not in same_session
+
+    runtime2 = _runtime(tmp_path)
+    try:
+        later_session = runtime2.context()
+    finally:
+        runtime2.close()
+
+    assert "MEMORY VERIFIED" in later_session  # existence-only line still fires
+    assert "pending review" in later_session
+    assert secret not in later_session  # prose stays quarantined
+    assert "Zephyrus" not in later_session
+
+
+def test_operational_first_capture_still_quotes_excerpt(tmp_path):
+    """Positive test: operational captures keep the excerpt-quoting feature."""
+    secret = "a blue kayak in the garage"
+    runtime1 = _runtime(tmp_path)
+    try:
+        runtime1.context()
+        runtime1.introduce("claude-opus-4-6")
+        result = runtime1.capture(f"Riley keeps {secret}")
+    finally:
+        runtime1.close()
+
+    assert "Memory ID:" in result  # operational branch taken
+
+    runtime2 = _runtime(tmp_path)
+    try:
+        later_session = runtime2.context()
+    finally:
+        runtime2.close()
+
+    assert "MEMORY VERIFIED" in later_session
+    assert secret in later_session  # excerpt quoted, feature preserved

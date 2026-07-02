@@ -19,6 +19,13 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Sampling is optional and occurs only inside an active client request.
 - Sampling failures, denials, or unsupported clients fall back cleanly.
 - Tool annotations match local side effects.
+- `mnemos_context_packet` defaults to `packet_mode="operational"` and never
+  includes confirmation or promotion-candidate prose in operational prompt or
+  JSON output.
+- Explicit review surfaces (`packet_mode="review"`, `mnemos_review_queue`) can
+  show review-only prose, while audit-only proposal rows remain excluded except
+  through the deliberate `mnemos_proposal_audit` admin/audit surface.
+- Inline visual snapshots show review counts/source IDs only, not pending prose.
 
 ## Install UX
 
@@ -52,6 +59,26 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Baseline simple mode does not require OpenRouter, Anthropic, OpenAI, or OpenClaw.
 - Dedicated providers are used only when explicitly configured.
 - Scope isolation is tested across multiple agents.
+- Operational retrieval, prompt building, simple runtime context/recall,
+  substrate producers, consolidation producers, shared-pool reads, and
+  modulators filter to `operational_context` before scoring, ranking, or
+  generation.
+- Direct-ID advanced tools (`mnemos_inspect`, `mnemos_forget`, hypomnema
+  revise/supersede/promote) and substrate handlers
+  (insight/reflection/surprise/wandering/dreaming/initiation) refuse to mutate
+  or reflect over non-operational rows: a review-only or audit-only ID returns
+  a "not found" response instead of leaking review prose into operating
+  surfaces.
+- Schema v6/v7 migrations default existing pending beliefs, confirmation-needed
+  functional memories, and hypomnema promotion candidates to review visibility.
+- Fresh live hypomnema writes that already meet stable promotion criteria, or
+  that carry identity/foundational scope, default to `review_only`; the raw
+  hypomnema SQL default remains `operational_context` for legacy compatibility,
+  with omitted-visibility callers still routed through the store classifier
+  before ordinary use.
+- Simple-mode first-capture verification records review-only/audit-only
+  captures as existence-only metadata and never stores or re-quotes their
+  prose in the operational restart proof.
 - Correction/forget behavior is documented.
 
 ## PAI Importer And Dual-Life Watcher
@@ -105,7 +132,8 @@ Use this checklist before publishing Mnemos or opening a release PR.
   an explicit operator action; `watch-plist` only writes the file.
 - Default `get_beliefs()` consumers exclude `confidence_pending_review` rows;
   belief review is the explicit opt-in path that can clear pending review,
-  including no-op acceptance.
+  including no-op acceptance, and promote approved rows back to
+  `operational_context` read visibility.
 - Error messages that mention recovery actions are probed against actual
   behavior. Recovery steps that would destroy operator hand-edits or in-flight
   state must be removed from user-facing text, even when the underlying code

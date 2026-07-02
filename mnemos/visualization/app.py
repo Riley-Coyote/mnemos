@@ -13,10 +13,10 @@ Usage:
     python -m mnemos.visualization.app --build-only                 # just generate HTML
     python -m mnemos.visualization.app --agent-id vektor            # different agent
     python -m mnemos.visualization.app --port 9000                  # custom port
+    python -m mnemos.visualization.app --audit                      # include review/audit rows
 
-Or via CLI:
-    mnemos ui
-    mnemos ui --agent-id vektor --port 9000
+Inline visual snapshots are available through `mnemos snapshot`; the dashboard
+runs as this module.
 """
 
 from __future__ import annotations
@@ -24,11 +24,9 @@ from __future__ import annotations
 import argparse
 import http.server
 import json
-import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 
 from mnemos.visualization.data import extract_all
@@ -40,7 +38,6 @@ def escape_html(text: str) -> str:
 
 def build_html(data: dict, agent_id: str) -> str:
     """Generate the complete dashboard HTML from extracted data."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
     stats = data["stats"]
 
     # Serialize data for JS
@@ -858,8 +855,8 @@ def _build_stats_cards(stats: dict) -> str:
         (stats["total_dormant"], "dormant"),
     ]
     return "".join(
-        f'<div class="stat-card"><div class="stat-val">{v}</div><div class="stat-label">{l}</div></div>'
-        for v, l in cards
+        f'<div class="stat-card"><div class="stat-val">{value}</div><div class="stat-label">{label}</div></div>'
+        for value, label in cards
     )
 
 
@@ -920,7 +917,6 @@ def _build_session_list(sessions: dict) -> str:
     for key, info in sorted_sessions:
         short_key = key[:16] + "..." if len(key) > 16 else key
         count = info.get("memories_encoded", 0)
-        skipped = info.get("skipped", "")
         indexed_at = (info.get("indexed_at") or "")[:10]
         size_kb = (info.get("size", 0) / 1024)
         dot_class = "ok" if count > 0 else "skip"
@@ -942,7 +938,14 @@ def _build_session_list(sessions: dict) -> str:
 # Server
 # ══════════════════════════════════════════════════════════════
 
-def serve(html: str, port: int = 8401, db_path: str = "", agent_id: str = "default"):
+def serve(
+    html: str,
+    port: int = 8401,
+    db_path: str = "",
+    agent_id: str = "default",
+    *,
+    include_non_operational: bool = False,
+):
     """Serve the dashboard with auto-rebuild on database changes."""
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -978,7 +981,11 @@ def serve(html: str, port: int = 8401, db_path: str = "", agent_id: str = "defau
                 if mtime != last_mtime:
                     last_mtime = mtime
                     try:
-                        data = extract_all(str(db), agent_id)
+                        data = extract_all(
+                            str(db),
+                            agent_id,
+                            include_non_operational=include_non_operational,
+                        )
                         handler_state["html"] = build_html(data, agent_id)
                         handler_state["reload_event"].set()
                         print(f"  rebuilt: {data['stats']['total_active']} engrams")
@@ -1011,17 +1018,26 @@ def main():
     parser.add_argument("--port", type=int, default=8401, help="Server port")
     parser.add_argument("--build-only", action="store_true", help="Generate HTML without serving")
     parser.add_argument("--output", help="Output path (default: ./mnemos-ui.html)")
+    parser.add_argument(
+        "--audit",
+        action="store_true",
+        help="Include review-only and audit-only rows in dashboard data",
+    )
     args = parser.parse_args()
 
     db_path = args.db_path or str(Path.home() / ".mnemos" / f"{args.agent_id}.db")
 
     if not Path(db_path).exists():
         print(f"Database not found: {db_path}")
-        print(f"Run 'mnemos init' first, or specify --db-path")
+        print("Run 'mnemos init' first, or specify --db-path")
         sys.exit(1)
 
     print(f"Extracting data from {db_path}...")
-    data = extract_all(db_path, args.agent_id)
+    data = extract_all(
+        db_path,
+        args.agent_id,
+        include_non_operational=args.audit,
+    )
     html = build_html(data, args.agent_id)
     print(f"  {data['stats']['total_active']} engrams, {data['stats']['total_connections']} connections")
 
@@ -1032,7 +1048,13 @@ def main():
     else:
         if args.output:
             Path(args.output).write_text(html, encoding="utf-8")
-        serve(html, args.port, db_path, args.agent_id)
+        serve(
+            html,
+            args.port,
+            db_path,
+            args.agent_id,
+            include_non_operational=args.audit,
+        )
 
 
 if __name__ == "__main__":

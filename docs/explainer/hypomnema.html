@@ -638,7 +638,7 @@
               <div class="node n-mnemos" data-node="promote">
                 <div class="label">Mnemos</div>
                 <strong>Promoted engram</strong>
-                <span>Stable continuity enters the graph and can reconsolidate.</span>
+                <span>Stable reviewed continuity enters the graph and can reconsolidate.</span>
               </div>
             </div>
           </div>
@@ -659,7 +659,7 @@
           </article>
           <article class="matrix-card">
             <h3>Use Mnemos when the knowledge has stabilized.</h3>
-            <p>After a hypomnema entry becomes high-confidence, high-salience, foundational or revised, it can graduate into a de-identified engram.</p>
+            <p>After a hypomnema entry becomes high-confidence and high-salience, or carries identity/foundational scope, it becomes a promotion candidate; operational packets show a review cue until promotion is explicit.</p>
           </article>
           <article class="matrix-card">
             <h3>Revise rather than overwrite.</h3>
@@ -677,7 +677,7 @@
       <div class="shell">
         <div class="section-head">
           <div class="kicker">MCP surface</div>
-          <p class="section-copy">The new Mnemos MCP tools expose the layer directly. Agents can write continuity, search it, improve it, replace it, inspect promotion candidates, and explicitly graduate stable entries into Mnemos. When scope args are omitted, these tools inherit the configured MCP server scope.</p>
+          <p class="section-copy">The new Mnemos MCP tools expose the layer directly. Agents can write continuity, search operational entries, improve them, replace them, inspect promotion candidates through review surfaces, and explicitly graduate stable entries into Mnemos. When scope args are omitted, these tools inherit the configured MCP server scope.</p>
         </div>
         <div class="tools">
           <article class="tool-card">
@@ -688,7 +688,7 @@
           <article class="tool-card">
             <code>mnemos_hypomnema_search</code>
             <h3>Load context</h3>
-            <p>Returns entries by lexical relevance, confidence, salience, and foundational weight.</p>
+            <p>Returns operational entries by lexical relevance, confidence, salience, and foundational weight.</p>
           </article>
           <article class="tool-card">
             <code>mnemos_hypomnema_revise</code>
@@ -703,7 +703,7 @@
           <article class="tool-card">
             <code>mnemos_hypomnema_candidates</code>
             <h3>Find graduation-ready entries</h3>
-            <p>Lists active entries above confidence and salience thresholds that are revised or foundational.</p>
+            <p>Lists operational graduation candidates; review-only candidates stay in the review queue.</p>
           </article>
           <article class="tool-card">
             <code>mnemos_hypomnema_promote</code>
@@ -735,7 +735,7 @@
           </article>
           <article class="schema-card">
             <div class="metric-label">Lifecycle</div>
-            <p>active, superseded_by, graduated_to_engram_id</p>
+            <p>active, read_visibility, superseded_by, graduated_to_engram_id</p>
           </article>
           <article class="schema-card">
             <div class="metric-label">History</div>
@@ -753,7 +753,7 @@
       <div class="shell closing">
         <blockquote>Hypomnema lets Mnemos stay alive without forcing every continuity note to become a belief.</blockquote>
         <div class="summary">
-          In practice, the prompt packet can read: identity first, pending revisions next, hypomnema as "what I am sitting with," functional memory as "what I reliably remember right now," and Mnemos as "associations moving underneath." That ordering keeps scoped continuity near the surface while leaving the deeper graph free to remain slower, more durable, and more consequential.
+          In practice, the operational prompt packet can read: identity first, confirmed functional memory, operational hypomnema as "what I am sitting with," and Mnemos as "associations moving underneath." Pending confirmation and promotion-candidate prose stays behind review counts and source IDs until a review packet or review queue is explicitly requested.
         </div>
       </div>
     </section>
@@ -798,7 +798,7 @@ project_scope="codex-test"`,
       },
       retrieve: {
         title: "Retrieve",
-        copy: "At prompt time, hypomnema returns the strongest entries from the inherited or explicitly supplied scope by relevance, confidence, salience, and foundational weight.",
+        copy: "At prompt time, hypomnema returns operational entries from the inherited or explicitly supplied scope by relevance, confidence, salience, and foundational weight. Review-only entries require an explicit review surface.",
         code: `mnemos_hypomnema_search(
   query="memory layers"
 )`,
@@ -807,7 +807,7 @@ project_scope="codex-test"`,
       },
       promote: {
         title: "Promote",
-        copy: "Only stable entries graduate upward. Promotion is explicit, dry-run by default, and writes a de-identified semantic engram into Mnemos.",
+        copy: "Only stable reviewed entries graduate upward. Promotion is explicit, dry-run by default, and writes a de-identified semantic engram into Mnemos.",
         code: `mnemos_hypomnema_promote(
   entry_id="...",
   dry_run=false

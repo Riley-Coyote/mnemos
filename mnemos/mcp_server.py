@@ -11,17 +11,19 @@ Tools:
     mnemos_session_close — Compress functional context into hypomnema
     mnemos_context_packet — Build the turnkey prompt/context packet
     mnemos_review_queue — Show confirmations and promotion candidates
+    mnemos_proposal_audit — Inspect audit-only proposal ledger rows
     mnemos_visual_snapshot — Generate an inline Mermaid memory map
     mnemos_remember     — Encode a new memory
     mnemos_ingest       — Ingest content from external sources
     mnemos_recall       — Retrieve relevant memories
     mnemos_hypomnema_write   — Write scoped continuity before promotion
-    mnemos_hypomnema_search  — Search scoped continuity
+    mnemos_hypomnema_search  — Search operational scoped continuity
     mnemos_hypomnema_revise  — Revise scoped continuity
     mnemos_hypomnema_supersede — Replace stale scoped continuity
-    mnemos_hypomnema_candidates — List promotion-ready continuity
+    mnemos_hypomnema_candidates — List operational promotion-ready continuity
     mnemos_hypomnema_promote — Promote stable continuity into Mnemos
     mnemos_inspect      — View full details of a memory
+    mnemos_introspect   — Audit text for metacognitive pattern markers
     mnemos_status       — Get memory system status
     mnemos_beliefs      — List reviewed current beliefs
     mnemos_forget       — Archive a specific memory
@@ -42,7 +44,11 @@ import sys
 from mcp.server.fastmcp import FastMCP
 
 from .core.types import SourceType
-from .store.sqlite_store import EngramStore
+from .store.sqlite_store import (
+    EngramStore,
+    READ_VISIBILITY_OPERATIONAL,
+    READ_VISIBILITY_REVIEW,
+)
 from .store.embedding_index import EmbeddingIndex
 from .encoding.encoder import Encoder
 from .retrieval.reactive import ReactiveRetriever
@@ -285,6 +291,23 @@ def _format_hypomnema_entry(entry: dict) -> str:
     )
 
 
+def _format_proposal_entry(entry: dict) -> str:
+    payload = entry.get("payload") or {}
+    if isinstance(payload, dict) and payload.get("content"):
+        payload_text = str(payload["content"])
+    else:
+        payload_text = str(payload)
+    provenance = ", ".join(entry.get("provenance_ids") or []) or "none"
+    return (
+        f"- {payload_text}\n"
+        f"  id={entry['id']} authority={entry['source_authority']} "
+        f"kind={entry['kind']} domain={entry['domain']} "
+        f"target={entry['target_surface']} transition={entry['transition']} "
+        f"blast={entry['blast_radius']} status={entry['status']} "
+        f"visibility={entry['read_visibility']} provenance={provenance}"
+    )
+
+
 @mcp.tool()
 def mnemos_setup(response: str = "") -> str:
     """Onboarding wizard for Mnemos. Call this to configure the memory system.
@@ -447,6 +470,7 @@ def mnemos_setup(response: str = "") -> str:
                     confidence=0.78,
                     salience=0.7,
                     related_session_id=session_id,
+                    read_visibility=READ_VISIBILITY_OPERATIONAL,
                 )
                 _store.write_functional_memory(  # type: ignore
                     f"Onboarding project context: {proj}",
@@ -580,8 +604,15 @@ def mnemos_setup(response: str = "") -> str:
         # Count what we've built
         _ensure_store()
         agent_id = config.get("agent_id", "default")
+        person_id = config.get("person_id", "user")
+        project_scope = "global"
         try:
-            stats = _store.get_stats(agent_id)
+            stats = _store.get_stats(
+                agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+                read_visibility=READ_VISIBILITY_OPERATIONAL,
+            )
             engram_count = stats.get("engrams_active", 0)
             belief_count = stats.get("beliefs_active", 0)
             conn_count = stats.get("connections", 0)
@@ -591,8 +622,6 @@ def mnemos_setup(response: str = "") -> str:
             engram_count = belief_count = conn_count = functional_count = hypomnema_count = 0
 
         agent_name = config.get("agent_name", "Agent")
-        person_id = config.get("person_id", "user")
-        project_scope = "global"
 
         # Final step — set setup complete
         config["setup_complete"] = True
@@ -979,29 +1008,35 @@ def mnemos_context_packet(
     project_scope: str = "global",
     token_budget: int = 3000,
     include_json: bool = False,
+    packet_mode: str = "operational",
 ) -> str:
     """Build the complete memory context an agent should read before answering.
 
     This is the turnkey call for agent integrations: it combines functional
     memory, hypomnema, long-term Mnemos recall, beliefs, and review cues in
-    the order an agent should reason over them. Default scope args inherit the
-    server's configured scope.
+    the order an agent should reason over them. packet_mode="operational"
+    withholds review prose; packet_mode="review" exposes candidate prose with
+    provenance labels. Default scope args inherit the server's configured scope.
     """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
     agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
-    packet = build_context_packet(
-        _store,  # type: ignore
-        query,
-        agent_id=agent_id,
-        person_id=person_id,
-        project_scope=project_scope,
-        session_id=session_id,
-        token_budget=max(500, token_budget),
-        include_prompt=True,
-    )
+    try:
+        packet = build_context_packet(
+            _store,  # type: ignore
+            query,
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope=project_scope,
+            session_id=session_id,
+            token_budget=max(500, token_budget),
+            include_prompt=True,
+            packet_mode=packet_mode,
+        )
+    except ValueError as exc:
+        return f"Context packet failed: {exc}"
     if include_json:
         return json.dumps(packet, indent=2, ensure_ascii=True, default=str)
     return packet["prompt"]
@@ -1036,8 +1071,16 @@ def mnemos_review_queue(
         person_id=person_id,
         project_scope=project_scope,
         limit=max_results,
+        read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
     )
-    if not functional and not candidates:
+    proposals = _store.list_proposals(  # type: ignore
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        status="pending_review",
+        limit=max_results,
+    )
+    if not functional and not candidates and not proposals:
         return "Review queue is clear."
 
     lines = []
@@ -1049,7 +1092,39 @@ def mnemos_review_queue(
             lines.append("")
         lines.append("Hypomnema promotion candidates:")
         lines.extend(_format_hypomnema_entry(entry) for entry in candidates)
+    if proposals:
+        if lines:
+            lines.append("")
+        lines.append("Proposal candidates:")
+        lines.extend(_format_proposal_entry(entry) for entry in proposals)
     return "\n".join(lines)
+
+
+@mcp.tool()
+def mnemos_proposal_audit(
+    agent_id: str = "default",
+    person_id: str = "user",
+    project_scope: str = "global",
+    max_results: int = 20,
+) -> str:
+    """Explicit audit/admin read of audit-only proposal ledger rows."""
+    gate = _setup_gate()
+    if gate:
+        return gate
+    _ensure_store()
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    proposals = _store.list_audit_proposals(  # type: ignore
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        limit=max_results,
+    )
+    if not proposals:
+        return "Proposal audit ledger has no audit-only rows for this scope."
+    return (
+        "Audit-only proposal ledger rows:\n\n"
+        + "\n\n".join(_format_proposal_entry(entry) for entry in proposals)
+    )
 
 
 @mcp.tool()
@@ -1143,11 +1218,20 @@ def mnemos_hypomnema_write(
     except ValueError as exc:
         return f"Hypomnema write failed: {exc}"
 
+    entry = _store.get_hypomnema_entry(  # type: ignore
+        entry_id,
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+    )
+    visibility = entry["read_visibility"] if entry is not None else "unknown"
+
     return (
         f"Hypomnema written: {entry_id}\n"
         f"  Scope: {agent_id}/{person_id}/{project_scope}\n"
         f"  Domain: {domain}\n"
         f"  Source: {source}\n"
+        f"  Visibility: {visibility}\n"
         f"  Confidence: {confidence:.2f}\n"
         f"  Salience: {salience:.2f}"
     )
@@ -1162,9 +1246,11 @@ def mnemos_hypomnema_search(
     project_scope: str = "global",
     include_inactive: bool = False,
 ) -> str:
-    """Search scoped hypomnema continuity entries.
+    """Search operational scoped hypomnema continuity entries.
 
     Default scope args inherit the server's configured scope.
+    Review-only promotion candidates are excluded; use mnemos_review_queue for
+    deliberate review inspection.
 
     Args:
         query: Optional natural-language query. Empty returns strongest entries.
@@ -1186,6 +1272,7 @@ def mnemos_hypomnema_search(
         project_scope=project_scope,
         limit=max_results,
         include_inactive=include_inactive,
+        exclude_promotion_candidates=True,
     )
     if not entries:
         return "No hypomnema entries found."
@@ -1228,6 +1315,7 @@ def mnemos_hypomnema_revise(
             project_scope=project_scope,
             confidence=confidence if confidence >= 0 else None,
             salience=salience if salience >= 0 else None,
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
         )
     except (KeyError, ValueError) as exc:
         return f"Hypomnema revision failed: {exc}"
@@ -1263,6 +1351,7 @@ def mnemos_hypomnema_supersede(
             agent_id=agent_id,
             person_id=person_id,
             project_scope=project_scope,
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
         )
     except (KeyError, ValueError) as exc:
         return f"Hypomnema supersession failed: {exc}"
@@ -1296,9 +1385,10 @@ def mnemos_hypomnema_promote(
         person_id=person_id,
         project_scope=project_scope,
         active_only=True,
+        read_visibility=READ_VISIBILITY_OPERATIONAL,
     )
     if entry is None:
-        return f"Active hypomnema entry not found: {entry_id}"
+        return f"Active operational hypomnema entry not found: {entry_id}"
 
     deidentified = entry["content"].replace(person_id, "the collaborator")
     content = "[promoted from hypomnema; de-identified] " + deidentified
@@ -1332,9 +1422,10 @@ def mnemos_hypomnema_candidates(
     person_id: str = "user",
     project_scope: str = "global",
 ) -> str:
-    """List hypomnema entries that meet promotion thresholds.
+    """List operational hypomnema entries that meet promotion thresholds.
 
     Default scope args inherit the server's configured scope.
+    Review-only candidates remain pending in mnemos_review_queue.
     """
     gate = _setup_gate()
     if gate:
@@ -1369,7 +1460,10 @@ def mnemos_inspect(engram_id: str) -> str:
     if gate:
         return gate
     _ensure_store()
-    engram = _store.get_engram(engram_id)  # type: ignore
+    engram = _store.get_engram(  # type: ignore
+        engram_id,
+        read_visibility=READ_VISIBILITY_OPERATIONAL,
+    )
     if engram is None:
         return f"Memory not found: {engram_id}"
 
@@ -1420,7 +1514,11 @@ def mnemos_introspect(text: str) -> str:
 
 
 @mcp.tool()
-def mnemos_status(agent_id: str = "default") -> str:
+def mnemos_status(
+    agent_id: str = "default",
+    person_id: str = "user",
+    project_scope: str = "global",
+) -> str:
     """Get memory system status and statistics.
 
     Shows counts of active/dormant/archived memories, connections,
@@ -1433,8 +1531,13 @@ def mnemos_status(agent_id: str = "default") -> str:
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
-    stats = _store.get_stats(agent_id)  # type: ignore
+    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    stats = _store.get_stats(  # type: ignore
+        agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        read_visibility=READ_VISIBILITY_OPERATIONAL,
+    )
 
     # Count long-term (stability >= 0.8) engrams
     active_engrams = _store.get_active_engrams(agent_id=agent_id, limit=10000)  # type: ignore
@@ -1477,8 +1580,9 @@ def mnemos_status(agent_id: str = "default") -> str:
 def mnemos_beliefs(agent_id: str = "default", domain: str = "") -> str:
     """List reviewed current beliefs with confidence levels.
 
-    Beliefs with ``confidence_pending_review`` are hidden until the belief
-    review pass opts in and clears their pending state.
+    Beliefs with ``confidence_pending_review`` or review-only visibility are
+    hidden until the belief review pass opts in, clears pending state, and
+    restores operational read visibility.
 
     Args:
         agent_id: Which agent's beliefs to show. Default: "default".
@@ -1568,7 +1672,10 @@ def mnemos_forget(engram_id: str) -> str:
     if gate:
         return gate
     _ensure_store()
-    engram = _store.get_engram(engram_id)  # type: ignore
+    engram = _store.get_engram(  # type: ignore
+        engram_id,
+        read_visibility=READ_VISIBILITY_OPERATIONAL,
+    )
     if engram is None:
         return f"Memory not found: {engram_id}"
 

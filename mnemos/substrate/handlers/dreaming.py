@@ -41,7 +41,10 @@ def handle(
     if not softened_id:
         return produced_events
 
-    softened = store.get_engram(softened_id)
+    softened = store.get_engram(
+        softened_id,
+        read_visibility="operational_context",
+    )
     if not softened:
         return produced_events
     if (
@@ -60,6 +63,7 @@ def handle(
         WHERE state='active' AND content LIKE '%[dream]%'
         AND owner_agent_id = ?
         AND consolidation_authorized = 1
+        AND read_visibility = 'operational_context'
         AND created_at > datetime('now', '-7 days')
     """, (agent_id,)).fetchone()[0]
 
@@ -76,6 +80,7 @@ def handle(
         WHERE state='active' AND content LIKE '%[dream]%'
         AND owner_agent_id = ?
         AND consolidation_authorized = 1
+        AND read_visibility = 'operational_context'
         ORDER BY created_at DESC LIMIT 1
     """, (agent_id,)).fetchone()
 
@@ -99,6 +104,7 @@ def handle(
         WHERE state='active'
           AND owner_agent_id = ?
           AND consolidation_authorized = 1
+          AND read_visibility = 'operational_context'
           AND id != ?
         ORDER BY (accessibility * strength) DESC
         LIMIT 5
@@ -111,7 +117,10 @@ def handle(
     vivid_id, vivid_content, vivid_impact = rows[0]
 
     # Check vividness difference meets threshold
-    vivid_engram = store.get_engram(vivid_id)
+    vivid_engram = store.get_engram(
+        vivid_id,
+        read_visibility="operational_context",
+    )
     if not vivid_engram:
         return produced_events
     if (
@@ -189,6 +198,7 @@ If something does emerge, respond with:
                         WHERE id = ?
                           AND owner_agent_id = ?
                           AND consolidation_authorized = 1
+                          AND read_visibility = 'operational_context'
                         """,
                         (engram_id, agent_id),
                     ).fetchone()

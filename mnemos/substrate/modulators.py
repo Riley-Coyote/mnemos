@@ -52,7 +52,7 @@ def compute_modulators(
     now = datetime.now(timezone.utc)
     recent_cutoff = (now - timedelta(hours=recent_window_hours)).isoformat()
 
-    predicates = ["state='active'"]
+    predicates = ["state='active'", "read_visibility = 'operational_context'"]
     params: list[str] = []
     if agent_id is not None:
         predicates.append("owner_agent_id = ?")
@@ -62,16 +62,14 @@ def compute_modulators(
     engram_where = " AND ".join(predicates)
 
     def count_connections(formed_after: str | None = None) -> int:
-        if agent_id is None and not require_consolidation_authorized:
-            if formed_after is None:
-                return conn.execute("SELECT COUNT(*) FROM connections").fetchone()[0]
-            return conn.execute(
-                "SELECT COUNT(*) FROM connections WHERE formed_at > ?",
-                (formed_after,),
-            ).fetchone()[0]
-
-        src_predicates = ["src.state='active'"]
-        dst_predicates = ["dst.state='active'"]
+        src_predicates = [
+            "src.state='active'",
+            "src.read_visibility = 'operational_context'",
+        ]
+        dst_predicates = [
+            "dst.state='active'",
+            "dst.read_visibility = 'operational_context'",
+        ]
         connection_params: list[str] = []
         if agent_id is not None:
             src_predicates.append("src.owner_agent_id = ?")
@@ -120,7 +118,11 @@ def compute_modulators(
     ).fetchone()[0] or 0.25
 
     # ── Belief stability ──
-    belief_predicates = ["superseded_by IS NULL", "confidence_pending_review = 0"]
+    belief_predicates = [
+        "superseded_by IS NULL",
+        "confidence_pending_review = 0",
+        "read_visibility = 'operational_context'",
+    ]
     belief_params: list[str] = []
     if agent_id is not None:
         belief_predicates.append("agent_id = ?")

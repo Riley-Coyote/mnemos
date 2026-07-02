@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ...simple_runtime import MnemosRuntime
+from ...store.sqlite_store import READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW
 from .scope import (
     HermesMnemosConfig,
     HermesScope,
@@ -32,12 +33,13 @@ IDENTITY_CAPTURE_SCHEMA = {
     "description": (
         "Persist scoped identity-continuity notes in Mnemos. Use for stable preferences, "
         "self-model facts, corrections, session handoffs, and project decisions that should "
-        "survive future Hermes sessions. Set review=true for uncertain claims."
+        "survive future Hermes sessions. Set review=true for uncertain claims; high-blast "
+        "identity/foundational captures may also be held for review by Mnemos policy."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "content": {"type": "string", "description": "The durable memory or continuity note to persist."},
+            "content": {"type": "string", "description": "The memory or continuity note to persist or queue for review."},
             "context": {"type": "string", "description": "Optional provenance or session context."},
             "importance": {
                 "description": "Importance as low, auto, high, critical, or a 0-1 numeric score.",
@@ -431,7 +433,7 @@ class MnemosMemoryProviderCore:
             {"key": "person_id", "description": "Optional fixed person/user identity scope"},
             {"key": "project_scope", "description": "Optional fixed project continuity scope"},
             {"key": "auto_recall", "description": "Auto-inject scoped identity continuity", "default": "true", "choices": ["true", "false"]},
-            {"key": "auto_capture", "description": "Auto-capture durable identity-continuity facts", "default": "true", "choices": ["true", "false"]},
+            {"key": "auto_capture", "description": "Auto-capture identity-continuity facts; high-blast captures can queue for review", "default": "true", "choices": ["true", "false"]},
             {"key": "auto_bootstrap", "description": "Seed identity from SOUL.md/context files without editing them", "default": "true", "choices": ["true", "false"]},
             {"key": "deep_maintenance", "description": "Enable optional model-assisted Mnemos maintenance when model keys exist", "default": "false", "choices": ["true", "false"]},
         ]
@@ -535,6 +537,7 @@ class MnemosMemoryProviderCore:
             salience=0.42,
             foundational=False,
             related_session_id=self._session_id,
+            read_visibility=READ_VISIBILITY_REVIEW,
         )
 
     def _review_inbox(self, limit: int = 10) -> list[dict[str, Any]]:
@@ -548,10 +551,12 @@ class MnemosMemoryProviderCore:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=max(1, min(50, limit * 3)),
+            read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
         )
         review = [
             entry for entry in entries
-            if float(entry.get("confidence", 1.0)) < 0.62
+            if entry.get("read_visibility") == READ_VISIBILITY_REVIEW
+            or float(entry.get("confidence", 1.0)) < 0.62
             or {"review", "inbox", "uncertain"} & set(entry.get("tags", []))
         ]
         return review[:limit]
@@ -567,6 +572,7 @@ class MnemosMemoryProviderCore:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=3,
+            read_visibility=(READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW),
         )
         if any("bootstrap" in entry.get("tags", []) for entry in existing):
             return

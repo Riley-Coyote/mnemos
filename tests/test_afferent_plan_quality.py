@@ -168,7 +168,7 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "dedupe-then-diversity" in text
     assert "Consistency-anomaly score" in text
     assert "Salience as queue-ordering only" in text
-    assert "Development-health metric set" in text
+    assert "Q5 (deferred to follow-up work)" in text
 
     # Ledger extensions carrying the AM-U4 definition (Requirements + Rule Ledger both point at the subsection)
     assert text.count("evidence-diversity definition per AM-U4 subsection") >= 2
@@ -176,6 +176,9 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "supporting_instance_ids" in text
     assert "evidence_diversity" in text
     assert "consistency_anomaly" in text
+    assert "`evidence_diversity` participates in the AM-U4 gate decision" in text
+    assert "`consistency_anomaly` is an informing signal only" in text
+    assert "never touching promotion eligibility or auto-apply" in text
     assert "schema v8" in text
     assert (
         "Modify: `mnemos/store/migrations.py`" in u4_section
@@ -200,6 +203,8 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "vividness-ratio cap" in text
     assert "four conjunctive conditions" in text
     assert "instance-content diversity" in text
+    assert "STRICTER than the general" in text
+    assert "unconditionally across all tiers" in text
     assert "adaptive decay" in text
     assert "audit_only row is retained for provenance" in text
     assert "read_visibility=review_only" in text
@@ -235,6 +240,7 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "`stored/recurring/stabilized/graduated/decayed`" in text
     assert "no state reaches `graduated` without the four conjunctive conditions" in text
     assert "graduated is immutable terminal" in text
+    assert "stabilized is a pre-graduation state" in text
 
     # Surface Ledger pattern-store row
     assert "Pattern store (U6c:" in text

@@ -158,6 +158,15 @@ def _recent_signal_events(
     now: datetime,
     limit: int,
 ) -> list[dict[str, Any]]:
+    # KNOWN RESIDUAL (ruling 004; reports/004-t2.5-inner-life-safety-repairs.md):
+    # `_event_influences` is a content-semantic filter applied AFTER the recency
+    # limit below, so a burst of newer non-influencing rows inside the window can
+    # evict an older in-window turn/test/error signal. Eviction precondition: more
+    # than `limit` newer non-influencing rows within [since, now]. Accepted for now
+    # because affect is U7-gated (not live) and non-influencing generators are
+    # weekly-throttled. The paging fix (option b) is roadmap RM-7 and is gated into
+    # inner-life preflight (KNOWN_ACTIVATION_BLOCKERS), so affect cannot activate
+    # while this is open.
     rows = store.get_inner_life_events(
         agent_id=agent_id,
         person_id=person_id,

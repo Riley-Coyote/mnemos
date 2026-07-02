@@ -574,3 +574,33 @@ def test_family_cadence_survives_newer_other_family_rows(tmp_path):
         assert due is False
     finally:
         store.close()
+
+
+# ── Ruling 004 tooth 2: affect activation gated on the recency residual ──────
+
+
+def test_preflight_blocks_affect_activation_while_recency_residual_open(tmp_path):
+    """Ruling 004 tooth 2: affect cannot reach full-scheduled activation while
+    `emotional-driver-filter-after-limit` is open — the inner-life preflight makes
+    it a blocker by mechanism (not memory) and surfaces it per-process. Deleting
+    the KNOWN_ACTIVATION_BLOCKERS entry when the paging fix lands re-opens affect."""
+    from mnemos.config.defaults import DEFAULT_CONFIG
+    from mnemos.inner_life.preflight import build_inner_life_preflight
+
+    db = tmp_path / "preflight.db"
+    EngramStore(db).close()
+    config = deepcopy(DEFAULT_CONFIG)
+    config["inner_life"]["schedules"]["enabled"] = True
+    config["inner_life"]["schedules"]["processes"]["affect"]["enabled"] = True
+
+    pf = build_inner_life_preflight(config=config, db_path=str(db))
+
+    assert (
+        "known_open_issue:affect:emotional-driver-filter-after-limit" in pf["blockers"]
+    )
+    assert pf["ready_for_full_scheduled_activation"] is False
+    assert pf["processes"]["affect"]["known_open_issues"] == [
+        "emotional-driver-filter-after-limit"
+    ]
+    # a process without a known residual is unaffected
+    assert pf["processes"]["reflect"]["known_open_issues"] == []

@@ -217,6 +217,8 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "MIN_RECURRENCES" in text
     assert "VIVIDNESS_RATIO_CAP" in text
     assert "drop:high_blast_generated" in text
+    assert "identity-domain rows transition directly" in text
+    assert "no stabilized-then-drop deadlock" in text
     assert "add the dream pattern_store table" in text
     assert "instance-content diversity metric" in text
     assert "mnemos/substrate/handlers/dreaming.py" in text
@@ -245,6 +247,7 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     # Surface Ledger pattern-store row
     assert "Pattern store (U6c:" in text
     assert "dream-pattern prose never appears as operational context" in text
+    assert "ZERO counts, IDs, or prose on operational surfaces" in text
 
     # Actor/Auth Ledger dream-graduation producer row
     assert "Dream graduation (U6c pattern-store producer)" in text
@@ -254,7 +257,7 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "Authentic recurrence graduates as a proposal exactly once" in text
     assert "False-consensus variant-spam does not graduate" in text
     assert "A single vivid dream does not graduate (vividness-ratio cap)" in text
-    assert "Identity-domain dream content drops regardless of stability" in text
+    assert "Identity-domain dream content is preempted at the gate" in text
 
     # Invariants that must survive the amendments
     assert "U7" not in text

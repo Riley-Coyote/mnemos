@@ -40,7 +40,7 @@ Before implementation starts, the plan must include all of these items:
 
 6. **Regression Ledger**
    - Every invariant needs at least one positive test and one negative test.
-   - Include explicit tests for fresh high-confidence/foundational review-only classification, duplicate/upsert non-promotion, terminal proposal immutability, and sample limits not altering total queue counts.
+   - Include explicit tests for fresh promotion/high-blast review-only classification, duplicate/upsert non-promotion, terminal proposal immutability, and sample limits not altering total queue counts.
 
 7. **DynamicModulation bound check**
    - State whether DynamicModulation is inert, conservative, or actively influencing retrieval.

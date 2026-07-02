@@ -667,7 +667,12 @@ class MnemosRuntime:
         context: str = "",
         importance: str | float = "auto",
     ) -> str:
-        """Capture durable continuity without exposing Mnemos internals."""
+        """Capture continuity without exposing Mnemos internals.
+
+        Operational captures are encoded and promoted immediately. Identity,
+        foundational, or promotion-ready captures are held as review-only
+        continuity and do not enter ordinary context or first-capture prose.
+        """
 
         if not content.strip():
             return "Nothing captured: content was empty."
@@ -763,7 +768,7 @@ class MnemosRuntime:
         )
 
     def recall(self, query: str, max_results: int = 5) -> str:
-        """Recall relevant continuity and durable memories."""
+        """Recall relevant operational continuity and durable memories."""
 
         if not query.strip():
             return "Recall needs a query."

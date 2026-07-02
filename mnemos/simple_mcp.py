@@ -174,11 +174,13 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         importance: str | float = "auto",
         ctx: Context | None = None,
     ) -> str:
-        """Capture durable continuity from the current conversation.
+        """Capture continuity from the current conversation.
 
         Use for preferences, decisions, project state, corrections, workflows,
         and anything the agent should carry across sessions. Tags, memory type,
-        scope, and maintenance are handled internally.
+        scope, visibility, and maintenance are handled internally. Identity,
+        foundational, or promotion-ready captures may be held for review rather
+        than promoted into operational memory.
         """
 
         sampled = await _sample_text(
@@ -213,7 +215,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             )
         )
         def mnemos_recall(query: str, max_results: int = 5) -> str:
-            """Recall relevant continuity and durable memories."""
+            """Recall relevant operational continuity and durable memories."""
 
             return _get_runtime().recall(query=query, max_results=max_results)
 

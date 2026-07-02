@@ -86,8 +86,8 @@ Simple mode exposes seven user-facing tools:
 | Tool | Purpose |
 |---|---|
 | `mnemos_context` | Startup continuity packet. Auto-creates local storage, runs lightweight maintenance, and can optionally include an identity graph artifact. |
-| `mnemos_capture` | Capture durable preferences, decisions, project state, workflows, and context. |
-| `mnemos_recall` | Search scoped continuity and durable memory with natural language. |
+| `mnemos_capture` | Capture continuity; high-blast identity/foundational captures may be held for review instead of promoted. |
+| `mnemos_recall` | Search operational scoped continuity and durable memory with natural language. |
 | `mnemos_correct` | Update, supersede, or archive stale memory. |
 | `mnemos_maintain` | Run the best available maintenance without requiring setup. |
 | `mnemos_introduce` | Let the agent declare its own model id and name so memory maintenance stays kin from day one. |
@@ -164,6 +164,7 @@ You have access to Mnemos MCP memory tools.
 At the start of this session, call mnemos_context.
 If Mnemos asks you to introduce yourself, call mnemos_introduce with your own model id and name.
 Use mnemos_capture for stable preferences, decisions, project state, workflows, corrections, and context I should not have to repeat.
+If Mnemos says a capture is for review, treat it as pending and do not quote its prose from ordinary context.
 Use mnemos_recall before relying on memory from prior sessions.
 Use mnemos_correct when a remembered fact is stale, wrong, superseded, or should be forgotten.
 Use mnemos_health if I ask whether memory is working.
@@ -217,10 +218,10 @@ Advanced tools include:
 | `mnemos_beliefs` | List reviewed current beliefs. |
 | `mnemos_shared` | Read shared memory pool entries. |
 | `mnemos_hypomnema_write` | Write scoped continuity manually. |
-| `mnemos_hypomnema_search` | Search scoped continuity manually. |
+| `mnemos_hypomnema_search` | Search operational scoped continuity manually. |
 | `mnemos_hypomnema_revise` | Revise a continuity entry. |
 | `mnemos_hypomnema_supersede` | Replace an active continuity entry. |
-| `mnemos_hypomnema_candidates` | List promotion-ready continuity. |
+| `mnemos_hypomnema_candidates` | List operational promotion-ready continuity; use `mnemos_review_queue` for review-only candidates. |
 | `mnemos_hypomnema_promote` | Promote continuity into a durable engram. |
 | `mnemos_forget` | Archive a memory. |
 | `mnemos_consolidate` | Trigger explicit consolidation. |
@@ -236,11 +237,13 @@ out of both ordinary operational packets and ordinary review queues.
 Use `mnemos_proposal_audit` only for deliberate audit/admin inspection of
 audit-only proposal ledger rows.
 
-Direct-ID advanced tools (`mnemos_inspect`, `mnemos_forget`, and the
+Direct-ID and operational hypomnema tools (`mnemos_inspect`, `mnemos_forget`,
+`mnemos_hypomnema_search`, `mnemos_hypomnema_candidates`, and the
 `mnemos_hypomnema_revise` / `mnemos_hypomnema_supersede` /
 `mnemos_hypomnema_promote` mutators) operate only on operational rows: a
-review-only or audit-only ID returns a "not found" response so review prose is
-never mutated through an operational tool call.
+review-only or audit-only ID returns a "not found" response, or is absent from
+ordinary search/candidate output, so review prose is never mutated or promoted
+through an operational tool call.
 
 ### Prompt For An Advanced MCP Agent
 
@@ -588,7 +591,7 @@ With no provider key and no extra setup, Mnemos can still run:
 
 - local SQLite memory graph
 - scoped continuity notes
-- durable engram capture
+- durable engram capture for operational rows, with review-only continuity for high-blast captures
 - recall with reconsolidation and operational read-visibility filtering before ranking
 - strength, stability, and accessibility updates
 - local decay
@@ -596,6 +599,7 @@ With no provider key and no extra setup, Mnemos can still run:
 - promotion bookkeeping
 - correction, supersession, and archiving
 - startup context packet generation with review prose withheld by default
+- cross-session verification that quotes operational first captures but emits only an existence cue for review-only first captures
 - optional SVG identity graph snapshots
 - maintenance during normal tool calls
 

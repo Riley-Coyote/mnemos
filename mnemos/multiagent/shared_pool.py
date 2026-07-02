@@ -7,6 +7,10 @@ other agents to access. Respects visibility controls:
 - SHARED: all agents in the same instance can see it
 - PUBLIC: available for federation across instances
 
+Shared reads also enforce Mnemos read visibility: only
+``operational_context`` rows participate in ordinary shared-pool reads and
+conflict resolution.
+
 The shared pool handles conflict resolution when multiple agents
 create memories about the same topic with different content.
 
@@ -101,10 +105,10 @@ class SharedPool:
         query: str | None = None,
         kind: str | None = None,
     ) -> list[Engram]:
-        """Get shared memories visible to an agent.
+        """Get operational shared memories visible to an agent.
 
         Returns engrams from all agents that have been published to the
-        shared pool. The caller can check owner_agent_id to see who
+        shared pool and are operational-context rows. The caller can check owner_agent_id to see who
         created each memory.
 
         Args:
@@ -155,7 +159,7 @@ class SharedPool:
         agent_id: str,
         limit: int = 20,
     ) -> list[Engram]:
-        """Get shared engrams from a specific agent.
+        """Get operational shared engrams from a specific agent.
 
         Args:
             agent_id: The agent whose shared memories to retrieve.

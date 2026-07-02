@@ -25,7 +25,7 @@ Commands:
     mnemos pai-import watch-plist    Write a launchd plist for watch-once
     mnemos pai-import watch-doctor   Run the Step 3 launch-readiness gate
     mnemos pai-import review-gate    Run diff-focused adversarial U3c gate
-    mnemos remember CONTENT      Capture durable continuity from the CLI
+    mnemos remember CONTENT      Capture continuity from the CLI
     mnemos hermes install        Install Mnemos for Hermes Agent
     mnemos hermes quickstart     Safely install Mnemos for Hermes Agent
 """
@@ -191,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── remember ──
     p_remember = sub.add_parser(
-        "remember", help="Capture durable continuity from the command line"
+        "remember", help="Capture continuity from the command line"
     )
     p_remember.add_argument("content", help="What to remember")
     p_remember.add_argument("--context", default="", help="Where/why this came up")

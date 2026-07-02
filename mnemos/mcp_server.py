@@ -17,10 +17,10 @@ Tools:
     mnemos_ingest       — Ingest content from external sources
     mnemos_recall       — Retrieve relevant memories
     mnemos_hypomnema_write   — Write scoped continuity before promotion
-    mnemos_hypomnema_search  — Search scoped continuity
+    mnemos_hypomnema_search  — Search operational scoped continuity
     mnemos_hypomnema_revise  — Revise scoped continuity
     mnemos_hypomnema_supersede — Replace stale scoped continuity
-    mnemos_hypomnema_candidates — List promotion-ready continuity
+    mnemos_hypomnema_candidates — List operational promotion-ready continuity
     mnemos_hypomnema_promote — Promote stable continuity into Mnemos
     mnemos_inspect      — View full details of a memory
     mnemos_introspect   — Audit text for metacognitive pattern markers
@@ -1246,9 +1246,11 @@ def mnemos_hypomnema_search(
     project_scope: str = "global",
     include_inactive: bool = False,
 ) -> str:
-    """Search scoped hypomnema continuity entries.
+    """Search operational scoped hypomnema continuity entries.
 
     Default scope args inherit the server's configured scope.
+    Review-only promotion candidates are excluded; use mnemos_review_queue for
+    deliberate review inspection.
 
     Args:
         query: Optional natural-language query. Empty returns strongest entries.
@@ -1420,9 +1422,10 @@ def mnemos_hypomnema_candidates(
     person_id: str = "user",
     project_scope: str = "global",
 ) -> str:
-    """List hypomnema entries that meet promotion thresholds.
+    """List operational hypomnema entries that meet promotion thresholds.
 
     Default scope args inherit the server's configured scope.
+    Review-only candidates remain pending in mnemos_review_queue.
     """
     gate = _setup_gate()
     if gate:

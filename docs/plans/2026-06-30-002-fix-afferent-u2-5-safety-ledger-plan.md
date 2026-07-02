@@ -280,7 +280,7 @@ These U-IDs are repair-plan units. They do not replace the Afferent plan's exist
 - Legacy v5 migration fixture style in `tests/test_store.py`.
 
 **Test scenarios:**
-- Happy path: fresh high-confidence/foundational hypomnema with omitted visibility stores `review_only`.
+- Happy path: fresh promotion/high-blast hypomnema with omitted visibility stores `review_only`.
 - Happy path: fresh identity-domain hypomnema with low salience and omitted visibility stores `review_only` or stricter.
 - Happy path: ordinary legacy hypomnema below thresholds migrate to `operational_context`.
 - Happy path: legacy promotion/high-blast hypomnema migrate to `review_only`.
@@ -314,7 +314,7 @@ These U-IDs are repair-plan units. They do not replace the Afferent plan's exist
 - In `MnemosRuntime.capture`, classify the hypomnema write before encoding/promoting. If the row is review-only or audit-only, do not create an operational engram carrying the same prose and do not mark the hypomnema promoted.
 - Keep ordinary non-candidate captures operational when they are not high-blast and do not cross the classifier.
 - Change identity-diff notes so synthesized identity/foundational divergence material is review-only until explicitly accepted.
-- Ensure `mnemos_hypomnema_write` omits model-settable visibility, reports resulting visibility, and proves high-confidence/foundational writes are review-visible only.
+- Ensure `mnemos_hypomnema_write` omits model-settable visibility, reports resulting visibility, and proves promotion/high-blast writes are review-visible only.
 - Make `mnemos_hypomnema_search` exclude operational promotion candidates by default, matching context packets and visual snapshots.
 - Preserve existing MCP reject behavior for non-operational promote/revise/supersede/forget targets.
 
@@ -335,7 +335,7 @@ These U-IDs are repair-plan units. They do not replace the Afferent plan's exist
 
 **Verification:**
 - The normal live write path no longer bypasses the store classifier.
-- Fresh high-confidence/foundational hypomnema cannot become operational just because it was written after migration.
+- Fresh promotion/high-blast hypomnema cannot become operational just because it was written after migration.
 - U2.5 does not implement authority stamping; it only prevents operational laundering before U3.
 
 ### U5. Expose Proposal And Review State Through Safe Surfaces
@@ -467,7 +467,7 @@ These U-IDs are repair-plan units. They do not replace the Afferent plan's exist
 - Existing focused tests in `tests/test_context_packet.py`, `tests/test_hypomnema.py`, `tests/test_retrieval.py`, and `tests/test_mcp_surface.py`.
 
 **Test scenarios:**
-- Happy path: fresh high-confidence/foundational hypomnema without explicit `read_visibility` is present only through explicit review visibility.
+- Happy path: fresh promotion/high-blast hypomnema without explicit `read_visibility` is present only through explicit review visibility.
 - Happy path: ordinary legacy hypomnema remains operational after migration.
 - Error path: proposal rows cannot be pending and operational at the same time.
 - Error path: raw proposal writes cannot forge applied/approved states.
@@ -475,7 +475,7 @@ These U-IDs are repair-plan units. They do not replace the Afferent plan's exist
 
 **Verification:**
 - Every targeted test node passes locally using temporary stores.
-- No operational search, context, promotion, retrieval, dream/tag, or MCP surface emits fresh high-confidence/foundational omitted-visibility hypomnema prose.
+- No operational search, context, promotion, retrieval, dream/tag, or MCP surface emits fresh promotion/high-blast omitted-visibility hypomnema prose.
 - No proposal payload is visible outside its intended review/audit surface.
 - The final adversarial checklist is clean: no unjustified `READ_VISIBILITY_OPERATIONAL` overrides on synthesized/identity/foundational writes; `write_proposal()` cannot persist `approved` or `applied` without a reviewed-gate path; a populated legacy v5 database leaves non-candidate hypomnema operational after v6 migration.
 - U2 is not reported closed until this focused proof and the branch validation lane pass cleanly.
@@ -519,7 +519,7 @@ These U-IDs are repair-plan units. They do not replace the Afferent plan's exist
 ## Success Metrics
 
 - The current Afferent plan has a correct RFC-R1 through RFC-R8 ledger and no operative bogus RFC-R9/R10 rules.
-- Fresh high-confidence/foundational omitted-visibility hypomnema is absent from operational search, context, retrieval, promotion, runtime maintenance, MCP search/promote, and tag lookup.
+- Fresh promotion/high-blast omitted-visibility hypomnema is absent from operational search, context, retrieval, promotion, runtime maintenance, MCP search/promote, and tag lookup.
 - The same hypomnema is visible only through explicit review visibility.
 - Ordinary legacy hypomnema remains operational after migration unless it is a promotion/high-blast candidate.
 - ProposalLedger accepts RFC axes, defaults to audit-only, rejects pending operational visibility, and cannot forge terminal apply/approve state.

@@ -53,10 +53,11 @@ The fundamental unit of memory. Each engram has:
   `read_visibility` (`operational_context`, `review_only`, or `audit_only`).
   Operational retrieval, packets, consolidation, substrate producers, and
   modulators read only `operational_context` rows by default; review APIs opt
-  in explicitly. Stable or foundational live hypomnema writes classify to
-  `review_only` by default, while the bare hypomnema SQL default stays
-  `operational_context` for legacy compatibility; omitted-visibility callers
-  still pass through the write-time classifier before ordinary use. Proposed
+  in explicitly. Stable promotion candidates and identity/foundational live
+  hypomnema writes classify to `review_only` by default, while the bare
+  hypomnema SQL default stays `operational_context` for legacy compatibility;
+  omitted-visibility callers still pass through the write-time classifier
+  before ordinary use. Proposed
   durable transitions are tracked in
   `proposal_ledger` with authority, target surface, transition, blast radius,
   visibility, status, reason, gate version, provenance, and payload fields.

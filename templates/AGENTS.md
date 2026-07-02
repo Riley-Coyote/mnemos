@@ -37,6 +37,8 @@ At the start of a meaningful work block:
 During the session:
 
 - Use `mnemos_capture` for stable preferences, decisions, lessons, project state, workflows, corrections, commitments, and context the human should not have to repeat.
+- If `mnemos_capture` reports `Captured continuity for review`, treat the note
+  as pending: do not quote or act on its prose from ordinary context.
 - Use `mnemos_recall` before relying on memory from prior sessions.
 - Use `mnemos_correct` when remembered continuity is stale, wrong, superseded, or should be forgotten.
 - Use `mnemos_health` when the human asks whether memory is working.

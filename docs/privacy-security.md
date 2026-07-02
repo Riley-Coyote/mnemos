@@ -20,7 +20,9 @@ Simple mode tools have these local side effects:
 - `mnemos_context` can create the database and log maintenance
 - `mnemos_context(include_graph=true)` can return a scoped SVG identity graph
   artifact and structured graph data
-- `mnemos_capture` writes continuity and durable memories
+- `mnemos_capture` writes continuity and, for operational captures, durable
+  memories; high-blast identity/foundational captures can stay review-only
+  instead of being promoted
 - `mnemos_recall` can reconsolidate access metadata
 - `mnemos_correct` can archive, revise, or supersede memory
 - `mnemos_maintain` runs consolidation and bookkeeping
@@ -87,11 +89,15 @@ material:
 - `read_visibility="review_only"` keeps pending functional confirmations,
   hypomnema promotion candidates, and other review-shaped material out of
   operating context while leaving it visible to explicit review tools.
-- Live hypomnema writes classify stable or foundational promotion candidates
-  as `review_only` at write time. The bare `hypomnema_entries` SQL default is
-  `operational_context` for legacy compatibility; callers that omit
-  `read_visibility` still go through the store's write-time classifier before
-  durable rows can enter ordinary context.
+- Simple-mode first-capture verification stores only the note ID for
+  non-operational captures. The restart proof may show a pending-review cue,
+  but it must not re-quote review-only or audit-only prose into operational
+  context.
+- Live hypomnema writes classify stable promotion candidates and
+  identity/foundational rows as `review_only` at write time. The bare
+  `hypomnema_entries` SQL default is `operational_context` for legacy
+  compatibility; callers that omit `read_visibility` still go through the
+  store's write-time classifier before durable rows can enter ordinary context.
 - `read_visibility="audit_only"` is excluded from ordinary operational reads
   and ordinary review queues; ProposalLedger audit rows require the explicit
   `mnemos_proposal_audit` admin/audit surface.

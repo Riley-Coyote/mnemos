@@ -26,9 +26,12 @@
 - Functional memories needing confirmation and hypomnema promotion candidates
   are quarantined from operational packet bodies and simple runtime recall
   until they are reviewed or promoted through an explicit surface.
-- Live hypomnema writes now classify stable or foundational promotion
-  candidates as `review_only` unless the caller explicitly supplies a
-  visibility. The raw `hypomnema_entries` SQL default remains
+- Simple-mode first-capture verification stores no prose for non-operational
+  captures. After restart, review-only first captures emit an existence-only
+  review cue; operational first captures still quote the original excerpt.
+- Live hypomnema writes now classify stable promotion candidates and
+  identity/foundational rows as `review_only` unless the caller explicitly
+  supplies a visibility. The raw `hypomnema_entries` SQL default remains
   `operational_context` for legacy compatibility; omitted-visibility callers
   still go through the store classifier before rows can enter ordinary context.
 - Direct-ID advanced MCP tools (`mnemos_inspect`, `mnemos_forget`, and the
@@ -58,7 +61,7 @@
 ### Simple Mode Magic UX (5 → 7 tools)
 - Onboarding ritual — a fresh scope's first context packet walks the agent through a short get-to-know-you script (name, current work, durable facts); stores that predate onboarding are grandfathered and never see it
 - mnemos_introduce — the agent declares its own model id and name; the declaration feeds the substrate-affinity gate so maintenance stays kin (an explicit MNEMOS_AGENT_MODEL still takes precedence)
-- Cross-session memory verification — the first context packet after a real restart quotes the very first capture back to the human, once, as proof that memory survived the goodbye
+- Cross-session memory verification — the first context packet after a real restart quotes an operational first capture back once, or emits an existence-only review cue when the first capture is review-only
 - Dream journal — consolidation cycles that did meaningful work leave a short first-person narrative, surfaced in the next context packet ("While you were away") and optionally polished by the host model via MCP sampling
 - mnemos_health — truly read-only, human-relayable health card: store location and size, memory counts, last maintenance cycle and who performed it, affinity verdict, onboarding and verification progress, latest dream entry
 

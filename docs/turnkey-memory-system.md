@@ -46,6 +46,9 @@ internally so the agent does not have to choose storage layers during normal
 conversation. Operational packets and recall use only `operational_context`
 rows; pending confirmation prose and promotion-candidate prose surface as
 review counts and source IDs until an explicit review surface asks for them.
+Simple captures that look like identity/foundational or otherwise
+promotion-ready material are held as review-only continuity rather than being
+promoted into operational engrams.
 
 ## Onboarding Walkthrough
 
@@ -74,6 +77,9 @@ The onboarding ritual seeds:
 - Promote to Mnemos only after continuity is stable, salient, and useful beyond the current relationship scope.
 - Treat review-only material as a queue, not as operating context; use review
   mode or the review queue when a human/operator needs to inspect the prose.
+- Treat a simple-mode `Captured continuity for review` response as pending:
+  ordinary context, recall, and cross-session verification must not quote its
+  prose.
 
 ## Inline Visual Content
 

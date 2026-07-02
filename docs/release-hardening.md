@@ -71,10 +71,14 @@ Use this checklist before publishing Mnemos or opening a release PR.
   surfaces.
 - Schema v6/v7 migrations default existing pending beliefs, confirmation-needed
   functional memories, and hypomnema promotion candidates to review visibility.
-- Fresh live hypomnema writes that already meet stable/foundational promotion
-  criteria default to `review_only`; the raw hypomnema SQL default remains
-  `operational_context` for legacy compatibility, with omitted-visibility
-  callers still routed through the store classifier before ordinary use.
+- Fresh live hypomnema writes that already meet stable promotion criteria, or
+  that carry identity/foundational scope, default to `review_only`; the raw
+  hypomnema SQL default remains `operational_context` for legacy compatibility,
+  with omitted-visibility callers still routed through the store classifier
+  before ordinary use.
+- Simple-mode first-capture verification records review-only/audit-only
+  captures as existence-only metadata and never stores or re-quotes their
+  prose in the operational restart proof.
 - Correction/forget behavior is documented.
 
 ## PAI Importer And Dual-Life Watcher

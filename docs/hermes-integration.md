@@ -72,7 +72,9 @@ Provider Mode enables:
 
 - compact startup identity-continuity packet
 - automatic scoped recall before turns
-- durable capture of preferences, corrections, decisions, self-model updates, and session handoffs
+- capture of preferences, corrections, decisions, self-model updates, and
+  session handoffs, with high-blast identity/foundational claims held for
+  review when Mnemos policy requires it
 - non-destructive mirroring of Hermes built-in memory writes into Mnemos
 - pre-compression preservation of identity-critical facts
 - session-end distillation and continuity reports
@@ -178,7 +180,8 @@ $HERMES_HOME/mnemos/mnemos.db
 
 In Provider Mode, Hermes receives four provider tools:
 
-- `mnemos_identity_capture`: save stable preferences, corrections, decisions, self-model facts, and handoffs
+- `mnemos_identity_capture`: save stable preferences, corrections, decisions,
+  self-model facts, and handoffs, or queue high-blast/uncertain material for review
 - `mnemos_identity_recall`: recall scoped continuity for the active agent/person/project
 - `mnemos_identity_correct`: revise, supersede, archive, or forget stale continuity
 - `mnemos_identity_report`: inspect compact context packets, graph data, review inbox, status, and maintenance

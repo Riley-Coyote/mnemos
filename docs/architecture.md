@@ -63,9 +63,10 @@ The fundamental unit of memory. Each engram has:
   visibility, status, reason, gate version, provenance, and payload fields.
 - **Gated inner-life controls** (schema v8): generated reflection, wandering,
   and dream rows pass through the narrative gate and low-stakes writer before
-  persistence. Passed rows are private, low-confidence, audit-only engrams;
-  provenance, skips, drops, scheduled-run telemetry, and soak tick summaries
-  live in `inner_life_events` instead of ordinary proposal or review queues.
+  persistence. Passed rows are private, low-confidence, audit-only engrams
+  written transactionally with their idempotency ledger rows; provenance, skips,
+  drops, scheduled-run telemetry, and soak tick summaries live in
+  `inner_life_events` instead of ordinary proposal or review queues.
 - **PAI coordinate guard**: before imported text becomes retrievable rows, the
   splitter strips Strict-B eigenvalue, vivezza, coordinate-target, and
   persona-signature tuple-value lines from any source kind. These values are
@@ -156,12 +157,23 @@ Passed generated candidates are written only as private
 `read_visibility="audit_only"` low-stakes engrams. They are rollout-tagged,
 source-grounded, not voice exemplars, not consolidation authorized, and never
 belief writes, identity patches, hypomnema promotions, or shared-pool
-publications.
+publications. Scheduled `wander` and `dream` pass person/project/rollout scope
+through the substrate event payload so their generated rows remain backoutable
+by rollout scope.
+
+Activity, cooldown, and cadence gates select eligible recent rows in SQL before
+applying scan limits. `affect` still has one accepted residual:
+`emotional-driver-filter-after-limit`, where a semantic influence filter runs
+after the recency limit. Full scheduled activation blocks `affect` while that
+residual is open, and RM-7 owns the paging/filtering fix.
 
 The U7 soak tick composes enabled families from `soak.families` and
 `inner_life.schedules`, records telemetry in `inner_life_events`, and keeps
-launchd loading behind an explicit operator authorization gate. The default
-config leaves both inner-life schedules and soak ticks disabled.
+launchd loading behind an explicit operator authorization gate. It wires a
+model client for enabled generative families (`reflect`, `wander`, `dream`)
+only when the caller has not supplied one; soak activation preflight disables
+that auto-wiring during the copy-DB dry run. The default config leaves both
+inner-life schedules and soak ticks disabled.
 
 ### Event System
 

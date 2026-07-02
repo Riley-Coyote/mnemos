@@ -58,14 +58,28 @@
   low-confidence, `read_visibility="audit_only"`, rollout-tagged, sourced to
   real IDs, not voice exemplars, and not consolidation authorized; generated
   identity/foundational-domain output is dropped as `high_blast_generated`.
+- Low-stakes generated writes now persist the engram and `inner_life_events`
+  idempotency row in one transaction, rolling back cleanly on crashes or
+  idempotency races so retries cannot mint duplicate generated memory.
 - Inner-life schedules are configured but disabled by default. Activation
   preflight checks per-family kill switches, activity-gate switches, provider
-  readiness, observer reviewer configuration, pre-soak snapshots, launchd plist
-  paths, halt marker, and rollback commands before U7 can load anything.
+  readiness, observer reviewer configuration, pre-soak snapshots, and known
+  per-process activation blockers before U7 can load anything. It also reports
+  launchd plist paths, halt marker, and rollback commands. `affect` remains
+  blocked by the `emotional-driver-filter-after-limit` residual until RM-7;
+  keeping it disabled is treated as the safe state rather than a
+  disabled-switch penalty.
 - New `mnemos soak` commands cover `tick`, `plist`, and `preflight`. The soak
   tick fans out enabled families, can run shallow consolidation without deep
-  model work, writes only `inner_life_events` telemetry for the tick itself,
-  and leaves launchd loading as a separate operator action.
+  model work, wires an LLM client for enabled generative families only when the
+  caller has not injected one, writes only `inner_life_events` telemetry for
+  the tick itself, and leaves launchd loading as a separate operator action.
+- Copy-DB soak activation preflight disables LLM auto-wiring, so
+  `--dry-run-tick` verifies the tick path without sending memory content to a
+  real model or mutating the supplied DB.
+- Inner-life recency, cooldown, signal, and family-cadence scans now apply
+  eligibility filters in SQL before `LIMIT`; the remaining affect semantic
+  filter-after-limit residual is documented and activation-blocked.
 - `mnemos pai-import review-gate` now recognizes U6.6 inner-life and U7 soak
   diffs and requires the matching schema, finalizer, activity, narrative,
   scheduler, CLI, preflight, and soak regression proof surfaces.

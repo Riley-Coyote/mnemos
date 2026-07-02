@@ -158,7 +158,7 @@ def _recent_signal_events(
     now: datetime,
     limit: int,
 ) -> list[dict[str, Any]]:
-    # KNOWN RESIDUAL (ruling 004; reports/004-t2.5-inner-life-safety-repairs.md):
+    # KNOWN RESIDUAL (ruling 004; see docs/gated-inner-life.md):
     # `_event_influences` is a content-semantic filter applied AFTER the recency
     # limit below, so a burst of newer non-influencing rows inside the window can
     # evict an older in-window turn/test/error signal. Eviction precondition: more

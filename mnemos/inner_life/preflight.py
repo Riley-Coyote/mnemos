@@ -18,8 +18,8 @@ SOAK_FAMILIES = ("shallow_consolidation",)
 # affect: `_recent_signal_events` applies the `_event_influences` content filter
 # after the recency limit, so a burst of newer non-influencing rows can evict an
 # older in-window signal (ruling 004, option (c) now / (b) at activation). The
-# paging primitive that closes it is roadmap RM-7. See
-# reports/004-t2.5-inner-life-safety-repairs.md.
+# paging primitive that closes it is roadmap RM-7; docs/gated-inner-life.md and
+# tests/test_t2_5_safety_gate_repairs.py carry the operator/test contract.
 KNOWN_ACTIVATION_BLOCKERS: dict[str, tuple[str, ...]] = {
     "affect": ("emotional-driver-filter-after-limit",),
 }

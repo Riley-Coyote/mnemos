@@ -183,6 +183,8 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
 
     # AM-U6c Dream Graduation charter
     assert "### U6c. Dream Graduation" in text
+    assert "U6c (dream graduation, Amendment B) is scheduled as a subsequent stage" in text
+    assert "codex/afferent-membrane-v1-dream-graduation" in text
     assert "non-accumulating" in text
     assert "vividness-ratio cap" in text
     assert "three conjunctive tests" in text

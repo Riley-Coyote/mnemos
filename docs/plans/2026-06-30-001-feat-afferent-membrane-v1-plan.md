@@ -13,7 +13,7 @@ Implement the Afferent Membrane v1 over Mnemos as a staged architecture: operati
 
 This plan is derived from `/Users/davidef/phenom-felt-review/RFC-v1-proposal-ledger.md`. The RFC is the safety ledger and source of truth; this plan cannot override, renumber, or weaken it.
 
-Current branch state: U1 packet mode split and U2 proposal-ledger/read-visibility schema are implemented on `codex/afferent-membrane-v1-ledger`. U3 through U6b remain planned follow-up stages.
+Current branch state: U1 packet mode split and U2 proposal-ledger/read-visibility schema are implemented on `codex/afferent-membrane-v1-ledger`. U3 through U6b remain planned follow-up stages; U6c (dream graduation, Amendment B) is scheduled as a subsequent stage per its dependency line (AM-U6 live + accumulated dream corpus).
 
 ## Current Validation State
 
@@ -242,6 +242,7 @@ Each invariant below requires at least one positive and one negative test. Posit
 | Stage 4 | `codex/afferent-membrane-v1-review-gates` | Tiered review gates by blast radius/domain/surface | Review routing tests and no-mistakes |
 | Stage 5 | `codex/afferent-membrane-v1-modulation` | DynamicModulation persistence and distribution bounds | Modulation tests, calibration placeholder proof, no-mistakes |
 | Stage 6 | `codex/afferent-membrane-v1-experience-tick` | ExperienceTick afferent layer feeding modulation and ledger | Tick-to-ledger/modulation tests and no-mistakes |
+| Stage 7 | `codex/afferent-membrane-v1-dream-graduation` | Dream pattern store + adaptive decay + three-test conjunctive stabilization (recurrences + seed-context diversity + vividness-ratio cap) + one-time non-accumulating graduation at generated authority | Pattern-store, stabilization gate, and graduation tests; adaptive decay + false-consensus + identity-domain-drop coverage; no-mistakes |
 
 Current Stage 2 state: branch `codex/afferent-membrane-v1-ledger`, base commit `03c9417`, implementing U1 packet mode and U2 proposal ledger/read visibility. Stage 3 starts from the authority lane only after the current branch head has local focused proof and same-head no-mistakes proof.
 

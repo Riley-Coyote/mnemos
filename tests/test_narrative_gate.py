@@ -92,6 +92,37 @@ def test_narrative_gate_drops_manufactured_inner_state(tmp_path):
         store.close()
 
 
+def test_narrative_gate_drops_high_blast_generated_identity_output(tmp_path):
+    """Finding B (DAVID-2 / D5): identity/foundational-domain generated output is
+    dropped and logged, never written even as a private low-stakes record."""
+    store = EngramStore(tmp_path / "narrative-high-blast.db")
+    try:
+        result = gate_narrative_candidate(
+            content="A quiet note about who I am and the principle I always hold.",
+            source_ids=["turn-2"],
+            process_name="wander",
+            store=store,
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            rollout_tag="u6.6-test",
+        )
+
+        assert result["allowed"] is False
+        assert result["reason"] == "high_blast_generated"
+        rows = store.get_inner_life_events(
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            event_type="skip",
+            rollout_tag="u6.6-test",
+        )
+        assert any(r["gate_decision"] == "drop:high_blast_generated" for r in rows)
+        _assert_no_generated_memory(store)
+    finally:
+        store.close()
+
+
 def test_narrative_gate_drops_introspection_reject(tmp_path):
     store = EngramStore(tmp_path / "narrative-reject.db")
     try:

@@ -773,7 +773,19 @@ INNER_LIFE_EVENT_TYPES = {
 
 
 def apply_u6_6_inner_life_schema_migration(conn: sqlite3.Connection) -> None:
-    """Apply the U6.6 private inner-life provenance ledger schema."""
+    """Apply the U6.6 private inner-life provenance ledger schema.
+
+    Finding C / DAVID-2: ``inner_life_events`` is the formal sub-ledger for the
+    auto-applied episodic-non-identity low-stakes class. Generated
+    dream/wander/reflection writes are recorded here (content-hash, excerpt,
+    source ids, gate decision, zero belief/identity/shared-pool counters) rather
+    than emitting duplicate ProposalLedger rows. The class boundary is
+    guaranteed by two gates landing in the same change: Finding A stamps the
+    written engram ``audit_only`` (quarantined from operational reads), and
+    Finding B drops identity/foundational-domain generated output before any
+    write — so this sub-ledger only ever holds episodic, non-identity, private
+    records.
+    """
     event_types = "', '".join(sorted(INNER_LIFE_EVENT_TYPES))
     conn.execute(
         f"""

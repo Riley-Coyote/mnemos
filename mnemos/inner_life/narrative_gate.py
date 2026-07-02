@@ -31,6 +31,22 @@ _METRICS_ONLY_DREAM_PATTERNS = (
     "softening pass",
 )
 
+# Identity/foundational domain markers, mirroring simple_runtime._classify_domain.
+# Finding B (DAVID-2 / D5): generated output whose domain is identity or
+# foundational has no legitimate low-stakes destination — drop-and-log, never a
+# private write. Keyword prefilter; a learned identity axis is the durable fix.
+_HIGH_BLAST_PATTERNS = (
+    "identity",
+    "who i am",
+    "who you are",
+    "selfhood",
+    "always",
+    "preference",
+    "prefers",
+    "principle",
+    "boundary",
+)
+
 
 def gate_narrative_candidate(
     *,
@@ -55,6 +71,8 @@ def gate_narrative_candidate(
         decision = _decision(False, "missing_source_ids", "drop:missing_source_ids", clean, sources)
     elif _looks_manufactured(clean):
         decision = _decision(False, "manufactured_inner_state", "drop:manufactured_inner_state", clean, sources)
+    elif _looks_high_blast(clean):
+        decision = _decision(False, "high_blast_generated", "drop:high_blast_generated", clean, sources)
     elif candidate_kind in {"dream", "dreaming"} and _looks_metrics_only_dream(clean):
         decision = _decision(False, "metrics_only_dream", "drop:metrics_only_dream", clean, sources)
     else:
@@ -130,6 +148,12 @@ def _source_ids(value: list[str] | tuple[str, ...] | None) -> list[str]:
 def _looks_manufactured(content: str) -> bool:
     lowered = content.lower()
     return any(pattern in lowered for pattern in _MANUFACTURE_PATTERNS)
+
+
+def _looks_high_blast(content: str) -> bool:
+    """Identity/foundational-domain generated output (Finding B / D5)."""
+    lowered = content.lower()
+    return any(pattern in lowered for pattern in _HIGH_BLAST_PATTERNS)
 
 
 def _looks_metrics_only_dream(content: str) -> bool:

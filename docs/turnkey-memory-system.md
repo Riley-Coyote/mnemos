@@ -50,6 +50,12 @@ Simple captures that look like identity/foundational or otherwise
 promotion-ready material are held as review-only continuity rather than being
 promoted into operational engrams.
 
+Gated inner-life and soak rows are outside the turnkey session loop. Their
+private provenance, gate decisions, skips/drops, and tick telemetry live in
+`inner_life_events`; any passed generated reflection, wandering, or dream
+memory is private `audit_only` low-stakes memory and does not enter ordinary
+context or recall.
+
 ## Onboarding Walkthrough
 
 The agent should walk the human through:

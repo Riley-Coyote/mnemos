@@ -30,6 +30,7 @@ model providers are optional for richer deep maintenance.
 | Hermes agent with another memory provider | Hermes Sidecar Mode | `mnemos hermes quickstart --agent-safe` |
 | Hermes agent using Mnemos as its provider | Hermes Provider Mode | `mnemos hermes quickstart --provider` |
 | Background memory maintenance | Substrate tick | `mnemos substrate-tick` |
+| Gated inner-life / soak validation | Representative DB operator path | `mnemos inner-life preflight --db-path ./copy.db` |
 
 Most users should start with **Simple MCP Mode**. Hermes users should start with
 **Hermes Sidecar Mode** unless they explicitly want Mnemos to occupy Hermes'
@@ -360,6 +361,12 @@ The substrate can run local deterministic passes without a model provider.
 Configured model providers enable richer deep maintenance, softening, belief
 review, reflection, dreaming, and wandering.
 
+The gated inner-life and full-soak commands are operator/pre-soak surfaces, not
+baseline background jobs. They require `--db-path`, refuse live `~/.mnemos`
+databases unless `--allow-live-db` is supplied, and keep generated
+reflection/wandering/dream output private and audit-only. See
+[docs/gated-inner-life.md](docs/gated-inner-life.md) before using them.
+
 ### Dedicated Model Providers
 
 OpenRouter:
@@ -542,6 +549,31 @@ Enforcement links: `mnemos/importer/operator.py`, `mnemos/importer/watcher.py`,
 `tests/test_u3c_pai_watch_doctor.py`, and
 `tests/test_u3c_pai_review_gate.py`.
 
+Gated inner-life and soak operator commands:
+
+```bash
+mnemos inner-life session-finalize --db-path ./copy.db --transcript ./session.jsonl \
+                          --session-id session-1
+mnemos inner-life turn-finalize --db-path ./copy.db --session-id session-1 \
+                          --user-text "..." --assistant-text "..."
+mnemos inner-life activity-gate --db-path ./copy.db --process reflect
+mnemos inner-life run --db-path ./copy.db --process reflect
+mnemos inner-life plist --db-path ./copy.db --process reflect \
+                          --plist ./com.davidef.mnemos.innerlife.reflect.plist
+mnemos inner-life preflight --db-path ./copy.db
+mnemos inner-life status --db-path ./copy.db
+mnemos soak tick --db-path ./copy.db
+mnemos soak plist --db-path ./copy.db \
+                          --plist ./com.davidef.mnemos.soak.tick.plist
+mnemos soak preflight --db-path ./copy.db --dry-run-tick \
+                          --soak-plist ./com.davidef.mnemos.soak.tick.plist
+```
+
+These commands use the schema v8 `inner_life_events` ledger for provenance,
+gate decisions, skips, and generated-write telemetry. Generated low-stakes
+memory rows are private, `read_visibility="audit_only"`, and excluded from
+ordinary operational retrieval.
+
 Global options:
 
 ```bash
@@ -636,6 +668,7 @@ Simple MCP Surface      context | capture | recall | correct | maintain
 Continuity Layer        scoped notes | revisions | supersession | promotion
 Mnemos Core             engrams | connections | beliefs | reconsolidation
 Substrate               decay | softening | reflection | modulators | events
+Gated Inner Life        provenance ledger | audit-only low-stakes writes | soak preflight
 Cross-Agent Layer       shared pool | bridge | federation | attestation
 Hermes Integration      sidecar MCP | provider shim | identity continuity
 ```
@@ -663,7 +696,7 @@ for release gates.
 ```bash
 uv run --extra dev pytest -q
 uv run --extra dev --extra mcp pytest -q tests/test_mcp_surface.py
-python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py
+python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/inner_life/*.py mnemos/soak/*.py
 ```
 
 ---

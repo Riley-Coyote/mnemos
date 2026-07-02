@@ -40,6 +40,35 @@
   initiation) now look up engrams with `read_visibility="operational_context"`
   so review-only and audit-only rows cannot be mutated, dreamt over, or
   reflected on through an operational call path.
+- The migration registry now fails loudly on duplicate schema version
+  registrations, and the v7 repair path applies the membrane schema only when
+  read-visibility columns are absent so inner-life-origin v6 databases upgrade
+  without downgrading existing quarantine rows.
+
+### Gated Inner Life And Full Soak
+- Schema v8 adds `inner_life_events`, a private sub-ledger for turn/session
+  provenance, activity-gate decisions, generated-candidate skips/drops,
+  scheduled-run telemetry, and U7 soak tick summaries.
+- New `mnemos inner-life` commands cover `session-finalize`, `turn-finalize`,
+  `activity-gate`, `run`, `plist`, `preflight`, and `status`. Every DB-using
+  command requires `--db-path` and refuses live `~/.mnemos` databases unless
+  `--allow-live-db` is supplied for an explicitly authorized live rollout.
+- Generated reflection, wandering, and dream output now passes through the
+  narrative gate and the low-stakes writer. Passed rows are private,
+  low-confidence, `read_visibility="audit_only"`, rollout-tagged, sourced to
+  real IDs, not voice exemplars, and not consolidation authorized; generated
+  identity/foundational-domain output is dropped as `high_blast_generated`.
+- Inner-life schedules are configured but disabled by default. Activation
+  preflight checks per-family kill switches, activity-gate switches, provider
+  readiness, observer reviewer configuration, pre-soak snapshots, launchd plist
+  paths, halt marker, and rollback commands before U7 can load anything.
+- New `mnemos soak` commands cover `tick`, `plist`, and `preflight`. The soak
+  tick fans out enabled families, can run shallow consolidation without deep
+  model work, writes only `inner_life_events` telemetry for the tick itself,
+  and leaves launchd loading as a separate operator action.
+- `mnemos pai-import review-gate` now recognizes U6.6 inner-life and U7 soak
+  diffs and requires the matching schema, finalizer, activity, narrative,
+  scheduler, CLI, preflight, and soak regression proof surfaces.
 
 ### MCP Server
 - Advanced MCP tools now inherit the server's configured `agent_id`,

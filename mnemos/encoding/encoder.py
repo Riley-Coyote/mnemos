@@ -75,7 +75,7 @@ def should_auto_share(engram: Engram) -> bool:
     lessons, and high-confidence semantic/procedural knowledge.
 
     Keep private: internal reasoning, emotional state, working memory,
-    reflections, and dream-sourced content.
+    observer output, reflections, and dream-sourced content.
     """
     tags = set(engram.tags)
 

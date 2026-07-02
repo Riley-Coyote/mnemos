@@ -3,8 +3,8 @@ Reflection pass: autonomous thought generation and narrative identity update.
 
 The most creative consolidation step:
 1. Reviews recent memories and finds patterns/themes
-2. Generates "thoughts" — new semantic engrams synthesizing insights
-3. Updates the narrative self-summary (the agent's story of who it is)
+2. Gates generated thoughts through the U6.6 narrative/low-stakes path
+3. Updates the self-summary from the measured graph identity profile
 
 Requires an LLM client for full functionality. Without one, uses
 template-based fallbacks that still produce useful (if less creative) output.
@@ -62,7 +62,11 @@ def run_reflection_pass(
     llm_client: Any | None,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Generate thoughts, curiosity questions, and update narrative self-summary.
+    """Gate generated thoughts and update the graph-derived self-summary.
+
+    Generated thoughts that pass the narrative gate are written as private,
+    low-stakes audit-only engrams; rejected candidates are logged below memory
+    in the inner-life event ledger.
 
     Args:
         store: The engram store.

@@ -61,6 +61,11 @@ The fundamental unit of memory. Each engram has:
   durable transitions are tracked in
   `proposal_ledger` with authority, target surface, transition, blast radius,
   visibility, status, reason, gate version, provenance, and payload fields.
+- **Gated inner-life controls** (schema v8): generated reflection, wandering,
+  and dream rows pass through the narrative gate and low-stakes writer before
+  persistence. Passed rows are private, low-confidence, audit-only engrams;
+  provenance, skips, drops, scheduled-run telemetry, and soak tick summaries
+  live in `inner_life_events` instead of ordinary proposal or review queues.
 - **PAI coordinate guard**: before imported text becomes retrievable rows, the
   splitter strips Strict-B eigenvalue, vivezza, coordinate-target, and
   persona-signature tuple-value lines from any source kind. These values are
@@ -134,7 +139,29 @@ The "sleeping brain" — autonomous processing that runs between sessions.
 2. **Connection Discovery**: Find new semantic relationships between engrams.
 3. **Softening**: LLM-mediated lossy compression. Low-resolution memories get rewritten preserving essence.
 4. **Belief Review**: Challenge stagnant beliefs with new evidence.
-5. **Reflection**: Generate thoughts, curiosity questions, narrative self-summary.
+5. **Reflection**: Generate gated low-stakes thoughts and refresh the
+   graph-derived identity profile.
+
+### Gated Inner Life
+
+The U6.6 inner-life layer is a private pre-soak path below ordinary operating
+context. Session and turn finalizers write provenance rows to
+`inner_life_events`; activity gates decide whether `challenge`, `observe`,
+`affect`, `reflect`, `wander`, or `dream` have enough grounded signal to run.
+Generated reflection, wandering, and dream candidates must pass the narrative
+gate, which drops null, ungrounded, manufactured, metrics-only, introspection-
+rejected, and identity/foundational-domain output.
+
+Passed generated candidates are written only as private
+`read_visibility="audit_only"` low-stakes engrams. They are rollout-tagged,
+source-grounded, not voice exemplars, not consolidation authorized, and never
+belief writes, identity patches, hypomnema promotions, or shared-pool
+publications.
+
+The U7 soak tick composes enabled families from `soak.families` and
+`inner_life.schedules`, records telemetry in `inner_life_events`, and keeps
+launchd loading behind an explicit operator authorization gate. The default
+config leaves both inner-life schedules and soak ticks disabled.
 
 ### Event System
 

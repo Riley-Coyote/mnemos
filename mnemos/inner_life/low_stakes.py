@@ -40,7 +40,7 @@ def write_low_stakes_record(
     rollout_tag: str = "u6.6",
     idempotency_key: str | None = None,
 ) -> dict[str, Any]:
-    """Persist a generated candidate as private, low-confidence memory only."""
+    """Persist a generated candidate as private, low-confidence audit-only memory."""
     if not gate_result.get("allowed"):
         reason = gate_result.get("reason") or "gate_not_passed"
         _record_skip(

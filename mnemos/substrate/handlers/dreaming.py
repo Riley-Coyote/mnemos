@@ -3,7 +3,9 @@ Dreaming handler — the most fragile handler.
 
 Triggered by: MEMORY_SOFTENED
 Effect: Collides a fading memory with a vivid one to produce a "dream" —
-         an unexpected synthesis. Most collisions produce nothing. That's by design.
+         an unexpected synthesis. Passed dreams are persisted only through the
+         private U6.6 low-stakes audit-only writer. Most collisions produce
+         nothing. That's by design.
 
 Dedup gates (matching wandering handler pattern):
   1. Count throttle — max N dream entries per 7 days (from config.max_dreams_per_week)
@@ -36,7 +38,7 @@ def handle(
     store,
     llm_client,
 ) -> list[SubstrateEvent]:
-    """Collide a softened memory with a vivid one. May produce a dream-memory."""
+    """Collide memories and persist only a gated low-stakes dream record."""
     produced_events: list[SubstrateEvent] = []
 
     softened_id = event.payload.get("engram_id")

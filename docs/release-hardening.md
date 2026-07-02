@@ -49,6 +49,20 @@ Use this checklist before publishing Mnemos or opening a release PR.
   - `mnemos/importer/operator.py`
   - `mnemos/importer/review_gate.py`
   - `mnemos/importer/watcher.py`
+  - `mnemos/inner_life/__init__.py`
+  - `mnemos/inner_life/activity_gate.py`
+  - `mnemos/inner_life/emotional_driver.py`
+  - `mnemos/inner_life/hypomnema_challenge.py`
+  - `mnemos/inner_life/low_stakes.py`
+  - `mnemos/inner_life/narrative_gate.py`
+  - `mnemos/inner_life/observer_panel.py`
+  - `mnemos/inner_life/preflight.py`
+  - `mnemos/inner_life/scheduler.py`
+  - `mnemos/inner_life/session_finalizer.py`
+  - `mnemos/inner_life/turn_finalizer.py`
+  - `mnemos/soak/__init__.py`
+  - `mnemos/soak/preflight.py`
+  - `mnemos/soak/tick.py`
   - `templates/SOUL.md`
   - `templates/IDENTITY.md`
 - Package metadata passes `twine check`.
@@ -79,7 +93,36 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Simple-mode first-capture verification records review-only/audit-only
   captures as existence-only metadata and never stores or re-quotes their
   prose in the operational restart proof.
+- Schema v8 adds `inner_life_events` as the private sub-ledger for U6.6/U7
+  provenance, gate decisions, skips/drops, scheduled-run telemetry, and soak
+  tick summaries.
+- Generated inner-life reflection, wandering, and dream rows pass the
+  narrative gate and are written only as private, low-confidence,
+  `audit_only` low-stakes engrams; generated identity/foundational-domain
+  output is dropped before persistence.
 - Correction/forget behavior is documented.
+
+## Gated Inner-Life And Soak
+
+- `mnemos inner-life` and `mnemos soak` DB-using commands require
+  `--db-path` and refuse live `~/.mnemos` databases unless `--allow-live-db`
+  is supplied for an explicitly authorized live rollout.
+- Default config keeps global schedule switches, per-family schedule switches,
+  `soak.tick.enabled`, and soak families disabled. Preflight reports missing
+  or disabled kill switches.
+- `inner-life preflight` blocks activation when the representative DB is
+  missing, schedules are disabled, activity gates are disabled, the pre-soak
+  snapshot is missing, required provider/reviewer readiness is absent, or
+  rollback/launchd surfaces are incomplete.
+- `inner-life plist` and `soak plist` write plist files atomically, bake
+  repo-local `python -m mnemos.cli ...` arguments, and never call `launchctl`.
+- `soak preflight` composes watcher doctor state, soak plist lint, launchd
+  not-loaded state, provider/snapshot/family readiness, and optional copy-DB
+  tick dry run. It may write the requested JSON artifact but must not mutate
+  the supplied DB.
+- `inner-life status` and soak tick summaries expose generated-memory,
+  belief-write, identity-patch, and shared-pool counters; U6.6/U7 validation
+  should keep belief, identity, and shared-pool counters at zero.
 
 ## PAI Importer And Dual-Life Watcher
 
@@ -147,7 +190,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
 
 ```bash
 uv run --extra dev --extra mcp pytest -q
-uv run --extra mcp python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/importer/__init__.py mnemos/importer/pai.py mnemos/importer/operator.py mnemos/importer/review_gate.py mnemos/importer/watcher.py
+uv run --extra mcp python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/importer/__init__.py mnemos/importer/pai.py mnemos/importer/operator.py mnemos/importer/review_gate.py mnemos/importer/watcher.py mnemos/inner_life/*.py mnemos/soak/*.py
 uv build
 uvx twine check dist/*
 git diff --check

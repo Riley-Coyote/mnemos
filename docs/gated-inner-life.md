@@ -1,8 +1,9 @@
 # Gated Inner Life
 
-U6.6 adds a private, low-stakes inner-life layer for pre-soak testing. It is
-code and representative-DB tooling only. Live `~/.mnemos` writes, launchd jobs,
-and autonomous scheduled writes still require explicit David authorization.
+U6.6 adds a private, low-stakes inner-life layer for pre-soak testing. Schema
+v8 adds the `inner_life_events` ledger. This is code and representative-DB
+tooling only. Live `~/.mnemos` writes, launchd jobs, and autonomous scheduled
+writes still require explicit David authorization.
 
 ## Boundaries
 
@@ -15,6 +16,9 @@ and autonomous scheduled writes still require explicit David authorization.
 - Generated records are private, low confidence, low stability/accessibility,
   rollout-tagged, source-grounded, not voice exemplars, and not consolidation
   authorized.
+- Generated records carry `read_visibility="audit_only"` and are excluded from
+  operational retrieval. Dedup/throttle checks for prior generated rows use
+  that private class; seed-selection queries stay on `operational_context`.
 - The layer never writes beliefs, identity patches, hypomnema promotions, or
   shared-pool publications.
 
@@ -28,18 +32,20 @@ and autonomous scheduled writes still require explicit David authorization.
 | `observer_panel.py` | Writes bounded observer-source findings with reviewer provenance. |
 | `emotional_driver.py` | Computes private affect weather from real events; does not journal affect prose. |
 | `narrative_gate.py` | Drops null, ungrounded, manufactured, rejected, or metrics-only generated candidates. |
-| `low_stakes.py` | Writes private low-confidence generated engrams with rollout tags and source IDs. |
+| `low_stakes.py` | Writes private low-confidence audit-only generated engrams with rollout tags and source IDs. |
 | `scheduler.py` | Runs one process behind the activity gate and writes launchd plists without loading them. |
 | `preflight.py` | Reports DB, schedule, provider, snapshot, launchd, kill-switch, and rollback readiness. |
+| `soak/tick.py` | Runs the U7 tick over enabled soak families and records tick telemetry below memory. |
+| `soak/preflight.py` | Builds the U7 activation artifact without mutating the supplied DB or loading launchd. |
 | `consolidation/reflection.py` | Gates generated reflection thoughts while preserving graph-derived `IdentityProfile`. |
 | `substrate/handlers/wandering.py` | Keeps authorized source filtering and writes passed wandering only as low-stakes memory. |
 | `substrate/handlers/dreaming.py` | Recombines real engrams only; metrics-only dream output is dropped. |
 
 ## CLI
 
-All `inner-life` commands require `--db-path`. They refuse `~/.mnemos`
-databases unless `--allow-live-db` is supplied, and live use of that override is
-reserved for explicit David authorization.
+All `inner-life` and `soak` DB-using commands require `--db-path`. They refuse
+`~/.mnemos` databases unless `--allow-live-db` is supplied, and live use of that
+override is reserved for explicit David authorization.
 
 During branch validation, use the repo-local command:
 
@@ -49,7 +55,7 @@ uv run --extra dev mnemos inner-life ...
 
 Do not rely on a globally installed `mnemos`; it can be stale relative to this
 branch. Generated launchd plists pin this repository's `.venv/bin/python3` and
-invoke `-m mnemos.cli inner-life run`.
+invoke `-m mnemos.cli inner-life run` or `-m mnemos.cli soak tick`.
 
 ```bash
 mnemos inner-life session-finalize \
@@ -129,6 +135,26 @@ mnemos soak preflight \
 ```
 
 ```bash
+mnemos soak plist \
+  --db-path /tmp/mnemos-copy.db \
+  --plist /tmp/com.davidef.mnemos.soak.tick.plist \
+  --interval-seconds 900 \
+  --artifact-dir /tmp/mnemos-soak \
+  --agent-id oliver \
+  --person-id david \
+  --project-scope pai
+```
+
+```bash
+mnemos soak tick \
+  --db-path /tmp/mnemos-copy.db \
+  --agent-id oliver \
+  --person-id david \
+  --project-scope pai \
+  --rollout-tag u7-soak
+```
+
+```bash
 mnemos inner-life status \
   --db-path /tmp/mnemos-copy.db \
   --agent-id oliver \
@@ -167,14 +193,17 @@ readiness, and an optional copy-DB tick dry run. It writes a JSON artifact when
 `--artifact` is provided, but it does not call `launchctl` and does not mutate
 the supplied DB.
 
-`inner-life plist` only writes plist files. It does not call `launchctl`, does
-not bootstrap schedules, and prints `Loaded: false`. U7 live launch remains a
-DAVID-AUTH gate.
+`inner-life plist` and `soak plist` only write plist files. They do not call
+`launchctl`, do not bootstrap schedules, and print `Loaded: false`. U7 live
+launch remains a DAVID-AUTH gate.
 
 Generated memory writes should be:
 
 - tagged `u6.6`, `generated`, `low-stakes`, and `rollout:<tag>`;
-- sourced from `dream`, `reflection`, or `observer`;
+- process-tagged as `dream`, `reflection`, or `wandering` work; observer
+  findings are ledger-only unless a future caller explicitly routes an observer
+  candidate through the low-stakes writer;
+- `read_visibility=audit_only`;
 - `visibility=private`;
 - `voice_exemplar_eligible=false`;
 - `consolidation_authorized=false`;
@@ -190,9 +219,10 @@ Backout order for U7/U8 remains disable-first:
 
 ## Validation
 
-The focused U6.6 suite covers:
+The focused U6.6/U7 suite covers:
 
 - private/idempotent event ledger migration;
+- schema v8 migration from empty, v5, and inner-life-origin v6 databases;
 - representative live-copy schema migration;
 - activity gate run/skip/cooldown behavior;
 - challenge, observer, and affect safety boundaries;
@@ -200,6 +230,8 @@ The focused U6.6 suite covers:
   drops;
 - scheduled runner activity-gate skip/run behavior and launchd plist static
   readiness;
+- soak tick disabled, shallow-consolidation, inner-life fanout, plist,
+  preflight blocked, and preflight ready behavior;
 - soak activation preflight blocking/ready behavior and copy-DB tick proof;
 - low-stakes writer privacy, idempotency, and non-promotion invariants;
 - gated reflection, wandering, and dream persistence;

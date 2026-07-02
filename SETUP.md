@@ -189,8 +189,11 @@ counts/source IDs but withholds confirmation and promotion-candidate prose; pass
 `packet_mode="review"` only for an explicit review pass. Audit-only proposal
 ledger rows require the separate `mnemos_proposal_audit` admin/audit surface.
 
-OpenClaw, crons, Forge, substrate ticks, and full agent workspaces are advanced
-integrations. They are no longer part of the baseline setup.
+OpenClaw, crons, Forge, substrate ticks, gated inner-life/soak validation, and
+full agent workspaces are advanced integrations. They are no longer part of the
+baseline setup. The inner-life/soak path is documented in
+[docs/gated-inner-life.md](docs/gated-inner-life.md) and should use a
+representative DB copy unless a live rollout is explicitly authorized.
 
 To bootstrap a full workspace:
 

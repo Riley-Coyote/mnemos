@@ -3,7 +3,8 @@ Wandering handler.
 
 Triggered by: SILENCE_EXTENDED
 Effect: During long gaps between memory formation, picks a recent memory
-         and lets the mind wander from it. May produce a wandering thought.
+         and lets the mind wander from it. Passed wandering thoughts are
+         persisted only through the private U6.6 low-stakes audit-only writer.
 
 Dedup gates:
   1. Count throttle — max N wandering entries per 7 days (from config.max_wanderings_per_week)
@@ -45,7 +46,7 @@ def handle(
     store,
     llm_client,
 ) -> list[SubstrateEvent]:
-    """Generate a wandering thought from recent memories during silence."""
+    """Generate and gate a private wandering thought from recent memories."""
     produced_events: list[SubstrateEvent] = []
 
     db_path = os.path.expanduser(config.db_path)

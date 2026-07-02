@@ -187,6 +187,7 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "Create: `mnemos/review/evidence_diversity.py`" in u4_section
     assert "mnemos/review/consistency_anomaly.py" in u4_section
     assert "v8 database migrates forward (v8 -> v9)" in u4_section
+    assert "Review-packet display" in u4_section
 
     # A-regression rows (three, aligned to 3-col schema)
     assert "Evidence-diversity gate qualifies genuinely diverse support" in text
@@ -219,6 +220,7 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "drop:high_blast_generated" in text
     assert "identity-domain rows transition directly" in text
     assert "no stabilized-then-drop deadlock" in text
+    assert "Operational-surface exception" in text
     assert "add the dream pattern_store table" in text
     assert "instance-content diversity metric" in text
     assert "mnemos/substrate/handlers/dreaming.py" in text

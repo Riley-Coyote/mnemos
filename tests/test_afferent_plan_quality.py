@@ -243,6 +243,14 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "graduation is one-time" in text
     assert "Proposal-side (standard U2.5 semantics)" in text
     assert "deferred proposals remain decidable" in text
+    proposal_row_match = re.search(r"\| ProposalLedger row \|(?:[^|]*\|){6}", text)
+    assert proposal_row_match is not None, "ProposalLedger State Ledger row missing"
+    proposal_row = proposal_row_match.group(0)
+    assert "rejected` and `applied` are terminal for the proposal" in proposal_row
+    assert "`deferred` is a decidable intermediate status" in proposal_row
+    assert "deferred proposal may subsequently transition to" in proposal_row
+    assert "U4 reviewed decision API" in proposal_row
+    assert "PROPOSAL_TERMINAL_STATUSES is unchanged" in text
 
     # State Ledger dream-pattern lifecycle row
     assert "Dream pattern (U6c)" in text

@@ -3137,6 +3137,7 @@ class EngramStore:
         process_name: str | None = None,
         exclude_process_name: str | None = None,
         gate_decision: str | None = None,
+        exclude_gate_decision: str | None = None,
         rollout_tag: str | None = None,
         limit: int = 100,
         recent: bool = False,
@@ -3180,6 +3181,9 @@ class EngramStore:
         if gate_decision is not None:
             predicates.append("gate_decision = ?")
             params.append(gate_decision)
+        if exclude_gate_decision is not None:
+            predicates.append("gate_decision != ?")
+            params.append(exclude_gate_decision)
         if rollout_tag is not None:
             predicates.append("rollout_tag = ?")
             params.append(rollout_tag)
@@ -3210,6 +3214,42 @@ class EngramStore:
         row["source_ids"] = _decode_json(row.pop("source_ids_json", "[]"), [])
         row["metadata"] = _decode_json(row.pop("metadata_json", "{}"), {})
         return row
+
+    def get_last_activity_gate_run(
+        self,
+        *,
+        target_process: str,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> dict[str, Any] | None:
+        """Return the most recent activity-gate ``run`` row for ``target_process``,
+        or None.
+
+        The full eligibility predicate — including ``target_process`` pulled from
+        the JSON metadata — is applied in SQL with ``LIMIT 1``, so no burst of
+        newer ``run`` rows for *other* processes can evict the one we need. This
+        is the cooldown gate's fix for the filter-after-limit hazard that
+        ``get_inner_life_events(recent=True)`` alone cannot solve (the target is
+        one predicate deeper than a plain column filter).
+        """
+        conn = self._get_conn()
+        row = conn.execute(
+            """
+            SELECT * FROM inner_life_events
+            WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+              AND event_type = 'tool_event'
+              AND process_name = 'activity-gate'
+              AND gate_decision = 'run'
+              AND json_extract(metadata_json, '$.target_process') = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (agent_id, person_id, project_scope, target_process),
+        ).fetchone()
+        return (
+            self._hydrate_inner_life_event_row(dict(row)) if row is not None else None
+        )
 
     # ── Stats ──
 

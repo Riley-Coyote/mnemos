@@ -470,24 +470,22 @@ def _last_family_attempt_at(
     project_scope: str,
     rollout_tag: str,
 ) -> datetime | None:
+    # Filter to THIS family's real attempts in SQL (process_name + exclude the
+    # not-due skip rows) with LIMIT 1, so other families' rows can never evict
+    # this family's last attempt from the scan and make the cadence expire early.
     rows = store.get_inner_life_events(
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        process_name=family,
+        exclude_gate_decision="skipped:family_not_due",
         rollout_tag=rollout_tag,
-        limit=500,
-        recent=True,  # family last-run cadence: fold max() over the newest rows
+        limit=1,
+        recent=True,
     )
-    latest: datetime | None = None
-    for row in rows:
-        if row.get("process_name") != family:
-            continue
-        if row.get("gate_decision") == "skipped:family_not_due":
-            continue
-        created = _coerce_now(row.get("created_at"))
-        if latest is None or created > latest:
-            latest = created
-    return latest
+    if not rows:
+        return None
+    return _coerce_now(rows[0].get("created_at"))
 
 
 def _tick_config(config: dict[str, Any]) -> dict[str, Any]:

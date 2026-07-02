@@ -116,7 +116,6 @@ def test_cooldown_gate_sees_newest_run_beyond_scan_limit(tmp_path):
             project_scope="pai",
             cooldown_minutes=240,
             now=run_at + timedelta(minutes=1),
-            limit=limit,
         )
 
         assert until == run_at + timedelta(minutes=240)
@@ -437,16 +436,15 @@ def test_atomic_write_detects_idempotency_race_and_rolls_back(tmp_path):
 
 
 def test_cooldown_survives_newer_unrelated_tool_event_noise(tmp_path):
-    """Finding C (review, error): a burst of newer unrelated tool_events must not
-    push the last activity-gate run out of the scan and lapse the cooldown — the
-    eligibility predicate (activity-gate run) is now filtered in SQL before the
-    limit, so the limit bounds eligible rows."""
+    """Findings C+E (review, error): neither unrelated tool_events NOR newer
+    activity-gate *runs for other processes* may push this process's last run out
+    of the scan and lapse its cooldown. The full predicate (activity-gate run for
+    THIS target_process, via json_extract) is resolved in SQL with LIMIT 1."""
     from mnemos.inner_life.activity_gate import _cooldown_until
 
     store = EngramStore(tmp_path / "cooldown-noise.db")
     try:
         base = datetime(2026, 7, 2, 12, 0, 0, tzinfo=timezone.utc)
-        limit = 5
         run_at = base
         _seed_event(
             store,
@@ -456,12 +454,22 @@ def test_cooldown_survives_newer_unrelated_tool_event_noise(tmp_path):
             gate_decision="run",
             metadata={"target_process": "reflect"},
         )
-        # >limit NEWER unrelated tool_events (not activity-gate runs) — the noise
-        for i in range(limit * 3):
+        # 30 NEWER activity-gate runs for OTHER processes (finding E) interleaved
+        # with unrelated tool_events (finding C) — all newer than the target run
+        others = ["wander", "dream", "affect", "observe", "challenge"]
+        for i in range(30):
+            _seed_event(
+                store,
+                f"other-run-{i}",
+                created_at=(base + timedelta(minutes=i + 1)).isoformat(),
+                process_name="activity-gate",
+                gate_decision="run",
+                metadata={"target_process": others[i % len(others)]},
+            )
             _seed_event(
                 store,
                 f"noise-{i}",
-                created_at=(base + timedelta(minutes=i + 1)).isoformat(),
+                created_at=(base + timedelta(minutes=i + 1, seconds=30)).isoformat(),
                 process_name="turn-finalizer",
                 gate_decision="ledger_only",
             )
@@ -472,8 +480,7 @@ def test_cooldown_survives_newer_unrelated_tool_event_noise(tmp_path):
             person_id="david",
             project_scope="pai",
             cooldown_minutes=240,
-            now=base + timedelta(minutes=limit * 3 + 1),
-            limit=limit,
+            now=base + timedelta(minutes=60),
         )
         assert until == run_at + timedelta(minutes=240)
     finally:
@@ -519,5 +526,51 @@ def test_signal_scan_survives_newer_activity_gate_telemetry(tmp_path):
             consolidation_passes=[],
         )
         assert any(s.source_type == "inner_life:turn_finalized" for s in signals)
+    finally:
+        store.close()
+
+
+def test_family_cadence_survives_newer_other_family_rows(tmp_path):
+    """Finding F (review, warning): other families' rows (and this family's own
+    not-due skips) must not evict the family's last real attempt from the cadence
+    scan and make _family_due fire early. The last attempt is now resolved in SQL
+    (process_name + exclude skip) with LIMIT 1."""
+    from mnemos.soak.tick import _family_due
+
+    store = EngramStore(tmp_path / "cadence.db")
+    try:
+        base = datetime(2026, 7, 2, 12, 0, 0, tzinfo=timezone.utc)
+        # THIS family's real attempt, oldest
+        _seed_event(
+            store,
+            "wander-attempt",
+            created_at=base.isoformat(),
+            process_name="wander",
+            gate_decision="run",
+            rollout_tag="u7-test",
+        )
+        # >500 NEWER rows (other-family runs + this family's not-due skips) so a
+        # limit-500 scan would evict the real attempt (the old bug)
+        for i in range(505):
+            _seed_event(
+                store,
+                f"dream-{i}",
+                created_at=(base + timedelta(seconds=i + 1)).isoformat(),
+                process_name="dream",
+                gate_decision="run",
+                rollout_tag="u7-test",
+            )
+        # cadence 240 min; only 10 min since the real attempt -> NOT due
+        due = _family_due(
+            store,
+            family="wander",
+            cadence_minutes=240,
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            rollout_tag="u7-test",
+            now=base + timedelta(minutes=10),
+        )
+        assert due is False
     finally:
         store.close()

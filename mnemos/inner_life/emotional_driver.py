@@ -162,8 +162,9 @@ def _recent_signal_events(
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        exclude_process_name="emotional-driver",
         limit=limit,
-        recent=True,  # recent-window scan; filtered to [since, now] below
+        recent=True,  # recent-window scan; excludes own rows, [since, now] filtered below
     )
     out: list[dict[str, Any]] = []
     for row in rows:

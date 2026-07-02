@@ -238,9 +238,11 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     # R3/R7/R8 U6c extensions (Requirements + Rule Ledger carry U6c, 6 total)
     assert text.count("extended by U6c (dream graduation)") >= 6
 
-    # Deferral-≠-re-graduation binding note
+    # Deferral-≠-re-graduation binding note (C1: pattern-side vs proposal-side lifecycles separated per Fable ruling 005)
     assert "both dispositions are terminal for the pattern" in text
     assert "graduation is one-time" in text
+    assert "Proposal-side (standard U2.5 semantics)" in text
+    assert "deferred proposals remain decidable" in text
 
     # State Ledger dream-pattern lifecycle row
     assert "Dream pattern (U6c)" in text

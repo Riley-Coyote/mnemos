@@ -3133,6 +3133,10 @@ class EngramStore:
         project_scope: str = "global",
         session_id: str | None = None,
         event_type: str | None = None,
+        event_types: Sequence[str] | None = None,
+        process_name: str | None = None,
+        exclude_process_name: str | None = None,
+        gate_decision: str | None = None,
         rollout_tag: str | None = None,
         limit: int = 100,
         recent: bool = False,
@@ -3146,6 +3150,13 @@ class EngramStore:
         so existing ASC-assuming callers (``reversed(rows)``, ``max()`` folds,
         ``since <= t <= now`` filters) operate on the recent window instead of
         the ancient one once the ledger grows past ``limit``.
+
+        Recency consumers that then filter in Python **must** push their
+        eligibility predicates into SQL here (``event_types`` IN-set,
+        ``process_name`` / ``exclude_process_name``, ``gate_decision``) so that
+        ``limit`` bounds *eligible* rows. Otherwise a burst of ineligible rows
+        (e.g. activity-gate telemetry) can fill the newest ``limit`` and push the
+        one row the caller needs out of the slice.
         """
         conn = self._get_conn()
         predicates = ["agent_id = ?", "person_id = ?", "project_scope = ?"]
@@ -3156,6 +3167,19 @@ class EngramStore:
         if event_type is not None:
             predicates.append("event_type = ?")
             params.append(event_type)
+        if event_types:
+            placeholders = ", ".join("?" for _ in event_types)
+            predicates.append(f"event_type IN ({placeholders})")
+            params.extend(event_types)
+        if process_name is not None:
+            predicates.append("process_name = ?")
+            params.append(process_name)
+        if exclude_process_name is not None:
+            predicates.append("process_name != ?")
+            params.append(exclude_process_name)
+        if gate_decision is not None:
+            predicates.append("gate_decision = ?")
+            params.append(gate_decision)
         if rollout_tag is not None:
             predicates.append("rollout_tag = ?")
             params.append(rollout_tag)

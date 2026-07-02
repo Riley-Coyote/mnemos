@@ -431,3 +431,93 @@ def test_atomic_write_detects_idempotency_race_and_rolls_back(tmp_path):
         assert store.count_engrams(agent_id="oliver", read_visibility=None) == before
     finally:
         store.close()
+
+
+# ── Review findings (004 re-run): filter-after-limit on the recency scans ───
+
+
+def test_cooldown_survives_newer_unrelated_tool_event_noise(tmp_path):
+    """Finding C (review, error): a burst of newer unrelated tool_events must not
+    push the last activity-gate run out of the scan and lapse the cooldown — the
+    eligibility predicate (activity-gate run) is now filtered in SQL before the
+    limit, so the limit bounds eligible rows."""
+    from mnemos.inner_life.activity_gate import _cooldown_until
+
+    store = EngramStore(tmp_path / "cooldown-noise.db")
+    try:
+        base = datetime(2026, 7, 2, 12, 0, 0, tzinfo=timezone.utc)
+        limit = 5
+        run_at = base
+        _seed_event(
+            store,
+            "target-run",
+            created_at=run_at.isoformat(),
+            process_name="activity-gate",
+            gate_decision="run",
+            metadata={"target_process": "reflect"},
+        )
+        # >limit NEWER unrelated tool_events (not activity-gate runs) — the noise
+        for i in range(limit * 3):
+            _seed_event(
+                store,
+                f"noise-{i}",
+                created_at=(base + timedelta(minutes=i + 1)).isoformat(),
+                process_name="turn-finalizer",
+                gate_decision="ledger_only",
+            )
+        until = _cooldown_until(
+            store,
+            process_name="reflect",
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            cooldown_minutes=240,
+            now=base + timedelta(minutes=limit * 3 + 1),
+            limit=limit,
+        )
+        assert until == run_at + timedelta(minutes=240)
+    finally:
+        store.close()
+
+
+def test_signal_scan_survives_newer_activity_gate_telemetry(tmp_path):
+    """Finding D (review, warning): activity-gate telemetry newer than a real
+    signal must not push that signal out of the newest-N scan — telemetry is now
+    excluded in SQL before the limit."""
+    from mnemos.inner_life.activity_gate import _collect_activity_signals
+
+    store = EngramStore(tmp_path / "signal-noise.db")
+    try:
+        base = datetime(2026, 7, 2, 12, 0, 0, tzinfo=timezone.utc)
+        event_limit = 5
+        _seed_event(
+            store,
+            "real-signal",
+            created_at=base.isoformat(),
+            process_name="turn-finalizer",
+            event_type="turn_finalized",
+        )
+        # >event_limit NEWER activity-gate telemetry rows (the noise)
+        for i in range(event_limit * 3):
+            _seed_event(
+                store,
+                f"gate-telemetry-{i}",
+                created_at=(base + timedelta(seconds=i + 1)).isoformat(),
+                process_name="activity-gate",
+                event_type="tool_event",
+                gate_decision="skipped:no_recent_activity",
+            )
+        signals = _collect_activity_signals(
+            store,
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            since=base - timedelta(minutes=1),
+            now=base + timedelta(minutes=1),
+            event_limit=event_limit,
+            consolidation_limit=0,
+            consolidation_passes=[],
+        )
+        assert any(s.source_type == "inner_life:turn_finalized" for s in signals)
+    finally:
+        store.close()

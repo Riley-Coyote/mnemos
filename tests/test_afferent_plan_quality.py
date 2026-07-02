@@ -166,6 +166,7 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "Instance count is never a diversity signal" in text
     assert "Fail-toward-review" in text
     assert "dedupe-then-diversity" in text
+    assert "Mixed-set qualifies via dedupe-then-diversity" in text
     assert "Consistency-anomaly score" in text
     assert "Salience as queue-ordering only" in text
     assert "Q5 (deferred to follow-up work)" in text
@@ -176,6 +177,7 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "supporting_instance_ids" in text
     assert "evidence_diversity" in text
     assert "consistency_anomaly" in text
+    assert "producer='dream_graduation'" in text
     assert "`evidence_diversity` participates in the AM-U4 gate decision" in text
     assert "`consistency_anomaly` is an informing signal only" in text
     assert "never touching promotion eligibility or auto-apply" in text
@@ -221,6 +223,7 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "identity-domain rows transition directly" in text
     assert "no stabilized-then-drop deadlock" in text
     assert "Operational-surface exception" in text
+    assert "explicit filter on" in text
     assert "add the dream pattern_store table" in text
     assert "instance-content diversity metric" in text
     assert "mnemos/substrate/handlers/dreaming.py" in text

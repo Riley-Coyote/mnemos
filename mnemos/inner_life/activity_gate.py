@@ -310,6 +310,7 @@ def _collect_activity_signals(
         person_id=person_id,
         project_scope=project_scope,
         limit=event_limit,
+        recent=True,  # recent-window signal scan; filtered to [since, now] below
     )
     for row in events:
         if row.get("process_name") == "activity-gate":
@@ -364,6 +365,7 @@ def _cooldown_until(
         project_scope=project_scope,
         event_type="tool_event",
         limit=limit,
+        recent=True,  # cooldown gate needs the newest tool_events, not the oldest
     )
     for row in reversed(rows):
         if row.get("process_name") != "activity-gate":

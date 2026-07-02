@@ -24,6 +24,9 @@ DEFAULT_SOAK_LABEL = "com.davidef.mnemos.soak.tick"
 DEFAULT_SOAK_ARTIFACT_DIR = "~/.mnemos/soak"
 DEFAULT_MIN_TICK_INTERVAL_SECONDS = 300
 SHALLOW_CONSOLIDATION = "shallow_consolidation"
+# Soak families that generate text and therefore need an LLM client (mirrors the
+# inner-life `run` CLI). affect/observe/challenge run without one.
+LLM_SOAK_FAMILIES = frozenset({"reflect", "wander", "dream"})
 
 
 def run_scheduled_soak_tick(
@@ -82,6 +85,20 @@ def run_scheduled_soak_tick(
             rollout_tag=rollout_tag,
             tick_id=tick_id,
         )
+
+    # Wire an LLM client for the generative families (reflect/wander/dream) when
+    # the caller didn't inject one — without it the scheduled soak path can never
+    # actually reflect/wander/dream (it silently no-ops, which is why the soak as
+    # designed had never dreamt through this path). Built only here, after the
+    # enabled + family gates above: this is capability, not activation. A disabled
+    # tick or a tick with no generative family never constructs a client,
+    # per-family kill switches still apply, and an injected client (tests) wins.
+    if llm_client is None and any(
+        family in LLM_SOAK_FAMILIES for family, _ in families
+    ):
+        from ..llm import create_client
+
+        llm_client = create_client()
 
     outcomes: list[dict[str, Any]] = []
     for family, family_config in families:
@@ -450,6 +467,7 @@ def _last_family_attempt_at(
         project_scope=project_scope,
         rollout_tag=rollout_tag,
         limit=500,
+        recent=True,  # family last-run cadence: fold max() over the newest rows
     )
     latest: datetime | None = None
     for row in rows:

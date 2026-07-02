@@ -60,6 +60,12 @@ def handle(
     db_path = os.path.expanduser(config.db_path)
     conn = sqlite3.connect(db_path)
     agent_id = config.agent_id
+    # Rollback integrity: scope travels via the event payload (see wandering.py)
+    # so every inner-life row this handler writes is tagged for backout; the
+    # substrate tick omits these keys and keeps the writer/gate defaults.
+    person_id = event.payload.get("person_id", "user")
+    project_scope = event.payload.get("project_scope", "global")
+    rollout_tag = event.payload.get("rollout_tag", "u6.6")
 
     # ── Gate 1: Count throttle ──
     dream_count = conn.execute(
@@ -204,6 +210,9 @@ If something does emerge, respond with:
             store=store,
             agent_id=agent_id,
             candidate_kind="dream",
+            person_id=person_id,
+            project_scope=project_scope,
+            rollout_tag=rollout_tag,
         )
         return produced_events
 
@@ -249,6 +258,9 @@ If something does emerge, respond with:
         store=store,
         agent_id=agent_id,
         candidate_kind="dream",
+        person_id=person_id,
+        project_scope=project_scope,
+        rollout_tag=rollout_tag,
     )
     if not gate_result["allowed"]:
         return produced_events
@@ -258,6 +270,9 @@ If something does emerge, respond with:
         gate_result=gate_result,
         candidate_kind="dream",
         agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        rollout_tag=rollout_tag,
     )
 
     return produced_events

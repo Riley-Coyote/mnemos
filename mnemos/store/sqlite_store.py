@@ -2995,12 +2995,17 @@ class EngramStore:
         metadata: dict[str, Any] | None = None,
         rollout_tag: str = "",
         gate_decision: str = "ledger_only",
+        commit: bool = True,
     ) -> dict[str, Any]:
         """Insert or update a private U6.6 event-ledger row.
 
         This helper intentionally writes only to `inner_life_events`. It never
         encodes memory or touches beliefs, hypomnema, identity, candidates, or
         sharing surfaces.
+
+        Pass ``commit=False`` to let a caller compose this write into a larger
+        transaction it owns (see ``save_engram_with_inner_life_event``); the row
+        is then finalized by the caller's commit.
         """
         if event_type not in VALID_INNER_LIFE_EVENT_TYPES:
             raise ValueError(f"Unsupported inner-life event_type: {event_type}")
@@ -3080,7 +3085,8 @@ class EngramStore:
                 now,
             ),
         )
-        conn.commit()
+        if commit:
+            conn.commit()
         return {
             "id": event_id,
             "inserted": existing is None,
@@ -3088,6 +3094,27 @@ class EngramStore:
             "created_at": created_at,
             "updated_at": now,
         }
+
+    def save_engram_with_inner_life_event(
+        self, engram: Engram, **ledger_kwargs: Any
+    ) -> dict[str, Any]:
+        """Persist an engram and its inner-life ledger row in ONE transaction.
+
+        The ledger row is the low-stakes idempotency guard. Writing it in the
+        same transaction as the engram means a crash between the two can never
+        leave a committed engram without its guard — which a retry would
+        otherwise re-mint as a duplicate. Either both land or neither does.
+        """
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._save_engram_no_commit(conn, engram)
+            result = self.upsert_inner_life_event(**ledger_kwargs, commit=False)
+            conn.commit()
+            return result
+        except Exception:
+            conn.rollback()
+            raise
 
     def get_inner_life_events(
         self,
@@ -3099,8 +3126,18 @@ class EngramStore:
         event_type: str | None = None,
         rollout_tag: str | None = None,
         limit: int = 100,
+        recent: bool = False,
     ) -> list[dict[str, Any]]:
-        """Return private U6.6 event-ledger rows, oldest first."""
+        """Return private U6.6 event-ledger rows.
+
+        By default returns the oldest matching rows (``created_at ASC``) — the
+        historical contract, preserved exactly. Recency consumers (cooldown /
+        cadence / recent-window gates) must pass ``recent=True``: the newest
+        ``limit`` rows are selected, then re-sorted ascending before returning,
+        so existing ASC-assuming callers (``reversed(rows)``, ``max()`` folds,
+        ``since <= t <= now`` filters) operate on the recent window instead of
+        the ancient one once the ledger grows past ``limit``.
+        """
         conn = self._get_conn()
         predicates = ["agent_id = ?", "person_id = ?", "project_scope = ?"]
         params: list[Any] = [agent_id, person_id, project_scope]
@@ -3114,15 +3151,24 @@ class EngramStore:
             predicates.append("rollout_tag = ?")
             params.append(rollout_tag)
         params.append(max(1, limit))
-        rows = conn.execute(
-            f"""
+        where = " AND ".join(predicates)
+        if recent:
+            query = f"""
+            SELECT * FROM (
+                SELECT * FROM inner_life_events
+                WHERE {where}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+            ) ORDER BY created_at ASC, id ASC
+            """
+        else:
+            query = f"""
             SELECT * FROM inner_life_events
-            WHERE {" AND ".join(predicates)}
+            WHERE {where}
             ORDER BY created_at ASC, id ASC
             LIMIT ?
-            """,
-            params,
-        ).fetchall()
+            """
+        rows = conn.execute(query, params).fetchall()
         return [self._hydrate_inner_life_event_row(dict(row)) for row in rows]
 
     @staticmethod

@@ -121,17 +121,21 @@ def write_low_stakes_record(
         consolidation_authorized=False,
         decay_protected=False,
     )
-    store.save_engram(engram)
-    _record_written(
-        store,
-        idempotency_key=key,
-        engram=engram,
-        candidate_kind=candidate_kind,
-        source_ids=source_ids,
-        agent_id=agent_id,
-        person_id=person_id,
-        project_scope=project_scope,
-        rollout_tag=rollout_tag,
+    # Atomicity (finding 4): persist the engram and its idempotency-guard ledger
+    # row in one transaction. A crash between the two must not leave a committed
+    # engram without its guard, which a retry would re-mint as a duplicate.
+    store.save_engram_with_inner_life_event(
+        engram,
+        **_ledger_event_kwargs(
+            engram,
+            idempotency_key=key,
+            candidate_kind=candidate_kind,
+            source_ids=source_ids,
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope=project_scope,
+            rollout_tag=rollout_tag,
+        ),
     )
     return _summary(
         written=1,
@@ -210,20 +214,22 @@ def _ledger_key_exists(
     return row is not None
 
 
-def _record_written(
-    store: EngramStore,
+def _ledger_event_kwargs(
+    engram: Engram,
     *,
     idempotency_key: str,
-    engram: Engram,
     candidate_kind: str,
     source_ids: list[str],
     agent_id: str,
     person_id: str,
     project_scope: str,
     rollout_tag: str,
-) -> None:
+) -> dict[str, Any]:
+    """Build the inner_life_events ledger-row kwargs for a written low-stakes
+    engram. Returned rather than written so the caller persists the engram and
+    this ledger row in one transaction (idempotency-guard atomicity, finding 4)."""
     excerpt, truncated = _excerpt(engram.content, 480)
-    store.upsert_inner_life_event(
+    return dict(
         idempotency_key=idempotency_key,
         event_type="tool_event",
         process_name="low-stakes-writer",

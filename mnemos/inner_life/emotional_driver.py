@@ -163,6 +163,7 @@ def _recent_signal_events(
         person_id=person_id,
         project_scope=project_scope,
         limit=limit,
+        recent=True,  # recent-window scan; filtered to [since, now] below
     )
     out: list[dict[str, Any]] = []
     for row in rows:

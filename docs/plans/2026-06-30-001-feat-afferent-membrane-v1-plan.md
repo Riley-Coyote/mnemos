@@ -198,7 +198,7 @@ Each invariant below requires at least one positive and one negative test. Posit
 - `mnemos/mcp_server.py`: advanced MCP surfaces `mnemos_context_packet` and `mnemos_review_queue`; review queue is the intentional prose-bearing surface.
 - `mnemos/interface/prompt_builder.py`: older memory prompt builder that emits operational-context rows only through store/retriever defaults.
 - `mnemos/simple_runtime.py`: simple mode has `context`, `recall`, `maintain`, `_promote_candidates`, dream journal display, and retrieval producers that now observe operational read visibility.
-- `mnemos/store/sqlite_store.py`: schema v6/v7, proposal ledger, search, stats, belief filtering, functional memory, hypomnema, and candidate methods live here.
+- `mnemos/store/sqlite_store.py`: schema v8, proposal ledger, search, stats, belief filtering, functional memory, hypomnema, and candidate methods live here.
 - `mnemos/store/migrations.py`: schema migration registry and PAI hardening precedent.
 - `mnemos/importer/pai.py`: strongest current ingest/preview/apply precedent for authority and review workflow.
 - `mnemos/importer/review_gate.py`: diff-review gate precedent for dangerous durable changes.
@@ -454,7 +454,7 @@ P qualifies as evidence-diverse iff `n ≥ 2` and `D(P) ≥ θ_div`. **Instance 
 - Error path: foundational hypomnema revision without review is blocked.
 - Error path: model-inferred user-model semantic promotion becomes pending review unless evidence-diverse.
 - Integration: review decisions update proposal ledger status and only then affect durable store rows.
-- Migration: an existing v6/v7 database migrates forward adding supporting_instance_ids and evidence_diversity columns to the proposal_ledger table; existing rows default to empty supporting_instance_ids and NULL evidence_diversity (nullable = review); no live-data mutation required beyond additive columns.
+- Migration: an existing v8 database migrates forward (v8 -> v9) by adding supporting_instance_ids and evidence_diversity columns to the proposal_ledger table; existing rows default to empty supporting_instance_ids and NULL evidence_diversity (nullable = incomputable = review); no live-data mutation required beyond additive columns; fresh v9 databases initialize the columns with the same defaults.
 
 **Verification:**
 - Tests prove every durable route has a proposal row and the expected gate outcome.
@@ -617,6 +617,7 @@ P qualifies as evidence-diverse iff `n ≥ 2` and `D(P) ≥ θ_div`. **Instance 
 - Negative path: identity-domain dream content drops regardless of stability — a stabilized pattern whose graduating content classifies identity/foundational drops at the narrative gate (`drop:high_blast_generated`); no proposal row, no private write.
 - Negative path: graduation is non-accumulating — a graduated pattern cannot re-emit; subsequent recurrences do not increment stability, do not trigger a second proposal, and do not extend the pattern's ledger effect.
 - Negative path: adaptive decay — unrevisited patterns decay out of the store without leaving durable traces.
+- Migration + defaults: an existing v9 (or later) database migrates forward to add the dream pattern_store table and the dream-pattern lifecycle columns (stored/recurring/stabilized/graduated/decayed with recurrence count, seed-context diversity metric, and vividness-ratio); fresh initialization creates the pattern_store empty; every row defaults to read_visibility=audit_only (dream-pattern prose never operational); no PAI/live-data mutation is required beyond additive schema.
 
 **Review-surface documentation note (binding):** the "maybe later" path for a graduated pattern is proposal deferral, never re-graduation. Graduation is one-time (Approach above) and a graduated pattern never re-enters `recurring` (State Ledger) — so a pattern's emitted proposal is its only question, ever. A reviewer who means "not yet" must defer the proposal; rejecting it is terminal for the pattern, since it can never ask twice. The review surface's documentation and affordances must say this explicitly — a rejected-when-weak pattern that strengthens later has no second path, so rejection is for "no," deferral is for "not yet." (Aligns with rejection-lineage anti-fatigue.)
 

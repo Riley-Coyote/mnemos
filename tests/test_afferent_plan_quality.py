@@ -176,12 +176,13 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "supporting_instance_ids" in text
     assert "evidence_diversity" in text
     assert "consistency_anomaly" in text
+    assert "schema v8" in text
     assert (
         "Modify: `mnemos/store/migrations.py`" in u4_section
         or "Modify: mnemos/store/migrations.py" in u4_section
     )
     assert "Create: `mnemos/review/evidence_diversity.py`" in u4_section
-    assert "existing v6/v7 database migrates forward" in u4_section
+    assert "v8 database migrates forward (v8 -> v9)" in u4_section
 
     # A-regression rows (three, aligned to 3-col schema)
     assert "Evidence-diversity gate qualifies genuinely diverse support" in text
@@ -201,6 +202,7 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "MIN_RECURRENCES" in text
     assert "VIVIDNESS_RATIO_CAP" in text
     assert "drop:high_blast_generated" in text
+    assert "add the dream pattern_store table" in text
     assert "mnemos/substrate/handlers/dreaming.py" in text
     assert "mnemos/substrate/handlers/wandering.py" in text
     assert "mnemos/inner_life/low_stakes.py" in text

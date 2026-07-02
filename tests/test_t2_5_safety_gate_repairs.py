@@ -334,3 +334,100 @@ def test_low_stakes_write_is_atomic_no_orphan_or_duplicate_on_crash(
         assert store.count_engrams(agent_id="oliver", read_visibility=None) == 1
     finally:
         store.close()
+
+
+# ── Review findings (004 pipeline): preflight-dry-run + idempotency-race ─────
+
+
+def test_soak_tick_build_llm_client_false_suppresses_build(tmp_path, monkeypatch):
+    """build_llm_client=False (the dry-run preflight path) suppresses the
+    auto-build even for a generative family — a copy-DB dry run must never reach
+    a real model (review finding preflight-dry-run-can-use-real-llm)."""
+    import mnemos.llm as llm_mod
+    from mnemos.soak.tick import run_scheduled_soak_tick
+
+    calls = {"n": 0}
+
+    def _fake_create_client(*args, **kwargs):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(llm_mod, "create_client", _fake_create_client)
+
+    store = EngramStore(tmp_path / "soak-dry.db")
+    try:
+        run_scheduled_soak_tick(
+            store,
+            config=_enable_soak_tick_config(inner_life=("wander",)),
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            rollout_tag="u7-test",
+            run_id="dry",
+            llm_client=None,
+            build_llm_client=False,
+        )
+        assert calls["n"] == 0
+    finally:
+        store.close()
+
+
+def test_soak_preflight_dry_run_does_not_reach_real_llm(tmp_path, monkeypatch):
+    """The activation preflight runs the tick on a DB copy; it must never build a
+    real LLM client (review finding preflight-dry-run-can-use-real-llm)."""
+    import mnemos.llm as llm_mod
+    from mnemos.soak.preflight import build_soak_activation_preflight
+
+    calls = {"n": 0}
+
+    def _fake_create_client(*args, **kwargs):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(llm_mod, "create_client", _fake_create_client)
+
+    db = tmp_path / "preflight.db"
+    EngramStore(db).close()
+    build_soak_activation_preflight(
+        config=_enable_soak_tick_config(inner_life=("wander",)),
+        db_path=str(db),
+        agent_id="oliver",
+        person_id="david",
+        project_scope="pai",
+        rollout_tag="u7-test",
+        run_tick_dry_run=True,
+    )
+    assert calls["n"] == 0
+
+
+def test_atomic_write_detects_idempotency_race_and_rolls_back(tmp_path):
+    """If the idempotency key was inserted concurrently (between the caller's
+    pre-check and the transaction), the staged engram is rolled back — no
+    duplicate engram (review finding low-stakes-idempotency-race)."""
+    from mnemos.core.engram import Engram
+
+    store = EngramStore(tmp_path / "race.db")
+    try:
+        # a concurrent writer already reserved this idempotency key
+        store.upsert_inner_life_event(
+            idempotency_key="race-key",
+            event_type="tool_event",
+            process_name="low-stakes-writer",
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+        )
+        before = store.count_engrams(agent_id="oliver", read_visibility=None)
+        outcome = store.save_engram_with_inner_life_event(
+            Engram(content="would-be-duplicate", impact="", owner_agent_id="oliver"),
+            idempotency_key="race-key",
+            event_type="tool_event",
+            process_name="low-stakes-writer",
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+        )
+        assert outcome["duplicate"] is True
+        assert store.count_engrams(agent_id="oliver", read_visibility=None) == before
+    finally:
+        store.close()

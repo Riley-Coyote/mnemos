@@ -124,7 +124,7 @@ def write_low_stakes_record(
     # Atomicity (finding 4): persist the engram and its idempotency-guard ledger
     # row in one transaction. A crash between the two must not leave a committed
     # engram without its guard, which a retry would re-mint as a duplicate.
-    store.save_engram_with_inner_life_event(
+    outcome = store.save_engram_with_inner_life_event(
         engram,
         **_ledger_event_kwargs(
             engram,
@@ -137,6 +137,10 @@ def write_low_stakes_record(
             rollout_tag=rollout_tag,
         ),
     )
+    if outcome.get("duplicate"):
+        # a concurrent writer won the race for this idempotency key; the staged
+        # engram was rolled back, so no duplicate memory was minted.
+        return _summary(written=0, duplicates=1, reason="duplicate")
     return _summary(
         written=1,
         reason="written",

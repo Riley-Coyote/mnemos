@@ -39,9 +39,16 @@ def run_scheduled_soak_tick(
     rollout_tag: str = "u7-soak",
     run_id: str | None = None,
     llm_client: Any | None = None,
+    build_llm_client: bool = True,
     now: datetime | str | None = None,
 ) -> dict[str, Any]:
-    """Run one cheap Polyphonic-style tick over enabled soak families."""
+    """Run one cheap Polyphonic-style tick over enabled soak families.
+
+    ``build_llm_client=False`` disables the auto-wiring below so a caller can
+    guarantee no real LLM is contacted — used by the dry-run preflight, which
+    runs on a DB copy and must never send memory content to a real model before
+    activation.
+    """
     now_dt = _coerce_now(now)
     tick_config = _tick_config(config)
     tick_id = run_id or now_dt.isoformat()
@@ -93,8 +100,10 @@ def run_scheduled_soak_tick(
     # enabled + family gates above: this is capability, not activation. A disabled
     # tick or a tick with no generative family never constructs a client,
     # per-family kill switches still apply, and an injected client (tests) wins.
-    if llm_client is None and any(
-        family in LLM_SOAK_FAMILIES for family, _ in families
+    if (
+        llm_client is None
+        and build_llm_client
+        and any(family in LLM_SOAK_FAMILIES for family, _ in families)
     ):
         from ..llm import create_client
 

@@ -301,6 +301,9 @@ def _run_tick_copy_dry_run(
                 project_scope=project_scope,
                 rollout_tag=rollout_tag,
                 run_id="preflight-copy",
+                # dry-run on a DB copy: never construct a real LLM client, so the
+                # preflight cannot send memory content to a model before activation
+                build_llm_client=False,
             )
         finally:
             store.close()

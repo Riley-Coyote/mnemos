@@ -3104,14 +3104,23 @@ class EngramStore:
         same transaction as the engram means a crash between the two can never
         leave a committed engram without its guard — which a retry would
         otherwise re-mint as a duplicate. Either both land or neither does.
+
+        Race guard: if a concurrent writer inserted the same idempotency key
+        between the caller's pre-check and this transaction, the ledger upsert
+        resolves to an UPDATE (``inserted`` is False). The staged engram would
+        then be a duplicate, so the whole transaction is rolled back and the
+        result carries ``duplicate=True``.
         """
         conn = self._get_conn()
         try:
             conn.execute("BEGIN IMMEDIATE")
             self._save_engram_no_commit(conn, engram)
             result = self.upsert_inner_life_event(**ledger_kwargs, commit=False)
+            if not result["inserted"]:
+                conn.rollback()
+                return {**result, "duplicate": True}
             conn.commit()
-            return result
+            return {**result, "duplicate": False}
         except Exception:
             conn.rollback()
             raise

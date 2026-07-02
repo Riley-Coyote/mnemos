@@ -9,8 +9,10 @@
   transition, blast radius, status, gate version, provenance, and payload
   fields.
 - Schema v7 normalizes the U2.5 proposal quarantine contract: unclassified
-  proposal rows default to `audit_only`, raw proposal writes cannot mint
-  approved/applied terminal states, and terminal proposal rows are immutable.
+  proposal rows default to `audit_only`, raw proposal writes can create only
+  pending/deferred/rejected review artifacts, and same-ID raw writes fail closed
+  once a row leaves `pending_review`. Future reviewed-decision APIs must use a
+  separate append-only path to apply or reject deferred proposals.
 - Operational reads now filter to `operational_context` before retrieval
   ranking, context packet assembly, prompt building, simple runtime context
   and recall, visual snapshots, shared-pool reads, substrate/consolidation

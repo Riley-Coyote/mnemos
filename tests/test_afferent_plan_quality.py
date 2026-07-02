@@ -30,8 +30,14 @@ def test_afferent_main_plan_keeps_rfc_rule_ledger_and_modulation_boundary():
     assert "The RFC is the safety ledger and source of truth" in text
     assert "this plan cannot override, renumber, or weaken it" in text
     assert "U3 through U6b remain planned follow-up stages" in text
-    assert "Do not start U3 until `no-mistakes` passes for the same short SHA returned by `git rev-parse --short HEAD`" in text
-    assert "SHA-256 `4c0a0b46534365023be89c328e6647b257bb431e5d4a5e346b74a8c56e1f976a`" in text
+    assert (
+        "Do not start U3 until `no-mistakes` passes for the same short SHA returned by `git rev-parse --short HEAD`"
+        in text
+    )
+    assert (
+        "SHA-256 `4c0a0b46534365023be89c328e6647b257bb431e5d4a5e346b74a8c56e1f976a`"
+        in text
+    )
 
     expected_mappings = [
         ("RFC-R1", "U3"),
@@ -57,7 +63,13 @@ def test_afferent_main_plan_keeps_rfc_rule_ledger_and_modulation_boundary():
 def test_afferent_main_plan_has_state_surface_and_regression_ledgers():
     text = _read(MAIN_PLAN)
 
-    for heading in ("## Rule Ledger", "## State Ledger", "## Surface Ledger", "## Actor/Auth Ledger", "## Regression Ledger"):
+    for heading in (
+        "## Rule Ledger",
+        "## State Ledger",
+        "## Surface Ledger",
+        "## Actor/Auth Ledger",
+        "## Regression Ledger",
+    ):
         assert heading in text
 
     required_rule_ledger = [
@@ -79,7 +91,9 @@ def test_afferent_main_plan_has_state_surface_and_regression_ledgers():
         "Terminal states",
         "Allowed transitions",
         "Rejected transitions",
-        "duplicate write against terminal row is rejected without mutating reason, provenance, payload, status, or visibility",
+        "Raw upserts on `pending_review` rows preserve or strengthen visibility",
+        "raw upserts on `deferred`, `rejected`, or `applied` rows are fail-closed",
+        "duplicate raw write against a deferred/rejected/applied row is rejected without mutating reason, provenance, payload, status, or visibility",
         "fresh high-confidence/foundational write cannot become operational",
     ]
     for phrase in required_state_ledger:
@@ -127,11 +141,143 @@ def test_u2_5_repair_plan_records_quality_gate_and_deliberate_deviation():
 
     assert "The reusable prevention gate for later Afferent work lives at" in text
     assert "no-mistakes should validate an already rigorous safety ledger" in text
-    assert "Any future no-mistakes `ask-user` policy decision must be folded back" in text
+    assert (
+        "Any future no-mistakes `ask-user` policy decision must be folded back" in text
+    )
     assert "Hypomnema promotion candidates may intentionally use `review_only`" in text
     assert "deliberate recorded deviation" in text
     assert "ProposalLedger rows should follow the RFC default" in text
     assert "`audit_only`" in text
+    _assert_no_operative_r9_or_r10(text)
+
+
+def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
+    """T2.6 plan repair: amendments A (AM-U4 evidence diversity) + B (AM-U6c dream graduation) pins.
+
+    Each assertion is anchored to a specific plan-file addition. Mutation-check
+    confirms each pin goes red when the corresponding plan edit is stashed.
+    """
+    text = _read(MAIN_PLAN)
+    u4_section = text.split("### U4. Tiered Review Gates", 1)[1].split(
+        "### U5. DynamicModulation Persistence Bounds", 1
+    )[0]
+
+    # AM-U4 Evidence Diversity subsection + review-surface folds
+    assert "#### AM-U4 Evidence Diversity" in text
+    assert "minimum pairwise dissimilarity across supporting instances" in text
+    assert "Instance count is never a diversity signal" in text
+    assert "Fail-toward-review" in text
+    assert "dedupe-then-diversity" in text
+    assert "Mixed-set qualifies via dedupe-then-diversity" in text
+    assert "Consistency-anomaly score" in text
+    assert "Salience as queue-ordering only" in text
+    assert "Q5 (deferred to follow-up work)" in text
+
+    # Ledger extensions carrying the AM-U4 definition (Requirements + Rule Ledger both point at the subsection)
+    assert text.count("evidence-diversity definition per AM-U4 subsection") >= 2
+    assert "`mnemos/review/evidence_diversity.py::compute_evidence_diversity`" in text
+    assert "supporting_instance_ids" in text
+    assert "evidence_diversity" in text
+    assert "consistency_anomaly" in text
+    assert "producer='dream_graduation'" in text
+    assert "`evidence_diversity` participates in the AM-U4 gate decision" in text
+    assert "`consistency_anomaly` is an informing signal only" in text
+    assert "never touching promotion eligibility or auto-apply" in text
+    assert "schema v8" in text
+    assert (
+        "Modify: `mnemos/store/migrations.py`" in u4_section
+        or "Modify: mnemos/store/migrations.py" in u4_section
+    )
+    assert "Create: `mnemos/review/evidence_diversity.py`" in u4_section
+    assert "mnemos/review/consistency_anomaly.py" in u4_section
+    assert "v8 database migrates forward (v8 -> v9)" in u4_section
+    assert "Review-packet display" in u4_section
+
+    # A-regression rows (three, aligned to 3-col schema)
+    assert "Evidence-diversity gate qualifies genuinely diverse support" in text
+    assert (
+        "Paraphrase-set never qualifies as evidence-diverse (false-consensus)" in text
+    )
+    assert "Single or incomputable support routes to review" in text
+
+    # AM-U6c Dream Graduation charter
+    assert "### U6c. Dream Graduation" in text
+    assert "U6c (dream graduation, Amendment B) is scheduled as a subsequent stage" in text
+    assert "codex/afferent-membrane-v1-dream-graduation" in text
+    assert "non-accumulating" in text
+    assert "vividness-ratio cap" in text
+    assert "four conjunctive conditions" in text
+    assert "instance-content diversity" in text
+    assert "STRICTER than the general" in text
+    assert "unconditionally across all tiers" in text
+    assert "adaptive decay" in text
+    assert "audit_only row is retained for provenance" in text
+    assert "read_visibility=review_only" in text
+    assert "visible on the review queue" in text
+    assert (
+        "test_adaptive_decay_transitions_unrevisited_patterns_to_decayed_state_audit_only_retained"
+        in text
+    )
+    assert "test_adaptive_decay_removes_unrevisited_patterns" not in text
+    assert "MIN_RECURRENCES" in text
+    assert "VIVIDNESS_RATIO_CAP" in text
+    assert "drop:high_blast_generated" in text
+    assert "identity-domain rows transition directly" in text
+    assert "no stabilized-then-drop deadlock" in text
+    assert "Operational-surface exception" in text
+    assert "explicit filter on" in text
+    assert "add the dream pattern_store table" in text
+    assert "instance-content diversity metric" in text
+    assert "mnemos/substrate/handlers/dreaming.py" in text
+    assert "mnemos/substrate/handlers/wandering.py" in text
+    assert "mnemos/inner_life/low_stakes.py" in text
+    assert "mnemos/inner_life/narrative_gate.py" in text
+    assert "mnemos/consolidation/dreaming.py" not in text
+    assert "mnemos/consolidation/wandering.py" not in text
+    assert "mnemos/consolidation/narrative_gate.py" not in text
+    assert "mnemos/affect/low_stakes.py" not in text
+
+    # R3/R7/R8 U6c extensions (Requirements + Rule Ledger carry U6c, 6 total)
+    assert text.count("extended by U6c (dream graduation)") >= 6
+
+    # Deferral-≠-re-graduation binding note (C1: pattern-side vs proposal-side lifecycles separated per Fable ruling 005)
+    assert "both dispositions are terminal for the pattern" in text
+    assert "graduation is one-time" in text
+    assert "Proposal-side (standard U2.5 semantics)" in text
+    assert "deferred proposals remain decidable" in text
+    proposal_row_match = re.search(r"\| ProposalLedger row \|(?:[^|]*\|){6}", text)
+    assert proposal_row_match is not None, "ProposalLedger State Ledger row missing"
+    proposal_row = proposal_row_match.group(0)
+    assert "rejected` and `applied` are terminal for the proposal" in proposal_row
+    assert "`deferred` is a decidable intermediate status" in proposal_row
+    assert "deferred proposal may subsequently transition to" in proposal_row
+    assert "U4 reviewed decision API" in proposal_row
+    assert "PROPOSAL_TERMINAL_STATUSES is unchanged" in text
+
+    # State Ledger dream-pattern lifecycle row
+    assert "Dream pattern (U6c)" in text
+    assert "`stored/recurring/stabilized/graduated/decayed`" in text
+    assert "no state reaches `graduated` without the four conjunctive conditions" in text
+    assert "graduated is immutable terminal" in text
+    assert "stabilized is a pre-graduation state" in text
+
+    # Surface Ledger pattern-store row
+    assert "Pattern store (U6c:" in text
+    assert "dream-pattern prose never appears as operational context" in text
+    assert "ZERO counts, IDs, or prose on operational surfaces" in text
+
+    # Actor/Auth Ledger dream-graduation producer row
+    assert "Dream graduation (U6c pattern-store producer)" in text
+    assert "no path in U6c mints anything above `generated`" in text
+
+    # B-regression rows (four)
+    assert "Authentic recurrence graduates as a proposal exactly once" in text
+    assert "False-consensus variant-spam does not graduate" in text
+    assert "A single vivid dream does not graduate (vividness-ratio cap)" in text
+    assert "Identity-domain dream content is preempted at the gate" in text
+
+    # Invariants that must survive the amendments
+    assert "U7" not in text
     _assert_no_operative_r9_or_r10(text)
 
 

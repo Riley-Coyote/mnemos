@@ -31,7 +31,8 @@ def build_inner_life_preflight(
     missing_schedule_switches = [
         process
         for process in PROCESS_FAMILIES
-        if process not in schedule_processes or "enabled" not in schedule_processes[process]
+        if process not in schedule_processes
+        or "enabled" not in schedule_processes[process]
     ]
     missing_soak_family_switches = [
         family
@@ -51,7 +52,8 @@ def build_inner_life_preflight(
     missing_activity_switches = [
         process
         for process in PROCESS_FAMILIES
-        if process not in activity_processes or "enabled" not in activity_processes[process]
+        if process not in activity_processes
+        or "enabled" not in activity_processes[process]
     ]
     disabled_activity_processes = [
         process
@@ -89,7 +91,10 @@ def build_inner_life_preflight(
     if schedules_enabled:
         if snapshot_path is None or not snapshot_path.exists():
             blockers.append("pre_soak_snapshot_missing")
-        if bool(activation.get("require_llm_provider", True)) and not provider["llm_ready"]:
+        if (
+            bool(activation.get("require_llm_provider", True))
+            and not provider["llm_ready"]
+        ):
             blockers.append("llm_provider_unavailable")
         if (
             bool(activation.get("require_observer_reviewers", True))
@@ -97,11 +102,13 @@ def build_inner_life_preflight(
         ):
             blockers.append("observer_reviewers_unconfigured")
 
-    artifact_dir = Path(activation.get("artifact_dir") or "~/.mnemos/inner-life").expanduser()
-    plist_dir = Path(activation.get("plist_dir") or "~/Library/LaunchAgents").expanduser()
-    label_prefix = str(
-        activation.get("label_prefix") or "com.davidef.mnemos.innerlife"
-    )
+    artifact_dir = Path(
+        activation.get("artifact_dir") or "~/.mnemos/inner-life"
+    ).expanduser()
+    plist_dir = Path(
+        activation.get("plist_dir") or "~/Library/LaunchAgents"
+    ).expanduser()
+    label_prefix = str(activation.get("label_prefix") or "com.davidef.mnemos.innerlife")
     soak_artifact_dir = Path(
         soak_tick.get("artifact_dir") or "~/.mnemos/soak"
     ).expanduser()
@@ -160,10 +167,18 @@ def build_inner_life_preflight(
         "disabled_activity_processes": disabled_activity_processes,
         "processes": {
             process: {
-                "scheduled": bool(schedule_processes.get(process, {}).get("enabled", False)),
-                "activity_gate": bool(activity_processes.get(process, {}).get("enabled", True)),
-                "cadence_minutes": schedule_processes.get(process, {}).get("cadence_minutes"),
-                "cooldown_minutes": activity_processes.get(process, {}).get("cooldown_minutes"),
+                "scheduled": bool(
+                    schedule_processes.get(process, {}).get("enabled", False)
+                ),
+                "activity_gate": bool(
+                    activity_processes.get(process, {}).get("enabled", True)
+                ),
+                "cadence_minutes": schedule_processes.get(process, {}).get(
+                    "cadence_minutes"
+                ),
+                "cooldown_minutes": activity_processes.get(process, {}).get(
+                    "cooldown_minutes"
+                ),
                 "launchd_label": f"{label_prefix}.{process}",
                 "plist_path": str(plist_dir / f"{label_prefix}.{process}.plist"),
                 "kill_switches": [
@@ -210,5 +225,7 @@ def _resolve_provider_status(
     return {
         "llm_ready": llm_ready,
         "llm_provider": llm_provider,
-        "observer_reviewer_count": int(activation.get("observer_reviewer_count", 0) or 0),
+        "observer_reviewer_count": int(
+            activation.get("observer_reviewer_count", 0) or 0
+        ),
     }

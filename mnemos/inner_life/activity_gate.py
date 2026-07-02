@@ -328,8 +328,12 @@ def _collect_activity_signals(
         )
 
     for pass_name in consolidation_passes:
-        for row in store.get_consolidation_runs(str(pass_name), limit=consolidation_limit):
-            occurred_at = _parse_datetime(row.get("completed_at") or row.get("started_at"))
+        for row in store.get_consolidation_runs(
+            str(pass_name), limit=consolidation_limit
+        ):
+            occurred_at = _parse_datetime(
+                row.get("completed_at") or row.get("started_at")
+            )
             if occurred_at is None or not since <= occurred_at <= now:
                 continue
             signals.append(

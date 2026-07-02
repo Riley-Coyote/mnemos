@@ -77,6 +77,7 @@ def register_migration(
     Returns:
         Decorator function.
     """
+
     def decorator(func: Callable[[sqlite3.Connection], None]) -> Callable:
         if version in _MIGRATIONS:
             raise ValueError(
@@ -87,6 +88,7 @@ def register_migration(
             )
         _MIGRATIONS[version] = (description, func)
         return func
+
     return decorator
 
 
@@ -102,9 +104,7 @@ def get_current_version(conn: sqlite3.Connection) -> int:
     conn.execute(
         "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
     )
-    row = conn.execute(
-        "SELECT value FROM meta WHERE key = 'schema_version'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
     if row is None:
         return 0
     try:
@@ -116,7 +116,9 @@ def get_current_version(conn: sqlite3.Connection) -> int:
     return version
 
 
-def run_migrations(conn: sqlite3.Connection, target_version: int | None = None) -> list[int]:
+def run_migrations(
+    conn: sqlite3.Connection, target_version: int | None = None
+) -> list[int]:
     """Apply all pending migrations up to target_version.
 
     Args:
@@ -425,7 +427,9 @@ def apply_u3b_hardening_schema_migration(conn: sqlite3.Connection) -> None:
         )
 
 
-@register_migration(5, "U3b hardening: row-map extensions + pai_import_events + tombstone triggers")
+@register_migration(
+    5, "U3b hardening: row-map extensions + pai_import_events + tombstone triggers"
+)
 def migrate_v5_u3b_hardening(conn: sqlite3.Connection) -> None:
     apply_u3b_hardening_schema_migration(conn)
 
@@ -478,7 +482,9 @@ def apply_afferent_membrane_v1_schema_migration(conn: sqlite3.Connection) -> Non
         """
         UPDATE hypomnema_entries
         SET read_visibility = 'review_only'
-        WHERE """ + HYPO_REVIEW_CANDIDATE_SQL + """
+        WHERE """
+        + HYPO_REVIEW_CANDIDATE_SQL
+        + """
         """,
         (HYPO_PROMOTION_MIN_CONFIDENCE, HYPO_PROMOTION_MIN_SALIENCE),
     )
@@ -557,9 +563,12 @@ def _repair_stale_v6_hypomnema_visibility(conn: sqlite3.Connection) -> None:
         conn, "hypomnema_entries", "read_visibility"
     ):
         return
-    if _normalize_default_literal(
-        _column_default(conn, "hypomnema_entries", "read_visibility")
-    ) != READ_VISIBILITY_REVIEW:
+    if (
+        _normalize_default_literal(
+            _column_default(conn, "hypomnema_entries", "read_visibility")
+        )
+        != READ_VISIBILITY_REVIEW
+    ):
         return
 
     row = conn.execute(
@@ -593,7 +602,9 @@ def _repair_stale_v6_hypomnema_visibility(conn: sqlite3.Connection) -> None:
         """
         UPDATE hypomnema_entries
         SET read_visibility = 'review_only'
-        WHERE """ + HYPO_REVIEW_CANDIDATE_SQL + """
+        WHERE """
+        + HYPO_REVIEW_CANDIDATE_SQL
+        + """
           AND read_visibility = 'operational_context'
         """,
         (HYPO_PROMOTION_MIN_CONFIDENCE, HYPO_PROMOTION_MIN_SALIENCE),
@@ -982,8 +993,7 @@ def upsert_pai_import_row(
         same_engram = (existing_engram_id or None) == effective_engram_id
         same_hash = existing_source_hash == source_hash
         same_content = (
-            content_at_last_import is None
-            or existing_content == content_at_last_import
+            content_at_last_import is None or existing_content == content_at_last_import
         )
         same_agent_id = agent_id is None or existing_agent_id == agent_id
         same_project_scope = (

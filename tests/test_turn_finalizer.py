@@ -53,12 +53,15 @@ def test_turn_finalizer_writes_one_idempotent_provenance_row_only(tmp_path):
 
         assert store.count_engrams(agent_id="oliver") == 0
         assert store.get_beliefs(agent_id="oliver") == []
-        assert store.search_hypomnema(
-            "verify the scope",
-            agent_id="oliver",
-            person_id="david",
-            project_scope="pai",
-        ) == []
+        assert (
+            store.search_hypomnema(
+                "verify the scope",
+                agent_id="oliver",
+                person_id="david",
+                project_scope="pai",
+            )
+            == []
+        )
     finally:
         store.close()
 
@@ -81,10 +84,13 @@ def test_turn_finalizer_skips_empty_exchange_without_writing(tmp_path):
         assert result["written"] == 0
         assert result["skipped"] == 1
         assert result["reason"] == "empty_exchange"
-        assert store.get_inner_life_events(
-            agent_id="oliver",
-            person_id="david",
-            project_scope="pai",
-        ) == []
+        assert (
+            store.get_inner_life_events(
+                agent_id="oliver",
+                person_id="david",
+                project_scope="pai",
+            )
+            == []
+        )
     finally:
         store.close()

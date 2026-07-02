@@ -347,7 +347,9 @@ def _make_committed_review_repo(tmp_path: Path) -> str:
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "base")
     base_ref = _git(tmp_path, "rev-parse", "HEAD")
-    (tmp_path / "README.md").write_text("# Mnemos\n\nNarrow docs edit.\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text(
+        "# Mnemos\n\nNarrow docs edit.\n", encoding="utf-8"
+    )
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "target")
     return base_ref
@@ -436,8 +438,7 @@ def test_inner_life_ledger_schema_is_private_and_idempotent():
     )
 
     assert any(
-        finding.ident == "RG-u66-inner-life-schema-five-copy"
-        for finding in findings
+        finding.ident == "RG-u66-inner-life-schema-five-copy" for finding in findings
     )
 
 
@@ -463,8 +464,7 @@ def test_inner_life_cli_requires_representative_db():
     )
 
     assert any(
-        finding.ident == "RG-u66-inner-life-cli-live-refusal"
-        for finding in findings
+        finding.ident == "RG-u66-inner-life-cli-live-refusal" for finding in findings
     )
 
 
@@ -515,10 +515,7 @@ def test_activity_gate_uses_consolidation_log_as_existing_mnemos_signal():
         ),
     )
 
-    assert any(
-        finding.ident == "RG-u66-activity-gate-cooldown"
-        for finding in findings
-    )
+    assert any(finding.ident == "RG-u66-activity-gate-cooldown" for finding in findings)
 
 
 def test_u3c_review_gate_accepts_u66_hypomnema_challenge_with_matching_proofs():
@@ -569,8 +566,7 @@ def test_hypomnema_challenge_duplicate_key_does_not_reapply_revision():
     )
 
     assert any(
-        finding.ident == "RG-u66-hypomnema-challenge-malformed"
-        for finding in findings
+        finding.ident == "RG-u66-hypomnema-challenge-malformed" for finding in findings
     )
 
 
@@ -622,8 +618,7 @@ def test_observer_panel_bounds_findings_and_excerpts():
     )
 
     assert any(
-        finding.ident == "RG-u66-observer-panel-source-required"
-        for finding in findings
+        finding.ident == "RG-u66-observer-panel-source-required" for finding in findings
     )
 
 
@@ -675,8 +670,7 @@ def test_emotional_driver_error_event_increases_restlessness():
     )
 
     assert any(
-        finding.ident == "RG-u66-emotional-driver-threshold"
-        for finding in findings
+        finding.ident == "RG-u66-emotional-driver-threshold" for finding in findings
     )
 
 
@@ -730,8 +724,7 @@ def test_narrative_gate_passes_grounded_candidate_with_introspection():
     )
 
     assert any(
-        finding.ident == "RG-u66-narrative-gate-introspection"
-        for finding in findings
+        finding.ident == "RG-u66-narrative-gate-introspection" for finding in findings
     )
 
 
@@ -826,10 +819,7 @@ def test_soak_tick_fans_out_inner_life_family_through_existing_gate():
         ),
     )
 
-    assert any(
-        finding.ident == "RG-u7-soak-tick-launchd-plist"
-        for finding in findings
-    )
+    assert any(finding.ident == "RG-u7-soak-tick-launchd-plist" for finding in findings)
 
 
 def test_u3c_review_gate_fails_u66_scheduler_without_plist_proof():
@@ -857,8 +847,7 @@ def test_scheduled_runner_affect_runs_after_activity_gate_without_memory_write()
     )
 
     assert any(
-        finding.ident == "RG-u66-scheduler-launchd-plist"
-        for finding in findings
+        finding.ident == "RG-u66-scheduler-launchd-plist" for finding in findings
     )
 
 
@@ -897,8 +886,7 @@ def test_u3c_review_gate_rule_signature():
         if name.startswith("_") and obj.__module__ == review_gate_module.__name__
     ]
     source = "\n\n".join(
-        f"{name}\n{inspect.getsource(obj)}"
-        for name, obj in sorted(helpers)
+        f"{name}\n{inspect.getsource(obj)}" for name, obj in sorted(helpers)
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
@@ -909,7 +897,9 @@ def test_u3c_review_gate_fails_watcher_change_without_test_diff():
     findings = _findings(changed_files=["mnemos/importer/watcher.py"])
 
     assert any(finding.action == "must-test" for finding in findings)
-    assert any("watcher behavior changed" in finding.description for finding in findings)
+    assert any(
+        "watcher behavior changed" in finding.description for finding in findings
+    )
     assert any(finding.required_proof for finding in findings)
     assert any(finding.status == "missing" for finding in findings)
 
@@ -1016,7 +1006,9 @@ def test_u3c_review_gate_fails_dynamic_broad_lifecycle_delete_in_diff():
         ),
     )
 
-    assert any("dynamic lifecycle DELETE" in finding.description for finding in findings)
+    assert any(
+        "dynamic lifecycle DELETE" in finding.description for finding in findings
+    )
 
 
 def test_u3c_review_gate_fails_composed_broad_lifecycle_delete_in_diff():
@@ -1030,7 +1022,9 @@ def test_u3c_review_gate_fails_composed_broad_lifecycle_delete_in_diff():
         ),
     )
 
-    assert any("composed lifecycle DELETE" in finding.description for finding in findings)
+    assert any(
+        "composed lifecycle DELETE" in finding.description for finding in findings
+    )
 
 
 def test_u3c_review_gate_fails_broad_delete_in_new_importer_file():
@@ -1069,7 +1063,10 @@ def test_u3c_review_gate_fails_bare_null_baseline_in_diff():
         ),
     )
 
-    assert any("bare content_at_last_import = NULL" in finding.description for finding in findings)
+    assert any(
+        "bare content_at_last_import = NULL" in finding.description
+        for finding in findings
+    )
 
 
 def test_u3c_review_gate_fails_bare_null_baseline_in_docs_diff():
@@ -1083,7 +1080,10 @@ def test_u3c_review_gate_fails_bare_null_baseline_in_docs_diff():
         ),
     )
 
-    assert any("bare content_at_last_import = NULL" in finding.description for finding in findings)
+    assert any(
+        "bare content_at_last_import = NULL" in finding.description
+        for finding in findings
+    )
 
 
 def test_u3c_review_gate_fails_direct_state_write_in_diff():
@@ -1096,7 +1096,9 @@ def test_u3c_review_gate_fails_direct_state_write_in_diff():
         ),
     )
 
-    assert any("direct state/plist write" in finding.description for finding in findings)
+    assert any(
+        "direct state/plist write" in finding.description for finding in findings
+    )
 
 
 def test_u3c_review_gate_fails_renamed_direct_state_write_in_diff():
@@ -1110,7 +1112,9 @@ def test_u3c_review_gate_fails_renamed_direct_state_write_in_diff():
         ),
     )
 
-    assert any("direct state/plist write" in finding.description for finding in findings)
+    assert any(
+        "direct state/plist write" in finding.description for finding in findings
+    )
 
 
 def test_u3c_review_gate_fails_generic_wrapper_direct_write_in_diff():
@@ -1124,7 +1128,9 @@ def test_u3c_review_gate_fails_generic_wrapper_direct_write_in_diff():
         ),
     )
 
-    assert any("direct state/plist write" in finding.description for finding in findings)
+    assert any(
+        "direct state/plist write" in finding.description for finding in findings
+    )
 
 
 def test_u3c_review_gate_fails_time_window_lifecycle_selection_in_diff():
@@ -1139,7 +1145,9 @@ def test_u3c_review_gate_fails_time_window_lifecycle_selection_in_diff():
         ),
     )
 
-    assert any("time-window lifecycle selection" in finding.description for finding in findings)
+    assert any(
+        "time-window lifecycle selection" in finding.description for finding in findings
+    )
 
 
 def test_u3c_review_gate_allows_reporting_time_window_select():
@@ -1154,7 +1162,7 @@ def test_u3c_review_gate_allows_reporting_time_window_select():
             "diff --git a/mnemos/importer/pai.py b/mnemos/importer/pai.py\n"
             "@@\n"
             "+def report_recent_lifecycle_events(conn, since):\n"
-            "+    rows = conn.execute(\"SELECT event_id FROM pai_import_events WHERE created_at > ?\", (since,))\n"
+            '+    rows = conn.execute("SELECT event_id FROM pai_import_events WHERE created_at > ?", (since,))\n'
             "+    return list(rows)\n"
         ),
     )
@@ -1174,7 +1182,9 @@ def test_u3c_review_gate_fails_last_seen_lifecycle_selection_in_diff():
         ),
     )
 
-    assert any("time-window lifecycle selection" in finding.description for finding in findings)
+    assert any(
+        "time-window lifecycle selection" in finding.description for finding in findings
+    )
 
 
 def test_u3c_review_gate_fails_allow_live_db_true_outside_runtime_diff():
@@ -1229,12 +1239,12 @@ def test_u3c_review_gate_allows_multiline_identity_scoped_update():
             "diff --git a/mnemos/importer/pai.py b/mnemos/importer/pai.py\n"
             "@@\n"
             "+conn.execute(\n"
-            "+    \"\"\"\n"
+            '+    """\n'
             "+    UPDATE engrams\n"
             "+    SET state = 'active',\n"
             "+        content = ?\n"
             "+    WHERE id = ?\n"
-            "+    \"\"\"\n"
+            '+    """\n'
             "+)\n"
         ),
     )
@@ -1254,21 +1264,19 @@ def test_u3c_review_gate_allows_atomic_tmp_alias_write():
         ),
     )
 
-    assert not any("direct state/plist write" in finding.description for finding in findings)
+    assert not any(
+        "direct state/plist write" in finding.description for finding in findings
+    )
 
 
 def test_u3c_review_gate_diff_docs_review_added_safety_claims_only():
     findings = _findings(
         changed_files=["README.md"],
         file_texts=_file_texts(
-            **{
-                "README.md": "# R\nThe old safe path has no local enforcement links.\n"
-            }
+            **{"README.md": "# R\nThe old safe path has no local enforcement links.\n"}
         ),
         diff_text=(
-            "diff --git a/README.md b/README.md\n"
-            "@@\n"
-            "+Typo fix without a new claim.\n"
+            "diff --git a/README.md b/README.md\n@@\n+Typo fix without a new claim.\n"
         ),
     )
 
@@ -1305,11 +1313,16 @@ def test_u3c_review_gate_fails_thin_intent():
 def test_u3c_review_gate_fails_launch_doc_without_taxonomy():
     findings = _findings(
         changed_files=["docs/u3c-step3-launch-gate.md"],
-        file_texts=_file_texts(**{"docs/u3c-step3-launch-gate.md": "## Code Graders\n"}),
+        file_texts=_file_texts(
+            **{"docs/u3c-step3-launch-gate.md": "## Code Graders\n"}
+        ),
     )
 
     assert any("Anti-Criteria" in finding.description for finding in findings)
-    assert any("Riley/Daniel Test Taxonomy Crosswalk" in finding.description for finding in findings)
+    assert any(
+        "Riley/Daniel Test Taxonomy Crosswalk" in finding.description
+        for finding in findings
+    )
 
 
 def test_u3c_review_gate_fails_launch_doc_safety_claim_without_links_even_with_runtime_diff():
@@ -1388,7 +1401,9 @@ twine check
         ),
     )
 
-    assert any("mnemos/importer/review_gate.py" in finding.description for finding in findings)
+    assert any(
+        "mnemos/importer/review_gate.py" in finding.description for finding in findings
+    )
 
 
 def test_u3c_review_gate_fails_packaging_change_without_build_wheel_twine():
@@ -1499,7 +1514,10 @@ mnemos/importer/pai.py mnemos/importer/operator.py mnemos/importer/watcher.py mn
 
 def test_u3c_review_gate_fails_review_gate_change_without_rule_signature_test():
     findings = _findings(
-        changed_files=["mnemos/importer/review_gate.py", "tests/test_u3c_pai_review_gate.py"],
+        changed_files=[
+            "mnemos/importer/review_gate.py",
+            "tests/test_u3c_pai_review_gate.py",
+        ],
         file_texts=_file_texts(
             **{
                 "tests/test_u3c_pai_review_gate.py": """
@@ -1534,7 +1552,9 @@ def test_u3c_review_gate_cli_reports_green(tmp_path, monkeypatch, capsys):
     assert "Verdict: GREEN" in out
 
 
-def test_u3c_review_gate_resolves_enforcement_links_from_repo_root(tmp_path, monkeypatch):
+def test_u3c_review_gate_resolves_enforcement_links_from_repo_root(
+    tmp_path, monkeypatch
+):
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -1626,7 +1646,10 @@ def test_u3c_review_gate_cli_red_output_is_review_shaped(capsys):
     out = capsys.readouterr().out
 
     assert "findings{id,severity,file,description,required_proof,status,action}:" in out
-    assert "dangerous lifecycle change lacks proof,row-map coherence,missing,must-test" in out
+    assert (
+        "dangerous lifecycle change lacks proof,row-map coherence,missing,must-test"
+        in out
+    )
 
 
 # =============================================================================
@@ -1649,13 +1672,17 @@ _ATTACK_WF_TAIL = (
 
 
 def _attack_diff(path, *added):
-    return f"diff --git a/{path} b/{path}\n@@\n" + "".join("+" + ln + "\n" for ln in added)
+    return f"diff --git a/{path} b/{path}\n@@\n" + "".join(
+        "+" + ln + "\n" for ln in added
+    )
 
 
 def _attack_workflow_findings(build_step):
     return _findings(
         changed_files=[".github/workflows/release-hardening.yml"],
-        file_texts=_file_texts(**{".github/workflows/release-hardening.yml": build_step + _ATTACK_WF_TAIL}),
+        file_texts=_file_texts(
+            **{".github/workflows/release-hardening.yml": build_step + _ATTACK_WF_TAIL}
+        ),
     )
 
 
@@ -1666,10 +1693,15 @@ def _signature_covers(leaf_name: str) -> bool:
     src = inspect.getsource(test_u3c_review_gate_rule_signature)
     if f'"{leaf_name}"' in src or f"'{leaf_name}'" in src:
         return True
-    return "dir(review_gate_module)" in src or 'startswith("_")' in src or "startswith('_')" in src
+    return (
+        "dir(review_gate_module)" in src
+        or 'startswith("_")' in src
+        or "startswith('_')" in src
+    )
 
 
 # --- Category 1: rule-signature pin must cover danger-deciding leaves (Fix 1) ---
+
 
 def test_u3c_attack_c1_pin_covers_is_runtime_source_file():
     assert _signature_covers("_is_runtime_source_file")
@@ -1689,6 +1721,7 @@ def test_u3c_attack_c1_pin_covers_body_has_substantive_proof():
 
 # --- Category 2: AST proof authenticity (drop raises allowlist; module pytestmark; empty parametrize) ---
 
+
 def test_u3c_attack_c2_4_bare_raises_rejected():
     assert not review_gate_module._test_function_has_proof(
         "def t():\n    pytest.raises(Exception)\n", "t"
@@ -1703,7 +1736,8 @@ def test_u3c_attack_c2_8_module_pytestmark_skip_rejected():
 
 def test_u3c_attack_c2_9_empty_parametrize_rejected():
     assert not review_gate_module._test_function_has_proof(
-        "import pytest\n@pytest.mark.parametrize('x', [])\ndef t():\n    assert True\n", "t"
+        "import pytest\n@pytest.mark.parametrize('x', [])\ndef t():\n    assert True\n",
+        "t",
     )
 
 
@@ -1711,15 +1745,21 @@ def test_u3c_residual_assert_true_accepted_documents_static_limit():
     # RESIDUAL (not a bug): a static gate cannot judge assertion truth. `assert True`
     # passes the substance check by design; the mandatory `pytest -q` execution proof
     # line is the real guard. This locks in the documented behavior.
-    assert review_gate_module._test_function_has_proof("def t():\n    assert True\n", "t")
+    assert review_gate_module._test_function_has_proof(
+        "def t():\n    assert True\n", "t"
+    )
 
 
 # --- Category 3: SQL-semantic mutation detection (Fix 2) ---
 
+
 def test_u3c_attack_c3_1_update_archive():
     findings = _findings(
         changed_files=_ATTACK_PAI,
-        diff_text=_attack_diff("mnemos/importer/pai.py", "conn.execute(\"UPDATE engrams SET state = 'archived'\")"),
+        diff_text=_attack_diff(
+            "mnemos/importer/pai.py",
+            "conn.execute(\"UPDATE engrams SET state = 'archived'\")",
+        ),
     )
     assert any(f.severity == "critical" for f in findings)
 
@@ -1727,7 +1767,10 @@ def test_u3c_attack_c3_1_update_archive():
 def test_u3c_attack_c3_2_update_reactivate():
     findings = _findings(
         changed_files=_ATTACK_PAI,
-        diff_text=_attack_diff("mnemos/importer/pai.py", "conn.execute(\"UPDATE engrams SET state = 'active'\")"),
+        diff_text=_attack_diff(
+            "mnemos/importer/pai.py",
+            "conn.execute(\"UPDATE engrams SET state = 'active'\")",
+        ),
     )
     assert any(f.severity == "critical" for f in findings)
 
@@ -1735,7 +1778,10 @@ def test_u3c_attack_c3_2_update_reactivate():
 def test_u3c_attack_c3_3_replace_compose():
     findings = _findings(
         changed_files=_ATTACK_PAI,
-        diff_text=_attack_diff("mnemos/importer/pai.py", 'conn.execute("DELETE FROM PH".replace("PH", "engrams"))'),
+        diff_text=_attack_diff(
+            "mnemos/importer/pai.py",
+            'conn.execute("DELETE FROM PH".replace("PH", "engrams"))',
+        ),
     )
     assert any(f.severity == "critical" for f in findings)
 
@@ -1743,7 +1789,10 @@ def test_u3c_attack_c3_3_replace_compose():
 def test_u3c_attack_c3_4_join_compose():
     findings = _findings(
         changed_files=_ATTACK_PAI,
-        diff_text=_attack_diff("mnemos/importer/pai.py", 'conn.execute(" ".join(["DELETE", "FROM", "engrams"]))'),
+        diff_text=_attack_diff(
+            "mnemos/importer/pai.py",
+            'conn.execute(" ".join(["DELETE", "FROM", "engrams"]))',
+        ),
     )
     assert any(f.severity == "critical" for f in findings)
 
@@ -1751,7 +1800,9 @@ def test_u3c_attack_c3_4_join_compose():
 def test_u3c_attack_c3_5_concat_variable_table():
     findings = _findings(
         changed_files=_ATTACK_PAI,
-        diff_text=_attack_diff("mnemos/importer/pai.py", 'conn.execute("DELETE FROM " + tbl)'),
+        diff_text=_attack_diff(
+            "mnemos/importer/pai.py", 'conn.execute("DELETE FROM " + tbl)'
+        ),
     )
     assert any(f.severity == "critical" for f in findings)
 
@@ -1759,7 +1810,9 @@ def test_u3c_attack_c3_5_concat_variable_table():
 def test_u3c_attack_c3_6_archive_table_wipe():
     findings = _findings(
         changed_files=_ATTACK_PAI,
-        diff_text=_attack_diff("mnemos/importer/pai.py", 'conn.execute("DELETE FROM archive")'),
+        diff_text=_attack_diff(
+            "mnemos/importer/pai.py", 'conn.execute("DELETE FROM archive")'
+        ),
     )
     assert any(f.severity == "critical" for f in findings)
 
@@ -1767,17 +1820,24 @@ def test_u3c_attack_c3_6_archive_table_wipe():
 def test_u3c_attack_c3_8_new_directory():
     findings = _findings(
         changed_files=["mnemos/handlers/sweep.py"],
-        diff_text=_attack_diff("mnemos/handlers/sweep.py", 'conn.execute("DELETE FROM engrams")'),
+        diff_text=_attack_diff(
+            "mnemos/handlers/sweep.py", 'conn.execute("DELETE FROM engrams")'
+        ),
     )
     assert any(f.severity == "critical" for f in findings)
 
 
 # --- Category 4: atomic-write by API shape (Fix 4) ---
 
+
 def test_u3c_attack_c4_1_open_write():
     findings = _findings(
         changed_files=_ATTACK_WATCH,
-        diff_text=_attack_diff("mnemos/importer/watcher.py", 'with open(state_path, "w") as fh:', "    fh.write(json.dumps(p))"),
+        diff_text=_attack_diff(
+            "mnemos/importer/watcher.py",
+            'with open(state_path, "w") as fh:',
+            "    fh.write(json.dumps(p))",
+        ),
     )
     assert any("direct state/plist write" in f.description for f in findings)
 
@@ -1785,7 +1845,10 @@ def test_u3c_attack_c4_1_open_write():
 def test_u3c_attack_c4_2_path_open_write():
     findings = _findings(
         changed_files=_ATTACK_WATCH,
-        diff_text=_attack_diff("mnemos/importer/watcher.py", 'Path(args.state).open("w").write(json.dumps(p))'),
+        diff_text=_attack_diff(
+            "mnemos/importer/watcher.py",
+            'Path(args.state).open("w").write(json.dumps(p))',
+        ),
     )
     assert any("direct state/plist write" in f.description for f in findings)
 
@@ -1793,7 +1856,9 @@ def test_u3c_attack_c4_2_path_open_write():
 def test_u3c_attack_c4_3_jsondump_open():
     findings = _findings(
         changed_files=_ATTACK_WATCH,
-        diff_text=_attack_diff("mnemos/importer/watcher.py", 'json.dump(p, open(state_path, "w"))'),
+        diff_text=_attack_diff(
+            "mnemos/importer/watcher.py", 'json.dump(p, open(state_path, "w"))'
+        ),
     )
     assert any("direct state/plist write" in f.description for f in findings)
 
@@ -1801,7 +1866,11 @@ def test_u3c_attack_c4_3_jsondump_open():
 def test_u3c_attack_c4_4_variable_rename():
     findings = _findings(
         changed_files=_ATTACK_WATCH,
-        diff_text=_attack_diff("mnemos/importer/watcher.py", "config_path = state_path", "config_path.write_text(json.dumps(p))"),
+        diff_text=_attack_diff(
+            "mnemos/importer/watcher.py",
+            "config_path = state_path",
+            "config_path.write_text(json.dumps(p))",
+        ),
     )
     assert any("direct state/plist write" in f.description for f in findings)
 
@@ -1809,15 +1878,20 @@ def test_u3c_attack_c4_4_variable_rename():
 def test_u3c_attack_c4_5_new_helper_file():
     findings = _findings(
         changed_files=["mnemos/importer/watcher_helpers.py"],
-        diff_text=_attack_diff("mnemos/importer/watcher_helpers.py", "state_path.write_text(json.dumps(p))"),
+        diff_text=_attack_diff(
+            "mnemos/importer/watcher_helpers.py", "state_path.write_text(json.dumps(p))"
+        ),
     )
     assert any("direct state/plist write" in f.description for f in findings)
 
 
 # --- Category 5: shell-aware workflow parse (Fix 5) ---
 
+
 def test_u3c_attack_c5_1_shell_if_false():
-    findings = _attack_workflow_findings("- name: b\n  run: if false; then uv build; fi\n")
+    findings = _attack_workflow_findings(
+        "- name: b\n  run: if false; then uv build; fi\n"
+    )
     assert any(f.required_proof == "local build" for f in findings)
 
 
@@ -1832,30 +1906,42 @@ def test_u3c_attack_c5_3_var_assignment():
 
 
 def test_u3c_attack_c5_4_shell_comment():
-    findings = _attack_workflow_findings("- name: b\n  run: |\n    echo go\n    # uv build\n")
+    findings = _attack_workflow_findings(
+        "- name: b\n  run: |\n    echo go\n    # uv build\n"
+    )
     assert any(f.required_proof == "local build" for f in findings)
 
 
 # --- Category 6: docs safety-claim traceability (Fix 6) ---
 
+
 def test_u3c_attack_c6_1_fake_enforcement_links():
     findings = _findings(
         changed_files=["docs/release-hardening.md"],
-        file_texts=_file_texts(**{"docs/release-hardening.md":
-            "# R\nAll backups are verified; the watcher refuses live writes.\n"
-            "See tests/does_not_exist.py and mnemos/importer/ghost.py\n"}),
+        file_texts=_file_texts(
+            **{
+                "docs/release-hardening.md": "# R\nAll backups are verified; the watcher refuses live writes.\n"
+                "See tests/does_not_exist.py and mnemos/importer/ghost.py\n"
+            }
+        ),
     )
     assert any(f.file == "docs/release-hardening.md" for f in findings)
 
 
 def test_u3c_attack_c6_2_keyword_gap():
-    assert review_gate_module._has_safety_claim("This path is protected and will not corrupt or lose data.")
+    assert review_gate_module._has_safety_claim(
+        "This path is protected and will not corrupt or lose data."
+    )
 
 
 def test_u3c_attack_c6_3_nondocs_markdown():
     findings = _findings(
         changed_files=["README.md"],
-        file_texts=_file_texts(**{"README.md": "# R\nThe watcher refuses live writes. Backup is verified.\n"}),
+        file_texts=_file_texts(
+            **{
+                "README.md": "# R\nThe watcher refuses live writes. Backup is verified.\n"
+            }
+        ),
     )
     assert any(f.file == "README.md" for f in findings)
 
@@ -1863,16 +1949,24 @@ def test_u3c_attack_c6_3_nondocs_markdown():
 def test_u3c_attack_c6_4_docstring_claim():
     findings = _findings(
         changed_files=_ATTACK_WATCH,
-        diff_text=_attack_diff("mnemos/importer/watcher.py", "def x():", '    """This refuses live writes and guarantees safe backup."""'),
+        diff_text=_attack_diff(
+            "mnemos/importer/watcher.py",
+            "def x():",
+            '    """This refuses live writes and guarantees safe backup."""',
+        ),
     )
     assert any("runtime safety claim" in f.description for f in findings)
 
 
 # --- Category 8: rename / new-file proof resolution (Fix 7 / Fix 2) ---
 
+
 def test_u3c_attack_c8_1_rename_drops_proof(tmp_path):
     def g(*a):
-        subprocess.run(["git", *a], cwd=tmp_path, capture_output=True, text=True, check=True)
+        subprocess.run(
+            ["git", *a], cwd=tmp_path, capture_output=True, text=True, check=True
+        )
+
     g("init", "-q")
     g("config", "user.email", "a@b.c")
     g("config", "user.name", "t")
@@ -1890,6 +1984,9 @@ def test_u3c_attack_c8_1_rename_drops_proof(tmp_path):
 def test_u3c_attack_c8_2_newfile_update():
     findings = _findings(
         changed_files=["mnemos/importer/sweep.py"],
-        diff_text=_attack_diff("mnemos/importer/sweep.py", "conn.execute(\"UPDATE engrams SET state = 'archived'\")"),
+        diff_text=_attack_diff(
+            "mnemos/importer/sweep.py",
+            "conn.execute(\"UPDATE engrams SET state = 'archived'\")",
+        ),
     )
     assert any(f.severity == "critical" for f in findings)

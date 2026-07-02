@@ -6,9 +6,7 @@ from mnemos.store.sqlite_store import EngramStore, SCHEMA_VERSION
 def _tables(conn):
     return {
         row["name"]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        )
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
 
 
@@ -71,12 +69,15 @@ def test_inner_life_ledger_schema_is_private_and_idempotent(tmp_path):
 
         assert store.count_engrams(agent_id="oliver") == 0
         assert store.get_beliefs(agent_id="oliver") == []
-        assert store.search_hypomnema(
-            "hello",
-            agent_id="oliver",
-            person_id="david",
-            project_scope="pai",
-        ) == []
+        assert (
+            store.search_hypomnema(
+                "hello",
+                agent_id="oliver",
+                person_id="david",
+                project_scope="pai",
+            )
+            == []
+        )
     finally:
         store.close()
 
@@ -95,9 +96,7 @@ def test_inner_life_ledger_migrates_schema_five_copy_without_touching_memory(tmp
 
         conn = sqlite3.connect(db)
         try:
-            conn.execute(
-                "UPDATE meta SET value = '5' WHERE key = 'schema_version'"
-            )
+            conn.execute("UPDATE meta SET value = '5' WHERE key = 'schema_version'")
             conn.execute("DROP TABLE IF EXISTS inner_life_events")
             conn.commit()
         finally:

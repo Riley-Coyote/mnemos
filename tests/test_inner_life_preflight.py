@@ -82,7 +82,9 @@ def test_preflight_enabled_schedules_require_snapshot_and_provider_readiness(tmp
     assert result["pre_soak_snapshot"]["exists"] is False
 
 
-def test_preflight_ready_when_enabled_snapshot_provider_and_kill_switches_exist(tmp_path):
+def test_preflight_ready_when_enabled_snapshot_provider_and_kill_switches_exist(
+    tmp_path,
+):
     db = tmp_path / "preflight-ready.db"
     EngramStore(db).close()
     config = _enabled_schedule_config(tmp_path)

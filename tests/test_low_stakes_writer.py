@@ -87,15 +87,21 @@ def test_low_stakes_writer_persists_private_generated_record_only(tmp_path):
         assert rows[0]["metadata"]["visibility"] == Visibility.PRIVATE
 
         assert store.get_beliefs(agent_id="oliver") == []
-        assert store.get_hypomnema_stats(
-            agent_id="oliver",
-            person_id="david",
-            project_scope="pai",
-        )["hypomnema_promotion_candidates"] == 0
-        assert store.get_active_engrams(
-            agent_id="oliver",
-            require_consolidation_authorized=True,
-        ) == []
+        assert (
+            store.get_hypomnema_stats(
+                agent_id="oliver",
+                person_id="david",
+                project_scope="pai",
+            )["hypomnema_promotion_candidates"]
+            == 0
+        )
+        assert (
+            store.get_active_engrams(
+                agent_id="oliver",
+                require_consolidation_authorized=True,
+            )
+            == []
+        )
     finally:
         store.close()
 

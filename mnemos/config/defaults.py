@@ -24,14 +24,12 @@ DEFAULT_CONFIG: dict = {
     "server": {
         "mode": "simple",
     },
-
     # ── Store ──
     "store": {
         "db_path": "~/.mnemos/memory.db",
         "wal_mode": True,
         "max_engrams_in_memory": 1000,
     },
-
     # ── Encoding ──
     "encoding": {
         "default_depth": "moderate",
@@ -44,7 +42,6 @@ DEFAULT_CONFIG: dict = {
         "max_connections_at_encoding": 5,
         "tag_extraction_enabled": True,
     },
-
     # ── Retrieval ──
     "retrieval": {
         "max_results": 20,
@@ -64,7 +61,6 @@ DEFAULT_CONFIG: dict = {
         "reconsolidation_max_stability_delta": 0.03,
         "reconsolidation_connection_bonus": 0.002,
     },
-
     # ── Consolidation ──
     "consolidation": {
         # Decay pass
@@ -72,42 +68,35 @@ DEFAULT_CONFIG: dict = {
         "dormant_threshold": 0.05,
         "archive_threshold": 0.01,
         "decay_interval_hours": 6,
-
         # Long-term stability (exponential decay model)
-        "stability_decay_factor": 3.0,         # k in exp(-k * stability)
-        "stability_connection_threshold": 3,   # min connections to trigger growth
-        "stability_growth_rate": 0.002,        # per log1p(n_connections) per cycle
-        "stability_growth_cap": 0.005,         # max growth per cycle
-
+        "stability_decay_factor": 3.0,  # k in exp(-k * stability)
+        "stability_connection_threshold": 3,  # min connections to trigger growth
+        "stability_growth_rate": 0.002,  # per log1p(n_connections) per cycle
+        "stability_growth_cap": 0.005,  # max growth per cycle
         # Softening pass
         "softening_enabled": True,
         "softening_threshold": 0.15,
         "minimum_resolution": 0.1,
         "resolution_step": 0.3,
-
         # Belief review
         "belief_review_enabled": True,
         "stagnation_threshold_days": 30,
         "minimum_belief_confidence": 0.1,
         "max_beliefs_per_pass": 10,
-
         # Reflection
         "reflection_enabled": True,
         "reflection_lookback_hours": 24,
         "max_thoughts_per_pass": 5,
         "max_curiosity_questions": 3,
-
         # Connection discovery
         "connection_discovery_enabled": True,
         "similarity_threshold": 0.7,
         "max_connections_per_engram": 20,
         "max_engrams_per_discovery_pass": 100,
-
         # Activity gate
         "activity_gate_enabled": True,
         "min_idle_minutes": 5,
     },
-
     # ── Interface ──
     "interface": {
         "default_token_budget": 2000,
@@ -117,13 +106,11 @@ DEFAULT_CONFIG: dict = {
         "include_curiosity_questions": True,
         "max_curiosity_questions_shown": 3,
     },
-
     # ── Advanced modules (opt-in) ──
     "advanced": {
         "working_memory_enabled": False,
         "wm_nominal_capacity": 7,
         "wm_attention_gradient": True,
-
         "schemas_enabled": False,
         "attention_gate_enabled": False,
         "predictive_retrieval_enabled": False,
@@ -134,7 +121,6 @@ DEFAULT_CONFIG: dict = {
         "observer_enabled": False,
         "dreaming_enabled": False,
     },
-
     # ── Gated inner-life layer (U6.6, scheduled only after DAVID-AUTH) ──
     "inner_life": {
         "activity_gate": {
@@ -182,7 +168,6 @@ DEFAULT_CONFIG: dict = {
             ],
         },
     },
-
     # ── Full-soak scheduled tick (U7, DAVID-AUTH before live load) ──
     "soak": {
         "tick": {
@@ -206,7 +191,6 @@ DEFAULT_CONFIG: dict = {
             },
         },
     },
-
     # ── Multi-agent ──
     "multiagent": {
         "shared_pool_enabled": False,

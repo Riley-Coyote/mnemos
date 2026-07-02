@@ -37,11 +37,16 @@ def test_remember_captures_in_scope(tmp_path, capsys):
         [
             "remember",
             "Decided to keep the consolidation passes scope-strict",
-            "--context", "audit follow-up",
-            "--db-path", db,
-            "--agent-id", "nova",
-            "--person-id", "riley",
-            "--project-scope", "demo",
+            "--context",
+            "audit follow-up",
+            "--db-path",
+            db,
+            "--agent-id",
+            "nova",
+            "--person-id",
+            "riley",
+            "--project-scope",
+            "demo",
         ]
     )
     out = capsys.readouterr().out
@@ -56,7 +61,9 @@ def test_remember_captures_in_scope(tmp_path, capsys):
     try:
         entries = store.search_hypomnema(
             "consolidation scope",
-            agent_id="nova", person_id="riley", project_scope="demo",
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
         )
         assert any("scope-strict" in e["content"] for e in entries)
     finally:
@@ -138,6 +145,8 @@ def test_inspect_defaults_to_operational_visibility(tmp_path, capsys):
     captured = capsys.readouterr()
     assert result == 0
     assert "Audit-only engram prose must require explicit audit mode." in captured.out
+
+
 def test_inner_life_session_finalize_cli_writes_private_ledger(tmp_path, capsys):
     transcript = tmp_path / "session.jsonl"
     transcript.write_text(
@@ -225,7 +234,9 @@ def test_inner_life_cli_refuses_default_live_db_without_override(capsys):
     assert "refuses live Mnemos databases" in err
 
 
-def test_inner_life_activity_gate_cli_records_preflight_without_memory(tmp_path, capsys):
+def test_inner_life_activity_gate_cli_records_preflight_without_memory(
+    tmp_path, capsys
+):
     db = tmp_path / "inner-life-activity.db"
     store = EngramStore(db)
     try:

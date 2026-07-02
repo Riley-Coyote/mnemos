@@ -50,22 +50,39 @@ _CONFIDENCE_BY_SOURCE: dict[str, tuple[float, str]] = {
 }
 
 # Tags that trigger auto-sharing to the shared pool
-_AUTO_SHARE_TAGS = frozenset({
-    "task-completion", "decision", "summary", "error", "discovery",
-    "deployment", "architecture", "lesson", "distilled",
-})
+_AUTO_SHARE_TAGS = frozenset(
+    {
+        "task-completion",
+        "decision",
+        "summary",
+        "error",
+        "discovery",
+        "deployment",
+        "architecture",
+        "lesson",
+        "distilled",
+    }
+)
 
 # Tags that force engrams to stay private
-_PRIVATE_TAGS = frozenset({
-    "internal", "emotional", "working-memory", "reflection", "thinking",
-})
+_PRIVATE_TAGS = frozenset(
+    {
+        "internal",
+        "emotional",
+        "working-memory",
+        "reflection",
+        "thinking",
+    }
+)
 
 # Source types that are internal processing and should stay private
-_PRIVATE_SOURCES = frozenset({
-    SourceType.DREAM,
-    SourceType.OBSERVER,
-    SourceType.REFLECTION,
-})
+_PRIVATE_SOURCES = frozenset(
+    {
+        SourceType.DREAM,
+        SourceType.OBSERVER,
+        SourceType.REFLECTION,
+    }
+)
 
 
 def should_auto_share(engram: Engram) -> bool:
@@ -175,7 +192,9 @@ class Encoder:
         # 1. Score confidence
         if override_confidence is not None:
             confidence = override_confidence
-            confidence_source = override_confidence_source or ConfidenceSource.MODEL_INFERRED
+            confidence_source = (
+                override_confidence_source or ConfidenceSource.MODEL_INFERRED
+            )
         else:
             confidence, confidence_source = self._score_confidence(content, source)
 
@@ -308,7 +327,9 @@ class Encoder:
         # 2. LLM-based belief evaluation (or skip if no client)
         if self._llm_client:
             evaluations = evaluate_beliefs(
-                self._llm_client, engram, beliefs,
+                self._llm_client,
+                engram,
+                beliefs,
             )
 
             # Build lookup for cooldown check
@@ -351,9 +372,7 @@ class Encoder:
             # Fallback: old heuristic (kept for when no LLM is available)
             content_lower = engram.content.lower()
             for belief in beliefs:
-                belief_words = {
-                    w.lower() for w in belief.content.split() if len(w) > 3
-                }
+                belief_words = {w.lower() for w in belief.content.split() if len(w) > 3}
                 content_words = {
                     w.lower() for w in engram.content.split() if len(w) > 3
                 }
@@ -362,9 +381,20 @@ class Encoder:
                     continue
 
                 negation_signals = [
-                    "not", "never", "wrong", "incorrect", "false",
-                    "failed", "doesn't", "didn't", "isn't", "wasn't",
-                    "no longer", "contrary", "opposite", "instead",
+                    "not",
+                    "never",
+                    "wrong",
+                    "incorrect",
+                    "false",
+                    "failed",
+                    "doesn't",
+                    "didn't",
+                    "isn't",
+                    "wasn't",
+                    "no longer",
+                    "contrary",
+                    "opposite",
+                    "instead",
                 ]
                 has_negation = any(neg in content_lower for neg in negation_signals)
 
@@ -442,7 +472,9 @@ class Encoder:
         if self._llm_client and fts_candidates:
             # LLM-based classification — batched single call
             classifications = classify_connections(
-                self._llm_client, engram, fts_candidates,
+                self._llm_client,
+                engram,
+                fts_candidates,
             )
             for cls in classifications:
                 # Use classifier confidence as connection strength

@@ -23,7 +23,9 @@ def _assert_no_generated_memory(store: EngramStore) -> None:
     assert store.get_beliefs(agent_id="oliver") == []
 
 
-def test_hypomnema_challenge_revise_down_lowers_confidence_and_preserves_history(tmp_path):
+def test_hypomnema_challenge_revise_down_lowers_confidence_and_preserves_history(
+    tmp_path,
+):
     store = EngramStore(tmp_path / "challenge-revise.db")
     try:
         entry_id = _write_entry(store, confidence=0.8)
@@ -95,13 +97,16 @@ def test_hypomnema_challenge_retire_archives_without_deleting(tmp_path):
         )
 
         assert result["decision"] == "retire"
-        assert store.get_hypomnema_entry(
-            entry_id,
-            agent_id="oliver",
-            person_id="david",
-            project_scope="pai",
-            active_only=True,
-        ) is None
+        assert (
+            store.get_hypomnema_entry(
+                entry_id,
+                agent_id="oliver",
+                person_id="david",
+                project_scope="pai",
+                active_only=True,
+            )
+            is None
+        )
         archived = store.get_hypomnema_entry(
             entry_id,
             agent_id="oliver",

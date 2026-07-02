@@ -11,12 +11,15 @@ def _now():
 def _assert_no_memory_writes(store: EngramStore) -> None:
     assert store.count_engrams(agent_id="oliver") == 0
     assert store.get_beliefs(agent_id="oliver") == []
-    assert store.search_hypomnema(
-        "activity gate",
-        agent_id="oliver",
-        person_id="david",
-        project_scope="pai",
-    ) == []
+    assert (
+        store.search_hypomnema(
+            "activity gate",
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+        )
+        == []
+    )
 
 
 def _write_turn_signal(store: EngramStore) -> None:
@@ -39,7 +42,9 @@ def _write_turn_signal(store: EngramStore) -> None:
     )
 
 
-def test_activity_gate_allows_recent_turn_signal_and_records_run_without_memory(tmp_path):
+def test_activity_gate_allows_recent_turn_signal_and_records_run_without_memory(
+    tmp_path,
+):
     store = EngramStore(tmp_path / "activity-run.db")
     try:
         _write_turn_signal(store)
@@ -122,7 +127,9 @@ def test_activity_gate_enforces_process_cooldown(tmp_path):
             person_id="david",
             project_scope="pai",
             now=first_now,
-            config={"activity_gate": {"processes": {"reflect": {"cooldown_minutes": 60}}}},
+            config={
+                "activity_gate": {"processes": {"reflect": {"cooldown_minutes": 60}}}
+            },
             rollout_tag="u6.6-test",
         )
         second = evaluate_activity_gate(
@@ -132,7 +139,9 @@ def test_activity_gate_enforces_process_cooldown(tmp_path):
             person_id="david",
             project_scope="pai",
             now=first_now + timedelta(minutes=10),
-            config={"activity_gate": {"processes": {"reflect": {"cooldown_minutes": 60}}}},
+            config={
+                "activity_gate": {"processes": {"reflect": {"cooldown_minutes": 60}}}
+            },
             rollout_tag="u6.6-test",
         )
 

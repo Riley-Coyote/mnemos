@@ -26,7 +26,9 @@ def _excerpt(text: str, limit: int = DEFAULT_EXCERPT_CHARS) -> tuple[str, bool]:
     return cleaned[: max(0, limit - 3)].rstrip() + "...", True
 
 
-def _source_id_list(source_message_ids: list[str] | tuple[str, ...] | None) -> list[str]:
+def _source_id_list(
+    source_message_ids: list[str] | tuple[str, ...] | None,
+) -> list[str]:
     if not source_message_ids:
         return []
     return [str(item).strip() for item in source_message_ids if str(item).strip()]

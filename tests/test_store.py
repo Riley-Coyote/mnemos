@@ -1,4 +1,5 @@
 """Tests for EngramStore — SQLite persistence layer."""
+
 import sqlite3
 
 import pytest
@@ -41,7 +42,10 @@ class TestEngramStore:
         hypomnema_columns = _column_map(conn, "hypomnema_entries")
         assert "read_visibility" in hypomnema_columns
         assert hypomnema_columns["read_visibility"]["notnull"] == 1
-        assert hypomnema_columns["read_visibility"]["dflt_value"] == "'operational_context'"
+        assert (
+            hypomnema_columns["read_visibility"]["dflt_value"]
+            == "'operational_context'"
+        )
 
         ledger_columns = _column_map(conn, "proposal_ledger")
         for column in (
@@ -61,8 +65,14 @@ class TestEngramStore:
             assert column in ledger_columns
 
         ledger_sql = _table_sql(conn, "proposal_ledger")
-        assert "read_visibility IN ('operational_context', 'review_only', 'audit_only')" in ledger_sql
-        assert "status IN ('pending_review', 'deferred', 'approved', 'rejected', 'applied', 'superseded')" in ledger_sql
+        assert (
+            "read_visibility IN ('operational_context', 'review_only', 'audit_only')"
+            in ledger_sql
+        )
+        assert (
+            "status IN ('pending_review', 'deferred', 'approved', 'rejected', 'applied', 'superseded')"
+            in ledger_sql
+        )
 
     def test_save_and_get_engram(self, store):
         """Round-trip save/get for an engram."""
@@ -120,15 +130,24 @@ class TestEngramStore:
 
         assert loaded_review is not None
         assert loaded_review.read_visibility == "review_only"
-        assert loaded_review.content == "Review-only rewritten through default save marker"
+        assert (
+            loaded_review.content == "Review-only rewritten through default save marker"
+        )
         assert loaded_audit is not None
         assert loaded_audit.read_visibility == "audit_only"
-        assert loaded_audit.content == "Audit-only rewritten through default save marker"
+        assert (
+            loaded_audit.content == "Audit-only rewritten through default save marker"
+        )
         assert loaded_operational is not None
         assert loaded_operational.read_visibility == "audit_only"
-        assert store.get_engram(review.id, read_visibility="operational_context") is None
+        assert (
+            store.get_engram(review.id, read_visibility="operational_context") is None
+        )
         assert store.get_engram(audit.id, read_visibility="operational_context") is None
-        assert store.get_engram(operational.id, read_visibility="operational_context") is None
+        assert (
+            store.get_engram(operational.id, read_visibility="operational_context")
+            is None
+        )
         assert hidden_hits == []
 
     def test_fts_search(self, store):
@@ -291,9 +310,7 @@ class TestEngramStore:
         assert audit.id not in default_ids
         assert operational.id not in default_ids
 
-    def test_belief_upsert_preserves_pending_flags_for_quarantined_rows(
-        self, store
-    ):
+    def test_belief_upsert_preserves_pending_flags_for_quarantined_rows(self, store):
         review = Belief(
             id="belief-review-pending-flags",
             content="Review-only pending marker",
@@ -483,7 +500,9 @@ class TestEngramStore:
                 transition="bad_surface",
             )
 
-    def test_proposal_ledger_defaults_to_audit_only_and_rejects_pending_operational_visibility(self, store):
+    def test_proposal_ledger_defaults_to_audit_only_and_rejects_pending_operational_visibility(
+        self, store
+    ):
         deferred = store.write_proposal(
             source_authority="generated",
             kind="semantic",
@@ -600,9 +619,7 @@ class TestEngramStore:
         assert rejected["status"] == "rejected"
         assert store.get_proposal("terminal_proposal") == rejected
         assert store.count_proposals() == 0
-        assert "terminal_proposal" not in {
-            row["id"] for row in store.list_proposals()
-        }
+        assert "terminal_proposal" not in {row["id"] for row in store.list_proposals()}
 
     def test_proposal_upsert_rejects_applied_terminal_conflict(self, store):
         conn = store._get_conn()
@@ -757,10 +774,13 @@ class TestEngramStore:
         store.save_belief(operational_belief)
 
         assert [b.id for b in store.get_beliefs()] == [operational_belief.id]
-        assert [b.id for b in store.get_beliefs(
-            read_visibility="review_only",
-            include_pending_review=True,
-        )] == [review_belief.id]
+        assert [
+            b.id
+            for b in store.get_beliefs(
+                read_visibility="review_only",
+                include_pending_review=True,
+            )
+        ] == [review_belief.id]
 
         operational_functional = store.write_functional_memory(
             "Visible operational functional memory",
@@ -775,15 +795,21 @@ class TestEngramStore:
             salience=1.0,
             read_visibility="review_only",
         )
-        assert [item["id"] for item in store.load_functional_memories(
-            "functional memory",
-            limit=1,
-        )] == [operational_functional["id"]]
-        assert [item["id"] for item in store.load_functional_memories(
-            "functional memory",
-            read_visibility="review_only",
-            limit=1,
-        )] == [review_functional["id"]]
+        assert [
+            item["id"]
+            for item in store.load_functional_memories(
+                "functional memory",
+                limit=1,
+            )
+        ] == [operational_functional["id"]]
+        assert [
+            item["id"]
+            for item in store.load_functional_memories(
+                "functional memory",
+                read_visibility="review_only",
+                limit=1,
+            )
+        ] == [review_functional["id"]]
 
         operational_hypo = store.write_hypomnema_entry(
             "Visible operational hypomnema anchor",
@@ -797,15 +823,21 @@ class TestEngramStore:
             salience=1.0,
             read_visibility="review_only",
         )
-        assert [entry["id"] for entry in store.search_hypomnema(
-            "hypomnema anchor",
-            limit=1,
-        )] == [operational_hypo]
-        assert [entry["id"] for entry in store.search_hypomnema(
-            "hypomnema anchor",
-            read_visibility="review_only",
-            limit=1,
-        )] == [review_hypo]
+        assert [
+            entry["id"]
+            for entry in store.search_hypomnema(
+                "hypomnema anchor",
+                limit=1,
+            )
+        ] == [operational_hypo]
+        assert [
+            entry["id"]
+            for entry in store.search_hypomnema(
+                "hypomnema anchor",
+                read_visibility="review_only",
+                limit=1,
+            )
+        ] == [review_hypo]
 
     def test_engram_reads_accept_multiple_explicit_visibilities(self, store):
         operational = Engram(
@@ -847,7 +879,9 @@ class TestEngramStore:
         assert {engram.id for engram in default_active} == {operational.id}
         assert {engram.id for engram in default_hits} == {operational.id}
 
-    def test_legacy_v5_migrates_non_candidate_hypomnema_operational_and_candidates_review_only(self, tmp_path):
+    def test_legacy_v5_migrates_non_candidate_hypomnema_operational_and_candidates_review_only(
+        self, tmp_path
+    ):
         """Existing databases preserve ordinary continuity and quarantine candidates."""
         db_path = tmp_path / "legacy-v5-read-visibility.db"
         _create_legacy_v5_read_visibility_db(db_path)
@@ -856,27 +890,48 @@ class TestEngramStore:
         try:
             conn = store._get_conn()
             assert store.get_meta("schema_version") == "8"
-            assert conn.execute(
-                "SELECT read_visibility FROM engrams WHERE id = 'legacy_e'"
-            ).fetchone()[0] == "operational_context"
-            assert conn.execute(
-                "SELECT read_visibility FROM beliefs WHERE id = 'legacy_pending_b'"
-            ).fetchone()[0] == "review_only"
-            assert conn.execute(
-                "SELECT read_visibility FROM functional_memories WHERE id = 'legacy_f'"
-            ).fetchone()[0] == "review_only"
-            assert conn.execute(
-                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_h'"
-            ).fetchone()[0] == "review_only"
-            assert conn.execute(
-                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_low_h'"
-            ).fetchone()[0] == "operational_context"
-            assert conn.execute(
-                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_identity_low_h'"
-            ).fetchone()[0] == "review_only"
-            assert conn.execute(
-                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_ordinary_h'"
-            ).fetchone()[0] == "operational_context"
+            assert (
+                conn.execute(
+                    "SELECT read_visibility FROM engrams WHERE id = 'legacy_e'"
+                ).fetchone()[0]
+                == "operational_context"
+            )
+            assert (
+                conn.execute(
+                    "SELECT read_visibility FROM beliefs WHERE id = 'legacy_pending_b'"
+                ).fetchone()[0]
+                == "review_only"
+            )
+            assert (
+                conn.execute(
+                    "SELECT read_visibility FROM functional_memories WHERE id = 'legacy_f'"
+                ).fetchone()[0]
+                == "review_only"
+            )
+            assert (
+                conn.execute(
+                    "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_h'"
+                ).fetchone()[0]
+                == "review_only"
+            )
+            assert (
+                conn.execute(
+                    "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_low_h'"
+                ).fetchone()[0]
+                == "operational_context"
+            )
+            assert (
+                conn.execute(
+                    "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_identity_low_h'"
+                ).fetchone()[0]
+                == "review_only"
+            )
+            assert (
+                conn.execute(
+                    "SELECT read_visibility FROM hypomnema_entries WHERE id = 'legacy_ordinary_h'"
+                ).fetchone()[0]
+                == "operational_context"
+            )
         finally:
             store.close()
 
@@ -968,13 +1023,21 @@ class TestEngramStore:
             assert terminal_row["applied_at"] == 375
             assert "legacy terminal proposal status=applied" in terminal_row["reason"]
             assert "back to pending_review" not in terminal_row["reason"]
-            assert terminal_row["id"] not in {row["id"] for row in store.list_proposals()}
+            assert terminal_row["id"] not in {
+                row["id"] for row in store.list_proposals()
+            }
             assert terminal_row["id"] in {
                 row["id"] for row in store.list_audit_proposals()
             }
             assert read_visibility_column["dflt_value"] == "'audit_only'"
-            assert "source_authority IN ('user_stated', 'imported', 'observed', 'generated')" in ledger_sql_flat
-            assert "kind IN ('episodic', 'semantic', 'procedural', 'prospective')" in ledger_sql_flat
+            assert (
+                "source_authority IN ('user_stated', 'imported', 'observed', 'generated')"
+                in ledger_sql_flat
+            )
+            assert (
+                "kind IN ('episodic', 'semantic', 'procedural', 'prospective')"
+                in ledger_sql_flat
+            )
         finally:
             store.close()
 
@@ -993,27 +1056,48 @@ class TestEngramStore:
 
             assert store.get_meta("schema_version") == "8"
             assert read_visibility_column["dflt_value"] == "'operational_context'"
-            assert conn.execute(
-                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_ordinary'"
-            ).fetchone()[0] == "review_only"
-            assert conn.execute(
-                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_defaulted_ordinary'"
-            ).fetchone()[0] == "review_only"
-            assert conn.execute(
-                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_candidate'"
-            ).fetchone()[0] == "review_only"
-            assert conn.execute(
-                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_identity'"
-            ).fetchone()[0] == "review_only"
-            assert conn.execute(
-                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_low_confidence_review'"
-            ).fetchone()[0] == "review_only"
-            assert conn.execute(
-                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_inbox_review'"
-            ).fetchone()[0] == "review_only"
-            assert conn.execute(
-                "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_audit'"
-            ).fetchone()[0] == "audit_only"
+            assert (
+                conn.execute(
+                    "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_ordinary'"
+                ).fetchone()[0]
+                == "review_only"
+            )
+            assert (
+                conn.execute(
+                    "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_defaulted_ordinary'"
+                ).fetchone()[0]
+                == "review_only"
+            )
+            assert (
+                conn.execute(
+                    "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_candidate'"
+                ).fetchone()[0]
+                == "review_only"
+            )
+            assert (
+                conn.execute(
+                    "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_identity'"
+                ).fetchone()[0]
+                == "review_only"
+            )
+            assert (
+                conn.execute(
+                    "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_low_confidence_review'"
+                ).fetchone()[0]
+                == "review_only"
+            )
+            assert (
+                conn.execute(
+                    "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_inbox_review'"
+                ).fetchone()[0]
+                == "review_only"
+            )
+            assert (
+                conn.execute(
+                    "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_audit'"
+                ).fetchone()[0]
+                == "audit_only"
+            )
         finally:
             store.close()
 
@@ -1071,9 +1155,10 @@ class TestEngramStore:
 
         assert store.count_engrams() == 1
         assert store.count_engrams(read_visibility=None) == 3
-        assert store.count_engrams(
-            read_visibility=("operational_context", "review_only")
-        ) == 2
+        assert (
+            store.count_engrams(read_visibility=("operational_context", "review_only"))
+            == 2
+        )
 
     def test_read_only_get_recent_opens_lazy_connection(self, tmp_db):
         writable = EngramStore(tmp_db)
@@ -1185,12 +1270,18 @@ class TestEngramStore:
         including_inactive = store.get_hypomnema_entries_by_tag(
             "dream-journal", active_only=False, limit=10, **in_scope
         )
-        assert {e["id"] for e in including_inactive} == {tagged_one, tagged_two, archived}
+        assert {e["id"] for e in including_inactive} == {
+            tagged_one,
+            tagged_two,
+            archived,
+        }
 
         # Quote-delimited matching keeps tags token-exact.
         assert store.get_hypomnema_entries_by_tag("dream", **in_scope) == []
 
-    def test_get_hypomnema_entries_by_tag_filters_read_visibility_by_default(self, store):
+    def test_get_hypomnema_entries_by_tag_filters_read_visibility_by_default(
+        self, store
+    ):
         in_scope = {"agent_id": "nova", "person_id": "riley", "project_scope": "demo"}
         operational = store.write_hypomnema_entry(
             "operational tagged note",
@@ -1211,7 +1302,9 @@ class TestEngramStore:
             **in_scope,
         )
 
-        default_entries = store.get_hypomnema_entries_by_tag("dream-journal", **in_scope)
+        default_entries = store.get_hypomnema_entries_by_tag(
+            "dream-journal", **in_scope
+        )
         review_entries = store.get_hypomnema_entries_by_tag(
             "dream-journal",
             read_visibility="review_only",
@@ -1230,8 +1323,7 @@ class TestEngramStore:
 
 def _column_map(conn, table: str):
     return {
-        row["name"]: dict(row)
-        for row in conn.execute(f"PRAGMA table_info({table})")
+        row["name"]: dict(row) for row in conn.execute(f"PRAGMA table_info({table})")
     }
 
 

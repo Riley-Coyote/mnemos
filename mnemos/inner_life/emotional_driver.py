@@ -67,7 +67,9 @@ def update_event_grounded_affect(
                 applied.append(event_name)
 
     movement = _movement(before, after)
-    source_ids = [str(row.get("id") or row.get("idempotency_key")) for row in events[:20]]
+    source_ids = [
+        str(row.get("id") or row.get("idempotency_key")) for row in events[:20]
+    ]
     if movement < min_movement or not applied:
         if record_decision:
             _record_affect_event(
@@ -214,7 +216,10 @@ def _movement(before: EmotionalState, after: EmotionalState) -> float:
         "isolation",
     )
     return round(
-        sum(abs(float(getattr(after, dim)) - float(getattr(before, dim))) for dim in dims),
+        sum(
+            abs(float(getattr(after, dim)) - float(getattr(before, dim)))
+            for dim in dims
+        ),
         4,
     )
 

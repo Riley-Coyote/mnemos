@@ -62,29 +62,36 @@ def handle(
     agent_id = config.agent_id
 
     # ── Gate 1: Count throttle ──
-    dream_count = conn.execute("""
+    dream_count = conn.execute(
+        """
         SELECT COUNT(*) FROM engrams
         WHERE state='active' AND content LIKE '%[dream]%'
         AND owner_agent_id = ?
         AND read_visibility = 'audit_only'
         AND created_at > datetime('now', '-7 days')
-    """, (agent_id,)).fetchone()[0]
+    """,
+        (agent_id,),
+    ).fetchone()[0]
 
     max_dreams = config.max_dreams_per_week
     if dream_count >= max_dreams:
-        log.debug("Gate 1 (count): %d dreams in last 7 days (max %d)",
-                  dream_count, max_dreams)
+        log.debug(
+            "Gate 1 (count): %d dreams in last 7 days (max %d)", dream_count, max_dreams
+        )
         conn.close()
         return produced_events
 
     # ── Gate 3: Time window ──
-    latest_dream = conn.execute("""
+    latest_dream = conn.execute(
+        """
         SELECT created_at FROM engrams
         WHERE state='active' AND content LIKE '%[dream]%'
         AND owner_agent_id = ?
         AND read_visibility = 'audit_only'
         ORDER BY created_at DESC LIMIT 1
-    """, (agent_id,)).fetchone()
+    """,
+        (agent_id,),
+    ).fetchone()
 
     if latest_dream:
         try:
@@ -93,15 +100,19 @@ def handle(
                 last_dt = last_dt.replace(tzinfo=timezone.utc)
             hours_since = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
             if hours_since < MIN_HOURS_BETWEEN_DREAMS:
-                log.debug("Gate 3 (time): last dream %.1fh ago (min %dh)",
-                          hours_since, MIN_HOURS_BETWEEN_DREAMS)
+                log.debug(
+                    "Gate 3 (time): last dream %.1fh ago (min %dh)",
+                    hours_since,
+                    MIN_HOURS_BETWEEN_DREAMS,
+                )
                 conn.close()
                 return produced_events
         except (ValueError, TypeError):
             pass
 
     # Find a vivid memory to collide with
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT id, content, impact FROM engrams
         WHERE state='active'
           AND owner_agent_id = ?
@@ -110,7 +121,9 @@ def handle(
           AND id != ?
         ORDER BY (accessibility * strength) DESC
         LIMIT 5
-    """, (agent_id, softened_id)).fetchall()
+    """,
+        (agent_id, softened_id),
+    ).fetchall()
     conn.close()
 
     if not rows:
@@ -136,8 +149,10 @@ def handle(
     vividness_diff = vivid_vividness - softened_vividness
 
     if vividness_diff < config.dreaming_collision_threshold:
-        log.debug(f"Vividness difference {vividness_diff:.2f} below threshold "
-                  f"{config.dreaming_collision_threshold}")
+        log.debug(
+            f"Vividness difference {vividness_diff:.2f} below threshold "
+            f"{config.dreaming_collision_threshold}"
+        )
         return produced_events
 
     # ── LLM collision ──
@@ -145,10 +160,10 @@ def handle(
     prompt = f"""Two memories are colliding in a dream state.
 
 Memory A (fading): {softened.content}
-Its significance: {softened.impact or '(unknown)'}
+Its significance: {softened.impact or "(unknown)"}
 
 Memory B (vivid): {vivid_content}
-Its significance: {vivid_impact or '(unknown)'}
+Its significance: {vivid_impact or "(unknown)"}
 
 These two memories are being held together. Is there an unexpected connection,
 a surprising synthesis, or an insight that emerges from their collision?
@@ -178,8 +193,10 @@ If something does emerge, respond with:
 
     dream_content = result.get("dream")
     if not dream_content:
-        log.debug(f"Dream collision between {softened_id} and {vivid_id} "
-                  f"dissolved — nothing emerged")
+        log.debug(
+            f"Dream collision between {softened_id} and {vivid_id} "
+            f"dissolved — nothing emerged"
+        )
         gate_narrative_candidate(
             content="",
             source_ids=[softened_id, vivid_id],
@@ -195,6 +212,7 @@ If something does emerge, respond with:
     # ── Gate 2: Embedding similarity ──
     try:
         from mnemos.store.embedding_index import EmbeddingIndex
+
         ei = EmbeddingIndex(db_path=db_path)
         if ei.available():
             similar = ei.search(full_content, k=3)
@@ -212,9 +230,12 @@ If something does emerge, respond with:
                     ).fetchone()
                     check_conn.close()
                     if row and "[dream]" in row[0]:
-                        log.debug("Gate 2 (embedding): similar dream found "
-                                  "(id=%s, score=%.3f), skipping",
-                                  engram_id[:20], score)
+                        log.debug(
+                            "Gate 2 (embedding): similar dream found "
+                            "(id=%s, score=%.3f), skipping",
+                            engram_id[:20],
+                            score,
+                        )
                         return produced_events
     except Exception as e:
         log.debug(f"Embedding dedup check failed (non-fatal): {e}")

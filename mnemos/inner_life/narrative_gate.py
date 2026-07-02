@@ -68,13 +68,25 @@ def gate_narrative_candidate(
     if not clean:
         decision = _decision(False, "null_output", "skip:null_output", clean, sources)
     elif not sources:
-        decision = _decision(False, "missing_source_ids", "drop:missing_source_ids", clean, sources)
+        decision = _decision(
+            False, "missing_source_ids", "drop:missing_source_ids", clean, sources
+        )
     elif _looks_manufactured(clean):
-        decision = _decision(False, "manufactured_inner_state", "drop:manufactured_inner_state", clean, sources)
+        decision = _decision(
+            False,
+            "manufactured_inner_state",
+            "drop:manufactured_inner_state",
+            clean,
+            sources,
+        )
     elif _looks_high_blast(clean):
-        decision = _decision(False, "high_blast_generated", "drop:high_blast_generated", clean, sources)
+        decision = _decision(
+            False, "high_blast_generated", "drop:high_blast_generated", clean, sources
+        )
     elif candidate_kind in {"dream", "dreaming"} and _looks_metrics_only_dream(clean):
-        decision = _decision(False, "metrics_only_dream", "drop:metrics_only_dream", clean, sources)
+        decision = _decision(
+            False, "metrics_only_dream", "drop:metrics_only_dream", clean, sources
+        )
     else:
         report, error = _run_introspection(clean, introspector)
         if error:
@@ -203,9 +215,9 @@ def _record_gate_decision(
     )
     source_ids = decision["source_ids"]
     digest = hashlib.sha256(
-        "|".join([process_name, candidate_kind, decision["reason"], excerpt, *source_ids]).encode(
-            "utf-8"
-        )
+        "|".join(
+            [process_name, candidate_kind, decision["reason"], excerpt, *source_ids]
+        ).encode("utf-8")
     ).hexdigest()[:16]
     metadata = {
         "writes_memory": False,

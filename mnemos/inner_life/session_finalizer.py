@@ -185,7 +185,9 @@ def finalize_session_transcript(
         event_type="session_finalized",
         limit=1000,
     )
-    session_existed = any(row["idempotency_key"] == session_key for row in before_session)
+    session_existed = any(
+        row["idempotency_key"] == session_key for row in before_session
+    )
     store.upsert_inner_life_event(
         idempotency_key=session_key,
         event_type="session_finalized",

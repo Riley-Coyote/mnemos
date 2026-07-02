@@ -215,7 +215,9 @@ def write_inner_life_launchd_plist(
 
     db = _checked_operator_db_path(db_path, allow_live_db=allow_live_db).resolve()
     if not db.exists():
-        raise FileNotFoundError(f"inner-life launchd requires an existing database: {db}")
+        raise FileNotFoundError(
+            f"inner-life launchd requires an existing database: {db}"
+        )
 
     plist = Path(plist_path).expanduser()
     plist.parent.mkdir(parents=True, exist_ok=True)
@@ -313,7 +315,9 @@ def _run_wander(
         payload={"scheduled": True},
         source="inner-life-scheduler",
     )
-    wandering.handle(event, config, _modulators(store, agent_id=agent_id), store, llm_client)
+    wandering.handle(
+        event, config, _modulators(store, agent_id=agent_id), store, llm_client
+    )
     after = store.count_engrams(agent_id=agent_id, read_visibility=None)
     return {
         "reason": "wander_complete",
@@ -349,7 +353,9 @@ def _run_dream(
         payload={"engram_id": softened.id, "scheduled": True},
         source="inner-life-scheduler",
     )
-    dreaming.handle(event, config, _modulators(store, agent_id=agent_id), store, llm_client)
+    dreaming.handle(
+        event, config, _modulators(store, agent_id=agent_id), store, llm_client
+    )
     after = store.count_engrams(agent_id=agent_id, read_visibility=None)
     return {
         "status": "ran",
@@ -459,7 +465,9 @@ def _modulators(store: EngramStore, *, agent_id: str) -> ModulatorState:
 
 
 def _run_key(process: str, reason: str, source_ids: list[str]) -> str:
-    payload = "|".join([process, reason, *source_ids, datetime.now(timezone.utc).isoformat()])
+    payload = "|".join(
+        [process, reason, *source_ids, datetime.now(timezone.utc).isoformat()]
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 

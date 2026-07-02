@@ -33,12 +33,15 @@ class FailingReviewer:
 def _assert_no_generated_memory(store: EngramStore) -> None:
     assert store.count_engrams(agent_id="oliver") == 0
     assert store.get_beliefs(agent_id="oliver") == []
-    assert store.search_hypomnema(
-        "observer",
-        agent_id="oliver",
-        person_id="david",
-        project_scope="pai",
-    ) == []
+    assert (
+        store.search_hypomnema(
+            "observer",
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+        )
+        == []
+    )
 
 
 def test_observer_panel_no_reviewers_records_clean_skip(tmp_path):

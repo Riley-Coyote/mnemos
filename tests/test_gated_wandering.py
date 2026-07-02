@@ -34,7 +34,9 @@ def _config(db_path, tmp_path, **overrides) -> SubstrateConfig:
     )
 
 
-def _seed_authorized_memory(store: EngramStore, content: str = "authorized seed") -> Engram:
+def _seed_authorized_memory(
+    store: EngramStore, content: str = "authorized seed"
+) -> Engram:
     engram = Engram(
         content=content,
         impact="source impact",

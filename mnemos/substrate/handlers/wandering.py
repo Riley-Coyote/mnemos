@@ -54,29 +54,38 @@ def handle(
     agent_id = config.agent_id
 
     # ── Gate 1: Count throttle ──
-    wandering_count = conn.execute("""
+    wandering_count = conn.execute(
+        """
         SELECT COUNT(*) FROM engrams
         WHERE state='active' AND content LIKE '%[wandering]%'
         AND owner_agent_id = ?
         AND read_visibility = 'audit_only'
         AND created_at > datetime('now', '-7 days')
-    """, (agent_id,)).fetchone()[0]
+    """,
+        (agent_id,),
+    ).fetchone()[0]
 
     max_wanderings = config.max_wanderings_per_week
     if wandering_count >= max_wanderings:
-        log.debug("Gate 1 (count): %d wanderings in last 7 days (max %d)",
-                  wandering_count, max_wanderings)
+        log.debug(
+            "Gate 1 (count): %d wanderings in last 7 days (max %d)",
+            wandering_count,
+            max_wanderings,
+        )
         conn.close()
         return produced_events
 
     # ── Gate 5: Time window ──
-    latest_wandering = conn.execute("""
+    latest_wandering = conn.execute(
+        """
         SELECT created_at FROM engrams
         WHERE state='active' AND content LIKE '%[wandering]%'
         AND owner_agent_id = ?
         AND read_visibility = 'audit_only'
         ORDER BY created_at DESC LIMIT 1
-    """, (agent_id,)).fetchone()
+    """,
+        (agent_id,),
+    ).fetchone()
 
     if latest_wandering:
         try:
@@ -85,15 +94,19 @@ def handle(
                 last_dt = last_dt.replace(tzinfo=timezone.utc)
             hours_since = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
             if hours_since < MIN_HOURS_BETWEEN_WANDERINGS:
-                log.debug("Gate 5 (time): last wandering %.1fh ago (min %dh)",
-                          hours_since, MIN_HOURS_BETWEEN_WANDERINGS)
+                log.debug(
+                    "Gate 5 (time): last wandering %.1fh ago (min %dh)",
+                    hours_since,
+                    MIN_HOURS_BETWEEN_WANDERINGS,
+                )
                 conn.close()
                 return produced_events
         except (ValueError, TypeError):
             pass  # If parse fails, allow
 
     # ── Gate 4: Seed filtering — exclude wandering/dream from trigger pool ──
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT id, content, impact FROM engrams
         WHERE state='active'
           AND owner_agent_id = ?
@@ -103,17 +116,22 @@ def handle(
           AND content NOT LIKE '%[dream]%'
         ORDER BY created_at DESC
         LIMIT 3
-    """, (agent_id,)).fetchall()
+    """,
+        (agent_id,),
+    ).fetchall()
 
     # Also collect recent wandering content hashes for gate 3
     recent_hashes = set()
-    hash_rows = conn.execute("""
+    hash_rows = conn.execute(
+        """
         SELECT content FROM engrams
         WHERE state='active' AND content LIKE '%[wandering]%'
         AND owner_agent_id = ?
         AND read_visibility = 'audit_only'
         AND created_at > datetime('now', '-30 days')
-    """, (agent_id,)).fetchall()
+    """,
+        (agent_id,),
+    ).fetchall()
     for hr in hash_rows:
         recent_hashes.add(_content_hash(hr[0]))
 
@@ -182,6 +200,7 @@ If something surfaces: {{"thought": "<the wandering thought>", "origin": "<which
     # ── Gate 2: Embedding similarity ──
     try:
         from mnemos.store.embedding_index import EmbeddingIndex
+
         ei = EmbeddingIndex(db_path=db_path)
         if ei.available():
             similar = ei.search(full_content, k=3)
@@ -200,8 +219,12 @@ If something surfaces: {{"thought": "<the wandering thought>", "origin": "<which
                     ).fetchone()
                     check_conn.close()
                     if row and "[wandering]" in row[0]:
-                        log.debug("Gate 2 (embedding): similar wandering found "
-                                  "(id=%s, score=%.3f), skipping", engram_id[:20], score)
+                        log.debug(
+                            "Gate 2 (embedding): similar wandering found "
+                            "(id=%s, score=%.3f), skipping",
+                            engram_id[:20],
+                            score,
+                        )
                         return produced_events
     except Exception as e:
         log.debug(f"Embedding dedup check failed (non-fatal): {e}")

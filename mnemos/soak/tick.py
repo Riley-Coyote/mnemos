@@ -163,11 +163,15 @@ def run_scheduled_soak_tick(
                 )
             )
 
-    status = "error" if any(row["status"] == "error" for row in outcomes) else (
-        "ran" if any(row["status"] == "ran" for row in outcomes) else "skipped"
+    status = (
+        "error"
+        if any(row["status"] == "error" for row in outcomes)
+        else ("ran" if any(row["status"] == "ran" for row in outcomes) else "skipped")
     )
-    reason = "family_error" if status == "error" else (
-        "families_ran" if status == "ran" else "all_families_skipped"
+    reason = (
+        "family_error"
+        if status == "error"
+        else ("families_ran" if status == "ran" else "all_families_skipped")
     )
     return _record_tick_summary(
         store,
@@ -206,7 +210,9 @@ def write_soak_tick_launchd_plist(
 
     db = _checked_operator_db_path(db_path, allow_live_db=allow_live_db).resolve()
     if not db.exists():
-        raise FileNotFoundError(f"soak tick launchd requires an existing database: {db}")
+        raise FileNotFoundError(
+            f"soak tick launchd requires an existing database: {db}"
+        )
 
     plist = Path(plist_path).expanduser()
     plist.parent.mkdir(parents=True, exist_ok=True)
@@ -308,7 +314,9 @@ def _record_tick_summary(
             int(row.get("shared_pool_writes", 0) or 0) for row in families
         ),
     }
-    event_type = "tool_event" if status == "ran" else "error" if status == "error" else "skip"
+    event_type = (
+        "tool_event" if status == "ran" else "error" if status == "error" else "skip"
+    )
     store.upsert_inner_life_event(
         idempotency_key=f"soak:{tick_id}:tick",
         event_type=event_type,
@@ -357,7 +365,9 @@ def _record_family_event(
     if family == SHALLOW_CONSOLIDATION:
         metadata["deep"] = False
         metadata["passes_run"] = list(details.get("passes_run", []))
-    event_type = "tool_event" if status == "ran" else "error" if status == "error" else "skip"
+    event_type = (
+        "tool_event" if status == "ran" else "error" if status == "error" else "skip"
+    )
     store.upsert_inner_life_event(
         idempotency_key=f"soak:{tick_id}:{family}",
         event_type=event_type,

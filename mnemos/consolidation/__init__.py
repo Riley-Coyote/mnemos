@@ -13,4 +13,4 @@ The daemon orchestrates these passes in order, respecting activity gates
 and configuration for which passes are enabled.
 """
 
-from .daemon import ConsolidationDaemon
+from .daemon import ConsolidationDaemon as ConsolidationDaemon

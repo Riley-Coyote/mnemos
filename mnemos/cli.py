@@ -107,13 +107,15 @@ def main(argv: list[str] | None = None) -> int:
         choices=("simple", "advanced"),
         default=_resolve_default_mode(),
         help="MCP tool surface to expose: 'simple' (default) or 'advanced'. "
-             "Persist a machine-wide default via server.mode in "
-             "~/.mnemos/config.json (or the MNEMOS_MODE env var).",
+        "Persist a machine-wide default via server.mode in "
+        "~/.mnemos/config.json (or the MNEMOS_MODE env var).",
     )
     p_serve.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
     p_serve.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
     p_serve.add_argument("--person-id", default=None, help="Person/user scope")
-    p_serve.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_serve.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
 
     # ── inspect ──
     p_inspect = sub.add_parser("inspect", help="Inspect a specific engram")
@@ -146,10 +148,14 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("stats", help="Show memory statistics")
 
     # ── snapshot ──
-    p_snapshot = sub.add_parser("snapshot", help="Print an inline Mermaid memory snapshot")
+    p_snapshot = sub.add_parser(
+        "snapshot", help="Print an inline Mermaid memory snapshot"
+    )
     p_snapshot.add_argument("--person-id", default="user", help="Person scope")
     p_snapshot.add_argument("--project-scope", default="global", help="Project scope")
-    p_snapshot.add_argument("--session-id", default="", help="Optional functional-memory session")
+    p_snapshot.add_argument(
+        "--session-id", default="", help="Optional functional-memory session"
+    )
     p_snapshot.add_argument("-n", "--max-items", type=int, default=6)
 
     # ── search ──
@@ -170,24 +176,42 @@ def main(argv: list[str] | None = None) -> int:
     # ── setup-openclaw ──
     p_setup = sub.add_parser("setup-openclaw", help="Register OpenClaw cron jobs")
     p_setup.add_argument("--agent", default="main", help="OpenClaw agent ID")
-    p_setup.add_argument("--dry-run", action="store_true", help="Show what would be registered")
+    p_setup.add_argument(
+        "--dry-run", action="store_true", help="Show what would be registered"
+    )
 
     # ── substrate-tick ──
     sub.add_parser("substrate-tick", help="Run one cognitive substrate tick")
 
     # ── index ──
     p_index = sub.add_parser("index", help="Run session indexer")
-    p_index.add_argument("--backfill", action="store_true", help="Index last 24h of sessions")
+    p_index.add_argument(
+        "--backfill", action="store_true", help="Index last 24h of sessions"
+    )
 
     # ── bootstrap ──
     p_bootstrap = sub.add_parser("bootstrap", help="Bootstrap a turnkey memory stack")
-    p_bootstrap.add_argument("--agent-name", required=True, help="Agent name (e.g., Nova)")
-    p_bootstrap.add_argument("--workspace", required=True, help="Workspace directory path")
-    p_bootstrap.add_argument("--user-name", default="User", help="User name (default: User)")
-    p_bootstrap.add_argument("--timezone", default="America/New_York", help="Timezone for crons")
-    p_bootstrap.add_argument("--api-key", default="", help="Optional LLM provider API key")
-    p_bootstrap.add_argument("--llm-provider", default="openrouter", help="LLM provider")
-    p_bootstrap.add_argument("--model", default="anthropic/claude-sonnet-4-5", help="Memory model")
+    p_bootstrap.add_argument(
+        "--agent-name", required=True, help="Agent name (e.g., Nova)"
+    )
+    p_bootstrap.add_argument(
+        "--workspace", required=True, help="Workspace directory path"
+    )
+    p_bootstrap.add_argument(
+        "--user-name", default="User", help="User name (default: User)"
+    )
+    p_bootstrap.add_argument(
+        "--timezone", default="America/New_York", help="Timezone for crons"
+    )
+    p_bootstrap.add_argument(
+        "--api-key", default="", help="Optional LLM provider API key"
+    )
+    p_bootstrap.add_argument(
+        "--llm-provider", default="openrouter", help="LLM provider"
+    )
+    p_bootstrap.add_argument(
+        "--model", default="anthropic/claude-sonnet-4-5", help="Memory model"
+    )
 
     # ── bridge ──
     p_bridge = sub.add_parser("bridge", help="Direct memory operations")
@@ -208,47 +232,93 @@ def main(argv: list[str] | None = None) -> int:
     p_remember.add_argument(
         "--importance", default="auto", help="auto, or a number from 0.0 to 1.0"
     )
-    p_remember.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_remember.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_remember.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Database path"
+    )
+    p_remember.add_argument(
+        "--agent-id", default=argparse.SUPPRESS, help="Agent identity"
+    )
     p_remember.add_argument("--person-id", default=None, help="Person/user scope")
-    p_remember.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_remember.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
 
     # ── doctor ──
     p_doctor = sub.add_parser("doctor", help="Check Mnemos simple-mode readiness")
     p_doctor.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_doctor.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_doctor.add_argument(
+        "--agent-id", default=argparse.SUPPRESS, help="Agent identity"
+    )
     p_doctor.add_argument("--person-id", default=None, help="Person/user scope")
-    p_doctor.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_doctor.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
 
     # ── hermes ──
-    p_hermes = sub.add_parser("hermes", help="Hermes Agent identity-continuity integration")
+    p_hermes = sub.add_parser(
+        "hermes", help="Hermes Agent identity-continuity integration"
+    )
     hermes_sub = p_hermes.add_subparsers(dest="hermes_command")
-    p_hermes_install = hermes_sub.add_parser("install", help="Install Mnemos for Hermes")
-    p_hermes_install.add_argument("--hermes-home", default=None, help="Hermes home directory")
-    p_hermes_install.add_argument("--db-path", default=None, help="Mnemos SQLite database path")
-    p_hermes_install.add_argument("--agent-id", default=None, help="Fixed Mnemos agent scope")
-    p_hermes_install.add_argument("--person-id", default=None, help="Fixed person/user scope")
-    p_hermes_install.add_argument("--project-scope", default=None, help="Fixed project scope")
+    p_hermes_install = hermes_sub.add_parser(
+        "install", help="Install Mnemos for Hermes"
+    )
+    p_hermes_install.add_argument(
+        "--hermes-home", default=None, help="Hermes home directory"
+    )
+    p_hermes_install.add_argument(
+        "--db-path", default=None, help="Mnemos SQLite database path"
+    )
+    p_hermes_install.add_argument(
+        "--agent-id", default=None, help="Fixed Mnemos agent scope"
+    )
+    p_hermes_install.add_argument(
+        "--person-id", default=None, help="Fixed person/user scope"
+    )
+    p_hermes_install.add_argument(
+        "--project-scope", default=None, help="Fixed project scope"
+    )
     p_hermes_install.add_argument(
         "--mode",
         choices=("provider", "sidecar"),
         default="provider",
         help="Provider Mode uses memory.provider=mnemos; Sidecar Mode preserves the existing provider and adds MCP",
     )
-    p_hermes_install.add_argument("--activate", action="store_true", help="Set memory.provider to mnemos in Provider Mode")
-    p_hermes_install.add_argument("--with-mcp", action="store_true", help="Also add Mnemos to Hermes mcp_servers")
-    p_hermes_install.add_argument("--mcp-name", default="mnemos", help="Hermes MCP server name")
-    p_hermes_install.add_argument("--force", action="store_true", help="Replace an existing shim")
-    p_hermes_install.add_argument("--dry-run", action="store_true", help="Show what would be written")
+    p_hermes_install.add_argument(
+        "--activate",
+        action="store_true",
+        help="Set memory.provider to mnemos in Provider Mode",
+    )
+    p_hermes_install.add_argument(
+        "--with-mcp", action="store_true", help="Also add Mnemos to Hermes mcp_servers"
+    )
+    p_hermes_install.add_argument(
+        "--mcp-name", default="mnemos", help="Hermes MCP server name"
+    )
+    p_hermes_install.add_argument(
+        "--force", action="store_true", help="Replace an existing shim"
+    )
+    p_hermes_install.add_argument(
+        "--dry-run", action="store_true", help="Show what would be written"
+    )
     p_hermes_quickstart = hermes_sub.add_parser(
         "quickstart",
         help="Safely install Mnemos for Hermes and run doctor",
     )
-    p_hermes_quickstart.add_argument("--hermes-home", default=None, help="Hermes home directory")
-    p_hermes_quickstart.add_argument("--db-path", default=None, help="Mnemos SQLite database path")
-    p_hermes_quickstart.add_argument("--agent-id", default=None, help="Fixed Mnemos agent scope")
-    p_hermes_quickstart.add_argument("--person-id", default=None, help="Fixed person/user scope")
-    p_hermes_quickstart.add_argument("--project-scope", default=None, help="Fixed project scope")
+    p_hermes_quickstart.add_argument(
+        "--hermes-home", default=None, help="Hermes home directory"
+    )
+    p_hermes_quickstart.add_argument(
+        "--db-path", default=None, help="Mnemos SQLite database path"
+    )
+    p_hermes_quickstart.add_argument(
+        "--agent-id", default=None, help="Fixed Mnemos agent scope"
+    )
+    p_hermes_quickstart.add_argument(
+        "--person-id", default=None, help="Fixed person/user scope"
+    )
+    p_hermes_quickstart.add_argument(
+        "--project-scope", default=None, help="Fixed project scope"
+    )
     p_hermes_quickstart.add_argument(
         "--agent-safe",
         action="store_true",
@@ -264,10 +334,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Alias for --provider",
     )
-    p_hermes_quickstart.add_argument("--mcp-name", default="mnemos", help="Hermes MCP server name")
-    p_hermes_quickstart.add_argument("--dry-run", action="store_true", help="Show what would be written")
+    p_hermes_quickstart.add_argument(
+        "--mcp-name", default="mnemos", help="Hermes MCP server name"
+    )
+    p_hermes_quickstart.add_argument(
+        "--dry-run", action="store_true", help="Show what would be written"
+    )
     p_hermes_doctor = hermes_sub.add_parser("doctor", help="Check Hermes Mnemos setup")
-    p_hermes_doctor.add_argument("--hermes-home", default=None, help="Hermes home directory")
+    p_hermes_doctor.add_argument(
+        "--hermes-home", default=None, help="Hermes home directory"
+    )
     hermes_sub.add_parser("shim", help="Print the Hermes provider shim")
 
     # ── identity ──
@@ -281,7 +357,9 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Path to SOUL.md (default: $MNEMOS_WORKSPACE/SOUL.md, then ./SOUL.md)",
     )
-    p_id_diff.add_argument("--json", action="store_true", help="Emit machine-readable report")
+    p_id_diff.add_argument(
+        "--json", action="store_true", help="Emit machine-readable report"
+    )
     p_id_diff.add_argument(
         "--no-note",
         action="store_true",
@@ -293,9 +371,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip optional model-assisted annotation",
     )
     p_id_diff.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_id_diff.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_id_diff.add_argument(
+        "--agent-id", default=argparse.SUPPRESS, help="Agent identity"
+    )
     p_id_diff.add_argument("--person-id", default=None, help="Person/user scope")
-    p_id_diff.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_id_diff.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
     p_id_accept = identity_sub.add_parser(
         "accept", help="Accept a divergence and open a new epoch"
     )
@@ -306,25 +388,41 @@ def main(argv: list[str] | None = None) -> int:
         metavar="N",
         help="Divergence number from the last `identity diff` run",
     )
-    p_id_accept.add_argument("--note", default="", help="Optional note recorded with the transition")
-    p_id_accept.add_argument("--json", action="store_true", help="Emit machine-readable result")
-    p_id_accept.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_id_accept.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_id_accept.add_argument(
+        "--note", default="", help="Optional note recorded with the transition"
+    )
+    p_id_accept.add_argument(
+        "--json", action="store_true", help="Emit machine-readable result"
+    )
+    p_id_accept.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Database path"
+    )
+    p_id_accept.add_argument(
+        "--agent-id", default=argparse.SUPPRESS, help="Agent identity"
+    )
     p_id_accept.add_argument("--person-id", default=None, help="Person/user scope")
-    p_id_accept.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_id_accept.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
 
     # ── mcp ──
     p_mcp = sub.add_parser("mcp", help="MCP client helpers")
     mcp_sub = p_mcp.add_subparsers(dest="mcp_command")
-    p_mcp_install = mcp_sub.add_parser("install", help="Print or write MCP client config")
+    p_mcp_install = mcp_sub.add_parser(
+        "install", help="Print or write MCP client config"
+    )
     p_mcp_install.add_argument(
         "client",
         choices=("claude", "cursor", "codex", "generic"),
         help="Client config style",
     )
     p_mcp_install.add_argument("--name", default="mnemos", help="MCP server name")
-    p_mcp_install.add_argument("--mode", choices=("simple", "advanced"), default="simple")
-    p_mcp_install.add_argument("--agent-id", default=None, help="Optional agent identity")
+    p_mcp_install.add_argument(
+        "--mode", choices=("simple", "advanced"), default="simple"
+    )
+    p_mcp_install.add_argument(
+        "--agent-id", default=None, help="Optional agent identity"
+    )
     p_mcp_install.add_argument("--db-path", default=None, help="Optional database path")
     p_mcp_install.add_argument(
         "--write",
@@ -336,19 +434,35 @@ def main(argv: list[str] | None = None) -> int:
     p_pai = sub.add_parser("pai-import", help="Operator PAI import workflow")
     pai_sub = p_pai.add_subparsers(dest="pai_import_command")
     p_pai_preview = pai_sub.add_parser("preview", help="Preview a PAI source manifest")
-    p_pai_preview.add_argument("--manifest", required=True, help="PAI source manifest JSON")
-    p_pai_preview.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
-    p_pai_preview.add_argument("--artifact", default=None, help="Write preview artifact JSON")
+    p_pai_preview.add_argument(
+        "--manifest", required=True, help="PAI source manifest JSON"
+    )
+    p_pai_preview.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path"
+    )
+    p_pai_preview.add_argument(
+        "--artifact", default=None, help="Write preview artifact JSON"
+    )
     p_pai_preview.add_argument(
         "--allow-live-db",
         action="store_true",
         help="Allow ~/.mnemos/memory.db; intended only for a deliberate final import",
     )
-    p_pai_apply = pai_sub.add_parser("apply", help="Backup DB and apply a PAI source manifest")
-    p_pai_apply.add_argument("--manifest", required=True, help="PAI source manifest JSON")
-    p_pai_apply.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
-    p_pai_apply.add_argument("--artifact", default=None, help="Write apply artifact JSON")
-    p_pai_apply.add_argument("--backup-dir", default=None, help="Directory for integrity-checked DB backup")
+    p_pai_apply = pai_sub.add_parser(
+        "apply", help="Backup DB and apply a PAI source manifest"
+    )
+    p_pai_apply.add_argument(
+        "--manifest", required=True, help="PAI source manifest JSON"
+    )
+    p_pai_apply.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path"
+    )
+    p_pai_apply.add_argument(
+        "--artifact", default=None, help="Write apply artifact JSON"
+    )
+    p_pai_apply.add_argument(
+        "--backup-dir", default=None, help="Directory for integrity-checked DB backup"
+    )
     p_pai_apply.add_argument(
         "--backup-keep",
         type=int,
@@ -423,7 +537,9 @@ def main(argv: list[str] | None = None) -> int:
         default=argparse.SUPPRESS,
         help="Representative SQLite DB path",
     )
-    p_pai_watch_once.add_argument("--state", required=True, help="Watcher state JSON path")
+    p_pai_watch_once.add_argument(
+        "--state", required=True, help="Watcher state JSON path"
+    )
     p_pai_watch_once.add_argument(
         "--artifact-dir", default=None, help="Directory for watch artifacts"
     )
@@ -457,7 +573,9 @@ def main(argv: list[str] | None = None) -> int:
         "--manifest", required=True, help="PAI source manifest JSON"
     )
     p_pai_watch_plist.add_argument("--db-path", required=True, help="SQLite DB path")
-    p_pai_watch_plist.add_argument("--state", required=True, help="Watcher state JSON path")
+    p_pai_watch_plist.add_argument(
+        "--state", required=True, help="Watcher state JSON path"
+    )
     p_pai_watch_plist.add_argument(
         "--artifact-dir", required=True, help="Directory for watch artifacts"
     )
@@ -466,7 +584,9 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="Directory for integrity-checked DB backups",
     )
-    p_pai_watch_plist.add_argument("--plist", required=True, help="Output launchd plist path")
+    p_pai_watch_plist.add_argument(
+        "--plist", required=True, help="Output launchd plist path"
+    )
     p_pai_watch_plist.add_argument("--label", default=None, help="launchd label")
     p_pai_watch_plist.add_argument("--interval-seconds", type=int, default=60)
     p_pai_watch_plist.add_argument(
@@ -475,7 +595,9 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Include bounded backup retention in generated ProgramArguments",
     )
-    p_pai_watch_plist.add_argument("--python", default=None, help="Python executable for launchd")
+    p_pai_watch_plist.add_argument(
+        "--python", default=None, help="Python executable for launchd"
+    )
     p_pai_watch_plist.add_argument(
         "--allow-live-db",
         action="store_true",
@@ -493,7 +615,9 @@ def main(argv: list[str] | None = None) -> int:
         default=argparse.SUPPRESS,
         help="Representative SQLite DB path",
     )
-    p_pai_watch_doctor.add_argument("--state", required=True, help="Watcher state JSON path")
+    p_pai_watch_doctor.add_argument(
+        "--state", required=True, help="Watcher state JSON path"
+    )
     p_pai_watch_doctor.add_argument(
         "--artifact-dir", required=True, help="Directory for watch artifacts"
     )
@@ -539,12 +663,22 @@ def main(argv: list[str] | None = None) -> int:
         "tick",
         help="Run one U7 scheduled tick over enabled soak families",
     )
-    p_soak_tick.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
-    p_soak_tick.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_soak_tick.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path"
+    )
+    p_soak_tick.add_argument(
+        "--agent-id", default=argparse.SUPPRESS, help="Agent identity"
+    )
     p_soak_tick.add_argument("--person-id", default=None, help="Person/user scope")
-    p_soak_tick.add_argument("--project-scope", default=None, help="Project/workspace scope")
-    p_soak_tick.add_argument("--rollout-tag", default="u7-soak", help="Rollout tag for scheduled rows")
-    p_soak_tick.add_argument("--run-id", default=None, help="Optional idempotency key suffix")
+    p_soak_tick.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
+    p_soak_tick.add_argument(
+        "--rollout-tag", default="u7-soak", help="Rollout tag for scheduled rows"
+    )
+    p_soak_tick.add_argument(
+        "--run-id", default=None, help="Optional idempotency key suffix"
+    )
     p_soak_tick.add_argument(
         "--allow-live-db",
         action="store_true",
@@ -554,16 +688,30 @@ def main(argv: list[str] | None = None) -> int:
         "plist",
         help="Write a launchd plist for the U7 scheduled tick without loading it",
     )
-    p_soak_plist.add_argument("--plist", required=True, help="Output launchd plist path")
-    p_soak_plist.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
-    p_soak_plist.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_soak_plist.add_argument(
+        "--plist", required=True, help="Output launchd plist path"
+    )
+    p_soak_plist.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path"
+    )
+    p_soak_plist.add_argument(
+        "--agent-id", default=argparse.SUPPRESS, help="Agent identity"
+    )
     p_soak_plist.add_argument("--person-id", default=None, help="Person/user scope")
-    p_soak_plist.add_argument("--project-scope", default=None, help="Project/workspace scope")
-    p_soak_plist.add_argument("--rollout-tag", default="u7-soak", help="Rollout tag for scheduled rows")
+    p_soak_plist.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
+    p_soak_plist.add_argument(
+        "--rollout-tag", default="u7-soak", help="Rollout tag for scheduled rows"
+    )
     p_soak_plist.add_argument("--interval-seconds", type=int, default=None)
-    p_soak_plist.add_argument("--artifact-dir", default=None, help="Directory for launchd logs")
+    p_soak_plist.add_argument(
+        "--artifact-dir", default=None, help="Directory for launchd logs"
+    )
     p_soak_plist.add_argument("--label", default=None, help="launchd label")
-    p_soak_plist.add_argument("--python", default=None, help="Python executable for launchd")
+    p_soak_plist.add_argument(
+        "--python", default=None, help="Python executable for launchd"
+    )
     p_soak_plist.add_argument(
         "--allow-live-db",
         action="store_true",
@@ -573,21 +721,49 @@ def main(argv: list[str] | None = None) -> int:
         "preflight",
         help="Build the U7 activation preflight without loading launchd",
     )
-    p_soak_preflight.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
-    p_soak_preflight.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_soak_preflight.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path"
+    )
+    p_soak_preflight.add_argument(
+        "--agent-id", default=argparse.SUPPRESS, help="Agent identity"
+    )
     p_soak_preflight.add_argument("--person-id", default=None, help="Person/user scope")
-    p_soak_preflight.add_argument("--project-scope", default=None, help="Project/workspace scope")
-    p_soak_preflight.add_argument("--rollout-tag", default="u7-soak", help="Rollout tag for dry-run rows")
-    p_soak_preflight.add_argument("--artifact", default=None, help="Optional JSON artifact path")
-    p_soak_preflight.add_argument("--soak-plist", default=None, help="Existing soak tick launchd plist to lint")
-    p_soak_preflight.add_argument("--watch-manifest", default=None, help="PAI watch manifest for watch-doctor")
-    p_soak_preflight.add_argument("--watch-state", default=None, help="PAI watch state path for watch-doctor")
-    p_soak_preflight.add_argument("--watch-artifact-dir", default=None, help="PAI watch artifact dir for watch-doctor")
-    p_soak_preflight.add_argument("--watch-backup-dir", default=None, help="PAI watch backup dir for watch-doctor")
+    p_soak_preflight.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
+    p_soak_preflight.add_argument(
+        "--rollout-tag", default="u7-soak", help="Rollout tag for dry-run rows"
+    )
+    p_soak_preflight.add_argument(
+        "--artifact", default=None, help="Optional JSON artifact path"
+    )
+    p_soak_preflight.add_argument(
+        "--soak-plist", default=None, help="Existing soak tick launchd plist to lint"
+    )
+    p_soak_preflight.add_argument(
+        "--watch-manifest", default=None, help="PAI watch manifest for watch-doctor"
+    )
+    p_soak_preflight.add_argument(
+        "--watch-state", default=None, help="PAI watch state path for watch-doctor"
+    )
+    p_soak_preflight.add_argument(
+        "--watch-artifact-dir",
+        default=None,
+        help="PAI watch artifact dir for watch-doctor",
+    )
+    p_soak_preflight.add_argument(
+        "--watch-backup-dir", default=None, help="PAI watch backup dir for watch-doctor"
+    )
     p_soak_preflight.add_argument("--watch-backup-keep", type=int, default=None)
-    p_soak_preflight.add_argument("--watch-plist", default=None, help="Existing PAI watch launchd plist to lint")
-    p_soak_preflight.add_argument("--watch-label", default=None, help="PAI watch launchd label")
-    p_soak_preflight.add_argument("--watch-python", default=None, help="Python executable for watch-doctor")
+    p_soak_preflight.add_argument(
+        "--watch-plist", default=None, help="Existing PAI watch launchd plist to lint"
+    )
+    p_soak_preflight.add_argument(
+        "--watch-label", default=None, help="PAI watch launchd label"
+    )
+    p_soak_preflight.add_argument(
+        "--watch-python", default=None, help="Python executable for watch-doctor"
+    )
     p_soak_preflight.add_argument(
         "--dry-run-tick",
         action="store_true",
@@ -606,14 +782,28 @@ def main(argv: list[str] | None = None) -> int:
         "session-finalize",
         help="Finalize JSONL/checkpoint transcript provenance below memory",
     )
-    p_inner_session.add_argument("--transcript", required=True, help="JSONL transcript/checkpoint path")
-    p_inner_session.add_argument("--session-id", required=True, help="Session identifier")
-    p_inner_session.add_argument("--thread-id", default=None, help="Optional thread identifier")
-    p_inner_session.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
-    p_inner_session.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_inner_session.add_argument(
+        "--transcript", required=True, help="JSONL transcript/checkpoint path"
+    )
+    p_inner_session.add_argument(
+        "--session-id", required=True, help="Session identifier"
+    )
+    p_inner_session.add_argument(
+        "--thread-id", default=None, help="Optional thread identifier"
+    )
+    p_inner_session.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path"
+    )
+    p_inner_session.add_argument(
+        "--agent-id", default=argparse.SUPPRESS, help="Agent identity"
+    )
     p_inner_session.add_argument("--person-id", default=None, help="Person/user scope")
-    p_inner_session.add_argument("--project-scope", default=None, help="Project/workspace scope")
-    p_inner_session.add_argument("--rollout-tag", default="u6.6", help="Rollout tag for written provenance rows")
+    p_inner_session.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
+    p_inner_session.add_argument(
+        "--rollout-tag", default="u6.6", help="Rollout tag for written provenance rows"
+    )
     p_inner_session.add_argument("--max-turn-events", type=int, default=25)
     p_inner_session.add_argument("--max-excerpt-chars", type=int, default=480)
     p_inner_session.add_argument(
@@ -626,17 +816,33 @@ def main(argv: list[str] | None = None) -> int:
         help="Finalize one completed turn provenance row below memory",
     )
     p_inner_turn.add_argument("--session-id", required=True, help="Session identifier")
-    p_inner_turn.add_argument("--turn-id", default=None, help="Optional turn identifier")
-    p_inner_turn.add_argument("--thread-id", default=None, help="Optional thread identifier")
-    p_inner_turn.add_argument("--user-text", default="", help="User side of completed exchange")
-    p_inner_turn.add_argument("--assistant-text", default="", help="Assistant side of completed exchange")
+    p_inner_turn.add_argument(
+        "--turn-id", default=None, help="Optional turn identifier"
+    )
+    p_inner_turn.add_argument(
+        "--thread-id", default=None, help="Optional thread identifier"
+    )
+    p_inner_turn.add_argument(
+        "--user-text", default="", help="User side of completed exchange"
+    )
+    p_inner_turn.add_argument(
+        "--assistant-text", default="", help="Assistant side of completed exchange"
+    )
     p_inner_turn.add_argument("--source-message-id", action="append", default=[])
     p_inner_turn.add_argument("--source-timestamp", default=None)
-    p_inner_turn.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
-    p_inner_turn.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_inner_turn.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path"
+    )
+    p_inner_turn.add_argument(
+        "--agent-id", default=argparse.SUPPRESS, help="Agent identity"
+    )
     p_inner_turn.add_argument("--person-id", default=None, help="Person/user scope")
-    p_inner_turn.add_argument("--project-scope", default=None, help="Project/workspace scope")
-    p_inner_turn.add_argument("--rollout-tag", default="u6.6", help="Rollout tag for written provenance rows")
+    p_inner_turn.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
+    p_inner_turn.add_argument(
+        "--rollout-tag", default="u6.6", help="Rollout tag for written provenance rows"
+    )
     p_inner_turn.add_argument("--max-excerpt-chars", type=int, default=480)
     p_inner_turn.add_argument(
         "--allow-live-db",
@@ -653,11 +859,19 @@ def main(argv: list[str] | None = None) -> int:
         choices=("challenge", "observe", "affect", "reflect", "wander", "dream"),
         help="Inner-life process family to preflight",
     )
-    p_inner_activity.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
-    p_inner_activity.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_inner_activity.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path"
+    )
+    p_inner_activity.add_argument(
+        "--agent-id", default=argparse.SUPPRESS, help="Agent identity"
+    )
     p_inner_activity.add_argument("--person-id", default=None, help="Person/user scope")
-    p_inner_activity.add_argument("--project-scope", default=None, help="Project/workspace scope")
-    p_inner_activity.add_argument("--rollout-tag", default="u6.6", help="Rollout tag for written gate rows")
+    p_inner_activity.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
+    p_inner_activity.add_argument(
+        "--rollout-tag", default="u6.6", help="Rollout tag for written gate rows"
+    )
     p_inner_activity.add_argument(
         "--allow-live-db",
         action="store_true",
@@ -673,12 +887,22 @@ def main(argv: list[str] | None = None) -> int:
         choices=("challenge", "observe", "affect", "reflect", "wander", "dream"),
         help="Inner-life process family to run",
     )
-    p_inner_run.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
-    p_inner_run.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_inner_run.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path"
+    )
+    p_inner_run.add_argument(
+        "--agent-id", default=argparse.SUPPRESS, help="Agent identity"
+    )
     p_inner_run.add_argument("--person-id", default=None, help="Person/user scope")
-    p_inner_run.add_argument("--project-scope", default=None, help="Project/workspace scope")
-    p_inner_run.add_argument("--rollout-tag", default="u6.6", help="Rollout tag for written rows")
-    p_inner_run.add_argument("--run-id", default=None, help="Optional idempotency key suffix")
+    p_inner_run.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
+    p_inner_run.add_argument(
+        "--rollout-tag", default="u6.6", help="Rollout tag for written rows"
+    )
+    p_inner_run.add_argument(
+        "--run-id", default=None, help="Optional idempotency key suffix"
+    )
     p_inner_run.add_argument(
         "--allow-live-db",
         action="store_true",
@@ -694,16 +918,30 @@ def main(argv: list[str] | None = None) -> int:
         choices=("challenge", "observe", "affect", "reflect", "wander", "dream"),
         help="Inner-life process family to schedule",
     )
-    p_inner_plist.add_argument("--plist", required=True, help="Output launchd plist path")
-    p_inner_plist.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
-    p_inner_plist.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_inner_plist.add_argument(
+        "--plist", required=True, help="Output launchd plist path"
+    )
+    p_inner_plist.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path"
+    )
+    p_inner_plist.add_argument(
+        "--agent-id", default=argparse.SUPPRESS, help="Agent identity"
+    )
     p_inner_plist.add_argument("--person-id", default=None, help="Person/user scope")
-    p_inner_plist.add_argument("--project-scope", default=None, help="Project/workspace scope")
-    p_inner_plist.add_argument("--rollout-tag", default="u6.6", help="Rollout tag for scheduled rows")
+    p_inner_plist.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
+    p_inner_plist.add_argument(
+        "--rollout-tag", default="u6.6", help="Rollout tag for scheduled rows"
+    )
     p_inner_plist.add_argument("--interval-seconds", type=int, default=None)
-    p_inner_plist.add_argument("--artifact-dir", default=None, help="Directory for launchd logs")
+    p_inner_plist.add_argument(
+        "--artifact-dir", default=None, help="Directory for launchd logs"
+    )
     p_inner_plist.add_argument("--label", default=None, help="launchd label")
-    p_inner_plist.add_argument("--python", default=None, help="Python executable for launchd")
+    p_inner_plist.add_argument(
+        "--python", default=None, help="Python executable for launchd"
+    )
     p_inner_plist.add_argument(
         "--allow-live-db",
         action="store_true",
@@ -713,12 +951,22 @@ def main(argv: list[str] | None = None) -> int:
         "status",
         help="Summarize U6.6 private inner-life telemetry",
     )
-    p_inner_status.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
-    p_inner_status.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_inner_status.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path"
+    )
+    p_inner_status.add_argument(
+        "--agent-id", default=argparse.SUPPRESS, help="Agent identity"
+    )
     p_inner_status.add_argument("--person-id", default=None, help="Person/user scope")
-    p_inner_status.add_argument("--project-scope", default=None, help="Project/workspace scope")
-    p_inner_status.add_argument("--rollout-tag", default=None, help="Optional rollout tag filter")
-    p_inner_status.add_argument("--limit", type=int, default=200, help="Max ledger rows to summarize")
+    p_inner_status.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
+    p_inner_status.add_argument(
+        "--rollout-tag", default=None, help="Optional rollout tag filter"
+    )
+    p_inner_status.add_argument(
+        "--limit", type=int, default=200, help="Max ledger rows to summarize"
+    )
     p_inner_status.add_argument(
         "--allow-live-db",
         action="store_true",
@@ -728,10 +976,18 @@ def main(argv: list[str] | None = None) -> int:
         "preflight",
         help="Inspect U7 gated inner-life activation readiness without loading schedules",
     )
-    p_inner_preflight.add_argument("--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path")
-    p_inner_preflight.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-    p_inner_preflight.add_argument("--person-id", default=None, help="Person/user scope")
-    p_inner_preflight.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_inner_preflight.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path"
+    )
+    p_inner_preflight.add_argument(
+        "--agent-id", default=argparse.SUPPRESS, help="Agent identity"
+    )
+    p_inner_preflight.add_argument(
+        "--person-id", default=None, help="Person/user scope"
+    )
+    p_inner_preflight.add_argument(
+        "--project-scope", default=None, help="Project/workspace scope"
+    )
     p_inner_preflight.add_argument(
         "--allow-live-db",
         action="store_true",
@@ -796,6 +1052,7 @@ def _resolve_agent_id(args: argparse.Namespace) -> str:
 def _get_store(args: argparse.Namespace):
     """Create or open the engram store."""
     from .store.sqlite_store import EngramStore
+
     return EngramStore(_resolve_db_path(args))
 
 
@@ -862,7 +1119,9 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     print(f"Strength:      {engram.strength:.4f}")
     print(f"Stability:     {engram.stability:.4f}")
     print(f"Accessibility: {engram.accessibility:.4f}")
-    print(f"Confidence:    {engram.source.confidence} ({engram.source.confidence_source})")
+    print(
+        f"Confidence:    {engram.source.confidence} ({engram.source.confidence_source})"
+    )
     print(f"Created:       {engram.created_at}")
     print(f"Last accessed: {engram.last_accessed}")
     print(f"Access count:  {engram.access_count}")
@@ -949,7 +1208,9 @@ def _cmd_search(args: argparse.Namespace) -> int:
         if len(content) > 80:
             content = content[:77] + "..."
         print(f"[{r.score:.3f}] {content}")
-        print(f"         id={r.engram.id[:25]}... kind={r.engram.kind} path={r.retrieval_path}")
+        print(
+            f"         id={r.engram.id[:25]}... kind={r.engram.kind} path={r.retrieval_path}"
+        )
 
     store.close()
     return 0
@@ -971,10 +1232,14 @@ def _cmd_consolidate(args: argparse.Namespace) -> int:
     print(f"Passes: {', '.join(stats.get('passes_run', []))}")
     if "decay" in stats:
         d = stats["decay"]
-        print(f"  Decay: {d.get('engrams_decayed', 0)} decayed, {d.get('engrams_archived', 0)} archived")
+        print(
+            f"  Decay: {d.get('engrams_decayed', 0)} decayed, {d.get('engrams_archived', 0)} archived"
+        )
     if "connection_discovery" in stats:
         cd = stats["connection_discovery"]
-        print(f"  Connections: {cd.get('connections_created', 0)} created, {cd.get('connections_strengthened', 0)} strengthened")
+        print(
+            f"  Connections: {cd.get('connections_created', 0)} created, {cd.get('connections_strengthened', 0)} strengthened"
+        )
     if "softening" in stats:
         s = stats["softening"]
         print(f"  Softening: {s.get('engrams_softened', 0)} softened")
@@ -983,7 +1248,9 @@ def _cmd_consolidate(args: argparse.Namespace) -> int:
         print(f"  Beliefs: {br.get('beliefs_reviewed', 0)} reviewed")
     if "reflection" in stats:
         ref = stats["reflection"]
-        print(f"  Reflection: {ref.get('thoughts_generated', 0)} thoughts, narrative={'updated' if ref.get('narrative_updated') else 'unchanged'}")
+        print(
+            f"  Reflection: {ref.get('thoughts_generated', 0)} thoughts, narrative={'updated' if ref.get('narrative_updated') else 'unchanged'}"
+        )
 
     # Check for errors
     errors = [k for k in stats if k.endswith("_error")]
@@ -1018,7 +1285,9 @@ def _cmd_setup_openclaw(args: argparse.Namespace) -> int:
     if args.dry_run:
         print("Would register the following cron jobs:")
         for job in jobs:
-            print(f"  {job['name']}: {job['schedule']['expr']} → {job['payload']['message'][:60]}...")
+            print(
+                f"  {job['name']}: {job['schedule']['expr']} → {job['payload']['message'][:60]}..."
+            )
         return 0
 
     result = install_cron_jobs(jobs)
@@ -1069,8 +1338,10 @@ def _cmd_index(args: argparse.Namespace) -> int:
         else:
             print("Running indexer...")
             result = indexer.run()
-        print(f"Indexed {result.get('sessions_processed', 0)} sessions, "
-              f"{result.get('memories_created', 0)} memories created")
+        print(
+            f"Indexed {result.get('sessions_processed', 0)} sessions, "
+            f"{result.get('memories_created', 0)} memories created"
+        )
         return 0
     except ImportError as e:
         print(f"Indexer not available: {e}", file=sys.stderr)
@@ -1102,7 +1373,9 @@ def _cmd_bridge(args: argparse.Namespace) -> int:
     """Direct memory operations via bridge."""
     from .bridge import MnemosBridge
 
-    bridge = MnemosBridge(agent_id=_resolve_agent_id(args), db_path=_resolve_db_path(args))
+    bridge = MnemosBridge(
+        agent_id=_resolve_agent_id(args), db_path=_resolve_db_path(args)
+    )
 
     if args.bridge_command == "status":
         print(bridge.status())
@@ -1158,7 +1431,9 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print(f"Database:    {runtime.db_path}")
         print(f"DB exists:    {'yes' if runtime.db_path.exists() else 'no'}")
         print(f"MCP SDK:      {'yes' if _mcp_available() else 'no'}")
-        print(f"Model:        {'dedicated provider configured' if runtime.has_dedicated_model else 'local baseline only'}")
+        print(
+            f"Model:        {'dedicated provider configured' if runtime.has_dedicated_model else 'local baseline only'}"
+        )
         _print_affinity_status()
         print(f"Simple tools: {', '.join(SIMPLE_TOOL_NAMES)}")
         print()
@@ -1304,7 +1579,9 @@ def _cmd_pai_import(args: argparse.Namespace) -> int:
                 return 0
             _print_pai_operator_run(watch.operator_run, db_path=db_path)
             if not args.apply:
-                return 1 if watch.operator_run.preview.counts.get(ACTION_ERROR, 0) else 0
+                return (
+                    1 if watch.operator_run.preview.counts.get(ACTION_ERROR, 0) else 0
+                )
             return 0
 
         if command == "apply":
@@ -1421,9 +1698,15 @@ def _cmd_soak(args: argparse.Namespace) -> int:
             print("-------------------------")
             print(f"DB:                 {preflight['db']['path']}")
             print(f"DB exists:          {preflight['db']['exists']}")
-            print(f"Watcher doctor:     {'GREEN' if preflight['watcher']['doctor']['ok'] else 'missing/blocked'}")
-            print(f"Soak tick plist:    {'ready' if preflight['soak_tick_plist']['ok'] else 'blocked'}")
-            print(f"Tick dry run:       {'ok' if preflight['tick_dry_run']['ok'] else preflight['tick_dry_run']['reason']}")
+            print(
+                f"Watcher doctor:     {'GREEN' if preflight['watcher']['doctor']['ok'] else 'missing/blocked'}"
+            )
+            print(
+                f"Soak tick plist:    {'ready' if preflight['soak_tick_plist']['ok'] else 'blocked'}"
+            )
+            print(
+                f"Tick dry run:       {'ok' if preflight['tick_dry_run']['ok'] else preflight['tick_dry_run']['reason']}"
+            )
             print(
                 "Launchd loaded:     "
                 f"{preflight['launchd'].get('pre_authorization_loaded')}"
@@ -1569,7 +1852,9 @@ def _cmd_inner_life(args: argparse.Namespace) -> int:
             )
             print(f"Launchd artifact dir:  {preflight['launchd']['artifact_dir']}")
             print(f"Launchd plist dir:     {preflight['launchd']['plist_dir']}")
-            print(f"Soak tick plist:       {preflight['launchd']['soak_tick_plist_path']}")
+            print(
+                f"Soak tick plist:       {preflight['launchd']['soak_tick_plist_path']}"
+            )
             print(f"Halt marker:           {preflight['launchd']['halt_marker_path']}")
             print(
                 "Full scheduled activation: "
@@ -1599,9 +1884,13 @@ def _cmd_inner_life(args: argparse.Namespace) -> int:
 
             config = load_config()
             activation = config.get("inner_life", {}).get("activation", {})
-            schedules = config.get("inner_life", {}).get("schedules", {}).get(
-                "processes",
-                {},
+            schedules = (
+                config.get("inner_life", {})
+                .get("schedules", {})
+                .get(
+                    "processes",
+                    {},
+                )
             )
             interval_seconds = args.interval_seconds
             if interval_seconds is None:
@@ -1717,7 +2006,11 @@ def _cmd_inner_life(args: argparse.Namespace) -> int:
                 from .inner_life.scheduler import run_scheduled_inner_life_process
                 from .llm import create_client
 
-                llm_client = create_client() if args.process in {"reflect", "wander", "dream"} else None
+                llm_client = (
+                    create_client()
+                    if args.process in {"reflect", "wander", "dream"}
+                    else None
+                )
                 result = run_scheduled_inner_life_process(
                     store,
                     process_name=args.process,
@@ -1756,10 +2049,16 @@ def _cmd_inner_life(args: argparse.Namespace) -> int:
             identity_patches = 0
             shared_pool_writes = 0
             for row in rows:
-                by_process[row["process_name"]] = by_process.get(row["process_name"], 0) + 1
-                by_decision[row["gate_decision"]] = by_decision.get(row["gate_decision"], 0) + 1
+                by_process[row["process_name"]] = (
+                    by_process.get(row["process_name"], 0) + 1
+                )
+                by_decision[row["gate_decision"]] = (
+                    by_decision.get(row["gate_decision"], 0) + 1
+                )
                 metadata = row.get("metadata", {})
-                generated_memory_writes += int(metadata.get("generated_memory_writes", 0) or 0)
+                generated_memory_writes += int(
+                    metadata.get("generated_memory_writes", 0) or 0
+                )
                 belief_writes += int(metadata.get("belief_writes", 0) or 0)
                 identity_patches += int(metadata.get("identity_patches", 0) or 0)
                 shared_pool_writes += int(metadata.get("shared_pool_writes", 0) or 0)
@@ -1801,7 +2100,9 @@ def _print_pai_operator_run(run, *, db_path: str) -> None:
         print(f"Backup:   {run.backup_path}")
     if run.artifact_path is not None:
         print(f"Artifact: {run.artifact_path}")
-    print(f"Rows:     {len(run.result.rows if run.result is not None else run.preview.rows)}")
+    print(
+        f"Rows:     {len(run.result.rows if run.result is not None else run.preview.rows)}"
+    )
     print(f"Counts:   {_format_counts(run.counts)}")
 
 
@@ -1848,7 +2149,9 @@ def _format_counts(counts: dict[str, int]) -> str:
 def _cmd_mcp(args: argparse.Namespace) -> int:
     """MCP client helper commands."""
     if args.mcp_command != "install":
-        print("Usage: mnemos mcp install {claude|cursor|codex|generic}", file=sys.stderr)
+        print(
+            "Usage: mnemos mcp install {claude|cursor|codex|generic}", file=sys.stderr
+        )
         return 1
 
     snippet = _mcp_server_snippet(
@@ -1882,7 +2185,17 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
 
     if args.client == "codex":
         command = _mnemos_command()
-        parts = ["codex", "mcp", "add", args.name, "--", command, "serve", "--mode", args.mode]
+        parts = [
+            "codex",
+            "mcp",
+            "add",
+            args.name,
+            "--",
+            command,
+            "serve",
+            "--mode",
+            args.mode,
+        ]
         if args.agent_id:
             parts.extend(["--agent-id", args.agent_id])
         if args.db_path:
@@ -2005,9 +2318,19 @@ def _mcp_server_snippet(
 
 def _claude_desktop_config_path() -> Path:
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Claude"
+            / "claude_desktop_config.json"
+        )
     if sys.platform.startswith("win"):
-        return Path(os.environ.get("APPDATA", str(Path.home()))) / "Claude" / "claude_desktop_config.json"
+        return (
+            Path(os.environ.get("APPDATA", str(Path.home())))
+            / "Claude"
+            / "claude_desktop_config.json"
+        )
     return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
 
 

@@ -9,7 +9,9 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-def _write_event(store: EngramStore, *, event_type: str, excerpt: str, gate_decision="ledger_only"):
+def _write_event(
+    store: EngramStore, *, event_type: str, excerpt: str, gate_decision="ledger_only"
+):
     digest = hashlib.sha256(excerpt.encode("utf-8")).hexdigest()[:16]
     store.upsert_inner_life_event(
         idempotency_key=f"{event_type}:{digest}",
@@ -31,12 +33,15 @@ def _write_event(store: EngramStore, *, event_type: str, excerpt: str, gate_deci
 def _assert_no_generated_memory(store: EngramStore) -> None:
     assert store.count_engrams(agent_id="oliver") == 0
     assert store.get_beliefs(agent_id="oliver") == []
-    assert store.search_hypomnema(
-        "affect",
-        agent_id="oliver",
-        person_id="david",
-        project_scope="pai",
-    ) == []
+    assert (
+        store.search_hypomnema(
+            "affect",
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+        )
+        == []
+    )
 
 
 def test_emotional_driver_updates_from_real_turn_and_verification_events(tmp_path):

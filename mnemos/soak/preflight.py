@@ -63,18 +63,22 @@ def build_soak_activation_preflight(
         watch_label=watch_label,
         soak_label=soak_label,
     )
-    dry_run = _run_tick_copy_dry_run(
-        config=config,
-        db_path=db,
-        agent_id=agent_id,
-        person_id=person_id,
-        project_scope=project_scope,
-        rollout_tag=rollout_tag,
-    ) if run_tick_dry_run else {
-        "ran": False,
-        "ok": False,
-        "reason": "not_requested",
-    }
+    dry_run = (
+        _run_tick_copy_dry_run(
+            config=config,
+            db_path=db,
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope=project_scope,
+            rollout_tag=rollout_tag,
+        )
+        if run_tick_dry_run
+        else {
+            "ran": False,
+            "ok": False,
+            "reason": "not_requested",
+        }
+    )
 
     blockers = list(inner["blockers"])
     if not watch["configured"]:
@@ -88,7 +92,11 @@ def build_soak_activation_preflight(
     elif launchd.get("pre_authorization_loaded", False):
         blockers.append("launchd_jobs_already_loaded")
     if not dry_run["ok"]:
-        blockers.append("soak_tick_dry_run_missing" if not dry_run["ran"] else "soak_tick_dry_run_failed")
+        blockers.append(
+            "soak_tick_dry_run_missing"
+            if not dry_run["ran"]
+            else "soak_tick_dry_run_failed"
+        )
 
     blockers = _dedupe(blockers)
     return {
@@ -173,7 +181,9 @@ def _resolve_soak_plist_path(
 ) -> Path:
     if soak_plist_path is not None:
         return Path(soak_plist_path).expanduser()
-    plist_dir = Path(tick_config.get("plist_dir") or "~/Library/LaunchAgents").expanduser()
+    plist_dir = Path(
+        tick_config.get("plist_dir") or "~/Library/LaunchAgents"
+    ).expanduser()
     return plist_dir / f"{label}.plist"
 
 
@@ -244,9 +254,15 @@ def _watch_doctor_summary(report: Any | None) -> dict[str, Any]:
             "ok": False,
             "checks": [],
         }
-    checks_raw = getattr(report, "checks", report.get("checks", []) if isinstance(report, dict) else [])
+    checks_raw = getattr(
+        report, "checks", report.get("checks", []) if isinstance(report, dict) else []
+    )
     checks = [_jsonable(check) for check in checks_raw]
-    ok = bool(getattr(report, "ok", report.get("ok", False) if isinstance(report, dict) else False))
+    ok = bool(
+        getattr(
+            report, "ok", report.get("ok", False) if isinstance(report, dict) else False
+        )
+    )
     return {
         "configured": True,
         "ok": ok,

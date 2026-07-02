@@ -132,23 +132,59 @@ VALID_INNER_LIFE_EVENT_TYPES = {
 }
 
 # Allowed column names for engrams table — prevents SQL injection via to_dict() keys
-_ENGRAM_COLUMNS = frozenset({
-    "id", "content", "content_at_encoding", "impact", "resolution", "kind", "tags",
-    "schema_refs", "strength", "stability", "accessibility", "encoding_context",
-    "source", "lineage", "owner_agent_id", "visibility", "state", "created_at",
-    "last_accessed", "access_count", "reconsolidation_count",
-    "voice_exemplar_eligible", "softening_protected", "original_substrate",
-    "original_timestamp", "consolidation_authorized", "decay_protected",
-    "read_visibility",
-})
+_ENGRAM_COLUMNS = frozenset(
+    {
+        "id",
+        "content",
+        "content_at_encoding",
+        "impact",
+        "resolution",
+        "kind",
+        "tags",
+        "schema_refs",
+        "strength",
+        "stability",
+        "accessibility",
+        "encoding_context",
+        "source",
+        "lineage",
+        "owner_agent_id",
+        "visibility",
+        "state",
+        "created_at",
+        "last_accessed",
+        "access_count",
+        "reconsolidation_count",
+        "voice_exemplar_eligible",
+        "softening_protected",
+        "original_substrate",
+        "original_timestamp",
+        "consolidation_authorized",
+        "decay_protected",
+        "read_visibility",
+    }
+)
 
 # Allowed column names for beliefs table
-_BELIEF_COLUMNS = frozenset({
-    "id", "agent_id", "content", "confidence", "domain", "created_at",
-    "last_revised", "last_challenged", "revision_history", "superseded_by",
-    "supporting_engram_ids", "tier", "needs_review", "confidence_pending_review",
-    "read_visibility",
-})
+_BELIEF_COLUMNS = frozenset(
+    {
+        "id",
+        "agent_id",
+        "content",
+        "confidence",
+        "domain",
+        "created_at",
+        "last_revised",
+        "last_challenged",
+        "revision_history",
+        "superseded_by",
+        "supporting_engram_ids",
+        "tier",
+        "needs_review",
+        "confidence_pending_review",
+        "read_visibility",
+    }
+)
 
 SQL_CREATE_TABLES = """
 -- Core engram storage
@@ -679,17 +715,37 @@ def _stricter_hypomnema_visibility(
     return _stricter_read_visibility(existing_visibility, classified_visibility)
 
 
-def _classify_hypomnema_domain_from_text(text: str, *, fallback: str = "situational") -> str:
+def _classify_hypomnema_domain_from_text(
+    text: str, *, fallback: str = "situational"
+) -> str:
     lowered = text.lower()
-    if any(marker in lowered for marker in ("identity", "who i am", "who you are", "selfhood", "soul.md")):
+    if any(
+        marker in lowered
+        for marker in ("identity", "who i am", "who you are", "selfhood", "soul.md")
+    ):
         return "identity"
-    if any(marker in lowered for marker in ("always", "preference", "prefers", "principle", "boundary", "foundational")):
+    if any(
+        marker in lowered
+        for marker in (
+            "always",
+            "preference",
+            "prefers",
+            "principle",
+            "boundary",
+            "foundational",
+        )
+    ):
         return "foundational"
     if any(marker in lowered for marker in ("again", "recurring", "usually", "often")):
         return "recurring"
-    if any(marker in lowered for marker in ("roadmap", "long term", "long-term", "future", "arc")):
+    if any(
+        marker in lowered
+        for marker in ("roadmap", "long term", "long-term", "future", "arc")
+    ):
         return "long-arc"
-    if any(marker in lowered for marker in ("current", "today", "temporary", "session")):
+    if any(
+        marker in lowered for marker in ("current", "today", "temporary", "session")
+    ):
         return "situational"
     return fallback
 
@@ -751,7 +807,9 @@ class EngramStore:
         conn.executescript(SQL_CREATE_TABLES)
         # Migrate: add impact column if missing (v0.1 → v0.2)
         try:
-            conn.execute("ALTER TABLE engrams ADD COLUMN impact TEXT NOT NULL DEFAULT ''")
+            conn.execute(
+                "ALTER TABLE engrams ADD COLUMN impact TEXT NOT NULL DEFAULT ''"
+            )
         except sqlite3.OperationalError:
             pass  # Column already exists
         conn.commit()
@@ -876,9 +934,7 @@ class EngramStore:
         if normalized is not None:
             query += " AND read_visibility = ?"
             params.append(normalized)
-        row = conn.execute(
-            query, params
-        ).fetchone()
+        row = conn.execute(query, params).fetchone()
         if row is None:
             return None
 
@@ -992,7 +1048,9 @@ class EngramStore:
             query = "SELECT COUNT(*) FROM engrams WHERE state = ?"
         else:
             params = [agent_id, state]
-            query = "SELECT COUNT(*) FROM engrams WHERE owner_agent_id = ? AND state = ?"
+            query = (
+                "SELECT COUNT(*) FROM engrams WHERE owner_agent_id = ? AND state = ?"
+            )
         query = _append_read_visibility_filter(
             query,
             params,
@@ -1102,7 +1160,9 @@ class EngramStore:
                SET relation = ?, strength = ?, formed_by = ?
                WHERE source_id = ? AND target_id = ?""",
             (
-                connection.relation.value if hasattr(connection.relation, 'value') else str(connection.relation),
+                connection.relation.value
+                if hasattr(connection.relation, "value")
+                else str(connection.relation),
                 connection.strength,
                 connection.formed_by,
                 source_id,
@@ -1167,7 +1227,6 @@ class EngramStore:
         conn = self._get_conn()
         rows = conn.execute(query, params).fetchall()
         return [Engram.from_dict(dict(r)) for r in rows]
-
 
     def get_connected_engram_ids(
         self,
@@ -1448,7 +1507,9 @@ class EngramStore:
             )
 
         now = int(datetime.now(timezone.utc).timestamp())
-        provenance = [str(item).strip() for item in (provenance_ids or []) if str(item).strip()]
+        provenance = [
+            str(item).strip() for item in (provenance_ids or []) if str(item).strip()
+        ]
         payload_json = _encode_json(payload or {})
         decided_at = now if status in {"deferred", "rejected"} else None
         applied_at = None
@@ -1534,10 +1595,14 @@ class EngramStore:
 
     def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
         """Load one proposal ledger row by ID."""
-        row = self._get_conn().execute(
-            "SELECT * FROM proposal_ledger WHERE id = ?",
-            (proposal_id,),
-        ).fetchone()
+        row = (
+            self._get_conn()
+            .execute(
+                "SELECT * FROM proposal_ledger WHERE id = ?",
+                (proposal_id,),
+            )
+            .fetchone()
+        )
         if row is None:
             return None
         return self._hydrate_proposal_row(dict(row))
@@ -1683,10 +1748,14 @@ class EngramStore:
 
     def get_memory_session(self, session_id: str) -> dict[str, Any] | None:
         """Load a functional memory session by ID."""
-        row = self._get_conn().execute(
-            "SELECT * FROM memory_sessions WHERE id = ?",
-            (session_id,),
-        ).fetchone()
+        row = (
+            self._get_conn()
+            .execute(
+                "SELECT * FROM memory_sessions WHERE id = ?",
+                (session_id,),
+            )
+            .fetchone()
+        )
         return dict(row) if row else None
 
     def close_memory_session(
@@ -1968,9 +2037,7 @@ class EngramStore:
             content = synthesis.strip()
         else:
             chosen = memories[:8]
-            details = "; ".join(
-                f"{m['memory_type']}: {m['content']}" for m in chosen
-            )
+            details = "; ".join(f"{m['memory_type']}: {m['content']}" for m in chosen)
             title = session.get("title") or session_id
             content = (
                 f"Session continuity from {title}: {details}"
@@ -2011,9 +2078,7 @@ class EngramStore:
                 read_visibility=None,
             )
             hypomnema_visibility = (
-                hypomnema.get("read_visibility")
-                if hypomnema is not None
-                else None
+                hypomnema.get("read_visibility") if hypomnema is not None else None
             )
 
         now = _utc_now()
@@ -2259,7 +2324,9 @@ class EngramStore:
             normalized_visibility,
             required_visibility,
         ):
-            raise ValueError("Hypomnema requires review visibility before operational use")
+            raise ValueError(
+                "Hypomnema requires review visibility before operational use"
+            )
         conn.execute(
             """
             INSERT INTO hypomnema_entries(
@@ -2487,17 +2554,19 @@ class EngramStore:
                 "reason": reason.strip(),
             }
         )
-        new_confidence = _clamp(confidence if confidence is not None else row["confidence"])
+        new_confidence = _clamp(
+            confidence if confidence is not None else row["confidence"]
+        )
         new_salience = _clamp(salience if salience is not None else row["salience"])
         new_revision_count = int(row["revision_count"] or 0) + 1
         new_domain = _classify_hypomnema_domain_from_text(
             new_content,
             fallback=row["domain"],
         )
-        new_foundational = (
-            bool(row["foundational"])
-            or new_domain in {"identity", "foundational"}
-        )
+        new_foundational = bool(row["foundational"]) or new_domain in {
+            "identity",
+            "foundational",
+        }
         classified_visibility = classify_hypomnema_read_visibility(
             confidence=new_confidence,
             salience=new_salience,
@@ -2565,10 +2634,10 @@ class EngramStore:
             new_content,
             fallback=row["domain"],
         )
-        new_foundational = (
-            bool(row["foundational"])
-            or new_domain in {"identity", "foundational"}
-        )
+        new_foundational = bool(row["foundational"]) or new_domain in {
+            "identity",
+            "foundational",
+        }
         replacement_visibility = (
             row["read_visibility"]
             if row["read_visibility"] != READ_VISIBILITY_OPERATIONAL
@@ -2754,8 +2823,7 @@ class EngramStore:
         ).fetchone()
         candidate_params = list(params)
         candidate_query = _append_hypomnema_review_candidate_filter(
-            "SELECT COUNT(*) FROM hypomnema_entries "
-            f"WHERE {where_sql}",
+            f"SELECT COUNT(*) FROM hypomnema_entries WHERE {where_sql}",
             candidate_params,
         )
         candidate_row = conn.execute(candidate_query, candidate_params).fetchone()
@@ -2848,9 +2916,7 @@ class EngramStore:
     def get_meta(self, key: str, default: str | None = None) -> str | None:
         """Read a meta value. Returns default when the key is absent."""
         conn = self._get_conn()
-        row = conn.execute(
-            "SELECT value FROM meta WHERE key = ?", (key,)
-        ).fetchone()
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         return row[0] if row else default
 
     def set_meta(self, key: str, value: str) -> None:
@@ -2882,9 +2948,7 @@ class EngramStore:
         )
         conn.commit()
 
-    def get_consolidation_runs(
-        self, pass_name: str, limit: int = 5
-    ) -> list[dict]:
+    def get_consolidation_runs(self, pass_name: str, limit: int = 5) -> list[dict]:
         """Most recent consolidation_log rows for a pass, newest first.
 
         The stats column is JSON-decoded. The table has no agent_id
@@ -3053,7 +3117,7 @@ class EngramStore:
         rows = conn.execute(
             f"""
             SELECT * FROM inner_life_events
-            WHERE {' AND '.join(predicates)}
+            WHERE {" AND ".join(predicates)}
             ORDER BY created_at ASC, id ASC
             LIMIT ?
             """,
@@ -3087,8 +3151,7 @@ class EngramStore:
         # Engram counts by state
         for state in ("active", "consolidating", "dormant", "archived"):
             query = (
-                "SELECT COUNT(*) FROM engrams "
-                "WHERE owner_agent_id = ? AND state = ?"
+                "SELECT COUNT(*) FROM engrams WHERE owner_agent_id = ? AND state = ?"
             )
             params: list[Any] = [agent_id, state]
             query = _append_read_visibility_filter(
@@ -3121,8 +3184,7 @@ class EngramStore:
 
         # Belief count
         belief_query = (
-            "SELECT COUNT(*) FROM beliefs "
-            "WHERE agent_id = ? AND superseded_by IS NULL"
+            "SELECT COUNT(*) FROM beliefs WHERE agent_id = ? AND superseded_by IS NULL"
         )
         belief_params: list[Any] = [agent_id]
         if not include_pending_review:

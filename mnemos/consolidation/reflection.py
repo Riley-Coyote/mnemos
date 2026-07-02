@@ -103,10 +103,7 @@ def run_reflection_pass(
         limit=200,
         require_consolidation_authorized=True,
     )
-    recent = [
-        e for e in all_engrams
-        if _hours_since(e.created_at) < lookback_hours
-    ]
+    recent = [e for e in all_engrams if _hours_since(e.created_at) < lookback_hours]
 
     stats["engrams_reviewed"] = len(recent)
 
@@ -242,7 +239,11 @@ def _llm_generate_thoughts(
     )
     try:
         raw = llm_client.complete(prompt)
-        return [line.strip().lstrip("- ") for line in raw.strip().split("\n") if line.strip()]
+        return [
+            line.strip().lstrip("- ")
+            for line in raw.strip().split("\n")
+            if line.strip()
+        ]
     except Exception:
         return []
 
@@ -296,7 +297,9 @@ def compute_identity_profile(
     living_questions = []
     for b in beliefs:
         if 0.2 < b.confidence < 0.5:
-            living_questions.append(f"Uncertain: {b.content} ({int(b.confidence*100)}%)")
+            living_questions.append(
+                f"Uncertain: {b.content} ({int(b.confidence * 100)}%)"
+            )
 
     # Also find engrams tagged as questions or unresolved
     for e in all_engrams:

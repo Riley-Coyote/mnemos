@@ -16,10 +16,31 @@ def test_session_finalizer_writes_bounded_provenance_below_memory(tmp_path):
     _write_jsonl(
         transcript,
         [
-            {"id": "u1", "timestamp": "2026-06-28T20:00:00Z", "role": "user", "content": "Start the Mnemos preflight."},
-            {"id": "a1", "timestamp": "2026-06-28T20:00:01Z", "role": "assistant", "content": "I verified the live DB was not touched."},
-            {"id": "t1", "timestamp": "2026-06-28T20:00:02Z", "type": "tool_call", "name": "pytest", "content": "uv run pytest tests/test_turn_finalizer.py"},
-            {"id": "a2", "timestamp": "2026-06-28T20:00:03Z", "role": "assistant", "content": "Tests passed and the generated rows stayed private."},
+            {
+                "id": "u1",
+                "timestamp": "2026-06-28T20:00:00Z",
+                "role": "user",
+                "content": "Start the Mnemos preflight.",
+            },
+            {
+                "id": "a1",
+                "timestamp": "2026-06-28T20:00:01Z",
+                "role": "assistant",
+                "content": "I verified the live DB was not touched.",
+            },
+            {
+                "id": "t1",
+                "timestamp": "2026-06-28T20:00:02Z",
+                "type": "tool_call",
+                "name": "pytest",
+                "content": "uv run pytest tests/test_turn_finalizer.py",
+            },
+            {
+                "id": "a2",
+                "timestamp": "2026-06-28T20:00:03Z",
+                "role": "assistant",
+                "content": "Tests passed and the generated rows stayed private.",
+            },
         ],
     )
     store = EngramStore(tmp_path / "session.db")
@@ -56,12 +77,15 @@ def test_session_finalizer_writes_bounded_provenance_below_memory(tmp_path):
 
         assert store.count_engrams(agent_id="oliver") == 0
         assert store.get_beliefs(agent_id="oliver") == []
-        assert store.search_hypomnema(
-            "generated rows stayed private",
-            agent_id="oliver",
-            person_id="david",
-            project_scope="pai",
-        ) == []
+        assert (
+            store.search_hypomnema(
+                "generated rows stayed private",
+                agent_id="oliver",
+                person_id="david",
+                project_scope="pai",
+            )
+            == []
+        )
     finally:
         store.close()
 
@@ -110,7 +134,9 @@ def test_session_finalizer_prefilters_long_transcript_deterministically(tmp_path
 
 def test_session_finalizer_reports_malformed_json_without_memory_writes(tmp_path):
     transcript = tmp_path / "broken.jsonl"
-    transcript.write_text('{"role": "user", "content": "ok"}\n{broken json\n', encoding="utf-8")
+    transcript.write_text(
+        '{"role": "user", "content": "ok"}\n{broken json\n', encoding="utf-8"
+    )
     store = EngramStore(tmp_path / "broken.db")
     try:
         result = finalize_session_transcript(

@@ -5,12 +5,15 @@ from mnemos.store.sqlite_store import EngramStore
 def _assert_no_generated_memory(store: EngramStore) -> None:
     assert store.count_engrams(agent_id="oliver") == 0
     assert store.get_beliefs(agent_id="oliver") == []
-    assert store.search_hypomnema(
-        "reflection",
-        agent_id="oliver",
-        person_id="david",
-        project_scope="pai",
-    ) == []
+    assert (
+        store.search_hypomnema(
+            "reflection",
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+        )
+        == []
+    )
 
 
 def test_narrative_gate_null_output_records_skip_without_memory(tmp_path):

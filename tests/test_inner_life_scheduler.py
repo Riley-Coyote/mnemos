@@ -52,7 +52,9 @@ def test_scheduled_runner_activity_gate_skip_writes_no_memory(tmp_path):
         store.close()
 
 
-def test_scheduled_runner_affect_runs_after_activity_gate_without_memory_write(tmp_path):
+def test_scheduled_runner_affect_runs_after_activity_gate_without_memory_write(
+    tmp_path,
+):
     store = EngramStore(tmp_path / "scheduled-affect.db")
     try:
         _seed_signal(store)
@@ -156,7 +158,9 @@ def test_scheduled_wander_counts_audit_only_low_stakes_write(tmp_path):
     store = EngramStore(tmp_path / "sched-count.db")
     try:
         store.save_engram(
-            Engram(content="AUTHORIZED-WANDER-SEED", impact="src", owner_agent_id="oliver")
+            Engram(
+                content="AUTHORIZED-WANDER-SEED", impact="src", owner_agent_id="oliver"
+            )
         )
         result = _run_wander(store, agent_id="oliver", llm_client=_StubLLM())
 

@@ -194,7 +194,9 @@ def test_soak_activation_preflight_blocks_without_watcher_plist_or_dry_run(tmp_p
     assert result["soak_tick_plist"]["exists"] is False
 
 
-def test_soak_activation_preflight_ready_after_watch_plist_launchd_and_copy_tick(tmp_path):
+def test_soak_activation_preflight_ready_after_watch_plist_launchd_and_copy_tick(
+    tmp_path,
+):
     db = tmp_path / "soak-preflight-ready.db"
     EngramStore(db).close()
     config = _enable_full_soak_config(tmp_path)

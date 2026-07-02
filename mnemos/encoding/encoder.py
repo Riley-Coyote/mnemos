@@ -8,9 +8,8 @@ connections to related memories.
 
 from __future__ import annotations
 
-import math
 from datetime import datetime, timezone, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..core.engram import Connection, Engram, EncodingContext, MemorySource
 from ..core.types import (
@@ -62,7 +61,11 @@ _PRIVATE_TAGS = frozenset({
 })
 
 # Source types that are internal processing and should stay private
-_PRIVATE_SOURCES = frozenset({SourceType.DREAM, SourceType.REFLECTION})
+_PRIVATE_SOURCES = frozenset({
+    SourceType.DREAM,
+    SourceType.OBSERVER,
+    SourceType.REFLECTION,
+})
 
 
 def should_auto_share(engram: Engram) -> bool:
@@ -394,7 +397,6 @@ class Encoder:
 
         # 3. Fire emotional event if surprised
         if surprise > 0.1:
-            from ..core.emotional_state import EmotionalState
             es = store.get_latest_emotional_state(agent_id)
             if es:
                 es.apply_cognitive_event("contradiction_detected", surprise * 0.15)

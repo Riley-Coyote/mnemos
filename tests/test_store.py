@@ -855,7 +855,7 @@ class TestEngramStore:
         store = EngramStore(db_path)
         try:
             conn = store._get_conn()
-            assert store.get_meta("schema_version") == "7"
+            assert store.get_meta("schema_version") == "8"
             assert conn.execute(
                 "SELECT read_visibility FROM engrams WHERE id = 'legacy_e'"
             ).fetchone()[0] == "operational_context"
@@ -944,7 +944,7 @@ class TestEngramStore:
         store = EngramStore(db_path)
         try:
             conn = store._get_conn()
-            assert store.get_meta("schema_version") == "7"
+            assert store.get_meta("schema_version") == "8"
             default_row = store.get_proposal("proposal_old_default")
             review_row = store.get_proposal("proposal_review")
             terminal_row = store.get_proposal("proposal_bad_terminal")
@@ -991,7 +991,7 @@ class TestEngramStore:
                 if column["name"] == "read_visibility"
             )
 
-            assert store.get_meta("schema_version") == "7"
+            assert store.get_meta("schema_version") == "8"
             assert read_visibility_column["dflt_value"] == "'operational_context'"
             assert conn.execute(
                 "SELECT read_visibility FROM hypomnema_entries WHERE id = 'v6_ordinary'"

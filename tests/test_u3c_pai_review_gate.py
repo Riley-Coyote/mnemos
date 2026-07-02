@@ -123,6 +123,146 @@ def test_u3c_review_gate_rule_signature():
     assert True
 """
 
+GOOD_CLI_SIMPLE_TESTS = """
+def test_inner_life_session_finalize_cli_writes_private_ledger():
+    assert True
+def test_inner_life_cli_requires_representative_db():
+    assert True
+def test_inner_life_cli_refuses_default_live_db_without_override():
+    assert True
+def test_inner_life_run_cli_executes_scheduled_affect_without_memory():
+    assert True
+def test_inner_life_plist_cli_writes_without_loading():
+    assert True
+def test_soak_tick_cli_requires_representative_db():
+    assert True
+def test_soak_tick_cli_refuses_default_live_db_without_override():
+    assert True
+def test_soak_tick_cli_reports_disabled_tick_without_memory():
+    assert True
+def test_soak_plist_cli_writes_orchestrator_without_loading():
+    assert True
+def test_soak_preflight_cli_writes_artifact_without_live_activation():
+    assert True
+"""
+
+GOOD_ACTIVITY_GATE_TESTS = """
+def test_activity_gate_allows_recent_turn_signal_and_records_run_without_memory():
+    assert True
+def test_activity_gate_skips_without_recent_signal_and_records_reason():
+    assert True
+def test_activity_gate_enforces_process_cooldown():
+    assert True
+def test_activity_gate_uses_consolidation_log_as_existing_mnemos_signal():
+    assert True
+"""
+
+GOOD_HYPO_CHALLENGE_TESTS = """
+def test_hypomnema_challenge_revise_down_lowers_confidence_and_preserves_history():
+    assert True
+def test_hypomnema_challenge_retire_archives_without_deleting():
+    assert True
+def test_hypomnema_challenge_malformed_output_records_error_without_change():
+    assert True
+def test_hypomnema_challenge_duplicate_key_does_not_reapply_revision():
+    assert True
+"""
+
+GOOD_OBSERVER_PANEL_TESTS = """
+def test_observer_panel_no_reviewers_records_clean_skip():
+    assert True
+def test_observer_panel_missing_source_ids_skips_before_client_call():
+    assert True
+def test_observer_panel_failed_reviewer_does_not_discard_successful_finding():
+    assert True
+def test_observer_panel_bounds_findings_and_excerpts():
+    assert True
+"""
+
+GOOD_EMOTIONAL_DRIVER_TESTS = """
+def test_emotional_driver_updates_from_real_turn_and_verification_events():
+    assert True
+def test_emotional_driver_skips_without_recent_events():
+    assert True
+def test_emotional_driver_skips_below_meaningful_movement_threshold():
+    assert True
+def test_emotional_driver_error_event_increases_restlessness():
+    assert True
+"""
+
+GOOD_NARRATIVE_GATE_TESTS = """
+def test_narrative_gate_null_output_records_skip_without_memory():
+    assert True
+def test_narrative_gate_missing_source_ids_drops_before_introspection():
+    assert True
+def test_narrative_gate_drops_manufactured_inner_state():
+    assert True
+def test_narrative_gate_drops_introspection_reject():
+    assert True
+def test_narrative_gate_passes_grounded_candidate_with_introspection():
+    assert True
+"""
+
+GOOD_INNER_LIFE_LEDGER_TESTS = """
+def test_inner_life_ledger_schema_is_private_and_idempotent():
+    assert True
+def test_inner_life_ledger_migrates_schema_five_copy_without_touching_memory():
+    assert True
+"""
+
+GOOD_INNER_LIFE_PREFLIGHT_TESTS = """
+def test_preflight_enabled_schedules_require_snapshot_and_provider_readiness():
+    assert True
+    assert "soak_tick_disabled"
+def test_preflight_ready_when_enabled_snapshot_provider_and_kill_switches_exist():
+    assert True
+    assert "soak_tick_enabled"
+    assert "shallow_consolidation"
+"""
+
+GOOD_INNER_LIFE_SCHEDULER_TESTS = """
+def test_scheduled_runner_activity_gate_skip_writes_no_memory():
+    assert True
+def test_scheduled_runner_affect_runs_after_activity_gate_without_memory_write():
+    assert True
+def test_scheduled_runner_observe_skips_without_reviewers_or_memory_write():
+    assert True
+def test_inner_life_launchd_plist_invokes_scheduled_runner_without_loading():
+    assert True
+"""
+
+GOOD_SOAK_TICK_TESTS = """
+def test_soak_tick_disabled_skips_without_memory_or_beliefs():
+    assert True
+def test_soak_tick_runs_shallow_consolidation_family_without_deep_passes():
+    assert True
+def test_soak_tick_fans_out_inner_life_family_through_existing_gate():
+    assert True
+def test_soak_tick_launchd_plist_invokes_orchestrator_without_loading():
+    assert True
+def test_soak_activation_preflight_blocks_without_watcher_plist_or_dry_run():
+    assert True
+def test_soak_activation_preflight_ready_after_watch_plist_launchd_and_copy_tick():
+    assert True
+"""
+
+GOOD_U3A_SCHEMA_TESTS = """
+SCHEMA_VERSION = 6
+def test_migration_version_guards():
+    assert "inner_life_events"
+    assert SCHEMA_VERSION
+"""
+
+GOOD_SESSION_FINALIZER_TESTS = """
+def test_session_finalizer_writes_bounded_provenance_below_memory():
+    assert True
+"""
+
+GOOD_TURN_FINALIZER_TESTS = """
+def test_turn_finalizer_writes_one_idempotent_provenance_row_only():
+    assert True
+"""
+
 GOOD_LAUNCH_DOC = """
 ## Anti-Criteria
 ## Riley/Daniel Test Taxonomy Crosswalk
@@ -149,13 +289,26 @@ def _file_texts(**overrides):
         ".github/workflows/release-hardening.yml": GOOD_WORKFLOW,
         "docs/u3c-step3-launch-gate.md": GOOD_LAUNCH_DOC,
         "mnemos/importer/watcher.py": GOOD_WATCHER,
+        "tests/test_cli_simple.py": GOOD_CLI_SIMPLE_TESTS,
+        "tests/test_emotional_driver.py": GOOD_EMOTIONAL_DRIVER_TESTS,
+        "tests/test_hypomnema_challenge.py": GOOD_HYPO_CHALLENGE_TESTS,
+        "tests/test_inner_life_activity_gate.py": GOOD_ACTIVITY_GATE_TESTS,
+        "tests/test_inner_life_ledger.py": GOOD_INNER_LIFE_LEDGER_TESTS,
+        "tests/test_inner_life_preflight.py": GOOD_INNER_LIFE_PREFLIGHT_TESTS,
+        "tests/test_inner_life_scheduler.py": GOOD_INNER_LIFE_SCHEDULER_TESTS,
+        "tests/test_narrative_gate.py": GOOD_NARRATIVE_GATE_TESTS,
         "tests/test_u3b_pai_importer.py": GOOD_IMPORTER_TESTS,
         "tests/test_u3b_pai_operator.py": GOOD_OPERATOR_TESTS,
+        "tests/test_u3a_schema_migrations.py": GOOD_U3A_SCHEMA_TESTS,
         "tests/test_u3c_pai_operator.py": GOOD_OPERATOR_U3C_TESTS,
         "tests/test_u3c_pai_review_gate.py": GOOD_REVIEW_GATE_TESTS,
         "tests/test_u3c_pai_watch.py": GOOD_WATCH_TESTS,
         "tests/test_u3c_pai_watch_doctor.py": GOOD_DOCTOR_TESTS,
         "tests/test_u3c_pai_watcher.py": GOOD_WATCHER_TESTS,
+        "tests/test_observer_panel.py": GOOD_OBSERVER_PANEL_TESTS,
+        "tests/test_session_finalizer.py": GOOD_SESSION_FINALIZER_TESTS,
+        "tests/test_soak_tick.py": GOOD_SOAK_TICK_TESTS,
+        "tests/test_turn_finalizer.py": GOOD_TURN_FINALIZER_TESTS,
     }
     base.update(overrides)
     return base
@@ -225,6 +378,518 @@ def test_u3c_review_gate_accepts_diff_with_matching_proof_surfaces():
     assert findings == []
 
 
+def test_u3c_review_gate_accepts_u66_inner_life_schema_and_cli_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/cli.py",
+            "mnemos/inner_life/session_finalizer.py",
+            "mnemos/inner_life/turn_finalizer.py",
+            "mnemos/store/migrations.py",
+            "mnemos/store/sqlite_store.py",
+            "tests/test_cli_simple.py",
+            "tests/test_inner_life_ledger.py",
+            "tests/test_session_finalizer.py",
+            "tests/test_turn_finalizer.py",
+            "tests/test_u3a_schema_migrations.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/cli.py": "inner-life session-finalize turn-finalize",
+                "mnemos/store/migrations.py": "U6.6 inner_life_events",
+                "mnemos/store/sqlite_store.py": "inner_life_events",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/store/migrations.py b/mnemos/store/migrations.py\n"
+            "@@\n"
+            "+# U6.6 private inner_life_events ledger\n"
+            "diff --git a/mnemos/cli.py b/mnemos/cli.py\n"
+            "@@\n"
+            '+p_inner = sub.add_parser("inner-life")\n'
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u66_schema_without_schema_five_copy_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/store/migrations.py",
+            "tests/test_inner_life_ledger.py",
+            "tests/test_u3a_schema_migrations.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/store/migrations.py": "U6.6 inner_life_events",
+                "tests/test_inner_life_ledger.py": """
+def test_inner_life_ledger_schema_is_private_and_idempotent():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/store/migrations.py b/mnemos/store/migrations.py\n"
+            "@@\n"
+            "+# U6.6 private inner_life_events ledger\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-inner-life-schema-five-copy"
+        for finding in findings
+    )
+
+
+def test_u3c_review_gate_fails_u66_cli_without_live_db_refusal_proof():
+    findings = _findings(
+        changed_files=["mnemos/cli.py", "tests/test_cli_simple.py"],
+        file_texts=_file_texts(
+            **{
+                "mnemos/cli.py": "inner-life session-finalize turn-finalize",
+                "tests/test_cli_simple.py": """
+def test_inner_life_session_finalize_cli_writes_private_ledger():
+    assert True
+def test_inner_life_cli_requires_representative_db():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/cli.py b/mnemos/cli.py\n"
+            "@@\n"
+            '+p_inner = sub.add_parser("inner-life")\n'
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-inner-life-cli-live-refusal"
+        for finding in findings
+    )
+
+
+def test_u3c_review_gate_accepts_u66_activity_gate_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/activity_gate.py",
+            "tests/test_inner_life_activity_gate.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/activity_gate.py": "U6.6 activity_gate",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/activity_gate.py b/mnemos/inner_life/activity_gate.py\n"
+            "@@\n"
+            "+# U6.6 activity_gate\n"
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u66_activity_gate_without_cooldown_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/activity_gate.py",
+            "tests/test_inner_life_activity_gate.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/activity_gate.py": "U6.6 activity_gate",
+                "tests/test_inner_life_activity_gate.py": """
+def test_activity_gate_allows_recent_turn_signal_and_records_run_without_memory():
+    assert True
+def test_activity_gate_skips_without_recent_signal_and_records_reason():
+    assert True
+def test_activity_gate_uses_consolidation_log_as_existing_mnemos_signal():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/activity_gate.py b/mnemos/inner_life/activity_gate.py\n"
+            "@@\n"
+            "+# U6.6 activity_gate\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-activity-gate-cooldown"
+        for finding in findings
+    )
+
+
+def test_u3c_review_gate_accepts_u66_hypomnema_challenge_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/hypomnema_challenge.py",
+            "tests/test_hypomnema_challenge.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/hypomnema_challenge.py": "U6.6 hypomnema_challenge",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/hypomnema_challenge.py b/mnemos/inner_life/hypomnema_challenge.py\n"
+            "@@\n"
+            "+# U6.6 hypomnema_challenge\n"
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u66_hypomnema_challenge_without_malformed_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/hypomnema_challenge.py",
+            "tests/test_hypomnema_challenge.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/hypomnema_challenge.py": "U6.6 hypomnema_challenge",
+                "tests/test_hypomnema_challenge.py": """
+def test_hypomnema_challenge_revise_down_lowers_confidence_and_preserves_history():
+    assert True
+def test_hypomnema_challenge_retire_archives_without_deleting():
+    assert True
+def test_hypomnema_challenge_duplicate_key_does_not_reapply_revision():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/hypomnema_challenge.py b/mnemos/inner_life/hypomnema_challenge.py\n"
+            "@@\n"
+            "+# U6.6 hypomnema_challenge\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-hypomnema-challenge-malformed"
+        for finding in findings
+    )
+
+
+def test_u3c_review_gate_accepts_u66_observer_panel_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/observer_panel.py",
+            "tests/test_observer_panel.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/observer_panel.py": "U6.6 observer_panel",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/observer_panel.py b/mnemos/inner_life/observer_panel.py\n"
+            "@@\n"
+            "+# U6.6 observer_panel\n"
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u66_observer_panel_without_source_id_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/observer_panel.py",
+            "tests/test_observer_panel.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/observer_panel.py": "U6.6 observer_panel",
+                "tests/test_observer_panel.py": """
+def test_observer_panel_no_reviewers_records_clean_skip():
+    assert True
+def test_observer_panel_failed_reviewer_does_not_discard_successful_finding():
+    assert True
+def test_observer_panel_bounds_findings_and_excerpts():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/observer_panel.py b/mnemos/inner_life/observer_panel.py\n"
+            "@@\n"
+            "+# U6.6 observer_panel\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-observer-panel-source-required"
+        for finding in findings
+    )
+
+
+def test_u3c_review_gate_accepts_u66_emotional_driver_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/emotional_driver.py",
+            "tests/test_emotional_driver.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/emotional_driver.py": "U6.6 emotional_driver",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/emotional_driver.py b/mnemos/inner_life/emotional_driver.py\n"
+            "@@\n"
+            "+# U6.6 emotional_driver\n"
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u66_emotional_driver_without_threshold_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/emotional_driver.py",
+            "tests/test_emotional_driver.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/emotional_driver.py": "U6.6 emotional_driver",
+                "tests/test_emotional_driver.py": """
+def test_emotional_driver_updates_from_real_turn_and_verification_events():
+    assert True
+def test_emotional_driver_skips_without_recent_events():
+    assert True
+def test_emotional_driver_error_event_increases_restlessness():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/emotional_driver.py b/mnemos/inner_life/emotional_driver.py\n"
+            "@@\n"
+            "+# U6.6 emotional_driver\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-emotional-driver-threshold"
+        for finding in findings
+    )
+
+
+def test_u3c_review_gate_accepts_u66_narrative_gate_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/narrative_gate.py",
+            "tests/test_narrative_gate.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/narrative_gate.py": "U6.6 narrative_gate",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/narrative_gate.py b/mnemos/inner_life/narrative_gate.py\n"
+            "@@\n"
+            "+# U6.6 narrative_gate\n"
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u66_narrative_gate_without_introspection_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/narrative_gate.py",
+            "tests/test_narrative_gate.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/narrative_gate.py": "U6.6 narrative_gate",
+                "tests/test_narrative_gate.py": """
+def test_narrative_gate_null_output_records_skip_without_memory():
+    assert True
+def test_narrative_gate_missing_source_ids_drops_before_introspection():
+    assert True
+def test_narrative_gate_drops_manufactured_inner_state():
+    assert True
+def test_narrative_gate_passes_grounded_candidate_with_introspection():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/narrative_gate.py b/mnemos/inner_life/narrative_gate.py\n"
+            "@@\n"
+            "+# U6.6 narrative_gate\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-narrative-gate-introspection"
+        for finding in findings
+    )
+
+
+def test_u3c_review_gate_accepts_u66_preflight_scheduler_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/config/defaults.py",
+            "mnemos/inner_life/preflight.py",
+            "mnemos/inner_life/scheduler.py",
+            "tests/test_inner_life_preflight.py",
+            "tests/test_inner_life_scheduler.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/config/defaults.py": "inner_life activation u6.6",
+                "mnemos/inner_life/preflight.py": "U6.6 inner_life preflight",
+                "mnemos/inner_life/scheduler.py": "U6.6 scheduled inner_life runner",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/preflight.py b/mnemos/inner_life/preflight.py\n"
+            "@@\n"
+            "+# U6.6 full scheduled activation preflight\n"
+            "diff --git a/mnemos/inner_life/scheduler.py b/mnemos/inner_life/scheduler.py\n"
+            "@@\n"
+            "+# U6.6 scheduled inner_life runner\n"
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_accepts_u7_soak_tick_with_matching_proofs():
+    findings = _findings(
+        changed_files=[
+            "mnemos/cli.py",
+            "mnemos/config/defaults.py",
+            "mnemos/importer/review_gate.py",
+            "mnemos/inner_life/preflight.py",
+            "mnemos/soak/__init__.py",
+            "mnemos/soak/tick.py",
+            "tests/test_cli_simple.py",
+            "tests/test_inner_life_preflight.py",
+            "tests/test_soak_tick.py",
+            "tests/test_u3c_pai_review_gate.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/cli.py": "soak tick inner-life u6.6 u7",
+                "mnemos/config/defaults.py": "soak tick inner_life activation u6.6 u7",
+                "mnemos/importer/review_gate.py": "u7-soak-tick",
+                "mnemos/inner_life/preflight.py": "scheduled tick orchestrator U7 inner_life preflight",
+                "mnemos/soak/tick.py": "U7 soak scheduled tick orchestrator inner_life",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/soak/tick.py b/mnemos/soak/tick.py\n"
+            "@@\n"
+            "+# U7 soak scheduled tick orchestrator\n"
+            "diff --git a/mnemos/cli.py b/mnemos/cli.py\n"
+            "@@\n"
+            '+p_soak = sub.add_parser("soak")\n'
+        ),
+    )
+
+    assert findings == []
+
+
+def test_u3c_review_gate_fails_u7_soak_tick_without_launchd_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/soak/tick.py",
+            "tests/test_soak_tick.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/soak/tick.py": "U7 soak scheduled tick orchestrator inner_life",
+                "tests/test_soak_tick.py": """
+def test_soak_tick_disabled_skips_without_memory_or_beliefs():
+    assert True
+def test_soak_tick_runs_shallow_consolidation_family_without_deep_passes():
+    assert True
+def test_soak_tick_fans_out_inner_life_family_through_existing_gate():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/soak/tick.py b/mnemos/soak/tick.py\n"
+            "@@\n"
+            "+# U7 soak scheduled tick orchestrator\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u7-soak-tick-launchd-plist"
+        for finding in findings
+    )
+
+
+def test_u3c_review_gate_fails_u66_scheduler_without_plist_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/scheduler.py",
+            "tests/test_inner_life_scheduler.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/scheduler.py": "U6.6 scheduled inner_life runner",
+                "tests/test_inner_life_scheduler.py": """
+def test_scheduled_runner_activity_gate_skip_writes_no_memory():
+    assert True
+def test_scheduled_runner_affect_runs_after_activity_gate_without_memory_write():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/scheduler.py b/mnemos/inner_life/scheduler.py\n"
+            "@@\n"
+            "+# U6.6 scheduled inner_life runner\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-scheduler-launchd-plist"
+        for finding in findings
+    )
+
+
+def test_u3c_review_gate_fails_u66_preflight_without_provider_snapshot_proof():
+    findings = _findings(
+        changed_files=[
+            "mnemos/inner_life/preflight.py",
+            "tests/test_inner_life_preflight.py",
+        ],
+        file_texts=_file_texts(
+            **{
+                "mnemos/inner_life/preflight.py": "U6.6 inner_life preflight",
+                "tests/test_inner_life_preflight.py": """
+def test_preflight_ready_when_enabled_snapshot_provider_and_kill_switches_exist():
+    assert True
+""",
+            }
+        ),
+        diff_text=(
+            "diff --git a/mnemos/inner_life/preflight.py b/mnemos/inner_life/preflight.py\n"
+            "@@\n"
+            "+# U6.6 full scheduled activation preflight\n"
+        ),
+    )
+
+    assert any(
+        finding.ident == "RG-u66-preflight-provider-snapshot-blockers"
+        for finding in findings
+    )
+
+
 def test_u3c_review_gate_rule_signature():
     helpers = [
         (name, obj)
@@ -237,7 +902,7 @@ def test_u3c_review_gate_rule_signature():
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
-    assert digest == "6a4b44e98161bb022b7438a4dd4c80a0ea0bc6bf1e7d45ceb4364cfed2262432"
+    assert digest == "bc82a18296a5c483a1967850fdaafcc8602fc3151df0eee8d9269e410336fc87"
 
 
 def test_u3c_review_gate_fails_watcher_change_without_test_diff():

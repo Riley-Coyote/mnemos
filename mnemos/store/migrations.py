@@ -78,6 +78,13 @@ def register_migration(
         Decorator function.
     """
     def decorator(func: Callable[[sqlite3.Connection], None]) -> Callable:
+        if version in _MIGRATIONS:
+            raise ValueError(
+                f"Duplicate schema migration version {version}: already "
+                f"registered as {_MIGRATIONS[version][0]!r}. Two branches "
+                "colliding on a version number must fail loudly, never "
+                "silently discard one migration."
+            )
         _MIGRATIONS[version] = (description, func)
         return func
     return decorator
@@ -751,6 +758,73 @@ def migrate_v7_afferent_u2_5_proposal_contract(conn: sqlite3.Connection) -> None
         "CREATE INDEX IF NOT EXISTS idx_proposal_ledger_visibility "
         "ON proposal_ledger(read_visibility, status)"
     )
+
+
+INNER_LIFE_EVENT_TYPES = {
+    "session_finalized",
+    "turn_finalized",
+    "turn_message",
+    "tool_event",
+    "file_event",
+    "test_outcome",
+    "skip",
+    "error",
+}
+
+
+def apply_u6_6_inner_life_schema_migration(conn: sqlite3.Connection) -> None:
+    """Apply the U6.6 private inner-life provenance ledger schema."""
+    event_types = "', '".join(sorted(INNER_LIFE_EVENT_TYPES))
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS inner_life_events (
+            id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            event_type TEXT NOT NULL
+                CHECK (event_type IN ('{event_types}')),
+            process_name TEXT NOT NULL,
+            agent_id TEXT NOT NULL DEFAULT 'default',
+            person_id TEXT NOT NULL DEFAULT 'user',
+            project_scope TEXT NOT NULL DEFAULT 'global',
+            session_id TEXT,
+            thread_id TEXT,
+            turn_id TEXT,
+            role TEXT,
+            source_message_id TEXT,
+            source_path TEXT,
+            source_timestamp TEXT,
+            content_hash TEXT NOT NULL DEFAULT '',
+            content_excerpt TEXT NOT NULL DEFAULT '',
+            event_tags_json TEXT NOT NULL DEFAULT '[]',
+            source_ids_json TEXT NOT NULL DEFAULT '[]',
+            metadata_json TEXT NOT NULL DEFAULT '{{}}',
+            rollout_tag TEXT NOT NULL DEFAULT '',
+            gate_decision TEXT NOT NULL DEFAULT 'ledger_only',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inner_life_events_scope "
+        "ON inner_life_events(agent_id, person_id, project_scope, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inner_life_events_session "
+        "ON inner_life_events(session_id, event_type, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inner_life_events_rollout "
+        "ON inner_life_events(rollout_tag, event_type, created_at)"
+    )
+
+
+# Renumbered from inner-life's original v6 to v8 during the PR4 × inner-life
+# merge: PR4 owns v6 (Afferent Membrane) and v7 (U2.5). Two branches must not
+# collide on a version number (see register_migration's duplicate guard).
+@register_migration(8, "U6.6 private inner-life event ledger")
+def migrate_v8_inner_life_events(conn: sqlite3.Connection) -> None:
+    apply_u6_6_inner_life_schema_migration(conn)
 
 
 def insert_pai_import_event(

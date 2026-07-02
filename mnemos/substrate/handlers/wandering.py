@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from ..events import SubstrateEvent
 from ..config import SubstrateConfig
 from ..modulators import ModulatorState
+from ...inner_life.low_stakes import write_low_stakes_record
+from ...inner_life.narrative_gate import gate_narrative_candidate
 
 log = logging.getLogger("mnemos.substrate.wandering")
 
@@ -161,10 +163,17 @@ If something surfaces: {{"thought": "<the wandering thought>", "origin": "<which
     thought = result.get("thought")
     if not thought:
         log.debug("Wandering produced no thought — mind is still")
+        gate_narrative_candidate(
+            content="",
+            source_ids=[row[0] for row in rows],
+            process_name="wander",
+            store=store,
+            agent_id=agent_id,
+            candidate_kind="wandering",
+        )
         return produced_events
 
     full_content = f"[wandering] {thought}"
-    origin = result.get("origin", "")
 
     # ── Gate 3: Content hash dedup ──
     new_hash = _content_hash(full_content)
@@ -200,21 +209,24 @@ If something surfaces: {{"thought": "<the wandering thought>", "origin": "<which
     except Exception as e:
         log.debug(f"Embedding dedup check failed (non-fatal): {e}")
 
-    # ── All gates passed — encode the wandering thought ──
-    log.info(f"Wandering thought (all gates passed): {thought[:80]}...")
-
-    from mnemos.encoding.encoder import Encoder
-    from mnemos.store.embedding_index import EmbeddingIndex as EI
-    ei = EI(db_path=db_path)
-    encoder = Encoder(store, embedding_index=ei, llm_client=llm_client)
-
-    encoder.encode(
+    # ── Final U6.6 gate: only private low-stakes memory may persist ──
+    log.info(f"Wandering thought (gated): {thought[:80]}...")
+    gate_result = gate_narrative_candidate(
         content=full_content,
-        impact=f"Surfaced during silence. Origin: {origin}",
-        kind="episodic",
-        tags=["wandering", "silence"],
+        source_ids=[row[0] for row in rows],
+        process_name="wander",
+        store=store,
         agent_id=agent_id,
-        skip_surprise_detection=True,
+        candidate_kind="wandering",
+    )
+    if not gate_result["allowed"]:
+        return produced_events
+
+    write_low_stakes_record(
+        store,
+        gate_result=gate_result,
+        candidate_kind="wandering",
+        agent_id=agent_id,
     )
 
     return produced_events

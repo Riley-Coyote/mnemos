@@ -135,6 +135,78 @@ DEFAULT_CONFIG: dict = {
         "dreaming_enabled": False,
     },
 
+    # ── Gated inner-life layer (U6.6, scheduled only after DAVID-AUTH) ──
+    "inner_life": {
+        "activity_gate": {
+            "enabled": True,
+            "default_cooldown_minutes": 240,
+            "default_signal_window_minutes": 1440,
+            "default_min_signals": 1,
+            "max_event_scan": 500,
+            "max_consolidation_scan": 20,
+            "consolidation_passes": ["cycle"],
+            "processes": {
+                "challenge": {"enabled": True, "cooldown_minutes": 720},
+                "observe": {"enabled": True, "cooldown_minutes": 720},
+                "affect": {"enabled": True, "cooldown_minutes": 360},
+                "reflect": {"enabled": True, "cooldown_minutes": 240},
+                "wander": {"enabled": True, "cooldown_minutes": 480},
+                "dream": {"enabled": True, "cooldown_minutes": 1440},
+            },
+        },
+        "schedules": {
+            "enabled": False,
+            "processes": {
+                "challenge": {"enabled": False, "cadence_minutes": 720},
+                "observe": {"enabled": False, "cadence_minutes": 720},
+                "affect": {"enabled": False, "cadence_minutes": 360},
+                "reflect": {"enabled": False, "cadence_minutes": 240},
+                "wander": {"enabled": False, "cadence_minutes": 480},
+                "dream": {"enabled": False, "cadence_minutes": 1440},
+            },
+        },
+        "activation": {
+            "artifact_dir": "~/.mnemos/inner-life",
+            "plist_dir": "~/Library/LaunchAgents",
+            "label_prefix": "com.davidef.mnemos.innerlife",
+            "pre_soak_snapshot_path": "",
+            "halt_marker_path": "~/.mnemos/full-soak.halt",
+            "require_llm_provider": True,
+            "require_observer_reviewers": True,
+            "observer_reviewer_count": 0,
+            "rollback_commands": [
+                "set inner_life.schedules.enabled=false",
+                "launchctl bootout gui/$UID ~/Library/LaunchAgents/com.davidef.mnemos.innerlife.<process>.plist",
+                "verify mnemos inner-life status stops changing",
+                "restore pre-soak DB snapshot only if rollout-tagged writes contaminate retrieval or identity",
+            ],
+        },
+    },
+
+    # ── Full-soak scheduled tick (U7, DAVID-AUTH before live load) ──
+    "soak": {
+        "tick": {
+            "enabled": False,
+            "cadence_minutes": 15,
+            "artifact_dir": "~/.mnemos/soak",
+            "plist_dir": "~/Library/LaunchAgents",
+            "label": "com.davidef.mnemos.soak.tick",
+            "halt_marker_path": "~/.mnemos/full-soak.halt",
+            "rollback_commands": [
+                "set soak.tick.enabled=false",
+                "launchctl bootout gui/$UID ~/Library/LaunchAgents/com.davidef.mnemos.soak.tick.plist",
+                "verify mnemos soak tick reports soak_tick_disabled",
+                "restore pre-soak DB snapshot only if rollout-tagged writes contaminate retrieval or identity",
+            ],
+        },
+        "families": {
+            "shallow_consolidation": {
+                "enabled": False,
+                "cadence_minutes": 240,
+            },
+        },
+    },
+
     # ── Multi-agent ──
     "multiagent": {
         "shared_pool_enabled": False,

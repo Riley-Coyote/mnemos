@@ -22,7 +22,7 @@ from mnemos.store.migrations import (
     run_migrations,
     upsert_pai_import_row,
 )
-from mnemos.store.sqlite_store import EngramStore
+from mnemos.store.sqlite_store import EngramStore, SCHEMA_VERSION
 from mnemos.substrate.config import SubstrateConfig
 from mnemos.substrate.handlers import dreaming, initiation, wandering
 from mnemos.substrate.modulators import ModulatorState, compute_modulators
@@ -345,9 +345,9 @@ def test_u3a_migration_and_row_map_are_idempotent(tmp_path):
     conn = store._get_conn()
     try:
         assert any(m["version"] == 4 for m in list_migrations())
-        # Re-run target_version=7 (current SCHEMA_VERSION) — should be no-op
+        # Re-run current SCHEMA_VERSION — should be no-op
         # since EngramStore.__init__ already migrated to latest.
-        assert run_migrations(conn, target_version=7) == []
+        assert run_migrations(conn, target_version=SCHEMA_VERSION) == []
         apply_u3a_schema_migration(conn)
         apply_u3a_schema_migration(conn)
 
@@ -641,7 +641,7 @@ def test_legacy_v3_db_opens_and_migrates_through_engram_store(tmp_path):
 
     store = EngramStore(db_path)
     try:
-        assert store.get_meta("schema_version") == "7"
+        assert store.get_meta("schema_version") == str(SCHEMA_VERSION)
         legacy = store.get_engram("legacy_e")
         assert legacy is not None
         assert legacy.voice_exemplar_eligible is True
@@ -678,7 +678,7 @@ def test_backed_up_legacy_db_rehearsal_preserves_u3a_sentinels(tmp_path, monkeyp
     store = EngramStore(backup_db)
     sentinel_ids: set[str] = set()
     try:
-        assert store.get_meta("schema_version") == "7"
+        assert store.get_meta("schema_version") == str(SCHEMA_VERSION)
         assert store._get_conn().execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert store.get_engram("legacy_e") is not None
 
@@ -794,16 +794,20 @@ def test_migration_version_guards(tmp_path):
     empty = sqlite3.connect(tmp_path / "empty.db")
     empty.row_factory = sqlite3.Row
     try:
-        # Bootstrap empty DB to the current latest schema (v7).
-        assert run_migrations(empty, target_version=7) == [4, 5, 6, 7]
+        # Bootstrap empty DB to the current latest schema (v8 after the
+        # PR4 × inner-life merge: v6 membrane, v7 U2.5, v8 inner-life ledger).
+        assert run_migrations(empty, target_version=SCHEMA_VERSION) == [4, 5, 6, 7, 8]
         assert empty.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
-        ).fetchone()["value"] == "7"
+        ).fetchone()["value"] == str(SCHEMA_VERSION)
         row_map_cols = _column_map(empty, "pai_import_row_map")
         assert "content_at_last_import" in row_map_cols
         assert "tombstone_at" in row_map_cols
         assert empty.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pai_import_events'"
+        ).fetchone()
+        assert empty.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'inner_life_events'"
         ).fetchone()
         assert empty.execute(
             """
@@ -850,16 +854,17 @@ def test_migration_version_guards(tmp_path):
 
 
 def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
-    """v7 is real now; use slot 8 to test failure isolation.
+    """v8 is real now (v6 membrane, v7 U2.5, v8 inner-life ledger); use slot 9
+    to test failure isolation.
 
-    The DB rolls back to v7 (current latest) when a hypothetical v8 migration
+    The DB rolls back to v8 (current latest) when a hypothetical v9 migration
     fails partway through.
     """
     db_path = tmp_path / "rollback.db"
     store = EngramStore(db_path)
     store.close()
 
-    previous = migrations._MIGRATIONS.get(8)
+    previous = migrations._MIGRATIONS.get(9)
 
     def fail_after_writes(conn):
         conn.execute("CREATE TABLE u3a_failure_probe (id TEXT PRIMARY KEY)")
@@ -868,14 +873,14 @@ def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
         )
         raise ValueError("synthetic migration failure")
 
-    migrations._MIGRATIONS[8] = ("synthetic failing migration", fail_after_writes)
+    migrations._MIGRATIONS[9] = ("synthetic failing migration", fail_after_writes)
     conn = sqlite3.connect(db_path)
     try:
-        with pytest.raises(RuntimeError, match="Migration 8 failed"):
-            run_migrations(conn, target_version=8)
+        with pytest.raises(RuntimeError, match="Migration 9 failed"):
+            run_migrations(conn, target_version=9)
         assert conn.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
-        ).fetchone()[0] == "7"
+        ).fetchone()[0] == str(SCHEMA_VERSION)
         assert not conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'u3a_failure_probe'"
         ).fetchone()
@@ -885,9 +890,9 @@ def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
     finally:
         conn.close()
         if previous is None:
-            del migrations._MIGRATIONS[8]
+            del migrations._MIGRATIONS[9]
         else:
-            migrations._MIGRATIONS[8] = previous
+            migrations._MIGRATIONS[9] = previous
 
 
 def test_future_schema_store_open_fails_before_mutating_schema(tmp_path):

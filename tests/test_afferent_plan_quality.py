@@ -199,6 +199,7 @@ def test_afferent_main_plan_encodes_evidence_diversity_and_dream_graduation():
     assert "vividness-ratio cap" in text
     assert "three conjunctive tests" in text
     assert "adaptive decay" in text
+    assert "audit_only row is retained for provenance" in text
     assert "MIN_RECURRENCES" in text
     assert "VIVIDNESS_RATIO_CAP" in text
     assert "drop:high_blast_generated" in text

@@ -91,7 +91,9 @@ def test_afferent_main_plan_has_state_surface_and_regression_ledgers():
         "Terminal states",
         "Allowed transitions",
         "Rejected transitions",
-        "duplicate write against terminal row is rejected without mutating reason, provenance, payload, status, or visibility",
+        "Raw upserts on `pending_review` rows preserve or strengthen visibility",
+        "raw upserts on `deferred`, `rejected`, or `applied` rows are fail-closed",
+        "duplicate raw write against a deferred/rejected/applied row is rejected without mutating reason, provenance, payload, status, or visibility",
         "fresh high-confidence/foundational write cannot become operational",
     ]
     for phrase in required_state_ledger:

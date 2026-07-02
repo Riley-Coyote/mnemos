@@ -163,7 +163,9 @@ def test_soak_tick_launchd_plist_invokes_orchestrator_without_loading(tmp_path):
     assert "--allow-live-db" not in args
     assert payload["StartInterval"] == 900
     assert payload["RunAtLoad"] is True
-    assert Path(payload["WorkingDirectory"]).name == "mnemos-install"
+    # WorkingDirectory is the resolved repo root (worktree-agnostic; not a
+    # hardcoded checkout name — report 003b). Not weakened to "any dir".
+    assert Path(payload["WorkingDirectory"]).resolve() == Path.cwd().resolve()
     assert Path(payload["StandardOutPath"]).parent == artifact_dir
 
 

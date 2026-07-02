@@ -94,6 +94,8 @@ VALID_PROPOSAL_STATUSES = {
     "superseded",
 }
 RAW_PROPOSAL_STATUSES = {"pending_review", "deferred", "rejected"}
+# Terminal for raw write_proposal upserts. Future reviewed decision APIs may
+# decide deferred proposals through a separate append-only audit path.
 PROPOSAL_TERMINAL_STATUSES = VALID_PROPOSAL_STATUSES - {"pending_review"}
 
 VALID_FUNCTIONAL_TYPES = {
@@ -1454,6 +1456,11 @@ class EngramStore:
         surface, transition, blast radius, gate version, provenance, payload,
         visibility, and lifecycle status without making candidate prose part of
         operational context.
+
+        This is the raw producer API: same-ID writes may update only
+        ``pending_review`` rows. Once a row is ``deferred``, ``rejected``,
+        ``applied``, ``approved``, or ``superseded``, raw writes fail closed;
+        reviewed decisions must use a separate append-only decision path.
         """
         source_authority = _clean_choice_with_aliases(
             source_authority,

@@ -123,7 +123,7 @@ U2.5 exposed the failure mode this gate guards against: no-mistakes should valid
 - ProposalLedger public vocabulary must use RFC axes: `source_authority = user_stated/imported/observed/generated` and `kind = episodic/semantic/procedural/prospective`.
 - ProposalLedger defaults to `audit_only`; hypomnema promotion candidates deliberately default to `review_only` so David can inspect them in review.
 - Audit-only ProposalLedger inspectability is a required U2.5 deliverable: ordinary operational/review packet surfaces exclude audit-only rows, while an explicit audit/admin read path can list them with provenance.
-- Raw proposal creation is pending/deferred/rejected review evidence only. U2.5 must not let `write_proposal()` mint `approved` or `applied` states that imply U4 decisions.
+- Raw proposal creation is pending/deferred/rejected review evidence only. U2.5 must not let `write_proposal()` mint `approved` or `applied` states that imply U4 decisions, and any later decision path must be separate from raw upserts.
 - Operational surfaces may show review counts and source IDs for review-visible items, but `audit_only` is invisible except through explicit audit/admin reads.
 - DynamicModulation storage/scaffolding is allowed only if inert or fail-conservative. Active retrieval influence requires both persistence and distribution-shape bounds.
 
@@ -227,7 +227,7 @@ These U-IDs are repair-plan units. They do not replace the Afferent plan's exist
 - Add `deferred` as a first-class status.
 - Make proposal `read_visibility` default to `audit_only`.
 - Define and enforce a status-by-visibility matrix: `pending_review`, `deferred`, and `rejected` cannot be `operational_context`; any future `applied` operational state must come from a reviewed gate, not raw proposal creation.
-- Restrict raw proposal creation to non-terminal review/audit lifecycle states. Do not let U2.5 implement U4 apply/approve behavior.
+- Restrict raw proposal creation to review/audit lifecycle states that do not imply applied durable writes. Do not let U2.5 implement U4 apply/approve behavior or conflate raw upserts with later reviewed decisions.
 - Decide whether existing non-RFC aliases such as `agent_generated` and `agent_observed` are rejected, migrated to canonical values, or accepted only as deprecated input aliases that serialize canonically.
 
 **Execution note:** Characterization-first for the current ProposalLedger tests, then tighten the contract.

@@ -20,7 +20,9 @@ Before implementation starts, the plan must include all of these items:
    - Record whether conflict/upsert behavior preserves, strengthens, rejects, or intentionally relaxes visibility/status.
    - For visibility-bearing rows, generic upserts must not downgrade `review_only` or `audit_only` into operational use.
    - Name every terminal state and whether it is mutable.
-   - For ProposalLedger rows, terminal conflicts are immutable: a later write with the same `proposal_id` must be rejected and the original terminal audit record must remain unchanged.
+   - For ProposalLedger rows, terminal conflicts are immutable for raw writes, and plans must separate the raw producer/upsert lifecycle from the reviewed decision lifecycle.
+   - Raw writes may mutate only `pending_review`; same-ID raw writes against `deferred`, `rejected`, `applied`, `approved`, or `superseded` must be rejected and leave the existing audit record unchanged.
+   - If a future reviewed decision API keeps `deferred` proposals decidable, it must be an explicit separate path with append-only decision audit records.
 
 3. **Surface Ledger**
    - For each read surface, define what operational, review, audit, admin, migration, direct-ID, aggregate/count, visual, MCP, and context paths can see.
@@ -40,7 +42,7 @@ Before implementation starts, the plan must include all of these items:
 
 6. **Regression Ledger**
    - Every invariant needs at least one positive test and one negative test.
-   - Include explicit tests for fresh promotion/high-blast review-only classification, duplicate/upsert non-promotion, terminal proposal immutability, and sample limits not altering total queue counts.
+   - Include explicit tests for fresh promotion/high-blast review-only classification, duplicate/upsert non-promotion, terminal proposal immutability, reviewed-decision transition semantics, and sample limits not altering total queue counts.
 
 7. **DynamicModulation bound check**
    - State whether DynamicModulation is inert, conservative, or actively influencing retrieval.

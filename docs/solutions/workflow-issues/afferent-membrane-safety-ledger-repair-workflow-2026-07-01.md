@@ -68,7 +68,7 @@ The test guard in `tests/test_afferent_plan_quality.py::test_afferent_main_plan_
 
 ### 3. Make durable state and terminal conflicts explicit before code
 
-The State Ledger is where the ProposalLedger terminal-state bug should have been caught before implementation. Terminal proposal rows are immutable. If a later write reuses a `proposal_id` whose existing row is `deferred`, `rejected`, or `applied`, the write must be rejected and the original audit record must remain unchanged: reason, provenance, payload, status, and visibility all stay intact. New content needs a new `proposal_id`.
+The State Ledger is where the ProposalLedger raw-conflict bug should have been caught before implementation. Raw proposal writes are fail-closed after `pending_review`: if a raw `write_proposal()` call reuses a `proposal_id` whose existing row is `deferred`, `rejected`, or `applied`, the write must be rejected and the original audit record must remain unchanged: reason, provenance, payload, status, and visibility all stay intact. This raw guard does not define proposal-side finality for `deferred`; a future U4 reviewed decision API may transition a deferred proposal to `applied` or `rejected` only through a separate append-only decision path. New producer content needs a new `proposal_id`.
 
 The plan now records that policy in the ProposalLedger row of the State Ledger, and the focused proof includes:
 
@@ -251,7 +251,7 @@ The U2.5 run surfaced repeated classes that should have been planned:
 - bootstrap counts influenced by quarantined engrams;
 - stale documentation of schema defaults versus write-time classification.
 
-Fold every no-mistakes `ask-user` policy decision back into the plan or gate. In this lane, David resolved the terminal conflict policy: terminal proposal conflicts must be immutable, and later writes with the same terminal `proposal_id` are rejected.
+Fold every no-mistakes `ask-user` policy decision back into the plan or gate. In this lane, David resolved the raw conflict policy: raw proposal writes against deferred/decided rows must be immutable, later raw writes with the same non-pending `proposal_id` are rejected, and any future deferred-to-applied/rejected decision must use a separate reviewed API with append-only audit.
 
 ### 12. Do not claim no-mistakes coverage for a stale head
 
@@ -279,7 +279,7 @@ The compound record needs to preserve the small failures because they are where 
 | `ask-user` policy decisions not folded back | Require policy-resolving `ask-user` findings to update the plan or gate before the next implementation round. |
 | U2/U3/U4 scope confusion | Defer authority stamping and David-only review; let U2.5 add only fail-closed visibility/proposal guardrails. |
 | DynamicModulation active too early | Make U5 inert/conservative; require TTL/decay/magnitude plus valence floor/deadband/fail-toward-width before active influence. |
-| ProposalLedger contract gaps | Use RFC axes, `audit_only` default, no pending operational rows, no raw `approved`/`applied` creation, immutable terminals, and explicit audit inspection. |
+| ProposalLedger contract gaps | Use RFC axes, `audit_only` default, no pending operational rows, no raw `approved`/`applied` creation, immutable raw conflicts after `pending_review`, separate reviewed-decision transitions, and explicit audit inspection. |
 | Hypomnema write classification leak | Route stable/foundational/identity rows through the shared classifier before operational use. |
 | Hypomnema migration/default drift | Preserve raw SQL `operational_context` for legacy compatibility while routing omitted live writes through classifier and repairing stale v6 defaults. |
 | Upsert/revision downgrade leaks | Preserve or strengthen `read_visibility` for engrams, beliefs, functional memory, hypomnema, and proposals. |

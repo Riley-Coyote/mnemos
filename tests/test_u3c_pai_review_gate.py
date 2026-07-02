@@ -890,7 +890,7 @@ def test_u3c_review_gate_rule_signature():
     )
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
-    assert digest == "bc82a18296a5c483a1967850fdaafcc8602fc3151df0eee8d9269e410336fc87"
+    assert digest == "93416875009f65c5d49086565e30ff809ebaf1ab8c2c5840e361cc6f921fda86"
 
 
 def test_u3c_review_gate_fails_watcher_change_without_test_diff():

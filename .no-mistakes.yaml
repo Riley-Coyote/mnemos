@@ -1,0 +1,14 @@
+# no-mistakes repo gate configuration for davidefitz/mnemos
+#
+# Pins a deterministic test command so the pipeline's test step runs the suite
+# directly instead of dispatching an agent to "figure out" how to test. The
+# agent-driven fallback deadlocked a prior run when the dispatched agent
+# inherited an unrelated instruction stack; a fixed command removes that path.
+#
+# Trust note: no-mistakes honors repo-level commands only when this file (with
+# allow_repo_commands: true) is present on the DEFAULT branch. On this fork main
+# is David-merge-only, so commit-access-to-main is the control on what the gate
+# executes — acceptable here, recorded in the supervision DAVID-DECISIONS ledger.
+allow_repo_commands: true
+commands:
+  test: uv run --all-extras pytest -q

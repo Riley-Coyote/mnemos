@@ -86,6 +86,8 @@ material:
   snapshots, shared-pool reads, consolidation producers, substrate producers,
   modulators, and direct-ID advanced lookups (`mnemos_inspect`,
   `mnemos_forget`, and the hypomnema revise/supersede/promote mutators).
+  Low-level store readers also fail closed to operational rows by default;
+  unfiltered admin reads must pass `read_visibility=None` explicitly.
 - `read_visibility="review_only"` keeps pending functional confirmations,
   hypomnema promotion candidates, and other review-shaped material out of
   operating context while leaving it visible to explicit review tools.
@@ -98,6 +100,10 @@ material:
   `hypomnema_entries` SQL default is `operational_context` for legacy
   compatibility; callers that omit `read_visibility` still go through the
   store's write-time classifier before durable rows can enter ordinary context.
+  The caller's domain label is checked against content classification and can
+  only raise risk; underclaimed identity/foundational content is written at the
+  effective domain, routed to review, and recorded as one scoped pending
+  domain-claim proposal.
 - `read_visibility="audit_only"` is excluded from ordinary operational reads
   and ordinary review queues; ProposalLedger audit rows require the explicit
   `mnemos_proposal_audit` admin/audit surface.
@@ -105,6 +111,11 @@ material:
   target surface, transition, blast radius, status, gate version, provenance,
   and payload fields so candidate state is inspectable without becoming
   operating context.
+- Engram source authority is harness-stamped from the channel:
+  `observed` for MCP/runtime/session-indexer surfaces, `imported` for curated
+  PAI import, and `generated` for autonomous producers. MCP callers cannot pass
+  `source_authority`, and payload text claiming `user_stated` or `imported`
+  authority does not elevate the row.
 
 ## Gated Inner Life And Soak
 

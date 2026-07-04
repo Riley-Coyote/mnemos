@@ -1351,7 +1351,8 @@ def test_connection_discovery_counts_only_operational_existing_edges(tmp_path):
             )
         }
         all_targets = {
-            connection.target_id for connection in store.get_connections(source.id)
+            connection.target_id
+            for connection in store.get_connections(source.id, read_visibility=None)
         }
 
         assert stats["engrams_processed"] == 1

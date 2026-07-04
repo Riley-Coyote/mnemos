@@ -37,17 +37,14 @@ def handle(
     engram = store.get_engram(engram_id, read_visibility="operational_context")
     if not engram:
         return produced_events
-    if (
-        engram.owner_agent_id != config.agent_id
-        or not engram.consolidation_authorized
-    ):
+    if engram.owner_agent_id != config.agent_id or not engram.consolidation_authorized:
         return produced_events
 
     agent_name = config.agent_name
     prompt = f"""Something surprised you during memory formation.
 
 The memory: {engram.content}
-Its impact: {engram.impact or '(none)'}
+Its impact: {engram.impact or "(none)"}
 Surprise score: {surprise_score:.2f}
 
 What made this surprising? What expectation was violated? What does this change
@@ -83,6 +80,8 @@ Respond with:
     # Encode the surprise reflection (this one does NOT skip surprise detection)
     from mnemos.encoding.encoder import Encoder
     from mnemos.store.embedding_index import EmbeddingIndex
+    from mnemos.core.types import SourceAuthority
+
     ei = EmbeddingIndex(db_path=os.path.expanduser(config.db_path))
     encoder = Encoder(store, embedding_index=ei, llm_client=llm_client)
 
@@ -94,6 +93,8 @@ Respond with:
         tags=["surprise", "reflection"],
         agent_id=config.agent_id,
         skip_surprise_detection=False,  # Surprise CAN chain — it's the original signal
+        # Autonomous substrate producer: generated (F1).
+        source_authority=SourceAuthority.GENERATED,
     )
 
     return produced_events

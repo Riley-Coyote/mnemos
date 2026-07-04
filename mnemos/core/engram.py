@@ -31,9 +31,13 @@ from .types import (
     EncodingDepth,
     EngramKind,
     EngramState,
+    SourceAuthority,
     SourceType,
     Visibility,
 )
+
+
+_VALID_SOURCE_AUTHORITIES = frozenset(a.value for a in SourceAuthority)
 
 
 def _now_iso() -> str:
@@ -41,9 +45,10 @@ def _now_iso() -> str:
 
 
 def _gen_ulid() -> str:
-    if hasattr(_ulid_mod, 'new'):
+    if hasattr(_ulid_mod, "new"):
         return str(_ulid_mod.new())
     from ulid import ULID
+
     return str(ULID())
 
 
@@ -235,6 +240,29 @@ class MemorySource:
     confidence_source: str = ConfidenceSource.MODEL_INFERRED
     """user_explicit | user_implied | model_inferred | speculative"""
 
+    authority: str = field(kw_only=True)
+    """RFC-R1 harness-stamped authority: user_stated | imported | observed |
+    generated. Derived from the ingest channel, never from payload. This is a
+    REQUIRED keyword-only field with NO constructor default (T3, finding A): a
+    direct writer that forgets to stamp fails loudly rather than silently
+    wearing ``observed`` — for an autonomous producer, ``observed`` would be an
+    elevation (generated content lying about its authority is exactly what the
+    membrane prevents). ``from_dict`` supplies ``observed`` for legacy rows that
+    predate the field; that is the only place the fallback lives."""
+
+    def __post_init__(self) -> None:
+        # Validate the closed authority set at the low-level constructor so a
+        # direct writer bypassing Encoder.encode() cannot persist an arbitrary
+        # authority string (T3 review: r1-memorysource-authority-not-validated).
+        authority = (
+            self.authority.value
+            if isinstance(self.authority, SourceAuthority)
+            else self.authority
+        )
+        if authority not in _VALID_SOURCE_AUTHORITIES:
+            raise ValueError(f"Unsupported source authority: {self.authority!r}")
+        self.authority = authority
+
     def to_dict(self) -> dict:
         return {
             "type": self.type,
@@ -242,11 +270,16 @@ class MemorySource:
             "model_id": self.model_id,
             "confidence": self.confidence,
             "confidence_source": self.confidence_source,
+            "authority": self.authority,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> MemorySource:
-        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+        kwargs = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        # Legacy rows serialized before the authority field: default observed
+        # (the conservative floor). This is the ONLY authority fallback path.
+        kwargs.setdefault("authority", "observed")
+        return cls(**kwargs)
 
 
 @dataclass
@@ -320,8 +353,15 @@ class Engram:
     # Typed connections
     connections: list[Connection] = field(default_factory=list)
 
-    # Provenance
-    source: MemorySource = field(default_factory=MemorySource)
+    # Provenance. The default source floors authority at ``observed`` for an
+    # Engram constructed WITHOUT an explicit source (tests/convenience); real
+    # producers (encoder, importer, low-stakes, softening) always pass an
+    # explicit source with an explicit authority, so this default never wears
+    # observed on an autonomous-producer path. (T3 finding A: MemorySource
+    # authority is now required, so the default_factory must stamp it here.)
+    source: MemorySource = field(
+        default_factory=lambda: MemorySource(authority=SourceAuthority.OBSERVED)
+    )
     lineage: Lineage = field(default_factory=Lineage)
 
     # Multi-agent

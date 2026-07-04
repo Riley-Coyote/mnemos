@@ -598,11 +598,13 @@ def test_u3b_belief_and_hypomnema_projection_drift_repairs(tmp_path):
         repair_hypo = preview_pai_import(store, [hypo_source])
         assert repair_hypo.counts == {ACTION_REPAIR: 1}
         apply_pai_import(store, repair_hypo)
+        # Imported hypomnema lands review_only; inspect via admin opt-in (R5/D8-A).
         repaired = store.get_hypomnema_entry(
             hypo_id,
             agent_id="oliver",
             person_id="david",
             project_scope="pai",
+            read_visibility=None,
         )
         assert repaired["tags"] == ["pai-import", "hypomnema"]
     finally:
@@ -946,11 +948,13 @@ def test_u3b_hypomnema_preview_apply_updates_explicit_target(tmp_path):
         apply_pai_import(store, first)
         target_id = first.rows[0].target_id
 
+        # Imported hypomnema lands review_only; inspect via admin opt-in (R5/D8-A).
         entry = store.get_hypomnema_entry(
             target_id,
             agent_id="oliver",
             person_id="david",
             project_scope="pai",
+            read_visibility=None,
         )
         assert entry is not None
         assert entry["content"] == "Continuity belongs in scoped memory."
@@ -967,6 +971,7 @@ def test_u3b_hypomnema_preview_apply_updates_explicit_target(tmp_path):
             agent_id="oliver",
             person_id="david",
             project_scope="pai",
+            read_visibility=None,
         )
         assert updated is not None
         assert updated["content"] == "Continuity remains scoped and durable."

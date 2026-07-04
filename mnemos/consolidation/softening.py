@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 import ulid as _ulid_mod
 
-from ..core.types import ConnectionRelation, EngramKind, SourceType
+from ..core.types import ConnectionRelation, EngramKind, SourceAuthority, SourceType
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -114,7 +114,11 @@ def run_softening_pass(
     }
 
     # Get all engrams that could need softening (active or dormant, resolution > minimum)
-    all_engrams = store.get_active_engrams(agent_id=agent_id, limit=5000) if agent_id is not None else store.get_active_engrams(limit=5000)
+    all_engrams = (
+        store.get_active_engrams(agent_id=agent_id, limit=5000)
+        if agent_id is not None
+        else store.get_active_engrams(limit=5000)
+    )
 
     # Conservator: the softener should preserve the agent's register, not
     # normalize it into the substrate model's voice. The most vivid
@@ -158,7 +162,10 @@ def run_softening_pass(
             # before/after pair, and leave the engram untouched.
             if llm_client and stats["llm_calls"] < max_llm_calls:
                 candidate = _llm_soften(
-                    engram.content, engram.resolution, target, llm_client,
+                    engram.content,
+                    engram.resolution,
+                    target,
+                    llm_client,
                     exemplars_block,
                 )
                 stats["llm_calls"] += 1
@@ -196,7 +203,10 @@ def run_softening_pass(
         # SOFTEN content (impact is preserved separately)
         if llm_client and stats["llm_calls"] < max_llm_calls:
             candidate = _llm_soften(
-                engram.content, engram.resolution, target, llm_client,
+                engram.content,
+                engram.resolution,
+                target,
+                llm_client,
                 exemplars_block,
             )
             stats["llm_calls"] += 1
@@ -277,7 +287,8 @@ def _select_voice_exemplars(all_engrams: list, k: int = 4) -> list:
     agent whose memories are being rewritten.
     """
     candidates = [
-        e for e in all_engrams
+        e
+        for e in all_engrams
         if (
             e.content
             and len(e.content) >= 20
@@ -294,9 +305,7 @@ def _format_exemplars(pool: list, exclude_id: str, limit: int = 3) -> str:
     exemplars = [e for e in pool if e.id != exclude_id][:limit]
     if not exemplars:
         return ""
-    lines = "\n".join(
-        f'{i}. "{e.content[:240]}"' for i, e in enumerate(exemplars, 1)
-    )
+    lines = "\n".join(f'{i}. "{e.content[:240]}"' for i, e in enumerate(exemplars, 1))
     return VOICE_EXEMPLARS_BLOCK.format(exemplars=lines)
 
 
@@ -361,7 +370,9 @@ def _llm_soften(
 
     try:
         result = llm_client.complete(prompt)
-        return result.strip() if result else _rule_based_soften(content, target_resolution)
+        return (
+            result.strip() if result else _rule_based_soften(content, target_resolution)
+        )
     except Exception:
         return _rule_based_soften(content, target_resolution)
 
@@ -444,6 +455,7 @@ def _create_or_reinforce_lesson(
 
     # No existing lesson found — create a new one
     from ..core.engram import Engram, MemorySource
+
     lesson = Engram(
         content=impact_text,
         impact=impact_text,  # For lessons, impact IS the content
@@ -455,6 +467,9 @@ def _create_or_reinforce_lesson(
             type=SourceType.REFLECTION,
             confidence=engram.source.confidence,
             confidence_source=engram.source.confidence_source,
+            # Softening lesson extraction is autonomous producer output:
+            # generated, never observed (T3 finding A).
+            authority=SourceAuthority.GENERATED,
         ),
         owner_agent_id=engram.owner_agent_id,
     )

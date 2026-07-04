@@ -20,13 +20,13 @@ class TestReactiveRetriever:
             content="The Mnemos project uses SQLite with FTS5 for full-text search",
             kind="semantic",
             tags=["mnemos", "architecture"],
+            source_authority="observed",
         )
 
         results = retriever.retrieve("SQLite full-text search")
         assert len(results) >= 1
         assert any(
-            "SQLite" in r.engram.content or "FTS5" in r.engram.content
-            for r in results
+            "SQLite" in r.engram.content or "FTS5" in r.engram.content for r in results
         )
 
     def test_co_retrieval_edges_are_co_activated_not_supports(
@@ -45,6 +45,7 @@ class TestReactiveRetriever:
                 content=f"Spreading activation tuning note number {i} for retrieval",
                 kind="semantic",
                 tags=["retrieval"],
+                source_authority="observed",
             )
 
         results = retriever.retrieve("spreading activation tuning retrieval")
@@ -60,9 +61,7 @@ class TestReactiveRetriever:
         assert all(c.relation == "co_activated" for c in retrieval_edges)
         assert not any(c.relation == "supports" for c in retrieval_edges)
 
-    def test_retrieval_excludes_review_only_fts_and_propagation(
-        self, store, retriever
-    ):
+    def test_retrieval_excludes_review_only_fts_and_propagation(self, store, retriever):
         """Review-only engrams cannot enter retrieval as seeds or graph targets."""
         operational = Engram(
             content="Operational afferent membrane seed",
@@ -152,7 +151,9 @@ class TestReactiveRetriever:
         assert "Operational retrieval seed for afferent proof" in contents
         assert "Review-only retrieval seed must not operationally rank" not in contents
         assert "Audit-only retrieval seed must not operationally rank" not in contents
-        assert "Audit-only propagation target must not operationally rank" not in contents
+        assert (
+            "Audit-only propagation target must not operationally rank" not in contents
+        )
 
     def test_retrieval_does_not_bridge_through_review_only_engram(
         self, store, retriever

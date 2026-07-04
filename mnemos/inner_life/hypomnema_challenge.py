@@ -56,11 +56,16 @@ def apply_hypomnema_challenge(
             "generated_memory_writes": 0,
         }
 
+    # The challenge is an inner-life review process: it examines and revises
+    # hypomnema at any tier (review_only entries are exactly the ones needing
+    # challenge), so it opts into unfiltered access rather than the operational
+    # default (R5, T3/D8-A). It writes nothing to an operational read surface.
     before = store.get_hypomnema_entry(
         entry_id,
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        read_visibility=None,
     )
     if before is None:
         _record_challenge_event(
@@ -161,6 +166,7 @@ def apply_hypomnema_challenge(
             agent_id=agent_id,
             person_id=person_id,
             project_scope=project_scope,
+            read_visibility=None,  # review process: read back at any tier (R5/D8-A)
         )
         action_writes = 1
     else:
@@ -181,6 +187,7 @@ def apply_hypomnema_challenge(
             agent_id=agent_id,
             person_id=person_id,
             project_scope=project_scope,
+            read_visibility=None,  # review process: read back at any tier (R5/D8-A)
         )
         action_writes = 1
 

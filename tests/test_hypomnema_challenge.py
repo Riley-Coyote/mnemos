@@ -53,6 +53,7 @@ def test_hypomnema_challenge_revise_down_lowers_confidence_and_preserves_history
             agent_id="oliver",
             person_id="david",
             project_scope="pai",
+            read_visibility=None,  # admin inspection of challenged row (R5/D8-A)
         )
         assert revised["active"] is True
         assert revised["confidence"] == pytest.approx(0.6)
@@ -145,6 +146,7 @@ def test_hypomnema_challenge_hold_writes_telemetry_without_revision(tmp_path):
             agent_id="oliver",
             person_id="david",
             project_scope="pai",
+            read_visibility=None,  # admin inspection of challenged row (R5/D8-A)
         )
         assert result["decision"] == "hold"
         assert result["hypomnema_writes"] == 0
@@ -237,6 +239,7 @@ def test_hypomnema_challenge_duplicate_key_does_not_reapply_revision(tmp_path):
             agent_id="oliver",
             person_id="david",
             project_scope="pai",
+            read_visibility=None,  # admin inspection of challenged row (R5/D8-A)
         )
         assert first["hypomnema_writes"] == 1
         assert second["duplicates"] == 1

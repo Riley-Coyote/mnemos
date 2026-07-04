@@ -142,13 +142,16 @@ class ReactiveRetriever:
                     read_visibility=read_visibility,
                 )
                 for engram in shared_fts:
-                    if engram.visibility in ("shared", "public") and engram.id not in seeds:
+                    if (
+                        engram.visibility in ("shared", "public")
+                        and engram.id not in seeds
+                    ):
                         seeds[engram.id] = engram
             except Exception:
                 pass  # Shared store is optional
 
         # Embedding seeds (meaning matching — finds what FTS misses)
-        if self._embedding_index and hasattr(self._embedding_index, 'search'):
+        if self._embedding_index and hasattr(self._embedding_index, "search"):
             try:
                 embedding_hits = self._embedding_index.search(
                     cue, k=20, exclude_ids=set(seeds.keys())
@@ -159,7 +162,11 @@ class ReactiveRetriever:
                             eid,
                             read_visibility=read_visibility,
                         )
-                        if engram and engram.state == "active" and engram.owner_agent_id == agent_id:
+                        if (
+                            engram
+                            and engram.state == "active"
+                            and engram.owner_agent_id == agent_id
+                        ):
                             seeds[eid] = engram
             except Exception:
                 pass  # Embeddings are optional — FTS still works
@@ -190,7 +197,7 @@ class ReactiveRetriever:
 
         # Spread through connections
         for hop in range(1, self._depth + 1):
-            hop_decay = self._decay ** hop
+            hop_decay = self._decay**hop
             new_activation: dict[str, float] = defaultdict(float)
 
             for engram_id, current_act in list(activation.items()):
@@ -199,17 +206,26 @@ class ReactiveRetriever:
                 if visible_engram(engram_id) is None:
                     continue
 
-                connections = self._store.get_connections(engram_id)
+                # R5 (T3): forward the retriever's read_visibility so admin/
+                # review retrieval keeps graph expansion instead of silently
+                # losing it now that get_connections fails closed to operational.
+                connections = self._store.get_connections(
+                    engram_id, read_visibility=read_visibility
+                )
                 # Cross-DB connections: also check shared store
                 if self._shared_store:
                     try:
-                        connections = connections + self._shared_store.get_connections(engram_id)
+                        connections = connections + self._shared_store.get_connections(
+                            engram_id, read_visibility=read_visibility
+                        )
                     except Exception:
                         pass
                 for conn in connections:
                     # Weight by relation type
                     relation_weight = _RELATION_WEIGHTS.get(conn.relation, 0.5)
-                    propagated = current_act * hop_decay * conn.strength * relation_weight
+                    propagated = (
+                        current_act * hop_decay * conn.strength * relation_weight
+                    )
 
                     if propagated > self._threshold * 0.5:
                         target = visible_engram(conn.target_id)
@@ -230,7 +246,7 @@ class ReactiveRetriever:
                     if engram and engram.tags:
                         overlap = sum(bias.get(tag, 0.0) for tag in engram.tags)
                         if overlap > 0:
-                            activation[eid] *= (1.0 + min(0.5, overlap))
+                            activation[eid] *= 1.0 + min(0.5, overlap)
 
         # 4. FILTER + LOAD: threshold, confidence floor, build results
         results: list[RetrievalResult] = []
@@ -268,10 +284,7 @@ class ReactiveRetriever:
             for result in top_results:
                 # Reconsolidate in the engram's home store
                 target_store = self._store
-                if (
-                    result.engram.owner_agent_id != agent_id
-                    and self._shared_store
-                ):
+                if result.engram.owner_agent_id != agent_id and self._shared_store:
                     target_store = self._shared_store
                 result.engram = reconsolidate(
                     engram=result.engram,

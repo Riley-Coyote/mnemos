@@ -19,7 +19,9 @@ from mnemos.integrations.hermes.installer import (
 )
 
 
-def _new_provider(tmp_path, *, agent_id="coder", person_id="riley", project_scope="mnemos"):
+def _new_provider(
+    tmp_path, *, agent_id="coder", person_id="riley", project_scope="mnemos"
+):
     return MnemosMemoryProviderCore(
         HermesMnemosConfig(
             db_path=str(tmp_path / "mnemos.db"),
@@ -46,7 +48,9 @@ def _install_yaml_stub(monkeypatch):
             if stripped.startswith("provider:"):
                 return {"memory": {"provider": stripped.split(":", 1)[1].strip()}}
         if "description:" in raw:
-            return {"description": "Local-first Mnemos identity-continuity provider for Hermes"}
+            return {
+                "description": "Local-first Mnemos identity-continuity provider for Hermes"
+            }
         return {}
 
     yaml_stub.safe_load = safe_load
@@ -100,13 +104,16 @@ def test_provider_context_stays_under_configured_budget(tmp_path):
                 {
                     "content": (
                         f"Riley identity-continuity preference {idx}: keep Hermes Mnemos "
-                        "packets compact, scoped, local-first, and non-destructive. " * 4
+                        "packets compact, scoped, local-first, and non-destructive. "
+                        * 4
                     ),
                     "importance": "high",
                 },
             )
         prompt_block = provider.system_prompt_block()
-        prefetched = provider.prefetch("identity-continuity preference compact scoped local-first")
+        prefetched = provider.prefetch(
+            "identity-continuity preference compact scoped local-first"
+        )
     finally:
         provider.shutdown()
 
@@ -119,17 +126,21 @@ def test_provider_can_capture_and_recall_in_temp_home(tmp_path):
     provider.initialize("session-1", hermes_home=tmp_path)
 
     try:
-        captured = json.loads(provider.handle_tool_call(
+        captured = json.loads(
+            provider.handle_tool_call(
                 "mnemos_identity_capture",
                 {
                     "content": "Riley uses Hermes Mnemos continuity in local-first mode.",
                     "importance": "high",
                 },
-            ))
-        recalled = json.loads(provider.handle_tool_call(
-            "mnemos_identity_recall",
-            {"query": "local-first continuity", "max_results": 4},
-        ))
+            )
+        )
+        recalled = json.loads(
+            provider.handle_tool_call(
+                "mnemos_identity_recall",
+                {"query": "local-first continuity", "max_results": 4},
+            )
+        )
     finally:
         provider.shutdown()
 
@@ -161,18 +172,25 @@ def test_hermes_agent_scope_does_not_leak_between_agents(tmp_path):
     vektor.initialize("session-b", hermes_home=tmp_path, agent_identity="vektor")
 
     try:
-            nova.handle_tool_call(
-                "mnemos_identity_capture",
-                {"content": "Nova records a scoped Hermes continuity note.", "importance": "high"},
+        nova.handle_tool_call(
+            "mnemos_identity_capture",
+            {
+                "content": "Nova records a scoped Hermes continuity note.",
+                "importance": "high",
+            },
+        )
+        leaked = json.loads(
+            vektor.handle_tool_call(
+                "mnemos_identity_recall",
+                {"query": "scoped Hermes continuity note"},
             )
-            leaked = json.loads(vektor.handle_tool_call(
+        )
+        found = json.loads(
+            nova.handle_tool_call(
                 "mnemos_identity_recall",
                 {"query": "scoped Hermes continuity note"},
-            ))
-            found = json.loads(nova.handle_tool_call(
-                "mnemos_identity_recall",
-                {"query": "scoped Hermes continuity note"},
-            ))
+            )
+        )
     finally:
         nova.shutdown()
         vektor.shutdown()
@@ -215,29 +233,44 @@ def test_hermes_scope_does_not_leak_between_people_or_projects(tmp_path):
     other_project.initialize("session-other", hermes_home=tmp_path)
 
     try:
-            riley.handle_tool_call(
-                "mnemos_identity_capture",
-                {"content": "Riley's Mnemos Hermes scope contains a private continuity note.", "importance": "high"},
+        riley.handle_tool_call(
+            "mnemos_identity_capture",
+            {
+                "content": "Riley's Mnemos Hermes scope contains a private continuity note.",
+                "importance": "high",
+            },
+        )
+        person_leak = json.loads(
+            alex.handle_tool_call(
+                "mnemos_identity_recall",
+                {"query": "private continuity note"},
             )
-            person_leak = json.loads(alex.handle_tool_call(
+        )
+        project_leak = json.loads(
+            other_project.handle_tool_call(
                 "mnemos_identity_recall",
                 {"query": "private continuity note"},
-            ))
-            project_leak = json.loads(other_project.handle_tool_call(
+            )
+        )
+        found = json.loads(
+            riley.handle_tool_call(
                 "mnemos_identity_recall",
                 {"query": "private continuity note"},
-            ))
-            found = json.loads(riley.handle_tool_call(
-                "mnemos_identity_recall",
-                {"query": "private continuity note"},
-            ))
+            )
+        )
     finally:
         riley.shutdown()
         alex.shutdown()
         other_project.shutdown()
 
-    assert "Riley's Mnemos Hermes scope contains a private continuity note" not in person_leak["result"]
-    assert "Riley's Mnemos Hermes scope contains a private continuity note" not in project_leak["result"]
+    assert (
+        "Riley's Mnemos Hermes scope contains a private continuity note"
+        not in person_leak["result"]
+    )
+    assert (
+        "Riley's Mnemos Hermes scope contains a private continuity note"
+        not in project_leak["result"]
+    )
     assert "private continuity note" in found["result"]
 
 
@@ -255,14 +288,18 @@ def test_bootstrap_reads_soul_without_overwriting_it(tmp_path):
     provider.initialize("session-1", hermes_home=tmp_path, agent_identity="coder")
 
     try:
-        recalled = json.loads(provider.handle_tool_call(
-            "mnemos_identity_recall",
-            {"query": "Hermes-Coder local-first engineering"},
-        ))
-        inbox = json.loads(provider.handle_tool_call(
-            "mnemos_identity_report",
-            {"kind": "inbox", "max_results": 8},
-        ))
+        recalled = json.loads(
+            provider.handle_tool_call(
+                "mnemos_identity_recall",
+                {"query": "Hermes-Coder local-first engineering"},
+            )
+        )
+        inbox = json.loads(
+            provider.handle_tool_call(
+                "mnemos_identity_report",
+                {"kind": "inbox", "max_results": 8},
+            )
+        )
     finally:
         provider.shutdown()
 
@@ -306,10 +343,12 @@ def test_bootstrap_review_only_seed_is_idempotent(tmp_path):
             if "bootstrap" in entry["tags"]
             and "Hermes identity bootstrap from SOUL.md" in entry["content"]
         ]
-        recalled = json.loads(provider.handle_tool_call(
-            "mnemos_identity_recall",
-            {"query": "Hermes-Coder local-first engineering"},
-        ))
+        recalled = json.loads(
+            provider.handle_tool_call(
+                "mnemos_identity_recall",
+                {"query": "Hermes-Coder local-first engineering"},
+            )
+        )
     finally:
         provider.shutdown()
 
@@ -364,10 +403,12 @@ def test_builtin_memory_write_is_mirrored_and_can_be_forgotten(tmp_path):
         )
         before = provider.prefetch("memory corrections")
         provider.on_memory_write("remove", "user", "memory corrections", metadata={})
-        after = json.loads(provider.handle_tool_call(
-            "mnemos_identity_recall",
-            {"query": "memory corrections"},
-        ))
+        after = json.loads(
+            provider.handle_tool_call(
+                "mnemos_identity_recall",
+                {"query": "memory corrections"},
+            )
+        )
     finally:
         provider.shutdown()
 
@@ -380,13 +421,15 @@ def test_uncertain_capture_goes_to_review_inbox(tmp_path):
     provider.initialize("session-1", hermes_home=tmp_path)
 
     try:
-        queued = json.loads(provider.handle_tool_call(
-            "mnemos_identity_capture",
-            {
-                "content": "Maybe remember that the launch label could be Night Glass.",
-                "review": True,
-            },
-        ))
+        queued = json.loads(
+            provider.handle_tool_call(
+                "mnemos_identity_capture",
+                {
+                    "content": "Maybe remember that the launch label could be Night Glass.",
+                    "review": True,
+                },
+            )
+        )
         provider._runtime._store.write_hypomnema_entry(
             "Audit-only Hermes inbox prose must not leave audit visibility.",
             agent_id=provider.scope.agent_id,
@@ -398,20 +441,26 @@ def test_uncertain_capture_goes_to_review_inbox(tmp_path):
             salience=0.2,
             read_visibility="audit_only",
         )
+        # Uncertain capture is queued audit_only; inspect via admin opt-in (R5/D8-A).
         entry = provider._runtime._store.get_hypomnema_entry(
             queued["continuity_note_id"],
             agent_id=provider.scope.agent_id,
             person_id=provider.scope.person_id,
             project_scope=provider.scope.project_scope,
+            read_visibility=None,
         )
-        recalled = json.loads(provider.handle_tool_call(
-            "mnemos_identity_recall",
-            {"query": "Night Glass"},
-        ))
-        inbox = json.loads(provider.handle_tool_call(
-            "mnemos_identity_report",
-            {"kind": "inbox"},
-        ))
+        recalled = json.loads(
+            provider.handle_tool_call(
+                "mnemos_identity_recall",
+                {"query": "Night Glass"},
+            )
+        )
+        inbox = json.loads(
+            provider.handle_tool_call(
+                "mnemos_identity_report",
+                {"kind": "inbox"},
+            )
+        )
     finally:
         provider.shutdown()
 
@@ -429,24 +478,30 @@ def test_pre_compression_preserves_identity_critical_facts(tmp_path):
     provider.initialize("session-1", hermes_home=tmp_path)
 
     try:
-        contribution = provider.on_pre_compress([
-            {
-                "role": "user",
-                "content": "Remember that Riley prefers Hermes identity packets to stay concise.",
-            },
-            {
-                "role": "assistant",
-                "content": "Verified the concise identity packet behavior for the Hermes provider.",
-            },
-        ])
-        recalled = json.loads(provider.handle_tool_call(
-            "mnemos_identity_recall",
-            {"query": "concise identity packet"},
-        ))
-        inbox = json.loads(provider.handle_tool_call(
-            "mnemos_identity_report",
-            {"kind": "inbox", "max_results": 8},
-        ))
+        contribution = provider.on_pre_compress(
+            [
+                {
+                    "role": "user",
+                    "content": "Remember that Riley prefers Hermes identity packets to stay concise.",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Verified the concise identity packet behavior for the Hermes provider.",
+                },
+            ]
+        )
+        recalled = json.loads(
+            provider.handle_tool_call(
+                "mnemos_identity_recall",
+                {"query": "concise identity packet"},
+            )
+        )
+        inbox = json.loads(
+            provider.handle_tool_call(
+                "mnemos_identity_report",
+                {"kind": "inbox", "max_results": 8},
+            )
+        )
     finally:
         provider.shutdown()
 
@@ -470,9 +525,13 @@ def test_provider_mode_activation_sets_mnemos_provider(tmp_path):
     assert len(diagnostics["provider_shim_ready_dirs"]) == 2
 
 
-def test_sidecar_mode_preserves_existing_external_provider_and_adds_mcp(tmp_path, monkeypatch):
+def test_sidecar_mode_preserves_existing_external_provider_and_adds_mcp(
+    tmp_path, monkeypatch
+):
     _install_yaml_stub(monkeypatch)
-    (tmp_path / "config.yaml").write_text("memory:\n  provider: honcho\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "memory:\n  provider: honcho\n", encoding="utf-8"
+    )
 
     result = install_hermes_plugin(
         hermes_home=tmp_path,
@@ -520,7 +579,9 @@ def test_installed_shim_is_discoverable_by_local_hermes(tmp_path, monkeypatch):
             if "provider: mnemos" in str(text):
                 return {"memory": {"provider": "mnemos"}}
             if "description:" in str(text):
-                return {"description": "Local-first Mnemos identity continuity memory provider"}
+                return {
+                    "description": "Local-first Mnemos identity continuity memory provider"
+                }
             return {}
 
         yaml_stub.safe_load = safe_load
@@ -528,7 +589,11 @@ def test_installed_shim_is_discoverable_by_local_hermes(tmp_path, monkeypatch):
         monkeypatch.setitem(sys.modules, "yaml", yaml_stub)
 
     for name in list(sys.modules):
-        if name == "plugins" or name.startswith("plugins.memory") or name.startswith("_hermes_user_memory"):
+        if (
+            name == "plugins"
+            or name.startswith("plugins.memory")
+            or name.startswith("_hermes_user_memory")
+        ):
             sys.modules.pop(name, None)
 
     memory_plugins = importlib.import_module("plugins.memory")
@@ -559,10 +624,12 @@ def test_sync_turn_accepts_forward_compatible_messages_payload(tmp_path):
                 },
             ],
         )
-        recalled = json.loads(provider.handle_tool_call(
-            "mnemos_identity_recall",
-            {"query": "sync_turn message payloads"},
-        ))
+        recalled = json.loads(
+            provider.handle_tool_call(
+                "mnemos_identity_recall",
+                {"query": "sync_turn message payloads"},
+            )
+        )
     finally:
         provider.shutdown()
 
@@ -574,9 +641,13 @@ def test_cli_hermes_sidecar_smoke_preserves_provider(tmp_path, capsys, monkeypat
     _install_yaml_stub(monkeypatch)
     from mnemos.cli import main
 
-    (tmp_path / "config.yaml").write_text("memory:\n  provider: honcho\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "memory:\n  provider: honcho\n", encoding="utf-8"
+    )
 
-    code = main(["hermes", "install", "--hermes-home", str(tmp_path), "--mode", "sidecar"])
+    code = main(
+        ["hermes", "install", "--hermes-home", str(tmp_path), "--mode", "sidecar"]
+    )
     out = capsys.readouterr().out
     doctor_code = main(["hermes", "doctor", "--hermes-home", str(tmp_path)])
     doctor = capsys.readouterr().out
@@ -593,15 +664,17 @@ def test_cli_hermes_provider_smoke_activates_provider(tmp_path, capsys, monkeypa
     _install_yaml_stub(monkeypatch)
     from mnemos.cli import main
 
-    code = main([
-        "hermes",
-        "install",
-        "--hermes-home",
-        str(tmp_path),
-        "--mode",
-        "provider",
-        "--activate",
-    ])
+    code = main(
+        [
+            "hermes",
+            "install",
+            "--hermes-home",
+            str(tmp_path),
+            "--mode",
+            "provider",
+            "--activate",
+        ]
+    )
     out = capsys.readouterr().out
     doctor_code = main(["hermes", "doctor", "--hermes-home", str(tmp_path)])
     doctor = capsys.readouterr().out
@@ -615,7 +688,9 @@ def test_cli_hermes_provider_smoke_activates_provider(tmp_path, capsys, monkeypa
 
 def test_quickstart_defaults_to_sidecar_with_existing_provider(tmp_path, monkeypatch):
     _install_yaml_stub(monkeypatch)
-    (tmp_path / "config.yaml").write_text("memory:\n  provider: honcho\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "memory:\n  provider: honcho\n", encoding="utf-8"
+    )
 
     result = quickstart_hermes(hermes_home=tmp_path)
     diagnostics = build_diagnostics(tmp_path)
@@ -630,7 +705,9 @@ def test_quickstart_defaults_to_sidecar_with_existing_provider(tmp_path, monkeyp
 
 def test_quickstart_agent_safe_never_changes_memory_provider(tmp_path, monkeypatch):
     _install_yaml_stub(monkeypatch)
-    (tmp_path / "config.yaml").write_text("memory:\n  provider: supermemory\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "memory:\n  provider: supermemory\n", encoding="utf-8"
+    )
 
     result = quickstart_hermes(
         hermes_home=tmp_path,
@@ -656,7 +733,10 @@ def test_quickstart_agent_safe_never_changes_memory_provider(tmp_path, monkeypat
         "--project-scope",
         "mnemos",
     ]
-    assert "Preserved: SOUL.md, MEMORY.md, USER.md, AGENTS.md, and memory.provider" in result.summary()
+    assert (
+        "Preserved: SOUL.md, MEMORY.md, USER.md, AGENTS.md, and memory.provider"
+        in result.summary()
+    )
 
 
 def test_quickstart_provider_mode_requires_explicit_flag(tmp_path, monkeypatch):
@@ -690,14 +770,18 @@ def test_quickstart_agent_safe_refuses_risky_mcp_replacement(tmp_path, monkeypat
     assert result.ok is False
     assert config["memory"]["provider"] == "honcho"
     assert config["mcp_servers"]["mnemos"]["command"] == "custom-mnemos"
-    assert any("agent-safe mode left it unchanged" in warning for warning in result.warnings)
+    assert any(
+        "agent-safe mode left it unchanged" in warning for warning in result.warnings
+    )
 
 
 def test_cli_hermes_quickstart_agent_safe_smoke(tmp_path, capsys, monkeypatch):
     _install_yaml_stub(monkeypatch)
     from mnemos.cli import main
 
-    code = main(["hermes", "quickstart", "--hermes-home", str(tmp_path), "--agent-safe"])
+    code = main(
+        ["hermes", "quickstart", "--hermes-home", str(tmp_path), "--agent-safe"]
+    )
     out = capsys.readouterr().out
 
     assert code == 0
@@ -725,7 +809,9 @@ def test_cli_hermes_quickstart_provider_smoke(tmp_path, capsys, monkeypatch):
 def test_docs_include_safe_hermes_agent_prompt():
     root = Path(__file__).resolve().parents[1]
     install_doc = (root / "HERMES_INSTALL.md").read_text(encoding="utf-8")
-    integration_doc = (root / "docs" / "hermes-integration.md").read_text(encoding="utf-8")
+    integration_doc = (root / "docs" / "hermes-integration.md").read_text(
+        encoding="utf-8"
+    )
 
     assert "Install Mnemos for yourself" in install_doc
     assert "quickstart --agent-safe" in install_doc

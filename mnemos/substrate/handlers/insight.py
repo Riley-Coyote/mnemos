@@ -89,6 +89,8 @@ If there's a genuine insight: {{"insight": "<the insight>", "significance": "<wh
     # Encode the insight
     from mnemos.encoding.encoder import Encoder
     from mnemos.store.embedding_index import EmbeddingIndex
+    from mnemos.core.types import SourceAuthority
+
     ei = EmbeddingIndex(db_path=os.path.expanduser(config.db_path))
     encoder = Encoder(store, embedding_index=ei, llm_client=llm_client)
 
@@ -99,6 +101,9 @@ If there's a genuine insight: {{"insight": "<the insight>", "significance": "<wh
         tags=["insight", "connection"],
         agent_id=config.agent_id,
         skip_surprise_detection=True,
+        # Autonomous substrate producer: generated (F1) — model-synthesized
+        # content must not wear observed authority.
+        source_authority=SourceAuthority.GENERATED,
     )
 
     return produced_events

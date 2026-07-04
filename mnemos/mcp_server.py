@@ -37,13 +37,15 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
 import os
 import signal
 import sys
 
 from mcp.server.fastmcp import FastMCP
 
-from .core.types import SourceType
+from .core.types import SourceAuthority, SourceType
+from .simple_runtime import _classify_domain, escalate_domain
 from .store.sqlite_store import (
     EngramStore,
     READ_VISIBILITY_OPERATIONAL,
@@ -232,9 +234,11 @@ def _init_store(db_path: str = "~/.mnemos/memory.db") -> None:
         _embedding_index = EmbeddingIndex(db_path=db_path)
         # Auto-detect LLM client from env vars (before encoder, which uses it)
         from .llm import create_client
+
         _llm_client = create_client()
         # Initialize shared memory pool
         from .multiagent.shared_pool import SharedPool
+
         _shared_pool = SharedPool()  # defaults to ~/.mnemos/shared.db
         _encoder = Encoder(
             _store,
@@ -376,7 +380,11 @@ def mnemos_setup(response: str = "") -> str:
             f"I am {agent_name}. {user_name} and I are beginning to work together.",
         ]
         # Extract key phrases for additional seed engrams
-        sentences = [s.strip() for s in response.replace(".", ".\n").split("\n") if len(s.strip()) > 20]
+        sentences = [
+            s.strip()
+            for s in response.replace(".", ".\n").split("\n")
+            if len(s.strip()) > 20
+        ]
         for s in sentences[:3]:
             seeds.append(f"{user_name} told me: {s}")
 
@@ -391,6 +399,10 @@ def mnemos_setup(response: str = "") -> str:
                     source=SourceType.USER_EXPLICIT,
                     agent_id=agent_id,
                     skip_surprise_detection=True,
+                    # Setup-wizard seed is built from tool-call content, not a
+                    # reviewed David assertion; observed keeps user_stated
+                    # un-mintable outside U4 (F1 ruling).
+                    source_authority=SourceAuthority.OBSERVED,
                 )
                 encoded += 1
             except Exception as e:
@@ -431,7 +443,9 @@ def mnemos_setup(response: str = "") -> str:
 
     # Step 4: Projects
     if step == 4:
-        projects = [p.strip() for p in response.replace(",", "\n").split("\n") if p.strip()]
+        projects = [
+            p.strip() for p in response.replace(",", "\n").split("\n") if p.strip()
+        ]
         if "indexer" not in config:
             config["indexer"] = {}
         config["indexer"]["known_projects"] = projects
@@ -455,6 +469,7 @@ def mnemos_setup(response: str = "") -> str:
                     source=SourceType.USER_EXPLICIT,
                     agent_id=agent_id,
                     skip_surprise_detection=True,
+                    source_authority=SourceAuthority.OBSERVED,  # setup-wizard seed (F1)
                 )
             except Exception:
                 pass
@@ -516,6 +531,7 @@ def mnemos_setup(response: str = "") -> str:
                 belief1 = f"{user_name} is deeply invested in {projects[0]}"
             try:
                 from .core.belief import Belief
+
                 b = Belief(
                     content=belief1,
                     domain="identity",
@@ -541,21 +557,34 @@ def mnemos_setup(response: str = "") -> str:
             except Exception as e:
                 logger.warning(f"Failed to create belief: {e}")
 
-        belief_text = "\n".join(f"  - {b}" for b in beliefs_created) if beliefs_created else "  (none yet — they'll form as we talk)"
+        belief_text = (
+            "\n".join(f"  - {b}" for b in beliefs_created)
+            if beliefs_created
+            else "  (none yet — they'll form as we talk)"
+        )
         return (
             "From what you've told me, I'm forming my first beliefs. "
             "These aren't facts — they're things I think are true based on what I know so far. "
             "They'll shift as I learn more:\n\n"
             f"{belief_text}\n\n"
             "When something contradicts a belief, I don't just delete it. I examine it. "
-            "That's how I grow.\n\n"
-            + ONBOARDING_PROMPTS[7]
+            "That's how I grow.\n\n" + ONBOARDING_PROMPTS[7]
         )
 
     # Step 6: Inner life toggle
     if step == 6:
         resp_lower = response.strip().lower()
-        enabled = resp_lower in ("yes", "y", "sure", "yeah", "on", "enable", "true", "absolutely", "do it")
+        enabled = resp_lower in (
+            "yes",
+            "y",
+            "sure",
+            "yeah",
+            "on",
+            "enable",
+            "true",
+            "absolutely",
+            "do it",
+        )
         if "substrate" not in config:
             config["substrate"] = {}
         config["substrate"]["enabled"] = enabled
@@ -563,7 +592,11 @@ def mnemos_setup(response: str = "") -> str:
         save_config(config)
         _config_invalidate()
 
-        status = "enabled — I'll dream between our conversations" if enabled else "disabled — I'll remember, but I won't dream"
+        status = (
+            "enabled — I'll dream between our conversations"
+            if enabled
+            else "disabled — I'll remember, but I won't dream"
+        )
         return f"Inner life: {status}.\n\n" + ONBOARDING_PROMPTS[8]
 
     # Step 7: LLM provider
@@ -592,6 +625,7 @@ def mnemos_setup(response: str = "") -> str:
 
         # Store the key in-process for the current MCP server if one was supplied.
         import os
+
         if api_key and provider == "openrouter":
             os.environ["OPENROUTER_API_KEY"] = api_key
         elif api_key and provider == "anthropic":
@@ -619,7 +653,9 @@ def mnemos_setup(response: str = "") -> str:
             functional_count = stats.get("functional_active", 0)
             hypomnema_count = stats.get("hypomnema_active", 0)
         except Exception:
-            engram_count = belief_count = conn_count = functional_count = hypomnema_count = 0
+            engram_count = belief_count = conn_count = functional_count = (
+                hypomnema_count
+            ) = 0
 
         agent_name = config.get("agent_name", "Agent")
 
@@ -635,8 +671,8 @@ def mnemos_setup(response: str = "") -> str:
             f"{engram_count} engrams formed, {belief_count} beliefs taking shape, "
             f"{conn_count} connections emerging.\n\n"
             "Recommended next call:\n"
-            f"mnemos_context_packet(query=\"what should I know before this session?\", "
-            f"agent_id=\"{agent_id}\", person_id=\"{person_id}\", project_scope=\"{project_scope}\")"
+            f'mnemos_context_packet(query="what should I know before this session?", '
+            f'agent_id="{agent_id}", person_id="{person_id}", project_scope="{project_scope}")'
         )
 
     # Already complete
@@ -676,6 +712,10 @@ def mnemos_remember(
         agent_id: Which agent's memory to store in. Default: "default".
         source_type: How the memory was captured — "session", "browser_extraction", etc.
         visibility: Memory visibility — "private", "shared", or "public". Default: "private".
+
+    Source authority is not caller-settable on the MCP surface. This tool
+    stamps observed authority from the tool channel; content claiming
+    user_stated/imported authority remains untrusted payload text.
     """
     gate = _setup_gate()
     if gate:
@@ -692,6 +732,10 @@ def mnemos_remember(
         source=source_type,
         agent_id=agent_id,
         skip_surprise_detection=skip_surprise_detection,
+        # Model/MCP agent asserting a memory: observed. This tool exposes no
+        # authority parameter, so a caller cannot self-stamp (R1); content
+        # claiming "source:user_stated" is payload text, not authority.
+        source_authority=SourceAuthority.OBSERVED,
     )
 
     if visibility != "private":
@@ -737,6 +781,10 @@ def mnemos_ingest(
               "moderate" (full pipeline), "deep" (full + belief check).
         confidence: Override confidence score (0.0 = use source-based default).
         skip_surprise: Skip surprise detection during encoding.
+
+    Source authority is not caller-settable on the MCP surface. External MCP
+    ingest is stamped observed; curated PAI import is the imported-authority
+    path.
     """
     gate = _setup_gate()
     if gate:
@@ -757,6 +805,8 @@ def mnemos_ingest(
         agent_id=agent_id,
         override_confidence=override_conf,
         skip_surprise_detection=skip,
+        # External pipeline feed is observed, not user-authored (R1/F1).
+        source_authority=SourceAuthority.OBSERVED,
     )
 
     if source_url:
@@ -844,7 +894,9 @@ def mnemos_session_start(
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
     session = _store.start_memory_session(  # type: ignore
         session_id=session_id or None,
         title=title,
@@ -888,7 +940,9 @@ def mnemos_functional_update(
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
     try:
         entry = _store.write_functional_memory(  # type: ignore
@@ -931,7 +985,9 @@ def mnemos_functional_list(
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
     try:
         entries = _store.load_functional_memories(  # type: ignore
             query,
@@ -973,7 +1029,9 @@ def mnemos_session_close(
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
     try:
         if promote_to_hypomnema:
             result = _store.close_session_to_hypomnema(  # type: ignore
@@ -1022,7 +1080,9 @@ def mnemos_context_packet(
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
     try:
         packet = build_context_packet(
             _store,  # type: ignore
@@ -1057,7 +1117,9 @@ def mnemos_review_queue(
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
     functional = _store.load_functional_memories(  # type: ignore
         "",
         agent_id=agent_id,
@@ -1112,7 +1174,9 @@ def mnemos_proposal_audit(
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
     proposals = _store.list_audit_proposals(  # type: ignore
         agent_id=agent_id,
         person_id=person_id,
@@ -1121,9 +1185,8 @@ def mnemos_proposal_audit(
     )
     if not proposals:
         return "Proposal audit ledger has no audit-only rows for this scope."
-    return (
-        "Audit-only proposal ledger rows:\n\n"
-        + "\n\n".join(_format_proposal_entry(entry) for entry in proposals)
+    return "Audit-only proposal ledger rows:\n\n" + "\n\n".join(
+        _format_proposal_entry(entry) for entry in proposals
     )
 
 
@@ -1143,7 +1206,9 @@ def mnemos_visual_snapshot(
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
     return build_memory_visual_snapshot(
         _store,  # type: ignore
         agent_id=agent_id,
@@ -1193,17 +1258,86 @@ def mnemos_hypomnema_write(
         foundational: Whether this should anchor the relationship/model.
         related_session_id: Optional external session identifier.
         related_engram_id: Optional Mnemos engram this entry interprets.
+
+    The caller-supplied domain may only escalate above the content classifier,
+    never de-escalate below it. Underclaimed identity/foundational content is
+    stored at the effective domain, routed to review, and recorded as a deduped
+    pending proposal for the scoped content claim.
     """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
+
+    # R2 (T3): the caller-supplied domain may only escalate, never de-escalate
+    # below the classifier. A caller labelling identity-bearing content
+    # "topical" cannot dodge review — the effective domain is the more-severe
+    # of {caller, classifier}, and identity/foundational routes the write to
+    # review_only via classify_hypomnema_read_visibility.
+    # Normalize the caller domain ONCE so trailing whitespace ("topical ") is
+    # not mistaken for an escalation (review finding r2-domain-claim-raw-domain).
+    caller_domain = (domain or "").strip()
+    classifier_domain = _classify_domain(content)
+    effective_domain = escalate_domain(caller_domain, classifier_domain)
+    domain_claim_detected = effective_domain != caller_domain
+
+    # Finding B (T3, completion of D4): flood-prevention idempotency runs BEFORE
+    # the write, scoped to the quarantine path. When an escalated write matches
+    # an already-pending identical claim (scope + claimed domain + effective
+    # domain + content), skip BOTH the duplicate hypomnema entry and the
+    # duplicate proposal. Deduping only the proposal row is not enough — a
+    # claim-spam loop still floods the review queue with duplicate review_only
+    # hypomnema candidates, and the review queue is the gate's true attack
+    # surface (D4's stated purpose governs its letter).
+    claim_key = None
+    if domain_claim_detected:
+        # Key on the CANONICAL effective domain + content + scope — NOT the raw
+        # caller-claimed domain (T3 review domain-claim-key-not-canonical). The
+        # claimed label is caller-varied and unbounded; keying on it would let a
+        # caller mint distinct claim IDs (topical/situational/bogus/whitespace)
+        # for the same effective-domain+content and duplicate review rows,
+        # bypassing D4 flood-prevention. The effective domain is harness-derived
+        # and canonical, so same-effective+same-content collapses to one row.
+        claim_key = hashlib.sha256(
+            "\x00".join(
+                [
+                    "hypomnema_write",
+                    agent_id,
+                    person_id,
+                    project_scope,
+                    effective_domain,
+                    # Normalize content in the key so leading/trailing whitespace
+                    # variants collapse to one claim row rather than being used to
+                    # bypass D4 flood-prevention (T3 review domain-claim-key-raw-content).
+                    content.strip(),
+                ]
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+        existing_claim = _store.get_proposal(f"domain-claim-{claim_key}")  # type: ignore
+        if (
+            existing_claim is not None
+            and existing_claim.get("status") == "pending_review"
+        ):
+            return (
+                "Duplicate quarantined domain claim; no new entry written.\n"
+                f"  Existing continuity note ID: {existing_claim.get('target_id')}\n"
+                f"  Domain: {effective_domain} (claimed {caller_domain}); already pending review"
+            )
+
     try:
         entry_id = _store.write_hypomnema_entry(  # type: ignore
             content,
+            # Finding B / review d4-domain-claim-idempotency-race: the quarantine
+            # path uses a DETERMINISTIC entry_id derived from the claim key, so
+            # two identical underclaimed writes that both slip past the pre-write
+            # check still target the SAME row (SQLite serializes the UPSERT) —
+            # one hypomnema entry, not a duplicate. Normal writes keep a fresh id.
+            entry_id=(f"claim-{claim_key}" if claim_key is not None else None),
             source=source,
-            domain=domain,
+            domain=effective_domain,
             tags=tags,
             agent_id=agent_id,
             person_id=person_id,
@@ -1218,18 +1352,85 @@ def mnemos_hypomnema_write(
     except ValueError as exc:
         return f"Hypomnema write failed: {exc}"
 
+    # D4 (T3): a caller domain claim below the classifier is evidence of risk,
+    # not authority — record it as a pending_review proposal so the reviewer
+    # sees the claim beside the harness truth, keyed by the same scoped claim_key
+    # computed above (scope + claimed domain + effective domain + content). The
+    # scope keeps a claim in another agent/person/project from overwriting this
+    # row; entry_id is deliberately excluded (the surface mints a fresh entry_id
+    # per call, so keying on it would defeat flood-prevention — the pre-write
+    # idempotency above already prevents the duplicate entry).
+    if domain_claim_detected:
+        try:
+            _store.write_proposal(  # type: ignore
+                proposal_id=f"domain-claim-{claim_key}",
+                source_authority=SourceAuthority.OBSERVED,
+                kind="semantic",
+                target_surface="hypomnema_entries",
+                transition="hypomnema_write_domain_claim",
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+                domain=effective_domain,
+                blast_radius=(
+                    "identity"
+                    if effective_domain in ("identity", "foundational")
+                    else "medium"
+                ),
+                read_visibility=READ_VISIBILITY_REVIEW,
+                status="pending_review",
+                reason=(
+                    f"caller-claimed domain={caller_domain!r} on {classifier_domain}-classified "
+                    f"content at mnemos_hypomnema_write; quarantined to review "
+                    f"(effective domain={effective_domain!r})"
+                ),
+                target_id=entry_id,
+                # Populate payload/provenance so the claim is visible in the
+                # review queue, not buried in reason/target_id (T3 review
+                # domain-claim-proposal-not-legible).
+                payload={
+                    "surface": "mnemos_hypomnema_write",
+                    "claimed_domain": caller_domain,
+                    "classifier_domain": classifier_domain,
+                    "effective_domain": effective_domain,
+                    "target_entry_id": entry_id,
+                },
+                provenance_ids=[entry_id],
+            )
+        except ValueError:
+            # A proposal-ledger write failure must not lose the quarantined
+            # hypomnema (already written at review tier); the claim record is
+            # best-effort telemetry on top of the enforced routing.
+            pass
+
+    # Read back the just-written row to display its assigned visibility. This
+    # is an admin read of the write's own result: a quarantined (review_only/
+    # audit_only) write must still be able to report its tier, so opt into
+    # unfiltered access (R5, T3/D8-A). This surfaces the tier to the caller;
+    # it does not place the prose into any operational read path.
     entry = _store.get_hypomnema_entry(  # type: ignore
         entry_id,
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        read_visibility=None,
     )
     visibility = entry["read_visibility"] if entry is not None else "unknown"
+
+    # R2 (T3): report the effective (stored) domain, and when the caller's label
+    # was escalated, name the override so the quarantine decision is legible
+    # rather than hidden behind the caller's claimed label.
+    if domain_claim_detected:
+        domain_display = (
+            f"{effective_domain} (escalated from {caller_domain}; routed to review)"
+        )
+    else:
+        domain_display = effective_domain
 
     return (
         f"Hypomnema written: {entry_id}\n"
         f"  Scope: {agent_id}/{person_id}/{project_scope}\n"
-        f"  Domain: {domain}\n"
+        f"  Domain: {domain_display}\n"
         f"  Source: {source}\n"
         f"  Visibility: {visibility}\n"
         f"  Confidence: {confidence:.2f}\n"
@@ -1264,7 +1465,9 @@ def mnemos_hypomnema_search(
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
     entries = _store.search_hypomnema(  # type: ignore
         query,
         agent_id=agent_id,
@@ -1304,7 +1507,9 @@ def mnemos_hypomnema_revise(
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
     try:
         _store.revise_hypomnema_entry(  # type: ignore
             entry_id,
@@ -1342,7 +1547,9 @@ def mnemos_hypomnema_supersede(
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
     try:
         new_id = _store.supersede_hypomnema_entry(  # type: ignore
             entry_id,
@@ -1356,7 +1563,9 @@ def mnemos_hypomnema_supersede(
     except (KeyError, ValueError) as exc:
         return f"Hypomnema supersession failed: {exc}"
 
-    return f"Hypomnema superseded: {entry_id}\n  Replacement: {new_id}\n  Reason: {reason}"
+    return (
+        f"Hypomnema superseded: {entry_id}\n  Replacement: {new_id}\n  Reason: {reason}"
+    )
 
 
 @mcp.tool()
@@ -1371,14 +1580,17 @@ def mnemos_hypomnema_promote(
 
     Promotion is explicit and dry-run by default because hypomnema is scoped
     continuity. The promoted engram is lightly de-identified and tagged as
-    hypomnema/promoted/continuity. Default scope args inherit the server's
-    configured scope.
+    hypomnema/promoted/continuity. Promotion stamps observed source authority;
+    hypomnema itself does not mint user_stated authority. Default scope args
+    inherit the server's configured scope.
     """
     gate = _setup_gate()
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
     entry = _store.get_hypomnema_entry(  # type: ignore
         entry_id,
         agent_id=agent_id,
@@ -1406,6 +1618,9 @@ def mnemos_hypomnema_promote(
         source=SourceType.USER_EXPLICIT,
         agent_id=agent_id,
         skip_surprise_detection=True,
+        # Promotion cannot mint authority; hypomnema carries none under
+        # Reading B, so promotion stamps observed (F2 ruling).
+        source_authority=SourceAuthority.OBSERVED,
     )
     _store.mark_hypomnema_promoted(entry_id, engram.id)  # type: ignore
     return (
@@ -1431,7 +1646,9 @@ def mnemos_hypomnema_candidates(
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
     entries = _store.get_hypomnema_promotion_candidates(  # type: ignore
         agent_id=agent_id,
         person_id=person_id,
@@ -1440,9 +1657,8 @@ def mnemos_hypomnema_candidates(
     )
     if not entries:
         return "No hypomnema entries currently meet promotion thresholds."
-    return (
-        f"{len(entries)} promotion candidates:\n\n"
-        + "\n\n".join(_format_hypomnema_entry(entry) for entry in entries)
+    return f"{len(entries)} promotion candidates:\n\n" + "\n\n".join(
+        _format_hypomnema_entry(entry) for entry in entries
     )
 
 
@@ -1508,6 +1724,7 @@ def mnemos_introspect(text: str) -> str:
         text: The text to introspect (e.g. one of your own recent responses).
     """
     from .advanced.introspection import introspect
+
     if not (text or "").strip():
         return "Nothing to introspect (empty text)."
     return introspect(text).to_summary()
@@ -1531,7 +1748,9 @@ def mnemos_status(
     if gate:
         return gate
     _ensure_store()
-    agent_id, person_id, project_scope = _effective_scope(agent_id, person_id, project_scope)
+    agent_id, person_id, project_scope = _effective_scope(
+        agent_id, person_id, project_scope
+    )
     stats = _store.get_stats(  # type: ignore
         agent_id,
         person_id=person_id,
@@ -1699,7 +1918,12 @@ def mnemos_consolidate(deep: bool = False, agent_id: str = "default") -> str:
         return gate
     _ensure_store()
     agent_id = _effective_agent_id(agent_id)
-    daemon = ConsolidationDaemon(store=_store, config={}, llm_client=_llm_client, embedding_index=_embedding_index)  # type: ignore
+    daemon = ConsolidationDaemon(
+        store=_store,
+        config={},
+        llm_client=_llm_client,
+        embedding_index=_embedding_index,
+    )  # type: ignore
     stats = daemon.run_cycle(deep=deep, agent_id=agent_id)
 
     lines = [
@@ -1709,12 +1933,18 @@ def mnemos_consolidate(deep: bool = False, agent_id: str = "default") -> str:
 
     if "decay" in stats:
         d = stats["decay"]
-        lines.append(f"  Decay: {d.get('engrams_decayed', 0)} decayed, {d.get('engrams_archived', 0)} archived")
+        lines.append(
+            f"  Decay: {d.get('engrams_decayed', 0)} decayed, {d.get('engrams_archived', 0)} archived"
+        )
     if "connection_discovery" in stats:
         cd = stats["connection_discovery"]
-        lines.append(f"  Connections: {cd.get('connections_created', 0)} new, {cd.get('connections_strengthened', 0)} strengthened")
+        lines.append(
+            f"  Connections: {cd.get('connections_created', 0)} new, {cd.get('connections_strengthened', 0)} strengthened"
+        )
     if "softening" in stats:
-        lines.append(f"  Softened: {stats['softening'].get('engrams_softened', 0)} memories")
+        lines.append(
+            f"  Softened: {stats['softening'].get('engrams_softened', 0)} memories"
+        )
     if "reflection" in stats:
         ref = stats["reflection"]
         lines.append(f"  Thoughts: {ref.get('thoughts_generated', 0)} generated")

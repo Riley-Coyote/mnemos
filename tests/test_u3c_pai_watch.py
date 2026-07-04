@@ -85,7 +85,9 @@ def test_u3c_removed_engram_section_tombstones_target_idempotently(tmp_path):
         source = _source("identity_kernel", "# A\nalpha\n\n# B\nbravo")
         first = preview_pai_import(store, [source])
         apply_pai_import(store, first)
-        removed_id = next(row for row in first.rows if row.source_anchor == "h:b:001").target_id
+        removed_id = next(
+            row for row in first.rows if row.source_anchor == "h:b:001"
+        ).target_id
 
         removed = replace(source, source_text="# A\nalpha")
         preview = preview_pai_watch_update(store, [removed])
@@ -97,52 +99,80 @@ def test_u3c_removed_engram_section_tombstones_target_idempotently(tmp_path):
         result = apply_pai_watch_update(store, preview)
         assert result.counts == {ACTION_NOOP: 1, ACTION_TOMBSTONE: 1}
 
-        row = store._get_conn().execute(
-            "SELECT state, softening_protected, decay_protected FROM engrams WHERE id = ?",
-            (removed_id,),
-        ).fetchone()
+        row = (
+            store._get_conn()
+            .execute(
+                "SELECT state, softening_protected, decay_protected FROM engrams WHERE id = ?",
+                (removed_id,),
+            )
+            .fetchone()
+        )
         assert row["state"] == "archived"
         assert bool(row["softening_protected"]) is True
         assert bool(row["decay_protected"]) is True
-        archive = store._get_conn().execute(
-            "SELECT archive_reason FROM archive WHERE id = ?",
-            (removed_id,),
-        ).fetchone()
+        archive = (
+            store._get_conn()
+            .execute(
+                "SELECT archive_reason FROM archive WHERE id = ?",
+                (removed_id,),
+            )
+            .fetchone()
+        )
         assert archive["archive_reason"] == "pai_import_tombstone:u3c-job"
-        row_map = store._get_conn().execute(
-            "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
-            (removed_id,),
-        ).fetchone()
+        row_map = (
+            store._get_conn()
+            .execute(
+                "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
+                (removed_id,),
+            )
+            .fetchone()
+        )
         assert row_map["tombstone_at"] is not None
-        version = store._get_conn().execute(
-            "SELECT content_snapshot, change_reason FROM versions WHERE engram_id = ?",
-            (removed_id,),
-        ).fetchone()
+        version = (
+            store._get_conn()
+            .execute(
+                "SELECT content_snapshot, change_reason FROM versions WHERE engram_id = ?",
+                (removed_id,),
+            )
+            .fetchone()
+        )
         assert version["content_snapshot"] == "# B\nbravo"
         assert version["change_reason"] == "pai_import_tombstone:u3c-job"
-        tombstone_events = store._get_conn().execute(
-            """
+        tombstone_events = (
+            store._get_conn()
+            .execute(
+                """
             SELECT COUNT(*) FROM pai_import_events
             WHERE target_id = ? AND action = ?
             """,
-            (removed_id, ACTION_TOMBSTONE),
-        ).fetchone()[0]
+                (removed_id, ACTION_TOMBSTONE),
+            )
+            .fetchone()[0]
+        )
         assert tombstone_events == 1
 
         replay = preview_pai_watch_update(store, [removed])
         apply_pai_watch_update(store, replay)
-        version_count = store._get_conn().execute(
-            "SELECT COUNT(*) FROM versions WHERE engram_id = ?",
-            (removed_id,),
-        ).fetchone()[0]
+        version_count = (
+            store._get_conn()
+            .execute(
+                "SELECT COUNT(*) FROM versions WHERE engram_id = ?",
+                (removed_id,),
+            )
+            .fetchone()[0]
+        )
         assert version_count == 1
-        replayed_tombstone_events = store._get_conn().execute(
-            """
+        replayed_tombstone_events = (
+            store._get_conn()
+            .execute(
+                """
             SELECT COUNT(*) FROM pai_import_events
             WHERE target_id = ? AND action = ?
             """,
-            (removed_id, ACTION_TOMBSTONE),
-        ).fetchone()[0]
+                (removed_id, ACTION_TOMBSTONE),
+            )
+            .fetchone()[0]
+        )
         assert replayed_tombstone_events == 1
     finally:
         store.close()
@@ -154,7 +184,9 @@ def test_u3c_returned_pai_tombstoned_engram_reactivates(tmp_path):
         source = _source("identity_kernel", "# A\nalpha\n\n# B\nbravo")
         first = preview_pai_import(store, [source])
         apply_pai_import(store, first)
-        removed_id = next(row for row in first.rows if row.source_anchor == "h:b:001").target_id
+        removed_id = next(
+            row for row in first.rows if row.source_anchor == "h:b:001"
+        ).target_id
 
         removed = replace(source, source_text="# A\nalpha")
         apply_pai_watch_update(store, preview_pai_watch_update(store, [removed]))
@@ -167,34 +199,52 @@ def test_u3c_returned_pai_tombstoned_engram_reactivates(tmp_path):
 
         result = apply_pai_watch_update(store, returned)
         assert result.counts == {ACTION_NOOP: 1, ACTION_REPAIR: 1}
-        row = store._get_conn().execute(
-            "SELECT state FROM engrams WHERE id = ?",
-            (removed_id,),
-        ).fetchone()
+        row = (
+            store._get_conn()
+            .execute(
+                "SELECT state FROM engrams WHERE id = ?",
+                (removed_id,),
+            )
+            .fetchone()
+        )
         assert row["state"] == "active"
-        row_map = store._get_conn().execute(
-            "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
-            (removed_id,),
-        ).fetchone()
+        row_map = (
+            store._get_conn()
+            .execute(
+                "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
+                (removed_id,),
+            )
+            .fetchone()
+        )
         assert row_map["tombstone_at"] is None
-        archive = store._get_conn().execute(
-            "SELECT 1 FROM archive WHERE id = ?",
-            (removed_id,),
-        ).fetchone()
+        archive = (
+            store._get_conn()
+            .execute(
+                "SELECT 1 FROM archive WHERE id = ?",
+                (removed_id,),
+            )
+            .fetchone()
+        )
         assert archive is None
     finally:
         store.close()
 
 
-def test_u3c_legacy_pai_tombstoned_engram_reactivates_without_row_map_tombstone(tmp_path):
+def test_u3c_legacy_pai_tombstoned_engram_reactivates_without_row_map_tombstone(
+    tmp_path,
+):
     store = EngramStore(tmp_path / "u3c.db")
     try:
         source = _source("identity_kernel", "# A\nalpha\n\n# B\nbravo")
         first = preview_pai_import(store, [source])
         apply_pai_import(store, first)
-        legacy_id = next(row for row in first.rows if row.source_anchor == "h:b:001").target_id
+        legacy_id = next(
+            row for row in first.rows if row.source_anchor == "h:b:001"
+        ).target_id
         conn = store._get_conn()
-        engram = conn.execute("SELECT * FROM engrams WHERE id = ?", (legacy_id,)).fetchone()
+        engram = conn.execute(
+            "SELECT * FROM engrams WHERE id = ?", (legacy_id,)
+        ).fetchone()
         conn.execute("UPDATE engrams SET state = 'archived' WHERE id = ?", (legacy_id,))
         conn.execute(
             """
@@ -227,9 +277,13 @@ def test_u3c_legacy_pai_tombstoned_engram_reactivates_without_row_map_tombstone(
 
         result = apply_pai_watch_update(store, returned)
         assert result.counts == {ACTION_NOOP: 1, ACTION_REPAIR: 1}
-        row = conn.execute("SELECT state FROM engrams WHERE id = ?", (legacy_id,)).fetchone()
+        row = conn.execute(
+            "SELECT state FROM engrams WHERE id = ?", (legacy_id,)
+        ).fetchone()
         assert row["state"] == "active"
-        archive = conn.execute("SELECT 1 FROM archive WHERE id = ?", (legacy_id,)).fetchone()
+        archive = conn.execute(
+            "SELECT 1 FROM archive WHERE id = ?", (legacy_id,)
+        ).fetchone()
         assert archive is None
     finally:
         store.close()
@@ -271,10 +325,14 @@ def test_u3c_empty_watched_source_tombstones_all_mapped_rows(tmp_path):
         assert tombstone.target_id == imported_id
 
         apply_pai_watch_update(store, preview)
-        row = store._get_conn().execute(
-            "SELECT state FROM engrams WHERE id = ?",
-            (imported_id,),
-        ).fetchone()
+        row = (
+            store._get_conn()
+            .execute(
+                "SELECT state FROM engrams WHERE id = ?",
+                (imported_id,),
+            )
+            .fetchone()
+        )
         assert row["state"] == "archived"
     finally:
         store.close()
@@ -302,24 +360,31 @@ def test_u3c_removed_hypomnema_section_deactivates_without_successor(tmp_path):
         source = _source("hypomnema", "# Keep\nstill live\n\n# Drop\nretire this")
         first = preview_pai_import(store, [source])
         apply_pai_import(store, first)
-        removed_id = next(row for row in first.rows if row.source_anchor == "h:drop:001").target_id
+        removed_id = next(
+            row for row in first.rows if row.source_anchor == "h:drop:001"
+        ).target_id
 
         removed = replace(source, source_text="# Keep\nstill live")
         preview = preview_pai_watch_update(store, [removed])
         assert preview.counts == {ACTION_NOOP: 1, ACTION_DEACTIVATE: 1}
 
         apply_pai_watch_update(store, preview)
+        # Inspect the deactivated (non-operational) row via admin opt-in (R5/D8-A).
         entry = store.get_hypomnema_entry(
             removed_id,
             agent_id="oliver",
             person_id="david",
             project_scope="pai",
+            read_visibility=None,
         )
         assert entry is not None
         assert entry["active"] is False
         assert entry["superseded_by"] is None
         assert entry["revision_count"] == 1
-        assert entry["revisions"][0]["reason"] == "deactivated: pai_import_deactivate:u3c-job"
+        assert (
+            entry["revisions"][0]["reason"]
+            == "deactivated: pai_import_deactivate:u3c-job"
+        )
 
         replay = preview_pai_watch_update(store, [removed])
         apply_pai_watch_update(store, replay)
@@ -328,6 +393,7 @@ def test_u3c_removed_hypomnema_section_deactivates_without_successor(tmp_path):
             agent_id="oliver",
             person_id="david",
             project_scope="pai",
+            read_visibility=None,
         )
         assert replayed["revision_count"] == 1
     finally:
@@ -343,12 +409,18 @@ def test_u3c_removed_belief_section_flags_review_without_changing_content(tmp_pa
         )
         first = preview_pai_import(store, [source])
         apply_pai_import(store, first)
-        removed_id = next(row for row in first.rows if row.source_anchor == "block:002").target_id
+        removed_id = next(
+            row for row in first.rows if row.source_anchor == "block:002"
+        ).target_id
 
-        before = store._get_conn().execute(
-            "SELECT confidence FROM beliefs WHERE id = ?",
-            (removed_id,),
-        ).fetchone()
+        before = (
+            store._get_conn()
+            .execute(
+                "SELECT confidence FROM beliefs WHERE id = ?",
+                (removed_id,),
+            )
+            .fetchone()
+        )
         store._get_conn().execute(
             """
             UPDATE beliefs
@@ -366,15 +438,19 @@ def test_u3c_removed_belief_section_flags_review_without_changing_content(tmp_pa
         assert preview.counts == {ACTION_NOOP: 1, ACTION_REVIEW: 1}
 
         apply_pai_watch_update(store, preview)
-        row = store._get_conn().execute(
-            """
+        row = (
+            store._get_conn()
+            .execute(
+                """
             SELECT content, confidence, needs_review, confidence_pending_review,
                    read_visibility, revision_history
             FROM beliefs
             WHERE id = ?
             """,
-            (removed_id,),
-        ).fetchone()
+                (removed_id,),
+            )
+            .fetchone()
+        )
         assert row["content"] == "Reports change family narratives."
         assert row["confidence"] == before["confidence"]
         assert bool(row["needs_review"]) is True
@@ -384,10 +460,14 @@ def test_u3c_removed_belief_section_flags_review_without_changing_content(tmp_pa
         assert revisions[-1]["reason"] == "pai_import_review:u3c-job"
 
         apply_pai_watch_update(store, preview_pai_watch_update(store, [removed]))
-        replayed_revisions = store._get_conn().execute(
-            "SELECT revision_history FROM beliefs WHERE id = ?",
-            (removed_id,),
-        ).fetchone()["revision_history"]
+        replayed_revisions = (
+            store._get_conn()
+            .execute(
+                "SELECT revision_history FROM beliefs WHERE id = ?",
+                (removed_id,),
+            )
+            .fetchone()["revision_history"]
+        )
         assert len(json.loads(replayed_revisions)) == 1
     finally:
         store.close()
@@ -402,7 +482,9 @@ def test_u3c_review_action_moves_already_pending_belief_to_review_only(tmp_path)
         )
         first = preview_pai_import(store, [source])
         apply_pai_import(store, first)
-        removed_id = next(row for row in first.rows if row.source_anchor == "block:002").target_id
+        removed_id = next(
+            row for row in first.rows if row.source_anchor == "block:002"
+        ).target_id
         store._get_conn().execute(
             """
             UPDATE beliefs
@@ -420,14 +502,18 @@ def test_u3c_review_action_moves_already_pending_belief_to_review_only(tmp_path)
         assert preview.counts == {ACTION_NOOP: 1, ACTION_REVIEW: 1}
 
         apply_pai_watch_update(store, preview)
-        row = store._get_conn().execute(
-            """
+        row = (
+            store._get_conn()
+            .execute(
+                """
             SELECT needs_review, confidence_pending_review, read_visibility
             FROM beliefs
             WHERE id = ?
             """,
-            (removed_id,),
-        ).fetchone()
+                (removed_id,),
+            )
+            .fetchone()
+        )
 
         assert bool(row["needs_review"]) is True
         assert bool(row["confidence_pending_review"]) is True
@@ -445,7 +531,9 @@ def test_u3c_review_action_preserves_audit_only_belief_visibility(tmp_path):
         )
         first = preview_pai_import(store, [source])
         apply_pai_import(store, first)
-        removed_id = next(row for row in first.rows if row.source_anchor == "block:002").target_id
+        removed_id = next(
+            row for row in first.rows if row.source_anchor == "block:002"
+        ).target_id
         store._get_conn().execute(
             """
             UPDATE beliefs
@@ -463,15 +551,19 @@ def test_u3c_review_action_preserves_audit_only_belief_visibility(tmp_path):
         assert preview.counts == {ACTION_NOOP: 1, ACTION_REVIEW: 1}
 
         apply_pai_watch_update(store, preview)
-        row = store._get_conn().execute(
-            """
+        row = (
+            store._get_conn()
+            .execute(
+                """
             SELECT needs_review, confidence_pending_review, read_visibility,
                    revision_history
             FROM beliefs
             WHERE id = ?
             """,
-            (removed_id,),
-        ).fetchone()
+                (removed_id,),
+            )
+            .fetchone()
+        )
 
         assert bool(row["needs_review"]) is True
         assert bool(row["confidence_pending_review"]) is True
@@ -481,10 +573,14 @@ def test_u3c_review_action_preserves_audit_only_belief_visibility(tmp_path):
         )
 
         apply_pai_watch_update(store, preview_pai_watch_update(store, [removed]))
-        replayed_revisions = store._get_conn().execute(
-            "SELECT revision_history FROM beliefs WHERE id = ?",
-            (removed_id,),
-        ).fetchone()["revision_history"]
+        replayed_revisions = (
+            store._get_conn()
+            .execute(
+                "SELECT revision_history FROM beliefs WHERE id = ?",
+                (removed_id,),
+            )
+            .fetchone()["revision_history"]
+        )
         assert len(json.loads(replayed_revisions)) == 1
     finally:
         store.close()
@@ -508,10 +604,14 @@ def test_u3c_watch_apply_rejects_stale_lifecycle_preview_after_target_drift(tmp_
         with pytest.raises(ValueError, match="diverged from importer baseline"):
             apply_pai_watch_update(store, preview)
 
-        row = store._get_conn().execute(
-            "SELECT state, content FROM engrams WHERE id = ?",
-            (tombstone.target_id,),
-        ).fetchone()
+        row = (
+            store._get_conn()
+            .execute(
+                "SELECT state, content FROM engrams WHERE id = ?",
+                (tombstone.target_id,),
+            )
+            .fetchone()
+        )
         assert row["state"] == "active"
         assert row["content"] == "operator edit after preview"
     finally:

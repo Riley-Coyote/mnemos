@@ -48,38 +48,171 @@ SEED = 42
 
 LIVES: dict[str, dict[str, list[str]]] = {
     "archivist": {
-        "letterpress": ["letterpress", "kerning", "typeface", "ligature", "galley", "platen"],
-        "manuscripts": ["manuscript", "vellum", "marginalia", "codex", "folio", "scribe"],
-        "bindings": ["binding", "spine", "endpaper", "headband", "buckram", "sewing-frame"],
-        "catalogs": ["catalog", "accession", "shelfmark", "finding-aid", "provenance", "deaccession"],
+        "letterpress": [
+            "letterpress",
+            "kerning",
+            "typeface",
+            "ligature",
+            "galley",
+            "platen",
+        ],
+        "manuscripts": [
+            "manuscript",
+            "vellum",
+            "marginalia",
+            "codex",
+            "folio",
+            "scribe",
+        ],
+        "bindings": [
+            "binding",
+            "spine",
+            "endpaper",
+            "headband",
+            "buckram",
+            "sewing-frame",
+        ],
+        "catalogs": [
+            "catalog",
+            "accession",
+            "shelfmark",
+            "finding-aid",
+            "provenance",
+            "deaccession",
+        ],
         "inks": ["ink", "pigment", "iron-gall", "lampblack", "sizing", "mordant"],
-        "restoration": ["restoration", "deacidification", "tear-repair", "humidification", "encapsulation", "foxing"],
-        "exhibits": ["exhibit", "vitrine", "lux-level", "mount", "caption", "loan-agreement"],
+        "restoration": [
+            "restoration",
+            "deacidification",
+            "tear-repair",
+            "humidification",
+            "encapsulation",
+            "foxing",
+        ],
+        "exhibits": [
+            "exhibit",
+            "vitrine",
+            "lux-level",
+            "mount",
+            "caption",
+            "loan-agreement",
+        ],
     },
     "gardener": {
         "soil": ["loam", "compost", "mycorrhizae", "tilth", "humus", "topdressing"],
-        "pruning": ["pruning", "pollarding", "espalier", "deadheading", "coppicing", "thinning-cut"],
-        "propagation": ["cutting", "scion", "rootstock", "stratification", "layering", "division"],
+        "pruning": [
+            "pruning",
+            "pollarding",
+            "espalier",
+            "deadheading",
+            "coppicing",
+            "thinning-cut",
+        ],
+        "propagation": [
+            "cutting",
+            "scion",
+            "rootstock",
+            "stratification",
+            "layering",
+            "division",
+        ],
         "pests": ["aphid", "whitefly", "ladybird", "neem", "thrips", "leafminer"],
-        "perennials": ["perennial", "rhizome", "crown", "hosta", "salvia", "overwintering"],
-        "water": ["irrigation", "drip-line", "swale", "mulch-basin", "greywater", "wicking-bed"],
-        "greenhouse": ["greenhouse", "cold-frame", "ventilation-louvre", "shade-cloth", "heat-mat", "glazing"],
+        "perennials": [
+            "perennial",
+            "rhizome",
+            "crown",
+            "hosta",
+            "salvia",
+            "overwintering",
+        ],
+        "water": [
+            "irrigation",
+            "drip-line",
+            "swale",
+            "mulch-basin",
+            "greywater",
+            "wicking-bed",
+        ],
+        "greenhouse": [
+            "greenhouse",
+            "cold-frame",
+            "ventilation-louvre",
+            "shade-cloth",
+            "heat-mat",
+            "glazing",
+        ],
     },
     "engineer": {
-        "retrieval": ["retrieval", "activation", "spreading", "recall-cue", "salience", "priming"],
-        "storage": ["sqlite", "schema", "migration", "index-scan", "vacuum", "write-ahead"],
-        "consolidation": ["consolidation", "decay-curve", "softening", "dormancy", "archival", "rehearsal"],
-        "agents": ["agent-scope", "identity-kernel", "epoch", "substrate", "affinity", "daemon"],
-        "graphs": ["graph", "edge-weight", "hub-node", "traversal", "clustering", "adjacency"],
-        "testing": ["pytest", "fixture", "regression", "invariant", "coverage", "flake"],
-        "deploy": ["deploy", "rollback", "canary", "healthcheck", "cron-job", "observability"],
+        "retrieval": [
+            "retrieval",
+            "activation",
+            "spreading",
+            "recall-cue",
+            "salience",
+            "priming",
+        ],
+        "storage": [
+            "sqlite",
+            "schema",
+            "migration",
+            "index-scan",
+            "vacuum",
+            "write-ahead",
+        ],
+        "consolidation": [
+            "consolidation",
+            "decay-curve",
+            "softening",
+            "dormancy",
+            "archival",
+            "rehearsal",
+        ],
+        "agents": [
+            "agent-scope",
+            "identity-kernel",
+            "epoch",
+            "substrate",
+            "affinity",
+            "daemon",
+        ],
+        "graphs": [
+            "graph",
+            "edge-weight",
+            "hub-node",
+            "traversal",
+            "clustering",
+            "adjacency",
+        ],
+        "testing": [
+            "pytest",
+            "fixture",
+            "regression",
+            "invariant",
+            "coverage",
+            "flake",
+        ],
+        "deploy": [
+            "deploy",
+            "rollback",
+            "canary",
+            "healthcheck",
+            "cron-job",
+            "observability",
+        ],
     },
 }
 
 FILLER = [
-    "spent the afternoon with", "kept returning to", "finally understood",
-    "made notes about", "argued with myself over", "quietly fixed",
-    "sketched a plan for", "compared two approaches to", "watched", "rebuilt",
+    "spent the afternoon with",
+    "kept returning to",
+    "finally understood",
+    "made notes about",
+    "argued with myself over",
+    "quietly fixed",
+    "sketched a plan for",
+    "compared two approaches to",
+    "watched",
+    "rebuilt",
 ]
 
 ENGRAMS_PER_TOPIC = {"archivist": 10, "gardener": 10, "engineer": 12}
@@ -95,7 +228,9 @@ DRIFT_MEASURE_EVERY = 10
 HOT_TOPICS_PER_LIFE = 2  # first N topics absorb most session queries
 
 
-def build_life(db_path: Path, agent: str, topics: dict[str, list[str]], rng: random.Random):
+def build_life(
+    db_path: Path, agent: str, topics: dict[str, list[str]], rng: random.Random
+):
     """Seed one synthetic life. Returns (store, ground_truth, queries)."""
     store = EngramStore(db_path)
     encoder = Encoder(store, llm_client=None)
@@ -121,6 +256,7 @@ def build_life(db_path: Path, agent: str, topics: dict[str, list[str]], rng: ran
                 agent_id=agent,
                 session_id=f"{agent}-{topic}-{i}",
                 skip_surprise_detection=True,
+                source_authority="observed",  # R1: synthetic benchmark writer (T3)
             )
             ids.add(e.id)
             engrams.append(e)
@@ -135,7 +271,9 @@ def build_life(db_path: Path, agent: str, topics: dict[str, list[str]], rng: ran
         for i, e in enumerate(engrams):
             # within-topic chain
             nxt = engrams[(i + 1) % len(engrams)]
-            e.add_connection(nxt.id, ConnectionRelation.SUPPORTS, strength=0.6, formed_by="seed")
+            e.add_connection(
+                nxt.id, ConnectionRelation.SUPPORTS, strength=0.6, formed_by="seed"
+            )
             # occasional cross-topic association
             if i % 4 == 0:
                 other = topic_engrams[topic_list[(ti + 1) % len(topic_list)]]
@@ -198,7 +336,9 @@ def run_grid() -> list[str]:
     with tempfile.TemporaryDirectory() as tmp:
         stores = {}
         for agent, topics in LIVES.items():
-            store, gt, queries = build_life(Path(tmp) / f"{agent}.db", agent, topics, rng)
+            store, gt, queries = build_life(
+                Path(tmp) / f"{agent}.db", agent, topics, rng
+            )
             stores[agent] = (store, gt, queries)
 
         rows = []
@@ -208,8 +348,13 @@ def run_grid() -> list[str]:
                     agg = {f"{m}@{k}": [] for m in ("p", "r") for k in K_VALUES}
                     for agent, (store, gt, queries) in stores.items():
                         res = evaluate(
-                            store, agent, gt, queries,
-                            depth=depth, decay=decay, threshold=threshold,
+                            store,
+                            agent,
+                            gt,
+                            queries,
+                            depth=depth,
+                            decay=decay,
+                            threshold=threshold,
                         )
                         for key, val in res.items():
                             agg[key].append(val)
@@ -252,7 +397,9 @@ def run_drift() -> list[str]:
     with tempfile.TemporaryDirectory() as tmp:
         lives = {}
         for agent, topics in LIVES.items():
-            store, gt, queries = build_life(Path(tmp) / f"{agent}.db", agent, topics, rng)
+            store, gt, queries = build_life(
+                Path(tmp) / f"{agent}.db", agent, topics, rng
+            )
             hot = set(list(topics)[:HOT_TOPICS_PER_LIFE])
             lives[agent] = {
                 "store": store,
@@ -293,7 +440,9 @@ def run_drift() -> list[str]:
 
         for session in range(1, DRIFT_SESSIONS + 1):
             for agent, life in lives.items():
-                retriever = ReactiveRetriever(life["store"], reconsolidation_enabled=True)
+                retriever = ReactiveRetriever(
+                    life["store"], reconsolidation_enabled=True
+                )
                 # ~80% of queries hit the hot topics
                 topic_pool = list(life["topics"])
                 if rng.random() < 0.8:
@@ -314,8 +463,12 @@ def run_drift() -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Mnemos retrieval benchmark")
-    parser.add_argument("--grid", action="store_true", help="run the parameter grid only")
-    parser.add_argument("--drift", action="store_true", help="run the drift simulation only")
+    parser.add_argument(
+        "--grid", action="store_true", help="run the parameter grid only"
+    )
+    parser.add_argument(
+        "--drift", action="store_true", help="run the drift simulation only"
+    )
     args = parser.parse_args()
     run_both = not (args.grid or args.drift)
 

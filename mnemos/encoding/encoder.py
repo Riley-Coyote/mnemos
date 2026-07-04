@@ -22,14 +22,18 @@ from ..core.types import (
     DEFAULT_STRENGTH,
     EncodingDepth,
     EngramKind,
+    SourceAuthority,
     SourceType,
     Visibility,
 )
 from .llm_classifier import (
+    apply_belief_update,
     classify_connections,
     evaluate_beliefs,
-    apply_belief_update,
 )
+
+# RFC-R1 authority values, harness-stamped at the ingest channel.
+VALID_SOURCE_AUTHORITIES = frozenset(a.value for a in SourceAuthority)
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -134,6 +138,7 @@ class Encoder:
             kind=EngramKind.SEMANTIC,
             tags=["preference", "ui"],
             source=SourceType.SESSION,
+            source_authority=SourceAuthority.OBSERVED,
         )
     """
 
@@ -164,6 +169,8 @@ class Encoder:
         override_confidence: float | None = None,
         override_confidence_source: str | None = None,
         skip_surprise_detection: bool = False,
+        *,
+        source_authority: str,
     ) -> Engram:
         """Create a new engram from raw content.
 
@@ -180,12 +187,21 @@ class Encoder:
             emotional_state: Current emotional state dict (6 dimensions).
             override_confidence: If set, use this confidence score instead of auto-scoring.
             override_confidence_source: If set, use this confidence source label.
+            source_authority: RFC-R1 harness-stamped authority (required,
+                keyword-only). Every caller stamps it from its ingest *channel*,
+                never from payload/caller content — there is deliberately no
+                default, so an unstamped caller is a loud ``TypeError`` rather
+                than a silent ``observed``. Trusted callers only; the MCP tool
+                surface exposes no authority parameter.
 
         Returns:
             The fully-formed, persisted Engram with connections attached.
         """
         if not content or not content.strip():
             raise ValueError("Cannot encode empty content")
+
+        if source_authority not in VALID_SOURCE_AUTHORITIES:
+            raise ValueError(f"Unsupported source authority: {source_authority!r}")
 
         tags = tags or []
 
@@ -222,6 +238,7 @@ class Encoder:
             session_id=session_id,
             confidence=confidence,
             confidence_source=confidence_source,
+            authority=source_authority,
         )
 
         engram = Engram(

@@ -80,7 +80,9 @@ def test_simple_tool_schemas_do_not_expose_injected_context():
     assert "ctx" not in tools["mnemos_capture"].inputSchema.get("properties", {})
     assert "ctx" not in tools["mnemos_maintain"].inputSchema.get("properties", {})
     assert "include_graph" in tools["mnemos_context"].inputSchema.get("properties", {})
-    assert "graph_max_nodes" in tools["mnemos_context"].inputSchema.get("properties", {})
+    assert "graph_max_nodes" in tools["mnemos_context"].inputSchema.get(
+        "properties", {}
+    )
 
 
 def test_simple_capture_accepts_numeric_or_string_importance():
@@ -90,7 +92,10 @@ def test_simple_capture_accepts_numeric_or_string_importance():
     importance_schema = schema["properties"]["importance"]
 
     assert "anyOf" in importance_schema
-    assert {entry["type"] for entry in importance_schema["anyOf"]} >= {"number", "string"}
+    assert {entry["type"] for entry in importance_schema["anyOf"]} >= {
+        "number",
+        "string",
+    }
 
 
 def test_hypomnema_candidates_tool_excludes_non_operational_prose(
@@ -287,17 +292,21 @@ def test_hypomnema_promote_rejects_non_operational_entries(monkeypatch, store):
         project_scope="mnemos",
     )
 
+    # Verify the quarantined rows were not mutated by the rejected promote:
+    # admin inspection requires explicit unfiltered opt-in (R5/D8-A).
     review_entry = store.get_hypomnema_entry(
         review_id,
         agent_id="vektor",
         person_id="riley",
         project_scope="mnemos",
+        read_visibility=None,
     )
     audit_entry = store.get_hypomnema_entry(
         audit_id,
         agent_id="vektor",
         person_id="riley",
         project_scope="mnemos",
+        read_visibility=None,
     )
 
     assert "Active operational hypomnema entry not found" in review_dry_run
@@ -353,17 +362,21 @@ def test_hypomnema_revise_and_supersede_reject_non_operational_entries(
         project_scope="mnemos",
     )
 
+    # Verify the quarantined rows were not mutated by the rejected MCP calls:
+    # admin inspection requires explicit unfiltered opt-in (R5/D8-A).
     review_entry = store.get_hypomnema_entry(
         review_id,
         agent_id="vektor",
         person_id="riley",
         project_scope="mnemos",
+        read_visibility=None,
     )
     audit_entry = store.get_hypomnema_entry(
         audit_id,
         agent_id="vektor",
         person_id="riley",
         project_scope="mnemos",
+        read_visibility=None,
     )
     leaked_replacements = store.search_hypomnema(
         "Leaked",
@@ -377,9 +390,15 @@ def test_hypomnema_revise_and_supersede_reject_non_operational_entries(
     assert "Hypomnema supersession failed" in audit_supersede
     assert "Review-only hypomnema prose" not in review_revise
     assert "Audit-only hypomnema prose" not in audit_supersede
-    assert review_entry["content"] == "Review-only hypomnema prose must not be revised by MCP."
+    assert (
+        review_entry["content"]
+        == "Review-only hypomnema prose must not be revised by MCP."
+    )
     assert review_entry["revision_count"] == 0
-    assert audit_entry["content"] == "Audit-only hypomnema prose must not be superseded by MCP."
+    assert (
+        audit_entry["content"]
+        == "Audit-only hypomnema prose must not be superseded by MCP."
+    )
     assert audit_entry["active"] is True
     assert audit_entry["superseded_by"] is None
     assert all("Leaked" not in entry["content"] for entry in leaked_replacements)
@@ -408,8 +427,10 @@ def test_inspect_and_forget_reject_non_operational_engrams(monkeypatch, store):
     review_forget = mcp_server.mnemos_forget(review.id)
     audit_forget = mcp_server.mnemos_forget(audit.id)
 
-    loaded_review = store.get_engram(review.id)
-    loaded_audit = store.get_engram(audit.id)
+    # Verify the quarantined engrams were not archived by the rejected
+    # inspect/forget: admin inspection requires explicit opt-in (R5/D8-A).
+    loaded_review = store.get_engram(review.id, read_visibility=None)
+    loaded_audit = store.get_engram(audit.id, read_visibility=None)
 
     assert "Memory not found" in review_inspect
     assert "Memory not found" in audit_inspect
@@ -534,11 +555,15 @@ def test_mcp_hypomnema_write_default_review_only_is_quarantined_from_search_cand
         project_scope="mnemos",
     )
 
+    # Admin inspection of the review_only row; the quarantine assertions below
+    # (absent from search/candidates/promote) stay on the operational default
+    # (R5/D8-A).
     entry = store.get_hypomnema_entry(
         entry_id,
         agent_id="vektor",
         person_id="riley",
         project_scope="mnemos",
+        read_visibility=None,
     )
 
     assert "Visibility: review_only" in write_output
@@ -776,7 +801,9 @@ def test_audit_admin_proposal_review_lists_audit_only_rows_without_operational_e
         person_id="riley",
         project_scope="mnemos",
         read_visibility="review_only",
-        payload={"content": "MCP review proposal prose must stay out of audit listing."},
+        payload={
+            "content": "MCP review proposal prose must stay out of audit listing."
+        },
     )
 
     queue_output = mcp_server.mnemos_review_queue(
@@ -830,7 +857,8 @@ def test_simple_stdio_server_lists_and_calls_context(tmp_path):
 
                 result = await session.call_tool("mnemos_context", {})
                 text = "\n".join(
-                    block.text for block in result.content
+                    block.text
+                    for block in result.content
                     if getattr(block, "type", None) == "text"
                 )
                 assert "Mnemos continuity packet" in text
@@ -840,7 +868,8 @@ def test_simple_stdio_server_lists_and_calls_context(tmp_path):
                     "mnemos_introduce", {"agent_model": "claude-sonnet-4-6"}
                 )
                 introduced_text = "\n".join(
-                    block.text for block in introduced.content
+                    block.text
+                    for block in introduced.content
                     if getattr(block, "type", None) == "text"
                 )
                 assert "Introduction recorded." in introduced_text
@@ -850,7 +879,8 @@ def test_simple_stdio_server_lists_and_calls_context(tmp_path):
                 assert health.structuredContent is not None
                 assert health.structuredContent["scope"]["agent_id"] == "smoke"
                 health_text = "\n".join(
-                    block.text for block in health.content
+                    block.text
+                    for block in health.content
                     if getattr(block, "type", None) == "text"
                 )
                 assert "Mnemos health card" in health_text

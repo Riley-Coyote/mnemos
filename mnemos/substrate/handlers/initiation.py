@@ -33,7 +33,8 @@ def handle(
     agent_id = config.agent_id
 
     # Get high-salience recent memories (high accessibility + strength, recently created)
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT id, content, impact, (accessibility * strength) as vividness
         FROM engrams
         WHERE state='active'
@@ -42,7 +43,9 @@ def handle(
           AND read_visibility = 'operational_context'
         ORDER BY vividness DESC
         LIMIT 5
-    """, (agent_id,)).fetchall()
+    """,
+        (agent_id,),
+    ).fetchall()
     conn.close()
 
     if len(rows) < 2:
@@ -93,6 +96,8 @@ If something emerges: {{"pattern": "<the pattern>", "significance": "<why it mat
 
     from mnemos.encoding.encoder import Encoder
     from mnemos.store.embedding_index import EmbeddingIndex
+    from mnemos.core.types import SourceAuthority
+
     ei = EmbeddingIndex(db_path=db_path)
     encoder = Encoder(store, embedding_index=ei, llm_client=llm_client)
 
@@ -103,6 +108,8 @@ If something emerges: {{"pattern": "<the pattern>", "significance": "<why it mat
         tags=["initiation", "pattern"],
         agent_id=agent_id,
         skip_surprise_detection=True,
+        # Autonomous substrate producer: generated (F1).
+        source_authority=SourceAuthority.GENERATED,
     )
 
     return produced_events

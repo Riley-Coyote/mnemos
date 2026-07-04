@@ -123,9 +123,12 @@ class TestEngramStore:
             )
         )
 
-        loaded_review = store.get_engram(review.id)
-        loaded_audit = store.get_engram(audit.id)
-        loaded_operational = store.get_engram(operational.id)
+        # Admin inspection of the stored visibility of quarantined rows
+        # requires explicit unfiltered opt-in under R5/D8-A; the assertions
+        # below are unchanged.
+        loaded_review = store.get_engram(review.id, read_visibility=None)
+        loaded_audit = store.get_engram(audit.id, read_visibility=None)
+        loaded_operational = store.get_engram(operational.id, read_visibility=None)
         hidden_hits = store.search_fts("rewritten strengthened marker", limit=10)
 
         assert loaded_review is not None
@@ -206,7 +209,9 @@ class TestEngramStore:
             source.id,
             read_visibility="operational_context",
         )
-        admin = store.get_engram(source.id)
+        # Admin load (unfiltered) must see all connection targets; explicit
+        # opt-in under R5/D8-A. The operational load above stays filtered.
+        admin = store.get_engram(source.id, read_visibility=None)
         active = store.get_active_engrams(agent_id="default", load_connections=True)
         loaded_source = next(engram for engram in active if engram.id == source.id)
 

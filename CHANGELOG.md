@@ -36,6 +36,24 @@
   supplies a visibility. The raw `hypomnema_entries` SQL default remains
   `operational_context` for legacy compatibility; omitted-visibility callers
   still go through the store classifier before rows can enter ordinary context.
+- Hypomnema writes now normalize and enforce no-de-escalation on the domain
+  axis: caller labels can only raise risk above the content classifier, never
+  lower it. Underclaimed high-blast content is stored at the effective domain,
+  routed to review, and recorded as a deduped `domain-claim-*` proposal whose
+  payload names the claimed, classifier, effective, and target IDs.
+- Durable engram sources now carry harness-stamped authority. `Encoder.encode`
+  requires a keyword-only `source_authority`; MCP/runtime/session-indexer
+  surfaces stamp `observed`, curated PAI import stamps `imported`, autonomous
+  producers stamp `generated`, and legacy source records deserialize to the
+  `observed` floor. MCP tools expose no authority parameter.
+- Low-level store readers that previously defaulted to unfiltered direct reads
+  now fail closed to `operational_context` unless callers explicitly pass
+  `read_visibility=None`; this covers direct engram loads, connection loads and
+  traversal, version history, archive search, functional memory by ID, and
+  hypomnema by ID.
+- Proposal rows now enum-check domains against `general` plus the six
+  hypomnema domains, so unknown non-empty domains fail closed before ledger
+  persistence.
 - Direct-ID advanced MCP tools (`mnemos_inspect`, `mnemos_forget`, and the
   hypomnema revise/supersede/promote mutators), shared-pool connect helpers,
   and substrate handlers (insight, reflection, surprise, wandering, dreaming,

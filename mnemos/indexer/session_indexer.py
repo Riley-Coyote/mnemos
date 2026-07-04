@@ -120,7 +120,9 @@ class SessionIndexer:
             or str(Path.home() / ".mnemos" / f"{self.agent_id}.db")
         )
         self.user_name = user_name or cfg.get("user_name", "User")
-        self.agent_name = agent_name or cfg.get("agent_name", self.agent_id.capitalize())
+        self.agent_name = agent_name or cfg.get(
+            "agent_name", self.agent_id.capitalize()
+        )
 
         # Session directories
         if sessions_dirs:
@@ -144,9 +146,10 @@ class SessionIndexer:
         file_cfg: dict = {}
         if config is None:
             from ..config.loader import load_config  # mnemos.config.loader
+
             try:
                 file_cfg = load_config().get("indexer", {}) or {}
-            except Exception:        # malformed/missing config.json -> ignore
+            except Exception:  # malformed/missing config.json -> ignore
                 file_cfg = {}
 
         self.known_projects = (
@@ -165,14 +168,14 @@ class SessionIndexer:
         )
 
         # LLM models
-        self.extraction_model = (
-            extraction_model or cfg.get("extraction_model", DEFAULT_EXTRACTION_MODEL)
+        self.extraction_model = extraction_model or cfg.get(
+            "extraction_model", DEFAULT_EXTRACTION_MODEL
         )
-        self.classification_model = (
-            classification_model or cfg.get("classification_model", DEFAULT_CLASSIFICATION_MODEL)
+        self.classification_model = classification_model or cfg.get(
+            "classification_model", DEFAULT_CLASSIFICATION_MODEL
         )
-        self.fallback_model = (
-            fallback_model or cfg.get("fallback_model", DEFAULT_FALLBACK_MODEL)
+        self.fallback_model = fallback_model or cfg.get(
+            "fallback_model", DEFAULT_FALLBACK_MODEL
         )
         self._api_key = (
             openrouter_api_key
@@ -184,18 +187,32 @@ class SessionIndexer:
         self._llm_client = llm_client or cfg.get("llm_client")
 
         # Tuning constants
-        self.max_memories_per_session = cfg.get("max_memories_per_session", DEFAULT_MAX_MEMORIES_PER_SESSION)
-        self.min_session_messages = cfg.get("min_session_messages", DEFAULT_MIN_SESSION_MESSAGES)
-        self.session_window_hours = cfg.get("session_window_hours", DEFAULT_SESSION_WINDOW_HOURS)
-        self.backfill_window_hours = cfg.get("backfill_window_hours", DEFAULT_BACKFILL_WINDOW_HOURS)
-        self.min_session_size_bytes = cfg.get("min_session_size_bytes", DEFAULT_MIN_SESSION_SIZE_BYTES)
+        self.max_memories_per_session = cfg.get(
+            "max_memories_per_session", DEFAULT_MAX_MEMORIES_PER_SESSION
+        )
+        self.min_session_messages = cfg.get(
+            "min_session_messages", DEFAULT_MIN_SESSION_MESSAGES
+        )
+        self.session_window_hours = cfg.get(
+            "session_window_hours", DEFAULT_SESSION_WINDOW_HOURS
+        )
+        self.backfill_window_hours = cfg.get(
+            "backfill_window_hours", DEFAULT_BACKFILL_WINDOW_HOURS
+        )
+        self.min_session_size_bytes = cfg.get(
+            "min_session_size_bytes", DEFAULT_MIN_SESSION_SIZE_BYTES
+        )
         self.max_chunk_chars = cfg.get("max_chunk_chars", DEFAULT_MAX_CHUNK_CHARS)
-        self.max_chunks_per_session = cfg.get("max_chunks_per_session", DEFAULT_MAX_CHUNKS_PER_SESSION)
+        self.max_chunks_per_session = cfg.get(
+            "max_chunks_per_session", DEFAULT_MAX_CHUNKS_PER_SESSION
+        )
         self.llm_retries = cfg.get("llm_retries", DEFAULT_LLM_RETRIES)
         self.encode_timeout = cfg.get("encode_timeout", DEFAULT_ENCODE_TIMEOUT)
 
         # State file
-        self._state_file = Path.home() / ".mnemos" / f"{self.agent_id}_indexing_state.json"
+        self._state_file = (
+            Path.home() / ".mnemos" / f"{self.agent_id}_indexing_state.json"
+        )
 
         # Prompt template (loaded lazily)
         self._extractor_prompt: str | None = None
@@ -232,7 +249,11 @@ class SessionIndexer:
             "sessions_indexed": total_sessions,
             "total_memories_encoded": total_memories,
             "recent": [
-                {"session": k, "memories": v.get("memories_encoded", 0), "at": v.get("indexed_at")}
+                {
+                    "session": k,
+                    "memories": v.get("memories_encoded", 0),
+                    "at": v.get("indexed_at"),
+                }
                 for k, v in recent
             ],
         }
@@ -250,7 +271,11 @@ class SessionIndexer:
             logger.info("No recent sessions to index")
             return {"sessions_processed": 0, "memories_encoded": 0}
 
-        logger.info("Found %d recent session files (window: %dh)", len(session_files), window_hours)
+        logger.info(
+            "Found %d recent session files (window: %dh)",
+            len(session_files),
+            window_hours,
+        )
 
         total_encoded = 0
         sessions_processed = 0
@@ -270,7 +295,9 @@ class SessionIndexer:
 
             # Skip very small files
             if current_size < self.min_session_size_bytes:
-                logger.debug("Skipping %s — too small (%d bytes)", session_key, current_size)
+                logger.debug(
+                    "Skipping %s — too small (%d bytes)", session_key, current_size
+                )
                 state["indexed_sessions"][session_key] = {
                     "size": current_size,
                     "indexed_at": _now_iso(),
@@ -283,7 +310,9 @@ class SessionIndexer:
             if len(messages) < self.min_session_messages:
                 logger.debug(
                     "Skipping %s — only %d messages (need %d)",
-                    session_key, len(messages), self.min_session_messages,
+                    session_key,
+                    len(messages),
+                    self.min_session_messages,
                 )
                 state["indexed_sessions"][session_key] = {
                     "size": current_size,
@@ -306,7 +335,9 @@ class SessionIndexer:
                 }
                 continue
 
-            logger.info("Extracted %d memories, encoding to Mnemos...", len(raw_memories))
+            logger.info(
+                "Extracted %d memories, encoding to Mnemos...", len(raw_memories)
+            )
 
             encoded = self._encode_to_mnemos(raw_memories, session_key)
             total_encoded += encoded
@@ -319,14 +350,20 @@ class SessionIndexer:
             }
 
         state["last_run"] = _now_iso()
-        state["total_memories_encoded"] = state.get("total_memories_encoded", 0) + total_encoded
+        state["total_memories_encoded"] = (
+            state.get("total_memories_encoded", 0) + total_encoded
+        )
         self._save_state(state)
 
         logger.info(
             "Indexing complete: %d memories encoded from %d sessions",
-            total_encoded, sessions_processed,
+            total_encoded,
+            sessions_processed,
         )
-        return {"sessions_processed": sessions_processed, "memories_encoded": total_encoded}
+        return {
+            "sessions_processed": sessions_processed,
+            "memories_encoded": total_encoded,
+        }
 
     # ------------------------------------------------------------------
     # State management
@@ -368,7 +405,9 @@ class SessionIndexer:
 
         return sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)
 
-    def _read_session_transcript(self, path: Path, max_messages: int = 100) -> list[dict]:
+    def _read_session_transcript(
+        self, path: Path, max_messages: int = 100
+    ) -> list[dict]:
         messages: list[dict] = []
         try:
             with open(path) as f:
@@ -400,10 +439,12 @@ class SessionIndexer:
                             )
 
                         if content and len(content) > 10:
-                            messages.append({
-                                "role": role,
-                                "content": content[:3000],
-                            })
+                            messages.append(
+                                {
+                                    "role": role,
+                                    "content": content[:3000],
+                                }
+                            )
                     except json.JSONDecodeError:
                         continue
         except Exception as e:
@@ -493,7 +534,11 @@ class SessionIndexer:
         ]
 
         for attempt in range(self.llm_retries + 1):
-            model = self.extraction_model if attempt < self.llm_retries else self.fallback_model
+            model = (
+                self.extraction_model
+                if attempt < self.llm_retries
+                else self.fallback_model
+            )
 
             if attempt > 0:
                 wait = 2 ** (attempt - 1)
@@ -503,12 +548,14 @@ class SessionIndexer:
                     logger.info("Attempt %d: retrying in %ds...", attempt + 1, wait)
                 time.sleep(wait)
 
-            body = json.dumps({
-                "model": model,
-                "messages": messages,
-                "temperature": 0.2,
-                "max_tokens": 4000,
-            }).encode()
+            body = json.dumps(
+                {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.2,
+                    "max_tokens": 4000,
+                }
+            ).encode()
 
             req = urllib.request.Request(
                 "https://openrouter.ai/api/v1/chat/completions",
@@ -527,7 +574,9 @@ class SessionIndexer:
                 if attempt < self.llm_retries:
                     logger.warning("LLM call failed (attempt %d): %s", attempt + 1, e)
                     continue
-                logger.error("LLM call failed after %d attempts: %s", self.llm_retries + 1, e)
+                logger.error(
+                    "LLM call failed after %d attempts: %s", self.llm_retries + 1, e
+                )
                 return None
 
     def _chunk_transcript(self, transcript: str) -> list[str]:
@@ -551,7 +600,7 @@ class SessionIndexer:
         if current:
             chunks.append("\n\n".join(current))
 
-        return chunks[:self.max_chunks_per_session]
+        return chunks[: self.max_chunks_per_session]
 
     def _extract_memories(self, transcript: str) -> list[dict]:
         system = self._load_extraction_prompt()
@@ -565,8 +614,16 @@ class SessionIndexer:
             if len(chunks) > 1:
                 logger.info("Extracting chunk %d/%d...", i + 1, len(chunks))
 
-            known = ", ".join(self.known_projects) if self.known_projects else "(none configured)"
-            active = ", ".join(self.active_projects) if self.active_projects else "(none configured)"
+            known = (
+                ", ".join(self.known_projects)
+                if self.known_projects
+                else "(none configured)"
+            )
+            active = (
+                ", ".join(self.active_projects)
+                if self.active_projects
+                else "(none configured)"
+            )
             prompt = (
                 f"Extract memories from this conversation transcript.\n\n"
                 f"Known projects: {known}\n"
@@ -599,7 +656,7 @@ class SessionIndexer:
             raw["type"] = mem_type
             valid.append(raw)
 
-        return valid[:self.max_memories_per_session]
+        return valid[: self.max_memories_per_session]
 
     # ------------------------------------------------------------------
     # Mnemos encoding
@@ -607,7 +664,7 @@ class SessionIndexer:
 
     def _encode_to_mnemos(self, memories: list[dict], session_key: str) -> int:
         from mnemos.store.sqlite_store import EngramStore
-        from mnemos.core.types import SourceType
+        from mnemos.core.types import SourceAuthority, SourceType
         from mnemos.encoding.encoder import Encoder
 
         store = EngramStore(self.db_path)
@@ -616,6 +673,7 @@ class SessionIndexer:
         embedding_index = None
         try:
             from mnemos.store.embedding_index import EmbeddingIndex
+
             embedding_index = EmbeddingIndex(db_path=self.db_path)
         except Exception:
             logger.debug("Embedding index not available, proceeding without it")
@@ -632,18 +690,22 @@ class SessionIndexer:
             if api_key:
                 try:
                     from mnemos.llm import OpenRouterClient
+
                     llm_client = OpenRouterClient(
                         api_key=api_key,
                         model=self.classification_model,
                         max_tokens=2000,
                     )
                 except Exception:
-                    logger.debug("LLM client not available for connection classification")
+                    logger.debug(
+                        "LLM client not available for connection classification"
+                    )
 
         # Optional: shared pool
         shared_pool = None
         try:
             from mnemos.multiagent.shared_pool import SharedPool
+
             shared_pool = SharedPool()
         except Exception:
             logger.debug("Shared pool not available")
@@ -687,6 +749,7 @@ class SessionIndexer:
             confidence = max(0.40, min(0.90, salience))
 
             try:
+
                 class _EncodeTimeout(Exception):
                     pass
 
@@ -707,6 +770,8 @@ class SessionIndexer:
                         agent_id=self.agent_id,
                         override_confidence=confidence,
                         override_confidence_source="trace_extraction",
+                        # Session-transcript ingest is the observed channel (F1).
+                        source_authority=SourceAuthority.OBSERVED,
                     )
                 finally:
                     signal.alarm(0)
@@ -716,7 +781,9 @@ class SessionIndexer:
                 conn_count = len(engram.connections)
                 logger.info(
                     "  [%s->%s] %s%s",
-                    mem_type, kind, content[:60],
+                    mem_type,
+                    kind,
+                    content[:60],
                     f" ({conn_count} connections)" if conn_count else "",
                 )
             except _EncodeTimeout:
@@ -732,6 +799,7 @@ class SessionIndexer:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()

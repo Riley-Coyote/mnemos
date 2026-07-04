@@ -141,7 +141,12 @@ class TestFunctionalMemoryStore:
         assert default_stats["functional_needs_confirmation"] == 2
 
     @pytest.mark.parametrize(
-        ("memory_id", "initial_visibility", "incoming_visibility", "expected_visibility"),
+        (
+            "memory_id",
+            "initial_visibility",
+            "incoming_visibility",
+            "expected_visibility",
+        ),
         [
             ("review-functional-default", "review_only", None, "review_only"),
             ("audit-functional-default", "audit_only", None, "audit_only"),
@@ -196,7 +201,10 @@ class TestFunctionalMemoryStore:
             **kwargs,
         )
 
-        updated = store.get_functional_memory(original["id"])
+        # Inspect the stored visibility of a possibly-quarantined row: admin
+        # opt-in under R5/D8-A. The operational membership check below stays
+        # on the default filter.
+        updated = store.get_functional_memory(original["id"], read_visibility=None)
         operational_ids = {
             item["id"]
             for item in store.load_functional_memories(
@@ -243,7 +251,8 @@ class TestFunctionalMemoryStore:
             read_visibility="operational_context",
         )
 
-        updated = store.get_functional_memory(original["id"])
+        # Admin inspection of the quarantined row's stored state (R5/D8-A).
+        updated = store.get_functional_memory(original["id"], read_visibility=None)
         kwargs = {}
         if queue_visibility is not None:
             kwargs["read_visibility"] = queue_visibility
@@ -389,11 +398,16 @@ class TestFunctionalMemoryStore:
         assert result["functional_memories"] == 1
         assert [item["id"] for item in remaining_review] == [review["id"]]
         assert by_id[operational["id"]]["is_deleted"] is True
-        assert by_id[operational["id"]]["promoted_to_hypomnema_id"] == result["hypomnema_id"]
+        assert (
+            by_id[operational["id"]]["promoted_to_hypomnema_id"]
+            == result["hypomnema_id"]
+        )
         assert by_id[review["id"]]["is_deleted"] is False
         assert by_id[review["id"]]["promoted_to_hypomnema_id"] is None
 
-    def test_close_session_review_worthy_synthesis_keeps_source_memory_active(self, store):
+    def test_close_session_review_worthy_synthesis_keeps_source_memory_active(
+        self, store
+    ):
         store.start_memory_session(
             session_id="session-high-blast",
             agent_id="vektor",

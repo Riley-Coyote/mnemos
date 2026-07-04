@@ -566,6 +566,7 @@
             <ul>
               <li>Bound to agent_id, person_id, and project_scope.</li>
               <li>Stores confidence, salience, domain, source, and revision history.</li>
+              <li>Normalizes caller domains so lower-risk labels cannot bypass review.</li>
               <li>Can be revised or superseded before promotion.</li>
             </ul>
           </article>
@@ -677,13 +678,13 @@
       <div class="shell">
         <div class="section-head">
           <div class="kicker">MCP surface</div>
-          <p class="section-copy">The new Mnemos MCP tools expose the layer directly. Agents can write continuity, search operational entries, improve them, replace them, inspect promotion candidates through review surfaces, and explicitly graduate stable entries into Mnemos. When scope args are omitted, these tools inherit the configured MCP server scope.</p>
+          <p class="section-copy">The new Mnemos MCP tools expose the layer directly. Agents can write continuity, search operational entries, improve them, replace them, inspect promotion candidates through review surfaces, and explicitly graduate stable entries into Mnemos. When scope args are omitted, these tools inherit the configured MCP server scope. Domain labels are checked against content, so an underclaimed identity or foundational note routes to review instead of operational context.</p>
         </div>
         <div class="tools">
           <article class="tool-card">
             <code>mnemos_hypomnema_write</code>
             <h3>Capture continuity</h3>
-            <p>Creates scoped entries with source, domain, tags, confidence, salience, density, and optional provenance.</p>
+            <p>Creates scoped entries with source, effective domain, tags, confidence, salience, density, and optional provenance.</p>
           </article>
           <article class="tool-card">
             <code>mnemos_hypomnema_search</code>

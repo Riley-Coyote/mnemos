@@ -10,6 +10,7 @@ from ..core.types import (
     ConfidenceSource,
     EncodingDepth,
     EngramKind,
+    SourceAuthority,
     SourceType,
     Visibility,
 )
@@ -107,6 +108,9 @@ def write_low_stakes_record(
             session_id=source_ids[0],
             confidence=0.35,
             confidence_source=ConfidenceSource.SPECULATIVE,
+            # Inner-life low-stakes record is autonomous producer output:
+            # generated, never observed (T3 finding A).
+            authority=SourceAuthority.GENERATED,
         ),
         lineage=Lineage(parents=source_ids),
         owner_agent_id=agent_id,

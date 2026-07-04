@@ -166,7 +166,9 @@ def test_context_and_health_counts_use_operational_scope(tmp_path):
     assert health["counts"]["continuity_notes_active"] == 1
 
 
-def test_context_and_recall_hide_operational_promotion_candidates(tmp_path, monkeypatch):
+def test_context_and_recall_hide_operational_promotion_candidates(
+    tmp_path, monkeypatch
+):
     from mnemos.store.sqlite_store import EngramStore
 
     db_path = str(tmp_path / "simple.db")
@@ -255,17 +257,21 @@ def test_direct_id_correction_does_not_mutate_non_operational_hypomnema(tmp_path
         review_result = runtime.correct("", target_id=review_id, action="forget")
         audit_result = runtime.correct("", target_id=audit_id, action="forget")
         assert runtime._store is not None
+        # Verify the quarantined rows were not mutated by the correction:
+        # admin inspection requires explicit unfiltered opt-in (R5/D8-A).
         review_entry = runtime._store.get_hypomnema_entry(
             review_id,
             agent_id="nova",
             person_id="riley",
             project_scope="demo",
+            read_visibility=None,
         )
         audit_entry = runtime._store.get_hypomnema_entry(
             audit_id,
             agent_id="nova",
             person_id="riley",
             project_scope="demo",
+            read_visibility=None,
         )
     finally:
         runtime.close()
@@ -278,7 +284,9 @@ def test_direct_id_correction_does_not_mutate_non_operational_hypomnema(tmp_path
     assert audit_entry is not None
     assert review_entry["active"] is True
     assert audit_entry["active"] is True
-    assert review_entry["content"] == "Review-only correction target must not be mutated."
+    assert (
+        review_entry["content"] == "Review-only correction target must not be mutated."
+    )
     assert audit_entry["content"] == "Audit-only correction target must not be mutated."
 
 
@@ -316,8 +324,9 @@ def test_direct_id_correction_does_not_mutate_non_operational_engram(tmp_path):
         review_result = runtime.correct("", target_id=review.id, action="forget")
         audit_result = runtime.correct("", target_id=audit.id, action="forget")
         assert runtime._store is not None
-        loaded_review = runtime._store.get_engram(review.id)
-        loaded_audit = runtime._store.get_engram(audit.id)
+        # Verify the quarantined engrams were not archived by the correction (R5/D8-A).
+        loaded_review = runtime._store.get_engram(review.id, read_visibility=None)
+        loaded_audit = runtime._store.get_engram(audit.id, read_visibility=None)
     finally:
         runtime.close()
 
@@ -498,7 +507,9 @@ def test_review_capture_persists_context_in_review_only_hypomnema(
     assert entries[0]["read_visibility"] == "review_only"
 
 
-def test_maintain_does_not_promote_fresh_default_review_only_foundational_hypomnema(tmp_path):
+def test_maintain_does_not_promote_fresh_default_review_only_foundational_hypomnema(
+    tmp_path,
+):
     runtime = MnemosRuntime(
         db_path=str(tmp_path / "simple.db"),
         agent_id="nova",
@@ -672,7 +683,8 @@ def test_query_only_supersede_reclassifies_identity_replacement_for_review(tmp_p
         runtime.close()
 
     active_review = [
-        entry for entry in entries
+        entry
+        for entry in entries
         if entry["active"] and "release report caution" in entry["content"]
     ]
     assert "for review" in corrected
@@ -751,7 +763,9 @@ def test_identity_graph_snapshot_contains_svg_and_structured_data(tmp_path):
 
     try:
         runtime.capture("Nova uses clear memory visualizations.", importance=0.9)
-        runtime.capture("Nova keeps graph snapshots as optional memory artifacts.", importance=0.85)
+        runtime.capture(
+            "Nova keeps graph snapshots as optional memory artifacts.", importance=0.85
+        )
         graph = runtime.identity_graph(max_nodes=12)
     finally:
         runtime.close()

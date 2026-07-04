@@ -22,8 +22,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
@@ -67,7 +65,7 @@ def run_introspection_pass(
 
     log.info("Introspecting %d recent responses", len(responses))
 
-    for resp in responses[:config.introspection_max_per_tick]:
+    for resp in responses[: config.introspection_max_per_tick]:
         text = resp.get("text", "")
         logprobs = resp.get("logprobs")
         session_id = resp.get("session_id", "unknown")
@@ -231,6 +229,7 @@ def _encode_audit(
     """Encode an introspection audit as a Mnemos engram."""
     try:
         from mnemos.encoding.encoder import Encoder
+        from mnemos.core.types import SourceAuthority
 
         encoder = Encoder(store)
 
@@ -261,6 +260,8 @@ def _encode_audit(
             source="reflection",
             agent_id=config.agent_id,
             skip_surprise_detection=True,
+            # Autonomous introspection producer: generated (F1).
+            source_authority=SourceAuthority.GENERATED,
         )
 
     except Exception as e:

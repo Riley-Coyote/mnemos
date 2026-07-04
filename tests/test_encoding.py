@@ -1,8 +1,14 @@
 """Tests for the encoding pipeline."""
+
 import pytest
 
 from mnemos.core.engram import Engram
-from mnemos.core.types import BOOTSTRAP_STABILITY, BOOTSTRAP_STRENGTH, SourceType
+from mnemos.core.types import (
+    BOOTSTRAP_STABILITY,
+    BOOTSTRAP_STRENGTH,
+    SourceAuthority,
+    SourceType,
+)
 
 
 class TestEncoder:
@@ -15,6 +21,7 @@ class TestEncoder:
             kind="semantic",
             tags=["preference", "ui"],
             source=SourceType.SESSION,
+            source_authority=SourceAuthority.OBSERVED,
         )
         assert engram is not None
         assert engram.content == "Riley prefers dark mode in all applications"
@@ -35,6 +42,7 @@ class TestEncoder:
             content="Operational memory still receives bootstrap values",
             source=SourceType.SESSION,
             skip_surprise_detection=True,
+            source_authority=SourceAuthority.OBSERVED,
         )
 
         assert engram.strength == BOOTSTRAP_STRENGTH
@@ -43,17 +51,21 @@ class TestEncoder:
     def test_encode_rejects_empty(self, encoder):
         """Empty content should raise ValueError."""
         with pytest.raises((ValueError, Exception)):
-            encoder.encode(content="", kind="semantic")
+            encoder.encode(
+                content="", kind="semantic", source_authority=SourceAuthority.OBSERVED
+            )
 
     def test_confidence_by_source(self, encoder):
         """Verify confidence ranges differ by source type."""
         session_engram = encoder.encode(
             content="Fact from a session conversation",
             source=SourceType.SESSION,
+            source_authority=SourceAuthority.OBSERVED,
         )
         reflection_engram = encoder.encode(
             content="Insight from background reflection",
             source=SourceType.REFLECTION,
+            source_authority=SourceAuthority.OBSERVED,
         )
 
         # Session source should have higher baseline confidence than reflection

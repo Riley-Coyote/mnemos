@@ -121,6 +121,11 @@ VALID_HYPO_DOMAINS = {
     "topical",
     "situational",
 }
+# RFC domain axis for proposal rows (T3/D7): the six hypomnema domains plus
+# "general" (the legitimate low-blast catch-all the raw producer API defaults
+# to). Enum-checked in write_proposal so a producer cannot pass an unknown
+# domain (merge-review §5.1(b)).
+VALID_PROPOSAL_DOMAINS = VALID_HYPO_DOMAINS | {"general"}
 
 VALID_INNER_LIFE_EVENT_TYPES = {
     "session_finalized",
@@ -921,13 +926,15 @@ class EngramStore:
         self,
         engram_id: str,
         *,
-        read_visibility: str | None = None,
+        read_visibility: str | None = READ_VISIBILITY_OPERATIONAL,
     ) -> Engram | None:
         """Load an engram by ID, including connections and versions.
 
-        ``read_visibility`` is an explicit access filter. Pass
-        ``READ_VISIBILITY_OPERATIONAL`` for operating-context reads; the
-        default ``None`` performs no visibility filter for direct/admin lookup.
+        ``read_visibility`` is an explicit access filter. The default is
+        ``READ_VISIBILITY_OPERATIONAL`` (fail-closed): quarantined
+        (``review_only``/``audit_only``) rows are excluded unless a caller
+        opts into unfiltered admin access by passing ``read_visibility=None``
+        explicitly (R5, T3/D8-A — the ``None`` opt-in is grep-auditable).
         """
         conn = self._get_conn()
         query = "SELECT * FROM engrams WHERE id = ?"
@@ -948,8 +955,8 @@ class EngramStore:
             read_visibility=read_visibility,
         )
 
-        # Load versions
-        engram.versions = self._get_versions(engram_id)
+        # Load versions (inherit the caller's visibility filter)
+        engram.versions = self._get_versions(engram_id, read_visibility=read_visibility)
 
         return engram
 
@@ -1014,7 +1021,15 @@ class EngramStore:
                     engram.id,
                     read_visibility=read_visibility,
                 )
-                engram.versions = self._get_versions(engram.id)
+                # R5 (T3): this engram already cleared the caller's visibility
+                # filter (it is in `engrams`), so gate its versions by the
+                # engram's own tier — a single value, so it is safe even when
+                # the caller passed a sequence of visibilities to the list read.
+                # Without this, an admin/review list read returned quarantined
+                # engrams with empty version histories.
+                engram.versions = self._get_versions(
+                    engram.id, read_visibility=engram.read_visibility
+                )
         return engrams
 
     def delete_engram(self, engram_id: str) -> None:
@@ -1120,9 +1135,15 @@ class EngramStore:
         self,
         engram_id: str,
         *,
-        read_visibility: str | Sequence[str] | None = None,
+        read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
     ) -> list[Connection]:
-        """Get all connections FROM an engram."""
+        """Get all connections FROM an engram.
+
+        Default is ``READ_VISIBILITY_OPERATIONAL`` (fail-closed): connections
+        touching a quarantined endpoint are excluded unless a caller opts into
+        unfiltered admin access with explicit ``read_visibility=None``
+        (R5, T3/D8-A).
+        """
         conn = self._get_conn()
         visibility_values = _normalize_read_visibility_values(read_visibility)
         params: list[Any] = [engram_id]
@@ -1234,8 +1255,33 @@ class EngramStore:
         self,
         engram_id: str,
         max_depth: int = 2,
+        *,
+        read_visibility: str | None = READ_VISIBILITY_OPERATIONAL,
     ) -> set[str]:
-        """Get IDs of engrams connected within max_depth hops."""
+        """Get IDs of engrams connected within max_depth hops.
+
+        R5 (T3): graph traversal (a named connection-discovery producer input)
+        excludes quarantined engrams. Default ``READ_VISIBILITY_OPERATIONAL``
+        (fail-closed): a connected engram whose ``read_visibility`` is not
+        operational is not traversed and not returned, so quarantined content
+        cannot re-enter a producer via the connection graph. Explicit
+        ``read_visibility=None`` opts into unfiltered admin traversal.
+        """
+        normalized = _normalize_read_visibility(read_visibility)
+        # R5 (T3 review r5-connected-root-visibility-not-checked): the ROOT must
+        # satisfy the filter too. A quarantined root passed under the operational
+        # default must not expand its edges and leak operational neighbours.
+        if normalized is not None:
+            root_visible = (
+                self._get_conn()
+                .execute(
+                    "SELECT 1 FROM engrams WHERE id = ? AND read_visibility = ?",
+                    (engram_id, normalized),
+                )
+                .fetchone()
+            )
+            if root_visible is None:
+                return set()
         visited: set[str] = set()
         frontier = {engram_id}
 
@@ -1248,11 +1294,25 @@ class EngramStore:
                     continue
                 visited.add(eid)
                 conn = self._get_conn()
-                rows = conn.execute(
-                    "SELECT target_id FROM connections WHERE source_id = ? "
-                    "UNION SELECT source_id FROM connections WHERE target_id = ?",
-                    (eid, eid),
-                ).fetchall()
+                if normalized is None:
+                    rows = conn.execute(
+                        "SELECT target_id FROM connections WHERE source_id = ? "
+                        "UNION SELECT source_id FROM connections WHERE target_id = ?",
+                        (eid, eid),
+                    ).fetchall()
+                else:
+                    # Exclude neighbours whose engram row is quarantined. The
+                    # JOIN drops any neighbour id without an operational engram
+                    # row (fail-closed) so review/audit content is never
+                    # surfaced through the graph.
+                    rows = conn.execute(
+                        "SELECT c.nid FROM ("
+                        "SELECT target_id AS nid FROM connections WHERE source_id = ? "
+                        "UNION SELECT source_id AS nid FROM connections WHERE target_id = ?"
+                        ") c JOIN engrams e ON e.id = c.nid "
+                        "WHERE e.read_visibility = ?",
+                        (eid, eid, normalized),
+                    ).fetchall()
                 next_frontier.update(r[0] for r in rows)
             frontier = next_frontier - visited
 
@@ -1285,13 +1345,35 @@ class EngramStore:
             ),
         )
 
-    def _get_versions(self, engram_id: str) -> list[VersionRef]:
-        """Get version history for an engram."""
+    def _get_versions(
+        self,
+        engram_id: str,
+        *,
+        read_visibility: str | None = READ_VISIBILITY_OPERATIONAL,
+    ) -> list[VersionRef]:
+        """Get version history for an engram.
+
+        R5 (T3): the ``versions`` table has no visibility column, so version
+        history inherits the parent engram's ``read_visibility`` — when a
+        filter is active, versions are returned only if the parent engram
+        satisfies it (fail-closed via JOIN). Called from ``get_engram`` with
+        the caller's filter threaded through; direct callers default operational.
+        """
         conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT * FROM versions WHERE engram_id = ? ORDER BY version_num",
-            (engram_id,),
-        ).fetchall()
+        normalized = _normalize_read_visibility(read_visibility)
+        if normalized is None:
+            rows = conn.execute(
+                "SELECT * FROM versions WHERE engram_id = ? ORDER BY version_num",
+                (engram_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT v.* FROM versions v "
+                "JOIN engrams e ON e.id = v.engram_id "
+                "WHERE v.engram_id = ? AND e.read_visibility = ? "
+                "ORDER BY v.version_num",
+                (engram_id, normalized),
+            ).fetchall()
         return [VersionRef.from_dict(dict(r)) for r in rows]
 
     # ── Archive ──
@@ -1322,14 +1404,45 @@ class EngramStore:
         conn.execute("DELETE FROM engrams_fts WHERE id = ?", (engram.id,))
         conn.commit()
 
-    def search_archive(self, query: str, limit: int = 20) -> list[dict]:
-        """Search archived engrams by content (for resharpen)."""
+    def search_archive(
+        self,
+        query: str,
+        limit: int = 20,
+        *,
+        read_visibility: str | None = READ_VISIBILITY_OPERATIONAL,
+    ) -> list[dict]:
+        """Search archived engrams by content (for resharpen).
+
+        R5 (T3): quarantined archived content is not retrievable by ``LIKE``.
+        Default is ``READ_VISIBILITY_OPERATIONAL`` (fail-closed); explicit
+        ``read_visibility=None`` opts into unfiltered admin access.
+
+        The ``archive`` table carries no ``read_visibility`` column, but
+        ``archive_engram`` leaves the source engram row in place with
+        ``state='archived'`` and its ``read_visibility`` intact, so the filter
+        recovers visibility by JOINing back to ``engrams`` on ``id``. An orphan
+        archive row (no backing engram) is excluded — fail-closed, since its
+        visibility cannot be established.
+        """
         conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT * FROM archive WHERE content LIKE ? OR content_at_encoding LIKE ? "
-            "LIMIT ?",
-            (f"%{query}%", f"%{query}%", limit),
-        ).fetchall()
+        params: list[Any] = [f"%{query}%", f"%{query}%"]
+        normalized = _normalize_read_visibility(read_visibility)
+        if normalized is None:
+            sql = (
+                "SELECT * FROM archive "
+                "WHERE (content LIKE ? OR content_at_encoding LIKE ?) LIMIT ?"
+            )
+            params.append(limit)
+        else:
+            sql = (
+                "SELECT a.* FROM archive a "
+                "JOIN engrams e ON e.id = a.id "
+                "WHERE (a.content LIKE ? OR a.content_at_encoding LIKE ?) "
+                "AND e.read_visibility = ? LIMIT ?"
+            )
+            params.append(normalized)
+            params.append(limit)
+        rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
     # ── Beliefs ──
@@ -1455,7 +1568,8 @@ class EngramStore:
         Proposal rows are review artifacts: they preserve authority, target
         surface, transition, blast radius, gate version, provenance, payload,
         visibility, and lifecycle status without making candidate prose part of
-        operational context.
+        operational context. Domains are enum-checked against the six hypomnema
+        domains plus ``general``; unknown non-empty domains fail closed.
 
         This is the raw producer API: same-ID writes may update only
         ``pending_review`` rows. Once a row is ``deferred``, ``rejected``,
@@ -1483,6 +1597,14 @@ class EngramStore:
             blast_radius,
             VALID_PROPOSAL_BLAST_RADII,
             "blast radius",
+        )
+        # T3/D7: enum-check the domain. Empty/None keeps the "general" catch-all;
+        # an unknown non-empty domain raises (producers are trusted callers, so
+        # loud is correct — merge-review §5.1(b)).
+        domain = _clean_choice(
+            domain.strip() or "general",
+            VALID_PROPOSAL_DOMAINS,
+            "proposal domain",
         )
         if status not in VALID_PROPOSAL_STATUSES:
             raise ValueError(f"Unsupported proposal status: {status}")
@@ -1573,7 +1695,7 @@ class EngramStore:
                 project_scope,
                 source_authority,
                 kind,
-                domain.strip() or "general",
+                domain,
                 target_surface,
                 transition.strip(),
                 blast_radius,
@@ -1823,7 +1945,12 @@ class EngramStore:
         now = _utc_now()
         fid = (memory_id or "").strip() or _new_id()
         session = (session_id or "").strip() or None
-        existing = self.get_functional_memory(fid, include_deleted=True)
+        # Write-path existing-row check: must see rows at any visibility so an
+        # upsert preserves/strengthens a quarantined row's visibility rather
+        # than treating it as absent. Admin opt-in (R5, T3/D8-A).
+        existing = self.get_functional_memory(
+            fid, include_deleted=True, read_visibility=None
+        )
         default_visibility = (
             existing["read_visibility"]
             if existing is not None and read_visibility is None
@@ -1920,12 +2047,23 @@ class EngramStore:
         memory_id: str,
         *,
         include_deleted: bool = False,
+        read_visibility: str | None = READ_VISIBILITY_OPERATIONAL,
     ) -> dict[str, Any] | None:
-        """Load a functional memory by ID."""
+        """Load a functional memory by ID.
+
+        R5 (T3): default ``READ_VISIBILITY_OPERATIONAL`` (fail-closed) — a
+        quarantined row is excluded unless a caller opts into unfiltered admin
+        access with explicit ``read_visibility=None``.
+        """
         sql = "SELECT * FROM functional_memories WHERE id = ?"
+        params: list[Any] = [memory_id]
         if not include_deleted:
             sql += " AND is_deleted = 0"
-        row = self._get_conn().execute(sql, (memory_id,)).fetchone()
+        normalized = _normalize_read_visibility(read_visibility)
+        if normalized is not None:
+            sql += " AND read_visibility = ?"
+            params.append(normalized)
+        row = self._get_conn().execute(sql, params).fetchone()
         if row is None:
             return None
         return self._hydrate_functional_row(dict(row))
@@ -2394,9 +2532,14 @@ class EngramStore:
         person_id: str = "user",
         project_scope: str = "global",
         active_only: bool = False,
-        read_visibility: str | None = None,
+        read_visibility: str | None = READ_VISIBILITY_OPERATIONAL,
     ) -> dict[str, Any] | None:
-        """Load a hypomnema entry by scoped ID."""
+        """Load a hypomnema entry by scoped ID.
+
+        Default is ``READ_VISIBILITY_OPERATIONAL`` (fail-closed): quarantined
+        entries are excluded unless a caller opts into unfiltered admin access
+        with explicit ``read_visibility=None`` (R5, T3/D8-A).
+        """
         conn = self._get_conn()
         query = (
             "SELECT * FROM hypomnema_entries "

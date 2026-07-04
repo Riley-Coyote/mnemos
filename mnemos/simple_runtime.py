@@ -16,11 +16,12 @@ from typing import Any
 
 from .config.loader import load_config
 from .consolidation.daemon import ConsolidationDaemon
-from .core.types import SourceType
+from .core.types import SourceAuthority, SourceType
 from .dream_journal import DREAM_JOURNAL_TAG, fetch_active_dream_entry
 from .encoding.encoder import Encoder
 from .identity_svg import build_timeline, render_identity_svg, short_label
 from .retrieval.reactive import ReactiveRetriever
+
 # Re-exported: MnemosScope and resolve_scope moved to simple_scope but
 # remain importable from here for existing consumers.
 from .simple_scope import MnemosScope, resolve_scope  # noqa: F401
@@ -74,28 +75,82 @@ def _dedicated_model_requested() -> bool:
 
 def _classify_kind(content: str) -> str:
     text = content.lower()
-    if any(marker in text for marker in ("how to", "process", "workflow", "steps", "procedure")):
+    if any(
+        marker in text
+        for marker in ("how to", "process", "workflow", "steps", "procedure")
+    ):
         return "procedural"
-    if any(marker in text for marker in ("todo", "remember to", "next time", "follow up", "should do")):
+    if any(
+        marker in text
+        for marker in ("todo", "remember to", "next time", "follow up", "should do")
+    ):
         return "prospective"
-    if any(marker in text for marker in ("decided", "built", "debugged", "met", "changed", "fixed")):
+    if any(
+        marker in text
+        for marker in ("decided", "built", "debugged", "met", "changed", "fixed")
+    ):
         return "episodic"
     return "semantic"
 
 
 def _classify_domain(content: str) -> str:
     text = content.lower()
-    if any(marker in text for marker in ("identity", "who i am", "who you are", "selfhood")):
+    if any(
+        marker in text for marker in ("identity", "who i am", "who you are", "selfhood")
+    ):
         return "identity"
-    if any(marker in text for marker in ("always", "preference", "prefers", "principle", "boundary")):
+    if any(
+        marker in text
+        for marker in ("always", "preference", "prefers", "principle", "boundary")
+    ):
         return "foundational"
-    if any(marker in text for marker in ("again", "recurring", "pattern", "usually", "often")):
+    if any(
+        marker in text
+        for marker in ("again", "recurring", "pattern", "usually", "often")
+    ):
         return "recurring"
-    if any(marker in text for marker in ("roadmap", "long term", "long-term", "arc", "future")):
+    if any(
+        marker in text
+        for marker in ("roadmap", "long term", "long-term", "arc", "future")
+    ):
         return "long-arc"
-    if any(marker in text for marker in ("current", "today", "now", "temporary", "session")):
+    if any(
+        marker in text for marker in ("current", "today", "now", "temporary", "session")
+    ):
         return "situational"
     return "topical"
+
+
+# RFC-R2 blast-radius severity ranks. A caller-supplied domain may only
+# *escalate* above the classifier's output, never de-escalate below it — the
+# laundering direction R2 must guard is "claim topical for identity-bearing
+# content" (merge-review §5.1, ruled D6). Effective domain = max-severity of
+# {caller, classifier}; ties keep the caller's label (harmless among low-blast).
+_DOMAIN_SEVERITY = {
+    "identity": 3,
+    "foundational": 3,
+    "recurring": 2,
+    "long-arc": 2,
+    "situational": 1,
+    "topical": 1,
+    "general": 1,
+}
+
+
+def escalate_domain(caller_domain: str, classifier_domain: str) -> str:
+    """Return the more-severe of the caller and classifier domains (R2).
+
+    The caller may escalate above the classifier but can never pull a write
+    below the classifier's blast radius. Fail-closed: an unknown label is
+    treated as low severity so it cannot silently outrank a high-blast one.
+    """
+    caller = (caller_domain or "").strip()
+    classifier = (classifier_domain or "").strip()
+    caller_rank = _DOMAIN_SEVERITY.get(caller, 1)
+    classifier_rank = _DOMAIN_SEVERITY.get(classifier, 1)
+    if classifier_rank > caller_rank:
+        return classifier
+    return caller
 
 
 def _simple_tags(content: str, context: str = "") -> list[str]:
@@ -149,11 +204,14 @@ def _has_query_overlap(query: str, text: str) -> bool:
     return bool(terms & text_terms)
 
 
-def _filter_continuity(query: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _filter_continuity(
+    query: str, entries: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     if not query.strip():
         return entries
     return [
-        entry for entry in entries
+        entry
+        for entry in entries
         if _has_query_overlap(query, entry.get("content", ""))
         or float(entry.get("score", 0.0)) >= 0.55
     ]
@@ -165,11 +223,13 @@ def _filter_memories(query: str, results: list[Any]) -> list[Any]:
     filtered = []
     for result in results:
         engram = result.engram
-        searchable = " ".join([
-            engram.content or "",
-            engram.impact or "",
-            " ".join(engram.tags or []),
-        ])
+        searchable = " ".join(
+            [
+                engram.content or "",
+                engram.impact or "",
+                " ".join(engram.tags or []),
+            ]
+        )
         if _has_query_overlap(query, searchable) or float(result.score) >= 1.35:
             filtered.append(result)
     return filtered
@@ -369,7 +429,10 @@ class MnemosRuntime:
         operational continuity packet through this meta side-channel.
         """
 
-        if self._get_meta("first_capture") is not None or self._get_meta("verified_at") is not None:
+        if (
+            self._get_meta("first_capture") is not None
+            or self._get_meta("verified_at") is not None
+        ):
             return
         payload = {
             "note_id": note_id,
@@ -381,7 +444,9 @@ class MnemosRuntime:
             payload["withheld"] = True
         else:
             payload["excerpt"] = content.strip().replace("\n", " ")[:160]
-        self._set_meta("first_capture", json.dumps(payload, ensure_ascii=True, sort_keys=True))
+        self._set_meta(
+            "first_capture", json.dumps(payload, ensure_ascii=True, sort_keys=True)
+        )
 
     def _verification_block(self) -> str | None:
         """One-time MEMORY VERIFIED block when continuity crosses a restart."""
@@ -493,7 +558,8 @@ class MnemosRuntime:
         )
         continuity = _filter_continuity(query, continuity)
         continuity = [
-            entry for entry in continuity
+            entry
+            for entry in continuity
             if DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
         ][:max_results]
         memories = self._retrieve(query, max_results=max_results) if query else []
@@ -525,18 +591,25 @@ class MnemosRuntime:
 
         dream = fetch_active_dream_entry(self._store, self.scope)
         if dream:
-            lines.extend([
-                "",
-                "While you were away:",
-                _indent(dream["content"]),
-                "  (Mnemos wrote this while consolidating memory. Share it with the human if the moment fits.)",
-            ])
+            lines.extend(
+                [
+                    "",
+                    "While you were away:",
+                    _indent(dream["content"]),
+                    "  (Mnemos wrote this while consolidating memory. Share it with the human if the moment fits.)",
+                ]
+            )
 
         if continuity:
             lines.extend(["", "Continuity notes:"])
             lines.extend(_format_continuity(entry) for entry in continuity)
         else:
-            lines.extend(["", "Continuity notes: none yet. Capture durable context when the user gives it."])
+            lines.extend(
+                [
+                    "",
+                    "Continuity notes: none yet. Capture durable context when the user gives it.",
+                ]
+            )
 
         if memories:
             lines.extend(["", "Relevant memories:"])
@@ -580,59 +653,73 @@ class MnemosRuntime:
             }
         ]
         edges: list[dict[str, Any]] = []
-        for domain, count in sorted(domain_counts.items(), key=lambda item: (-item[1], item[0])):
+        for domain, count in sorted(
+            domain_counts.items(), key=lambda item: (-item[1], item[0])
+        ):
             domain_id = f"domain:{domain}"
-            nodes.append({
-                "id": domain_id,
-                "label": domain,
-                "kind": "domain",
-                "weight": count,
-            })
-            edges.append({
-                "source": f"agent:{self.scope.agent_id}",
-                "target": domain_id,
-                "relation": "contains",
-                "strength": min(1.0, 0.35 + count * 0.12),
-            })
+            nodes.append(
+                {
+                    "id": domain_id,
+                    "label": domain,
+                    "kind": "domain",
+                    "weight": count,
+                }
+            )
+            edges.append(
+                {
+                    "source": f"agent:{self.scope.agent_id}",
+                    "target": domain_id,
+                    "relation": "contains",
+                    "strength": min(1.0, 0.35 + count * 0.12),
+                }
+            )
 
         for entry in continuity[:max_nodes]:
             domain = entry.get("domain") or "topical"
             node_id = f"continuity:{entry['id']}"
-            nodes.append({
-                "id": node_id,
-                "label": short_label(entry.get("content", ""), 44),
-                "kind": "continuity",
-                "domain": domain,
-                "confidence": round(float(entry.get("confidence", 0.0)), 3),
-                "salience": round(float(entry.get("salience", 0.0)), 3),
-                "created_at": entry.get("created_at"),
-            })
-            edges.append({
-                "source": f"domain:{domain}",
-                "target": node_id,
-                "relation": "anchors",
-                "strength": round(float(entry.get("salience", 0.5)), 3),
-            })
+            nodes.append(
+                {
+                    "id": node_id,
+                    "label": short_label(entry.get("content", ""), 44),
+                    "kind": "continuity",
+                    "domain": domain,
+                    "confidence": round(float(entry.get("confidence", 0.0)), 3),
+                    "salience": round(float(entry.get("salience", 0.0)), 3),
+                    "created_at": entry.get("created_at"),
+                }
+            )
+            edges.append(
+                {
+                    "source": f"domain:{domain}",
+                    "target": node_id,
+                    "relation": "anchors",
+                    "strength": round(float(entry.get("salience", 0.5)), 3),
+                }
+            )
 
         for engram in engrams[: max(3, max_nodes // 2)]:
             node_id = f"memory:{engram.id}"
-            nodes.append({
-                "id": node_id,
-                "label": short_label(engram.impact or engram.content, 38),
-                "kind": "memory",
-                "confidence": round(float(engram.source.confidence), 3),
-                "strength": round(float(engram.strength), 3),
-                "stability": round(float(engram.stability), 3),
-                "accessibility": round(float(engram.accessibility), 3),
-                "source_type": engram.source.type,
-                "created_at": engram.created_at,
-            })
-            edges.append({
-                "source": f"agent:{self.scope.agent_id}",
-                "target": node_id,
-                "relation": "encodes",
-                "strength": round(float(engram.accessibility), 3),
-            })
+            nodes.append(
+                {
+                    "id": node_id,
+                    "label": short_label(engram.impact or engram.content, 38),
+                    "kind": "memory",
+                    "confidence": round(float(engram.source.confidence), 3),
+                    "strength": round(float(engram.strength), 3),
+                    "stability": round(float(engram.stability), 3),
+                    "accessibility": round(float(engram.accessibility), 3),
+                    "source_type": engram.source.type,
+                    "created_at": engram.created_at,
+                }
+            )
+            edges.append(
+                {
+                    "source": f"agent:{self.scope.agent_id}",
+                    "target": node_id,
+                    "relation": "encodes",
+                    "strength": round(float(engram.accessibility), 3),
+                }
+            )
 
         timeline = build_timeline(continuity, engrams)
         summary = (
@@ -739,6 +826,9 @@ class MnemosRuntime:
             agent_id=self.scope.agent_id,
             override_confidence=confidence,
             skip_surprise_detection=True,
+            # Runtime continuity capture is observed (C4/F1); already hardcodes
+            # observed on the hypomnema side.
+            source_authority=SourceAuthority.OBSERVED,
         )
         note_id = self._store.write_hypomnema_entry(
             content.strip(),
@@ -808,7 +898,12 @@ class MnemosRuntime:
     ) -> str:
         """Correct, supersede, or archive stale memory."""
 
-        if not correction.strip() and action not in {"forget", "archive", "remove", "delete"}:
+        if not correction.strip() and action not in {
+            "forget",
+            "archive",
+            "remove",
+            "delete",
+        }:
             return "Correction needs replacement text or a forget/archive action."
 
         self._ensure_init()
@@ -836,14 +931,18 @@ class MnemosRuntime:
                         project_scope=self.scope.project_scope,
                         read_visibility=READ_VISIBILITY_OPERATIONAL,
                     )
-                    related_engram_id = hypo.get("related_engram_id") or hypo.get("graduated_to_engram_id")
+                    related_engram_id = hypo.get("related_engram_id") or hypo.get(
+                        "graduated_to_engram_id"
+                    )
                     if related_engram_id:
                         related = self._store.get_engram(
                             related_engram_id,
                             read_visibility=READ_VISIBILITY_OPERATIONAL,
                         )
                         if related is not None:
-                            self._store.archive_engram(related, reason=f"simple_correction_{action}")
+                            self._store.archive_engram(
+                                related, reason=f"simple_correction_{action}"
+                            )
                     return f"Archived continuity note {target}."
 
                 self._store.revise_hypomnema_entry(
@@ -871,7 +970,10 @@ class MnemosRuntime:
             )
             if engram is not None:
                 self._store.archive_engram(engram, reason=f"simple_correction_{action}")
-                if action in {"forget", "archive", "remove", "delete"} and not correction.strip():
+                if (
+                    action in {"forget", "archive", "remove", "delete"}
+                    and not correction.strip()
+                ):
                     return f"Archived memory {target}."
                 replacement = self._encoder.encode(
                     content=correction.strip(),
@@ -882,6 +984,9 @@ class MnemosRuntime:
                     agent_id=self.scope.agent_id,
                     override_confidence=0.92,
                     skip_surprise_detection=True,
+                    # Correcting an existing engram: inherit its authority so a
+                    # transformation neither inflates nor erases provenance (F1).
+                    source_authority=engram.source.authority,
                 )
                 return (
                     f"Archived memory {target} and captured correction {replacement.id}.\n"
@@ -909,14 +1014,18 @@ class MnemosRuntime:
                         project_scope=self.scope.project_scope,
                         read_visibility=READ_VISIBILITY_OPERATIONAL,
                     )
-                    related_engram_id = match.get("related_engram_id") or match.get("graduated_to_engram_id")
+                    related_engram_id = match.get("related_engram_id") or match.get(
+                        "graduated_to_engram_id"
+                    )
                     if related_engram_id:
                         related = self._store.get_engram(
                             related_engram_id,
                             read_visibility=READ_VISIBILITY_OPERATIONAL,
                         )
                         if related is not None:
-                            self._store.archive_engram(related, reason=f"simple_correction_{action}")
+                            self._store.archive_engram(
+                                related, reason=f"simple_correction_{action}"
+                            )
                     maintenance = self.maintain(auto=True)
                     return (
                         f"Archived closest continuity note {match['id']}.\n"
@@ -950,7 +1059,8 @@ class MnemosRuntime:
 
                 return self._finish_hypomnema_correction(
                     note_id,
-                    match.get("related_engram_id") or match.get("graduated_to_engram_id"),
+                    match.get("related_engram_id")
+                    or match.get("graduated_to_engram_id"),
                     correction,
                     action,
                     label="closest continuity note",
@@ -987,7 +1097,9 @@ class MnemosRuntime:
                 read_visibility=READ_VISIBILITY_OPERATIONAL,
             )
             if related is not None:
-                self._store.archive_engram(related, reason=f"simple_correction_{action}")
+                self._store.archive_engram(
+                    related, reason=f"simple_correction_{action}"
+                )
 
         updated_note = self._store.get_hypomnema_entry(
             note_id,
@@ -1022,6 +1134,11 @@ class MnemosRuntime:
             agent_id=self.scope.agent_id,
             override_confidence=0.92,
             skip_surprise_detection=True,
+            # DECLARED DEVIATION from F1 (which ruled inherit-original): the
+            # transformation source here is a hypomnema note, which carries no
+            # authority under Reading B, so per F2's promotion logic this stamps
+            # observed (the runtime-write floor). Flagged for Fable's review.
+            source_authority=SourceAuthority.OBSERVED,
         )
         self._store.mark_hypomnema_promoted(note_id, replacement.id)
         maintenance = self.maintain(auto=True)
@@ -1081,9 +1198,13 @@ class MnemosRuntime:
             )
             narrative = compose_dream_narrative(stats, deltas, promoted)
             if narrative:
-                self.last_dream_note_id = write_dream_entry(self._store, self.scope, narrative)
+                self.last_dream_note_id = write_dream_entry(
+                    self._store, self.scope, narrative
+                )
                 self.last_dream_narrative = narrative
-                self._set_meta("dream_last_written_at", datetime.now(timezone.utc).isoformat())
+                self._set_meta(
+                    "dream_last_written_at", datetime.now(timezone.utc).isoformat()
+                )
                 dream_status = "updated"
         except Exception:
             dream_status = "skipped (write failed)"
@@ -1095,7 +1216,11 @@ class MnemosRuntime:
         else:
             completed = "local deterministic maintenance completed"
 
-        model_note = "dedicated model available" if self._llm_client else "no dedicated model configured"
+        model_note = (
+            "dedicated model available"
+            if self._llm_client
+            else "no dedicated model configured"
+        )
         if requested_deep and not can_run_deep:
             model_note += "; deep requested, ran local deterministic maintenance"
         elif not requested_deep:
@@ -1238,12 +1363,15 @@ class MnemosRuntime:
         assert self._store is not None
         assert self._retriever is not None
         emotional_state = self._store.get_latest_emotional_state(self.scope.agent_id)
-        return _filter_memories(query, self._retriever.retrieve(
-            cue=query,
-            agent_id=self.scope.agent_id,
-            max_results=max(1, max_results),
-            emotional_state=emotional_state,
-        ))
+        return _filter_memories(
+            query,
+            self._retriever.retrieve(
+                cue=query,
+                agent_id=self.scope.agent_id,
+                max_results=max(1, max_results),
+                emotional_state=emotional_state,
+            ),
+        )
 
     def _promote_candidates(self, limit: int = 3) -> int:
         assert self._store is not None
@@ -1258,7 +1386,9 @@ class MnemosRuntime:
         promoted = 0
         for entry in candidates:
             if entry.get("related_engram_id"):
-                self._store.mark_hypomnema_promoted(entry["id"], entry["related_engram_id"])
+                self._store.mark_hypomnema_promoted(
+                    entry["id"], entry["related_engram_id"]
+                )
                 promoted += 1
                 continue
             engram = self._encoder.encode(
@@ -1270,6 +1400,10 @@ class MnemosRuntime:
                 agent_id=self.scope.agent_id,
                 override_confidence=float(entry["confidence"]),
                 skip_surprise_detection=True,
+                # DECLARED DEVIATION from F1: promoting a hypomnema candidate to
+                # an engram; the hypomnema carries no authority under Reading B,
+                # so per F2 this stamps observed (matches mnemos_hypomnema_promote).
+                source_authority=SourceAuthority.OBSERVED,
             )
             self._store.mark_hypomnema_promoted(entry["id"], engram.id)
             promoted += 1
@@ -1393,35 +1527,37 @@ def format_health_card(data: dict[str, Any]) -> str:
     if dream["excerpt"] is None:
         dream_line = "none yet"
     else:
-        dream_line = f"{dream['last_written_at']}: \"{dream['excerpt']}\""
+        dream_line = f'{dream["last_written_at"]}: "{dream["excerpt"]}"'
 
-    return "\n".join([
-        "Mnemos health card",
-        line(
-            "Scope",
-            f"agent={scope['agent_id']} person={scope['person_id']} "
-            f"project={scope['project_scope']}",
-        ),
-        line("Store", f"{store['db_path']} ({_human_size(store['size_bytes'])})"),
-        line(
-            "Memories",
-            f"{counts['memories_active']} active, "
-            f"{counts['memories_archived']} archived",
-        ),
-        line(
-            "Continuity",
-            f"{counts['continuity_notes_active']} notes "
-            f"({counts['continuity_notes_foundational']} foundational)",
-        ),
-        line("Connections", counts["connections"]),
-        line("Beliefs", f"{counts['beliefs_active']} active"),
-        line("Last cycle", cycle_line),
-        line("Affinity", affinity_line),
-        line(
-            "Onboarding",
-            f"{data['onboarding']['stage']} (session {data['onboarding']['session']})",
-        ),
-        line("Verification", verification_line),
-        line("Last dream", dream_line),
-        "Everything on this card is safe to relay to the human in plain words.",
-    ])
+    return "\n".join(
+        [
+            "Mnemos health card",
+            line(
+                "Scope",
+                f"agent={scope['agent_id']} person={scope['person_id']} "
+                f"project={scope['project_scope']}",
+            ),
+            line("Store", f"{store['db_path']} ({_human_size(store['size_bytes'])})"),
+            line(
+                "Memories",
+                f"{counts['memories_active']} active, "
+                f"{counts['memories_archived']} archived",
+            ),
+            line(
+                "Continuity",
+                f"{counts['continuity_notes_active']} notes "
+                f"({counts['continuity_notes_foundational']} foundational)",
+            ),
+            line("Connections", counts["connections"]),
+            line("Beliefs", f"{counts['beliefs_active']} active"),
+            line("Last cycle", cycle_line),
+            line("Affinity", affinity_line),
+            line(
+                "Onboarding",
+                f"{data['onboarding']['stage']} (session {data['onboarding']['session']})",
+            ),
+            line("Verification", verification_line),
+            line("Last dream", dream_line),
+            "Everything on this card is safe to relay to the human in plain words.",
+        ]
+    )

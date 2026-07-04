@@ -39,6 +39,10 @@ The fundamental unit of memory. Each engram has:
 - **Dual-trace model**: Strength, stability, accessibility — three independent dimensions
 - **Kind**: Episodic (experiences), semantic (facts), procedural (how-to), prospective (future-directed)
 - **Confidence**: Scored by source reliability (user-explicit → speculative)
+- **Source authority**: Harness-stamped provenance (`user_stated`, `imported`,
+  `observed`, or `generated`) derived from the ingest channel, never from
+  payload text. `Encoder.encode()` requires an explicit `source_authority`
+  keyword from trusted code; MCP tools do not expose an authority parameter.
 - **State lifecycle**: Active → consolidating → dormant → archived
 - **Resolution**: High → low (details fade through softening, like human memory)
 - **Full version history**: Every reconsolidation is tracked
@@ -57,8 +61,10 @@ The fundamental unit of memory. Each engram has:
   hypomnema writes classify to `review_only` by default, while the bare
   hypomnema SQL default stays `operational_context` for legacy compatibility;
   omitted-visibility callers still pass through the write-time classifier
-  before ordinary use. Proposed
-  durable transitions are tracked in
+  before ordinary use. Caller-supplied hypomnema domains can only escalate
+  above the content classifier; underclaimed high-blast content is stored at
+  the effective domain, routed to review, and logged as a deduped domain-claim
+  proposal. Proposed durable transitions are tracked in
   `proposal_ledger` with authority, target surface, transition, blast radius,
   visibility, status, reason, gate version, provenance, and payload fields.
 - **Gated inner-life controls** (schema v8): generated reflection, wandering,
@@ -106,9 +112,11 @@ Cue → read-visibility prefilter → FTS5 search + embedding similarity → gra
 activation/scoring → reconsolidation → results
 
 Operational retrieval uses `read_visibility="operational_context"` before FTS,
-embedding hits, graph propagation, scoring, and reconsolidation. Explicit
-review callers can request `review_only`; audit-only rows stay out of normal
-review flows.
+embedding hits, graph propagation, scoring, and reconsolidation. Store helpers
+that load by ID, traverse connections, read versions, search archive rows, or
+load functional/hypomnema rows also default to operational visibility; explicit
+`read_visibility=None` is the unfiltered admin opt-in. Explicit review callers
+can request `review_only`; audit-only rows stay out of normal review flows.
 
 Every retrieval updates the returned visible memory — access count, strength,
 new connections. Operational paths return operational rows. Memories are living

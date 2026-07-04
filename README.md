@@ -94,9 +94,10 @@ Simple mode exposes seven user-facing tools:
 | `mnemos_introduce` | Let the agent declare its own model id and name so memory maintenance stays kin from day one. |
 | `mnemos_health` | Human-relayable health card: store location and size, counts, last maintenance cycle, affinity verdict, onboarding state, and last dream entry. |
 
-Agents do not need to pass tags, memory kinds, confidence, source types, or
-agent IDs. Mnemos resolves scope once from CLI flags, environment, config, and
-reasonable defaults.
+Agents do not need to pass tags, memory kinds, confidence, source types, source
+authority, or agent IDs. Mnemos resolves scope once from CLI flags,
+environment, config, and reasonable defaults, and stamps source authority from
+the ingest channel rather than from model-supplied text.
 
 ### Install Simple MCP Into Clients
 
@@ -210,8 +211,8 @@ Advanced tools include:
 | `mnemos_review_queue` | Inspect confirmation and promotion candidates through an explicit review surface. |
 | `mnemos_proposal_audit` | Inspect audit-only proposal ledger rows through an explicit admin/audit surface. |
 | `mnemos_visual_snapshot` | Render an inline Mermaid memory map with review prose withheld. |
-| `mnemos_remember` | Encode a memory with explicit fields. |
-| `mnemos_ingest` | Ingest external knowledge with provenance. |
+| `mnemos_remember` | Encode a memory with explicit fields; authority remains harness-stamped. |
+| `mnemos_ingest` | Ingest external knowledge with provenance; authority remains harness-stamped. |
 | `mnemos_recall` | Retrieve memories. |
 | `mnemos_inspect` | View full memory details. |
 | `mnemos_introspect` | Audit text for metacognitive pattern markers. |
@@ -245,6 +246,14 @@ Direct-ID and operational hypomnema tools (`mnemos_inspect`, `mnemos_forget`,
 review-only or audit-only ID returns a "not found" response, or is absent from
 ordinary search/candidate output, so review prose is never mutated or promoted
 through an operational tool call.
+
+MCP callers cannot stamp `source_authority`; `mnemos_remember`,
+`mnemos_ingest`, setup seeding, and hypomnema promotion use the tool channel's
+fixed authority. Hypomnema write domains are also fail-closed: a caller can
+label content more cautiously, but cannot label identity/foundational content
+down to `topical` to bypass review. Underclaimed writes are stored at the
+effective domain, routed to review, and duplicate scoped content claims collapse
+to one pending review row.
 
 ### Prompt For An Advanced MCP Agent
 

@@ -16,6 +16,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Scope-taking advanced tools inherit configured agent/person/project scope
   when callers leave scope args at their default sentinels.
 - Injected FastMCP context parameters are not exposed in public tool schemas.
+- No MCP tool exposes `source_authority` or an authority override parameter.
 - Sampling is optional and occurs only inside an active client request.
 - Sampling failures, denials, or unsupported clients fall back cleanly.
 - Tool annotations match local side effects.
@@ -77,6 +78,15 @@ Use this checklist before publishing Mnemos or opening a release PR.
   substrate producers, consolidation producers, shared-pool reads, and
   modulators filter to `operational_context` before scoring, ranking, or
   generation.
+- Low-level direct readers (`get_engram`, graph connections/traversal,
+  archived search, functional memory, and hypomnema by ID) default to
+  operational visibility; unfiltered access is explicit `read_visibility=None`
+  and reserved for audit/admin code paths.
+- Every durable engram write stamps source authority from the trusted channel:
+  MCP/runtime/session-indexer surfaces use `observed`, curated PAI import uses
+  `imported`, autonomous producers use `generated`, and legacy source records
+  deserialize to the `observed` floor. Payload text must never mint
+  `user_stated` or `imported`.
 - Direct-ID advanced tools (`mnemos_inspect`, `mnemos_forget`, hypomnema
   revise/supersede/promote) and substrate handlers
   (insight/reflection/surprise/wandering/dreaming/initiation) refuse to mutate
@@ -90,6 +100,10 @@ Use this checklist before publishing Mnemos or opening a release PR.
   hypomnema SQL default remains `operational_context` for legacy compatibility,
   with omitted-visibility callers still routed through the store classifier
   before ordinary use.
+- Hypomnema write domains are normalized and cannot de-escalate below content
+  classification. Underclaimed high-blast writes are routed to review, produce
+  one legible scoped domain-claim proposal, and duplicate content/whitespace
+  variants do not flood the review queue.
 - Simple-mode first-capture verification records review-only/audit-only
   captures as existence-only metadata and never stores or re-quotes their
   prose in the operational restart proof.

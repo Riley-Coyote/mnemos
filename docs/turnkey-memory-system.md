@@ -49,6 +49,8 @@ review counts and source IDs until an explicit review surface asks for them.
 Simple captures that look like identity/foundational or otherwise
 promotion-ready material are held as review-only continuity rather than being
 promoted into operational engrams.
+The agent also does not stamp source authority; Mnemos derives authority from
+the tool/import/producer channel and treats payload authority claims as text.
 
 Gated inner-life and soak rows are outside the turnkey session loop. Their
 private provenance, gate decisions, skips/drops, and tick telemetry live in
@@ -86,6 +88,9 @@ The onboarding ritual seeds:
 - Treat a simple-mode `Captured continuity for review` response as pending:
   ordinary context, recall, and cross-session verification must not quote its
   prose.
+- Do not treat a caller domain label as a downgrade. Mnemos can store the
+  higher-risk effective domain, route underclaimed high-blast continuity to
+  review, and collapse duplicate scoped claims.
 
 ## Inline Visual Content
 

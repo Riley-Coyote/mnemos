@@ -5,10 +5,11 @@ from enum import Enum
 
 class EngramKind(str, Enum):
     """Classification of memory type."""
-    EPISODIC = "episodic"          # Specific experiences, events
-    SEMANTIC = "semantic"          # Facts, knowledge, understanding
-    PROCEDURAL = "procedural"     # How-to knowledge, skills, patterns
-    PROSPECTIVE = "prospective"   # Future-directed (linked to Intentions)
+
+    EPISODIC = "episodic"  # Specific experiences, events
+    SEMANTIC = "semantic"  # Facts, knowledge, understanding
+    PROCEDURAL = "procedural"  # How-to knowledge, skills, patterns
+    PROSPECTIVE = "prospective"  # Future-directed (linked to Intentions)
 
 
 class ConnectionRelation(str, Enum):
@@ -21,17 +22,18 @@ class ConnectionRelation(str, Enum):
       ELABORATES, TEMPORAL_BEFORE, TEMPORAL_AFTER, PART_OF, INSTANCE_OF,
       ANALOGOUS_TO, INTERFERES_WITH, DISTILLED_INTO
     """
+
     # --- Core taxonomy (LLM-classified) ---
-    SUPPORTS = "supports"           # Independently reinforces same conclusion
-    CONTRADICTS = "contradicts"     # Genuine evidence against
-    CAUSES = "causes"               # Temporal/causal chain
-    EXTENDS = "extends"             # Adds new analysis, goes further
-    PARALLELS = "parallels"         # Same pattern, different instances
-    SYNTHESIZES = "synthesizes"     # Combines multiple sources into unified picture
-    GROUNDS = "grounds"             # Provides foundational context giving meaning
+    SUPPORTS = "supports"  # Independently reinforces same conclusion
+    CONTRADICTS = "contradicts"  # Genuine evidence against
+    CAUSES = "causes"  # Temporal/causal chain
+    EXTENDS = "extends"  # Adds new analysis, goes further
+    PARALLELS = "parallels"  # Same pattern, different instances
+    SYNTHESIZES = "synthesizes"  # Combines multiple sources into unified picture
+    GROUNDS = "grounds"  # Provides foundational context giving meaning
 
     # --- Structural (mechanism-formed, not semantically classified) ---
-    CO_ACTIVATED = "co_activated"   # Retrieved together — correlation, not evidence.
+    CO_ACTIVATED = "co_activated"  # Retrieved together — correlation, not evidence.
     # Created by retrieval reconsolidation; the connection discovery pass
     # may later upgrade it to a semantic relation (or remove it). Writing
     # these as SUPPORTS would re-seed the relation-type monoculture the
@@ -50,6 +52,7 @@ class ConnectionRelation(str, Enum):
 
 class EngramState(str, Enum):
     """Lifecycle state of an engram."""
+
     ACTIVE = "active"
     CONSOLIDATING = "consolidating"
     DORMANT = "dormant"
@@ -58,22 +61,25 @@ class EngramState(str, Enum):
 
 class ConfidenceSource(str, Enum):
     """How confident we are in a memory, and why."""
-    USER_EXPLICIT = "user_explicit"    # 0.95-1.0: Direct, unambiguous statement
-    USER_IMPLIED = "user_implied"      # 0.70-0.94: Strong inference from behavior
+
+    USER_EXPLICIT = "user_explicit"  # 0.95-1.0: Direct, unambiguous statement
+    USER_IMPLIED = "user_implied"  # 0.70-0.94: Strong inference from behavior
     MODEL_INFERRED = "model_inferred"  # 0.40-0.69: Pattern recognition
-    SPECULATIVE = "speculative"        # 0.00-0.39: Tentative, needs verification
+    SPECULATIVE = "speculative"  # 0.00-0.39: Tentative, needs verification
 
 
 class EncodingDepth(str, Enum):
     """How deeply an engram was encoded."""
-    SHALLOW = "shallow"        # Minimal metadata, no connections
-    MODERATE = "moderate"      # Full metadata, basic connections
-    DEEP = "deep"              # Rich connections, schema update
+
+    SHALLOW = "shallow"  # Minimal metadata, no connections
+    MODERATE = "moderate"  # Full metadata, basic connections
+    DEEP = "deep"  # Rich connections, schema update
     ELABORATIVE = "elaborative"  # Above + questions + belief check
 
 
 class Visibility(str, Enum):
     """Multi-agent visibility scope."""
+
     PRIVATE = "private"
     SHARED = "shared"
     PUBLIC = "public"
@@ -81,15 +87,32 @@ class Visibility(str, Enum):
 
 class SourceType(str, Enum):
     """How a memory entered the system."""
-    SESSION = "session"          # From user interaction
-    BACKGROUND = "background"    # From autonomous thinking
-    DREAM = "dream"              # From dream consolidation
-    MERGE = "merge"              # From parallel session merge
-    OBSERVER = "observer"        # From external observer
-    BOOTSTRAP = "bootstrap"      # From initialization/migration
-    REFLECTION = "reflection"    # From consolidation reflection pass
+
+    SESSION = "session"  # From user interaction
+    BACKGROUND = "background"  # From autonomous thinking
+    DREAM = "dream"  # From dream consolidation
+    MERGE = "merge"  # From parallel session merge
+    OBSERVER = "observer"  # From external observer
+    BOOTSTRAP = "bootstrap"  # From initialization/migration
+    REFLECTION = "reflection"  # From consolidation reflection pass
     BROWSER_EXTRACTION = "browser_extraction"  # From Sovereign Mind browser extension
-    EXTERNAL = "external"                        # From external ingestion pipeline
+    EXTERNAL = "external"  # From external ingestion pipeline
+
+
+class SourceAuthority(str, Enum):
+    """Harness-stamped authority for a durable-affecting write (RFC-R1).
+
+    Authority is derived from the *channel* a write arrives on — which tool,
+    which surface, which importer — never from caller parameters or payload
+    content. A payload or caller claiming a higher authority is evidence of
+    risk, not authority (R1). ``user_stated`` is never mintable by any ingest
+    channel; it is reserved for David's reviewed-decision path (U4).
+    """
+
+    USER_STATED = "user_stated"  # David asserted it through a reviewed surface
+    IMPORTED = "imported"  # Curated-history importer (DAVID-7)
+    OBSERVED = "observed"  # Agent/runtime observed it (model-reachable channels)
+    GENERATED = "generated"  # Autonomous producer synthesized it
 
 
 # Constants
@@ -107,9 +130,10 @@ BELIEF_TIERS = (0.7, 0.5, 0.3)
 
 class BeliefChangeKind(str, Enum):
     """Result of classifying a belief confidence change against tier boundaries."""
-    CONFIRMED = "confirmed"        # Upward crossing — belief strengthened past a tier
+
+    CONFIRMED = "confirmed"  # Upward crossing — belief strengthened past a tier
     CONTRADICTED = "contradicted"  # Downward crossing — belief eroded past a tier
-    NO_CROSSING = "no_crossing"    # Change stayed within the same tier band
+    NO_CROSSING = "no_crossing"  # Change stayed within the same tier band
 
 
 def classify_belief_change(

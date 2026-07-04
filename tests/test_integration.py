@@ -1,5 +1,4 @@
 """Integration test — full memory lifecycle."""
-import pytest
 
 from mnemos.store.sqlite_store import EngramStore
 from mnemos.encoding.encoder import Encoder
@@ -24,18 +23,21 @@ class TestFullRoundtrip:
             kind="semantic",
             tags=["architecture", "retrieval"],
             source=SourceType.SESSION,
+            source_authority="observed",
         )
-        e2 = encoder.encode(
+        encoder.encode(
             content="Connection types include supports, contradicts, causes, and extends",
             kind="semantic",
             tags=["architecture", "connections"],
             source=SourceType.SESSION,
+            source_authority="observed",
         )
-        e3 = encoder.encode(
+        encoder.encode(
             content="Deployed the MCP server to production successfully",
             kind="episodic",
             tags=["deployment", "mcp"],
             source=SourceType.SESSION,
+            source_authority="observed",
         )
 
         assert store.count_engrams() >= 3

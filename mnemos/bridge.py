@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any
 
 log = logging.getLogger("mnemos.bridge")
 
@@ -64,6 +63,7 @@ class MnemosBridge:
 
         try:
             from .multiagent.shared_pool import SharedPool
+
             self._shared_pool = SharedPool()
         except Exception:
             self._shared_pool = None
@@ -93,7 +93,7 @@ class MnemosBridge:
     ) -> str:
         """Encode a memory."""
         self._ensure_init()
-        from .core.types import SourceType
+        from .core.types import SourceAuthority, SourceType
 
         tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
         engram = self._encoder.encode(
@@ -104,6 +104,8 @@ class MnemosBridge:
             source=SourceType.SESSION,
             agent_id=self.agent_id,
             skip_surprise_detection=skip_surprise_detection,
+            # Programmatic library surface (agent channel): observed (F1).
+            source_authority=SourceAuthority.OBSERVED,
         )
 
         return (
@@ -161,7 +163,9 @@ class MnemosBridge:
         """List current beliefs."""
         self._ensure_init()
         belief_list = self._store.get_beliefs(
-            agent_id=self.agent_id, domain=None, active_only=True,
+            agent_id=self.agent_id,
+            domain=None,
+            active_only=True,
         )
         if not belief_list:
             return "No active beliefs found."
@@ -169,7 +173,9 @@ class MnemosBridge:
         lines = []
         for b in belief_list:
             pct = int(b.confidence * 100)
-            lines.append(f"- {b.content} [{b.domain}, {pct}%, {len(b.revision_history)} revisions]")
+            lines.append(
+                f"- {b.content} [{b.domain}, {pct}%, {len(b.revision_history)} revisions]"
+            )
         return f"{len(belief_list)} active beliefs:\n\n" + "\n".join(lines)
 
     def consolidate(self, deep: bool = False) -> str:
@@ -178,8 +184,10 @@ class MnemosBridge:
         from .consolidation.daemon import ConsolidationDaemon
 
         daemon = ConsolidationDaemon(
-            store=self._store, config={},
-            llm_client=self._llm_client, embedding_index=self._embedding_index,
+            store=self._store,
+            config={},
+            llm_client=self._llm_client,
+            embedding_index=self._embedding_index,
         )
         stats = daemon.run_cycle(deep=deep, agent_id=self.agent_id)
 

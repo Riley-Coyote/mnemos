@@ -46,7 +46,7 @@ from typing import Callable, Iterable
 
 from ..core.belief import Belief
 from ..core.engram import Engram, MemorySource
-from ..core.types import ConfidenceSource, EngramKind, SourceType
+from ..core.types import ConfidenceSource, EngramKind, SourceAuthority, SourceType
 from ..store.migrations import insert_pai_import_event, upsert_pai_import_row
 from ..store.read_visibility import READ_VISIBILITY_AUDIT, READ_VISIBILITY_REVIEW
 from ..store.sqlite_store import EngramStore
@@ -687,6 +687,9 @@ def _row_to_engram(row: PaiImportRow) -> Engram:
             type=SourceType.EXTERNAL,
             confidence=row.confidence,
             confidence_source=ConfidenceSource.USER_EXPLICIT,
+            # Curated-history importer stamps imported, never user_stated
+            # (R1/DAVID-7); import config cannot elevate authority.
+            authority=SourceAuthority.IMPORTED,
         ),
         owner_agent_id=row.agent_id,
     )
@@ -1597,6 +1600,11 @@ def _engram_matches_row(conn, row: PaiImportRow) -> bool | None:
         and source.get("type") == SourceType.EXTERNAL.value
         and _float_equal(source.get("confidence"), row.confidence)
         and source.get("confidence_source") == ConfidenceSource.USER_EXPLICIT.value
+        # Include authority in the identity check (T3 review pai-import-authority-noop):
+        # a pre-existing row wrongly stamped observed (e.g. a legacy import or a
+        # from_dict fallback) must NOT be treated as a no-op — re-import repairs
+        # the stale stamp to imported instead of leaving it reading back observed.
+        and source.get("authority") == SourceAuthority.IMPORTED.value
     )
 
 

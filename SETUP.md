@@ -95,8 +95,9 @@ It exposes only:
 - `mnemos_introduce`
 - `mnemos_health`
 
-The user does not need to set up a database, choose tags, pass agent IDs, learn
-engram/hypomnema terminology, configure OpenClaw, or supply a model key.
+The user does not need to set up a database, choose tags, pass agent IDs, stamp
+source authority, learn engram/hypomnema terminology, configure OpenClaw, or
+supply a model key.
 Most captures become operational continuity automatically. Captures that look
 like identity/foundational or otherwise promotion-ready material can return
 `Captured continuity for review`; those notes stay out of ordinary context and
@@ -179,6 +180,11 @@ Advanced mode preserves the full tool surface: explicit remember/ingest/recall,
 hypomnema management, functional-memory sessions, context packets, review
 queues, proposal audit, visual snapshots, beliefs, shared memory, inspect,
 forget, and explicit consolidation.
+
+Advanced MCP callers still do not choose `source_authority`; Mnemos stamps it
+from the tool/import/producer channel. Hypomnema domains are checked against
+content classification, so a lower-risk caller label cannot bypass review for
+identity/foundational content.
 
 Scope-taking advanced tools inherit the server scope when their `agent_id`,
 `person_id`, and `project_scope` args are left at defaults. Launch with

@@ -269,12 +269,27 @@ hypomnema require a vault witness before they can read as operational. The
 witness is `decision_ref`, the hash of an approved line in the root/vault-owned
 `/usr/local/var/mnemos-vault/decisions.jsonl` journal.
 
-Identity apply and legacy witness stamping read only the canonical journal path;
-environment variables and call arguments cannot redirect them. If the journal
-file exists but is agent-owned or agent-writable, apply refuses it and
-session-start/watchdog reconciliation fails closed with `journal_untrusted`,
-quarantining already witnessed operational identity rows until a trusted journal
-is restored.
+Two batch witness modes exist for pre-vault identity rows. `mnemos-decide
+--witness-legacy` witnesses already-operational rows and preserves their
+visibility when `apply_legacy_witness()` stamps them. `mnemos-decide
+--initial-rollout` is the one-time DAVID-10 ceremony path: it witnesses only
+mapped `hypomnema_entries` that the restamp left `review_only`, then
+`apply_initial_rollout()` stamps and promotes those matching rows to
+`operational_context` at session start. The initial rollout does not enumerate
+beliefs or native/unmapped held hypomnema rows.
+
+`scripts/restamp_david10.py` prepares that rollout corpus from
+`pai_import_row_map` source buckets. It defaults to dry-run, requires an explicit
+DB path, refuses live `~/.mnemos` unless David passes the ceremony opt-in flag,
+and requires `--snapshot` on `--execute`; the snapshot must match the target's
+full pre-write database content under the transaction lock.
+
+Identity apply, legacy witness stamping, and initial-rollout stamping read only
+the canonical journal path; environment variables and call arguments cannot
+redirect them. If the journal file exists but is agent-owned or agent-writable,
+apply refuses it and session-start/watchdog reconciliation fails closed with
+`journal_untrusted`, quarantining already witnessed operational identity rows
+until a trusted journal is restored.
 
 Reconciliation runs in both directions: table rows must resolve to approved
 journal lines, and approved journal lines must still have live matching rows. A

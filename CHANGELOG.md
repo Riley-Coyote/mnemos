@@ -72,13 +72,20 @@
   journal-governed operational identity rows.
 - Schema v9 identity-vault hardening requires identity/foundational
   `beliefs` and `hypomnema_entries` to carry a vault `decision_ref` before
-  operational reads surface them. Apply, legacy witness stamping, session-start
-  reconcile, and the watchdog use only the canonical
+  operational reads surface them. Apply, legacy witness stamping,
+  initial-rollout stamping, session-start reconcile, and the watchdog use only
+  the canonical
   `/usr/local/var/mnemos-vault/decisions.jsonl` journal.
+- The DAVID-10 ceremony adds `scripts/restamp_david10.py` and
+  `mnemos-decide --initial-rollout`. The restamp buckets mapped hypomnema rows
+  with dry-run-first and snapshot parity checks; the rollout witness is
+  hypomnema-only, source-map constrained, and promotes matching review-only rows
+  only after `apply_initial_rollout()` re-verifies them under lock.
 - The vault reconciler now rejects an agent-owned/agent-writable journal leaf,
   fails closed on missing/corrupt/untrusted journals, runs quarantine-all and
-  normal writes under one `BEGIN IMMEDIATE` span, and restores cleared-ref raw
-  SQL hides only when the witness fully re-verifies.
+  normal writes under one `BEGIN IMMEDIATE` span, honors newest initial-rollout
+  lines per row, reports stale rollout refs, and restores cleared-ref raw SQL
+  hides only when the witness fully re-verifies.
 - Schema v10 adds inert `dynamic_modulations` storage for bounded
   DynamicModulation work. Rows can be persisted, loaded by primary key,
   counted for telemetry/backout, and deleted by normalized `rollout_tag`, but

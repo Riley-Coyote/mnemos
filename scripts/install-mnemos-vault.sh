@@ -213,13 +213,19 @@ TMP_SUDO="$(mktemp)"
 cat > "${TMP_SUDO}" <<EOF
 # Only ${DAVID} may run ONLY the vault TCB as ${VAULT_USER}, password every time.
 # 008r-review (sudoers-allows-tcb-redirect-args): restrict to the EXACT invocation
-# forms — no args (interactive decide) and --witness-legacy. An unrestricted rule
-# would let --db/--journal redirect the canonical journal/DB under sudo while
-# printing a successful decision. "" matches a no-argument invocation; the second
-# form matches exactly --witness-legacy. Anything else (e.g. --journal /tmp/fake)
-# is denied by sudo. (The TCB ALSO self-refuses these flags when SUDO_USER is set.)
+# forms — no args (interactive decide), --witness-legacy, and --initial-rollout.
+# An unrestricted rule would let --db/--journal redirect the canonical journal/DB
+# under sudo while printing a successful decision. "" matches a no-argument
+# invocation; the other forms match exactly --witness-legacy / --initial-rollout.
+# Anything else (e.g. --journal /tmp/fake) is denied by sudo. (The TCB ALSO
+# self-refuses the redirect flags when SUDO_USER is set.)
+# DAVID-10 / 013b: --initial-rollout is the ONE-TIME ceremony pass that witnesses
+# the review_only curated hypomnema corpus and promotes it operational; David
+# runs it once, standalone, at the ceremony (same standalone form as
+# --witness-legacy). Coherence is mandatory (013b fix 4): this rule, the TCB
+# argument handling, and the ceremony walkthrough all name `--initial-rollout`.
 Defaults!${TCB_DEST} timestamp_timeout=0
-${DAVID} ALL=(${VAULT_USER}) PASSWD: ${TCB_DEST} "", ${TCB_DEST} --witness-legacy
+${DAVID} ALL=(${VAULT_USER}) PASSWD: ${TCB_DEST} "", ${TCB_DEST} --witness-legacy, ${TCB_DEST} --initial-rollout
 EOF
 # Validate BEFORE installing — a broken sudoers file can lock you out.
 visudo -cf "${TMP_SUDO}"

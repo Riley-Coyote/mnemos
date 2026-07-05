@@ -71,10 +71,10 @@ The fundamental unit of memory. Each engram has:
   `beliefs` and `hypomnema_entries` additionally carry `decision_ref`, the hash
   of an approved line in the canonical root/vault-owned decisions journal.
   When the vault directory is installed and trusted, operational reads exclude
-  identity-tier rows with no ref, and apply/legacy-witness paths read only the
-  canonical journal. A present agent-owned or agent-writable journal leaf is
-  unusable-at-read: apply refuses it and reconciliation routes it through the
-  same quarantine-all fail-closed handling as a corrupt journal.
+  identity-tier rows with no ref, and apply/legacy/initial-rollout witness paths
+  read only the canonical journal. A present agent-owned or agent-writable
+  journal leaf is unusable-at-read: apply refuses it and reconciliation routes it
+  through the same quarantine-all fail-closed handling as a corrupt journal.
 - **DynamicModulation storage** (schema v10): the `dynamic_modulations` table is
   an inert persistence and backout surface, not an active retrieval signal.
   `EngramStore.store_dynamic_modulation()` can persist reversible,
@@ -173,13 +173,20 @@ belief and hypomnema rows. `apply_identity_decision()` applies only a
 chain-verified approved/rejected journal line whose content hash still matches
 the proposal under the write lock; `apply_legacy_witness()` stamps pre-vault
 identity rows from legacy witness lines without promoting rows that were already
-review/audit-only. `reconcile_identity_vault()` runs at session start and from
-the watchdog. It holds a `BEGIN IMMEDIATE` span lock while it checks both
+review/audit-only. `apply_initial_rollout()` is the one-time DAVID-10 companion:
+it reads approved `witness="initial-rollout"` lines, accepts only the newest
+line per `(table, row_id)`, re-verifies mapped review-only identity rows under
+the write lock, then stamps and promotes matching rows to
+`operational_context`. `reconcile_identity_vault()` runs at session start and
+from the watchdog. It holds a `BEGIN IMMEDIATE` span lock while it checks both
 directions (table -> journal and journal -> table), quarantines orphaned,
-forged, de-tiered, content-mutated, lifecycle-hidden, or unverified rows, and
-restores operational visibility only when the journal witness fully re-verifies.
-For a raw-SQL hide that cleared `decision_ref`, restore writes the verified ref
-and visibility together so the next pass does not re-orphan the row.
+forged, de-tiered, content-mutated, lifecycle-hidden, stale-ref, or unverified
+rows, and restores operational visibility only when the journal witness fully
+re-verifies. For a raw-SQL hide that cleared `decision_ref`, restore writes the
+verified ref and visibility together so the next pass does not re-orphan the
+row; an unstamped initial-rollout row still at `review_only` is treated as a
+benign pending-apply state, while a curator-held row is reported without being
+promoted.
 
 ## Layer 2: Substrate (Inner Life / Consolidation)
 

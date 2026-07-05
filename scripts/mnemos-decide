@@ -12,14 +12,19 @@ Behaviour:
      blast_radius or domain is identity/foundational.
   2. For each: print the RAW ledger prose (no summarization), full provenance,
      and the content SHA-256 computed live from the row.
-  3. Prompt [a]pprove / [r]eject / [d]efer / [s]kip. On a/r, append a
+  3. Prompt [a]pprove / [r]eject / [s]kip. On a/r, append a
      hash-chained line to the journal (append-only file the vault owns).
+  4. Special batch modes:
+     - --witness-legacy witnesses already-operational pre-vault identity rows.
+     - --initial-rollout witnesses only mapped review_only hypomnema rows from
+       the DAVID-10 restamp so agent-side apply_initial_rollout can stamp and
+       promote them once, during the ceremony.
 
 The hash + chain logic below is a deliberate, self-contained copy of
 mnemos/vault/journal.py. tests/test_vault_journal_twin.py pins the two to
 byte-identical output. Auditability of this file outranks not-repeating-myself.
 
-Stdlib only: sqlite3, hashlib, json, os, sys, datetime.
+Stdlib only: argparse, datetime, hashlib, json, os, pwd, sqlite3, sys.
 """
 
 import argparse
@@ -355,14 +360,67 @@ _LEGACY_SQL = {
     ),
 }
 
+# 008s #4 / DAVID-10: --initial-rollout is the ONE-TIME first-witness pass over
+# freshly-migrated legacy identity rows that the DAVID-10 restamp left at
+# read_visibility='review_only'. On that first pass, review_only is provably a
+# MIGRATION DEFAULT — no curator has individually flagged these rows; the whole
+# curated identity corpus was stamped review_only by migration-6's backfill and
+# the restamp, awaiting exactly this deliberate ceremony confirmation. So unlike
+# --witness-legacy (which witnesses only already-operational rows and preserves
+# their visibility), --initial-rollout witnesses the review_only identity corpus
+# AND promotes it to operational at stamp (apply_initial_rollout). David passes
+# this flag ONCE, at the ceremony, with the witness-set preview in hand. At
+# steady state --witness-legacy's skip-rule holds and this flag is not used.
+#
+# 013b RULING (fix 1) — HYPOMNEMA-ONLY. The beliefs branch is REMOVED. The
+# DAVID-10 restamp is hypomnema-scoped; on the live corpus no belief legitimately
+# needs --initial-rollout — the 46 identity beliefs are already operational
+# (post-incident-reversal) and witness via --witness-legacy at steady state, and
+# the SINGLE review_only identity belief (becoming-is-mixed-deposition,
+# needs_review=1/confidence_pending_review=1) is DELIBERATELY review-pending by
+# David's recorded curator intent (~/mnemos-vault-incident-reversal-20260704.sh).
+# Enumerating beliefs here would have witnessed that one row into the permanent
+# journal and promoted it operational under David's single aggregate
+# confirmation — silently overriding his standing E2 decision. Dropping the
+# branch provably closes the sweep for this ceremony. The apply-layer guard
+# (apply_initial_rollout, fix 2) kills the CLASS: any future re-introduction of a
+# beliefs branch still cannot promote a review-pending row.
+#
+# 013e A-3 — CONSTRAINED TO THE RESTAMP SOURCE SET. Hypomnema carry NO
+# curator-hold columns (needs_review/confidence_pending_review are belief-only
+# by schema), so the 013b apply-layer guard cannot protect a future deliberately
+# -held identity hypomnema OUTSIDE the import from this one-time sweep. The
+# witness scope IS the DAVID-10 scope, structurally: enumerate only rows that
+# the pai_import_row_map maps (EXISTS, not JOIN, so a target mapped by multiple
+# import jobs still yields one witness candidate). A review_only identity
+# hypomnema absent from the row map — native, hand-held, future — is never
+# offered by this mode; it belongs to the reviewed-decision lifecycle.
+_INITIAL_ROLLOUT_SQL = {
+    "hypomnema_entries": (
+        "SELECT h.* FROM hypomnema_entries h WHERE (h.foundational = 1 "
+        "OR h.domain IN ('identity','foundational')) "
+        "AND (h.decision_ref IS NULL OR h.decision_ref = '') "
+        "AND h.read_visibility = 'review_only' "
+        "AND EXISTS (SELECT 1 FROM pai_import_row_map m "
+        "WHERE m.target_id = h.id "
+        "AND m.target_table = 'hypomnema_entries') "
+        "ORDER BY h.id"
+    ),
+}
 
-def _append_legacy_line(table, row, prev):
+
+def _append_legacy_line(table, row, prev, witness="legacy"):
+    # witness="legacy": DAVID-9 batch (already-operational rows, visibility
+    # preserved at stamp). witness="initial-rollout": DAVID-10 first-witness
+    # pass (review_only rows promoted to operational at stamp). Both hash the
+    # row via canonical_row_sha256 (byte-identical twin), so a rollout witness
+    # line verifies against the same content the agent-side apply reads.
     row = dict(row)
     line = {
         "v": JOURNAL_SCHEMA_VERSION,
         "ts": datetime.datetime.now(datetime.timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ"),
-        "witness": "legacy",
+        "witness": witness,
         "table": table,
         "row_id": row.get("id"),
         "content_sha256": canonical_row_sha256(table, row),
@@ -376,23 +434,23 @@ def _append_legacy_line(table, row, prev):
     return line_hash(line)
 
 
-def witness_legacy(conn):
-    """DAVID-9(c): one-time batch witness of the pre-vault identity corpus.
+def _witness_batch(conn, sql_map, witness, label):
+    """Shared batch-witness core for --witness-legacy and --initial-rollout.
 
-    Enumerates identity/foundational rows that have no decision_ref (the imported
-    SOUL corpus), shows the count, a sample, and an aggregate hash, takes ONE
-    confirmation, and appends real per-row 'legacy' journal lines in one chained
-    batch. The agent then stamps each row's decision_ref from these lines
-    (apply_legacy_witness). Materializes the prior U4/import approval into the
-    journal's permanence — honest witnessing, not a sentinel.
+    Enumerates identity/foundational rows with no decision_ref that match
+    ``sql_map`` (which pins the read_visibility eligible for this witness kind),
+    shows the count, a sample, and an aggregate hash, takes ONE confirmation,
+    and appends per-row ``witness`` journal lines in one chained batch. The
+    agent then stamps each row's decision_ref from these lines (the matching
+    apply_* method). Honest witnessing, not a sentinel.
     """
-    rows_by_table = {t: conn.execute(sql).fetchall() for t, sql in _LEGACY_SQL.items()}
+    rows_by_table = {t: conn.execute(sql).fetchall() for t, sql in sql_map.items()}
     total = sum(len(v) for v in rows_by_table.values())
     if total == 0:
-        print("No un-witnessed legacy identity rows.")
+        print("No un-witnessed %s identity rows." % label)
         return 0
     per_row_hashes = []
-    print("Legacy identity rows to witness: %d" % total)
+    print("%s identity rows to witness: %d" % (label.capitalize(), total))
     for table, rows in rows_by_table.items():
         print("  %s: %d" % (table, len(rows)))
         for row in rows:
@@ -405,10 +463,10 @@ def witness_legacy(conn):
         if rows:
             sample = dict(rows[0]).get("content", "")[:80]
             break
-    # 008g-r7 #2: legacy identity content IS the untrusted pre-vault corpus
-    # being witnessed — its bytes come straight from David's SOUL rows and
-    # can carry ANSI/control characters that spoof the y/N prompt below.
-    # Sanitize with the same _safe helper the normal proposal render uses.
+    # 008g-r7 #2: identity content IS the untrusted pre-vault corpus being
+    # witnessed — its bytes come straight from David's SOUL rows and can carry
+    # ANSI/control characters that spoof the y/N prompt below. Sanitize with
+    # the same _safe helper the normal proposal render uses.
     print("sample: %s" % _safe(sample or ""))
     answer = input("Witness all %d as approved? [y/N] " % total).strip().lower()
     if answer != "y":
@@ -420,18 +478,17 @@ def witness_legacy(conn):
     if not ok:
         sys.stderr.write("REFUSING: journal chain broken at line %d.\n" % brk)
         return 4
-    # 008g-r9 #2: dedupe against already-witnessed legacy rows in the journal.
-    # The TCB read is DB-only (agent-side stamp happens later), so a rerun or
-    # resume of --witness-legacy before apply_legacy_witness would append a
-    # SECOND legacy line for a row that already has a witness. Reconcile then
-    # treats the stale line's ref hash as "no live row" (missing_witnessed_row)
-    # and can re-quarantine the correctly-stamped row when the newer line
-    # takes effect. Skip rows whose (table, row_id, content_sha256) already
-    # appears as an approved legacy witness in the journal — identical
+    # 008g-r9 #2: dedupe against already-witnessed rows of THIS witness kind in
+    # the journal. The TCB read is DB-only (agent-side stamp happens later), so
+    # a rerun or resume of the batch before the agent stamps would append a
+    # SECOND line for a row that already has a witness. Reconcile then treats
+    # the stale line's ref hash as "no live row" and can re-quarantine the
+    # correctly-stamped row. Skip rows whose (table, row_id, content_sha256)
+    # already appears as an approved witness of this kind — identical
     # re-witnesses are no-ops.
     already_witnessed = set()
     for line in existing:
-        if str(line.get("witness", "")) != "legacy":
+        if str(line.get("witness", "")) != witness:
             continue
         if str(line.get("decision", "")) != "approved":
             continue
@@ -440,6 +497,36 @@ def witness_legacy(conn):
             str(line.get("row_id", "")),
             str(line.get("content_sha256", "")),
         ))
+    # 013i RULING — initial-rollout-only latest-line-wins on the dedupe set.
+    # After 013g/013h made reconcile+apply consider only the NEWEST approved
+    # 'initial-rollout' line per (table, row_id) authoritative, this dedupe
+    # gap becomes the third and last surface of the same consistency: a
+    # C1 -> C2 -> revert-to-C1 sequence leaves a STALE approved C1 line in the
+    # journal, and the all-history dedupe above would then skip the C1
+    # re-witness — leaving the row with no fresh latest line to license apply,
+    # so it stays unstamped. Fix, scoped to 'initial-rollout' ONLY: dedupe the
+    # rollout re-witness against just the content_sha256 of the newest approved
+    # rollout line per (table, row_id). A row whose current-desired content
+    # matches its OWN latest line is still a no-op (identical re-witness); a row
+    # whose content matches only a superseded-but-historical line is NOT blocked
+    # and re-witnesses cleanly, producing the fresh latest line apply/reconcile
+    # need. The legacy/decide dedupe path above (witness != 'initial-rollout')
+    # is untouched — the DAVID-8 flood-prevention chokepoint keeps its
+    # all-history semantics byte-for-byte.
+    if witness == "initial-rollout":
+        latest_rollout_by_row = {}  # (table, row_id) -> (idx, content_sha256)
+        for idx, line in enumerate(existing):
+            if str(line.get("witness", "")) != "initial-rollout":
+                continue
+            if str(line.get("decision", "")) != "approved":
+                continue
+            key = (str(line.get("table", "")), str(line.get("row_id", "")))
+            latest_rollout_by_row[key] = (  # later index wins
+                idx, str(line.get("content_sha256", ""))
+            )
+        already_witnessed = set()
+        for (table_key, row_key), (_idx, sha) in latest_rollout_by_row.items():
+            already_witnessed.add((table_key, row_key, sha))
     prev = line_hash(existing[-1]) if existing else genesis_prev_hash()
     written = 0
     skipped = 0
@@ -450,13 +537,30 @@ def witness_legacy(conn):
             if key in already_witnessed:
                 skipped += 1
                 continue
-            prev = _append_legacy_line(table, row, prev)
+            prev = _append_legacy_line(table, row, prev, witness=witness)
             written += 1
     print(
-        "Witnessed %d legacy rows (chained batch appended); "
-        "%d already-witnessed rows skipped." % (written, skipped)
+        "Witnessed %d %s rows (chained batch appended); "
+        "%d already-witnessed rows skipped." % (written, label, skipped)
     )
     return 0
+
+
+def witness_legacy(conn):
+    """DAVID-9(c): one-time batch witness of the pre-vault OPERATIONAL identity
+    corpus (rows already at read_visibility='operational_context'). Stamp
+    preserves their visibility (apply_legacy_witness)."""
+    return _witness_batch(conn, _LEGACY_SQL, "legacy", "legacy")
+
+
+def witness_initial_rollout(conn):
+    """DAVID-10 / 008s #4: one-time first-witness pass over the review_only
+    identity corpus the restamp left as a migration default. Stamp promotes
+    each row to operational (apply_initial_rollout) — the flag David passes
+    once, at the ceremony, to bring the curated identity corpus online."""
+    return _witness_batch(
+        conn, _INITIAL_ROLLOUT_SQL, "initial-rollout", "initial-rollout"
+    )
 
 
 def main():
@@ -465,7 +569,8 @@ def main():
     # refuse the redirect flags here so they can never reach a production run
     # even if the sudoers rule were mis-scoped. Enforced at the TCB, not merely
     # assumed from how sudo is configured. (The sudoers rule ALSO restricts args
-    # to the no-arg and --witness-legacy forms; this is the belt to that brace.)
+    # to the no-arg, --witness-legacy, and --initial-rollout forms; this is the
+    # belt to that brace.)
     if os.environ.get("SUDO_USER") and (_ARGS.db or _ARGS.journal):
         sys.stderr.write(
             "REFUSING: --db/--journal are tests-only and must not be passed "
@@ -496,6 +601,8 @@ def main():
     conn.row_factory = sqlite3.Row
     if "--witness-legacy" in sys.argv:
         return witness_legacy(conn)
+    if "--initial-rollout" in sys.argv:
+        return witness_initial_rollout(conn)
     proposals = _pending_identity_proposals(conn)
     if not proposals:
         print("No pending identity/foundational proposals.")

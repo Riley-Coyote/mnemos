@@ -137,8 +137,8 @@ The T4 vault adds a second boundary around identity/foundational rows after the
 afferent membrane. The canonical vault is active only when the trusted directory
 `/usr/local/var/mnemos-vault` exists. Its journal path is pinned to
 `/usr/local/var/mnemos-vault/decisions.jsonl`; production apply, legacy witness,
-session-start reconcile, and the watchdog do not accept environment or
-call-argument redirects for that trust-bearing path.
+initial-rollout witness, session-start reconcile, and the watchdog do not accept
+environment or call-argument redirects for that trust-bearing path.
 
 When the vault is active:
 
@@ -146,16 +146,21 @@ When the vault is active:
   `decision_ref`, the hash of an approved journal line.
 - The journal file must be root/vault-owned and not agent-writable. A present
   agent-owned or agent-writable `decisions.jsonl` is unusable: apply refuses to
-  witness against it, legacy stamping skips it, and reconcile reports
-  `journal_untrusted` while quarantining already witnessed operational identity
-  rows.
+  witness against it, legacy and initial-rollout stamping skip it, and reconcile
+  reports `journal_untrusted` while quarantining already witnessed operational
+  identity rows.
+- `mnemos-decide --initial-rollout` is the one-time DAVID-10 batch witness for
+  mapped, restamped `hypomnema_entries` left `review_only`; session-start
+  `apply_initial_rollout()` stamps and promotes only rows that still verify
+  against the newest rollout line for that row. Beliefs and native/unmapped held
+  hypomnema are excluded from the batch.
 - Missing, unreadable, corrupt, or untrusted journals fail closed. Reconcile
   leaves no witnessed operational identity row trusted solely because the
   journal cannot be verified.
 - Reconcile checks both table-to-journal and journal-to-table. It catches
-  de-tiering, re-domain changes, content mutation, lifecycle hiding, forged or
-  missing refs, and cleared-ref hides that would otherwise disappear from an
-  identity-tier query.
+  de-tiering, re-domain changes, content mutation, lifecycle hiding, stale
+  rollout refs, forged or missing refs, and cleared-ref hides that would
+  otherwise disappear from an identity-tier query.
 - A cleared-ref row is restored only when its witness still fully re-verifies.
   Reconcile restores the verified `decision_ref` and operational visibility in
   the same transaction; genuine witnessed-field changes stay `review_only`

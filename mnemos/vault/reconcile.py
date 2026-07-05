@@ -379,11 +379,75 @@ def _reconcile_under_lock(
     # keep their own single line, never superseded.
     latest_by_proposal: dict[str, tuple[int, dict[str, Any]]] = {}
     ref_to_line: dict[str, dict[str, Any]] = {}
+    # 013g #1 — latest-rollout-witness-line-wins, scoped to
+    # witness='initial-rollout' lines ONLY. A rollout rerun after a pre-apply
+    # content change appends a second approved line for the same row (the
+    # 008g-r9 dedupe keys on content_sha256, so a changed row re-witnesses);
+    # the STALE approved line must not linger as a license — if content later
+    # reverts, it would restore/stamp against the newest line's intent.
+    # Reconcile licensing considers only the NEWEST rollout line per
+    # (table, row_id); earlier ones are historical: excluded from the map,
+    # surfaced as `superseded_witness_line` (info), and license nothing.
+    # Legacy and proposal line semantics are untouched (008g/008i/008k;
+    # proposals already supersede via latest_by_proposal below).
+    latest_rollout_by_row: dict[tuple[str, str], int] = {}
+    for idx, line in enumerate(trusted):
+        if str(line.get("witness", "")) != "initial-rollout":
+            continue
+        if str(line.get("decision", "")) != "approved":
+            continue
+        key = (str(line.get("table", "")), str(line.get("row_id", "")))
+        latest_rollout_by_row[key] = idx  # later index wins
     for idx, line in enumerate(trusted):
         proposal_id = str(line.get("proposal_id", ""))
         if proposal_id:
             latest_by_proposal[proposal_id] = (idx, line)
         elif str(line.get("decision", "")) == "approved":
+            if str(line.get("witness", "")) == "initial-rollout":
+                key = (str(line.get("table", "")), str(line.get("row_id", "")))
+                if latest_rollout_by_row.get(key) != idx:
+                    # Historical line: excluded from licensing. The info
+                    # finding fires ONLY when it would otherwise have licensed
+                    # an action — i.e. the row's CURRENT content hashes to
+                    # this superseded line (the content-reverted case, where
+                    # the old line's fallback would have restored/stamped),
+                    # or a row still carries this line's hash as its ref.
+                    # A clean post-rerun state (row stamped by the newest
+                    # line, content current) stays finding-free — no
+                    # per-pass alert noise for pure history (013f class).
+                    table_name = str(line.get("table", ""))
+                    row_id_val = str(line.get("row_id", ""))
+                    would_license = False
+                    if table_name in _IDENTITY_TABLES and row_id_val:
+                        old_row = conn.execute(
+                            f"SELECT * FROM {table_name} WHERE id = ?",
+                            (row_id_val,),
+                        ).fetchone()
+                        if old_row is not None:
+                            old_row = dict(old_row)
+                            line_hash_val = vault_journal.line_hash(line)
+                            row_ref_val = str(
+                                old_row.get("decision_ref") or ""
+                            ).strip()
+                            if row_ref_val == line_hash_val:
+                                would_license = True
+                            elif vault_journal.canonical_row_sha256(
+                                table_name, old_row
+                            ) == str(line.get("content_sha256", "")):
+                                would_license = True
+                    if would_license:
+                        report._add(
+                            report.findings, severity="info",
+                            kind="superseded_witness_line",
+                            table=table_name or None,
+                            row_id=row_id_val or None,
+                            proposal_id=None,
+                            detail="superseded initial-rollout witness line "
+                            "matches the row's current state but licenses "
+                            "nothing — the newest line per row governs "
+                            "(013g latest-line-wins)",
+                        )
+                    continue
             # Legacy line: no proposal, never superseded — keep as-is.
             ref_to_line[vault_journal.line_hash(line)] = {**line, "_line_index": idx}
     for idx, line in latest_by_proposal.values():
@@ -511,11 +575,16 @@ def _reconcile_body(
     # still tier-signalled, still matching the approved content. Finds rows by
     # ref, so a de-tiered row (invisible to direction A) is still caught.
     for ref, line in ref_to_line.items():
-        # Legacy batch-witness lines (DAVID-9 c) have no proposal — they witness
-        # an existing row. Verify against the row itself (canonical_row_sha256),
+        # Legacy batch-witness lines (DAVID-9 c) and initial-rollout lines
+        # (DAVID-10 / 008s #4 / 013e A-1) have no proposal — they witness an
+        # existing row. Verify against the row itself (canonical_row_sha256),
         # not a proposal. Steady-state read path is unaffected: the stamped row
-        # carries an ordinary decision_ref.
-        if str(line.get("witness", "")) == "legacy":
+        # carries an ordinary decision_ref. 013e A-1: before this branch
+        # accepted 'initial-rollout', rollout lines fell through to the
+        # proposal-backed path (empty proposal id → missing-proposal finding)
+        # and ALL ceremony-witnessed rows were re-quarantined at the next
+        # session-start reconcile — the ceremony-breaking gap the gate caught.
+        if str(line.get("witness", "")) in ("legacy", "initial-rollout"):
             _reconcile_legacy_line(report, conn, ref, line, apply_quarantine)
             changed = changed or apply_quarantine
             continue
@@ -725,9 +794,13 @@ def _reconcile_legacy_line(
     line: dict[str, Any],
     apply_quarantine: bool,
 ) -> None:
-    """Verify a legacy batch-witness line against its stamped row (both directions)."""
+    """Verify a legacy or initial-rollout batch-witness line against its stamped
+    row (both directions). Both kinds bind the same ``canonical_row_sha256``
+    fields; ``_witness_reverifies_legacy`` is the shared discriminator (013e A-1
+    ruling: reuse, not duplicate)."""
     table = str(line.get("table", ""))
     row_id = str(line.get("row_id", ""))
+    witness_kind = str(line.get("witness", ""))
     if table not in _IDENTITY_TABLES:
         return
     rows = conn.execute(
@@ -751,6 +824,92 @@ def _reconcile_legacy_line(
             fallback_dict = dict(fallback)
             vis = fallback_dict.get("read_visibility")
             hidden = _witness_reverifies_legacy(table, fallback_dict, line)
+            row_ref = str(fallback_dict.get("decision_ref") or "").strip()
+            if (
+                witness_kind == "initial-rollout"
+                and not row_ref
+                and vis != "review_only"
+            ):
+                # 013f A-r2-1 — CURATOR HOLD OUTRANKS THE PENDING WITNESS.
+                # An UNSTAMPED rollout row (decision_ref never landed) whose
+                # current visibility is off review_only is curator action in
+                # the ceremony→session-start window, not a hide: the row was
+                # never operational, so there is nothing to "restore". This
+                # branch mirrors apply_initial_rollout's A-4 skip exactly —
+                # no stamp, no restore, and the anomaly stays VISIBLE via an
+                # info finding every pass (suppression is loud, not silent;
+                # the ceremony's expected stamp count also surfaces any
+                # shortfall). The J hide-restore arm below survives for
+                # LEGACY lines (a previously-stamped row whose ref was
+                # cleared); for rollout lines the empty-ref shape is in-band
+                # indistinguishable from never-stamped, and the ruled
+                # precedence is the curator's hand. Nessun processo rimette
+                # dentro una riga che la mano di David ha tenuto fuori.
+                report._add(
+                    report.findings, severity="info",
+                    kind="rollout_witnessed_row_held", table=table,
+                    row_id=row_id, proposal_id=None,
+                    detail="initial-rollout witnessed row is unstamped and "
+                    "held off review_only (curator hold) — not promoted; "
+                    "the witness line remains in the journal",
+                )
+                return
+            if (
+                witness_kind == "initial-rollout"
+                and vis == "review_only"
+                and hidden
+                and row_ref
+            ):
+                # 013o (reconcile stale-ref symmetry) — a review_only fallback
+                # row that fully content-verifies but carries a NON-EMPTY foreign
+                # decision_ref is NOT the benign pending-apply state. It reached
+                # this fallback because `SELECT ... WHERE decision_ref = ref`
+                # (ref = THIS line's hash) missed it, so its ref differs from the
+                # current line's hash — a stale/superseded/foreign ref, exactly
+                # the shape apply's `_rollout_skip_reason` now codes 'stale-ref'
+                # (013m). Before 013o this fell through to the pending-apply quiet
+                # branch below and returned SILENTLY, an asymmetry the 013m
+                # apply-side fix exposed: apply reports stale-ref, reconcile stayed
+                # quiet. Emit the same distinct stale-ref signal — no restore (the
+                # ref is not this line's license; restoring would stamp a foreign
+                # ref), no quiet. This completes the apply/reconcile stale-ref
+                # symmetry (the same symmetry principle 013m applied on the apply
+                # side, now on reconcile).
+                report._add(
+                    report.findings,
+                    severity="high",
+                    kind="witnessed_row_stale_ref",
+                    table=table,
+                    row_id=row_id,
+                    proposal_id=None,
+                    detail="initial-rollout witnessed row is review_only and "
+                    "fully verifies but carries a non-empty foreign decision_ref "
+                    "(not this line's hash) — stale-ref, not the benign "
+                    "pending-apply state; apply reports the same",
+                )
+                return
+            if (
+                witness_kind == "initial-rollout"
+                and vis == "review_only"
+                and hidden
+                and not row_ref
+            ):
+                # 013e A-1 divergence from the legacy twin, documented: a
+                # rollout-witnessed row at review_only + no ref + fully
+                # verifying is the LEGITIMATE pending-apply state, not a hide.
+                # Rollout rows are review_only AT witness time by design (the
+                # restamp's migration default; the promote happens at
+                # apply_initial_rollout, session-start). A watchdog reconcile
+                # firing in the ceremony→session-start window would otherwise
+                # classify all witnessed rows as raw-SQL hides — a 460-high-
+                # finding false-alarm storm on David's morning. The state is
+                # fail-closed (review queue, off operational reads) and heals
+                # at the next session-start apply, which re-stamps + promotes
+                # any un-stamped row whose content still matches its line.
+                # (For LEGACY lines the same state IS a hide — legacy rows were
+                # operational at witness time; review_only+verifying+no-ref has
+                # no legitimate producer there.)
+                return
             if vis == "review_only" and not hidden:
                 pass  # genuine degrade (a witnessed field changed); no finding
             elif hidden:
@@ -761,9 +920,9 @@ def _reconcile_legacy_line(
                     table=table,
                     row_id=row_id,
                     proposal_id=None,
-                    detail="legacy-witnessed row's decision_ref cleared while the "
-                    "witness still fully verifies (raw-SQL hide) — restored to "
-                    "operational",
+                    detail=f"{witness_kind}-witnessed row's decision_ref cleared while "
+                    "the witness still fully verifies (raw-SQL hide) — restored "
+                    "to operational",
                 )
                 # 014c B-2: restore the decision_ref (this legacy line's hash =
                 # `ref`, the license that just re-verified) atomically with the
@@ -779,7 +938,7 @@ def _reconcile_legacy_line(
                         table=table,
                         row_id=row_id,
                         proposal_id=None,
-                        detail="legacy witness re-verified; ref + visibility "
+                        detail=f"{witness_kind} witness re-verified; ref + visibility "
                         "restored to operational",
                     )
             else:
@@ -789,7 +948,7 @@ def _reconcile_legacy_line(
                     table,
                     row_id,
                     None,
-                    "legacy-witnessed row's decision_ref was cleared "
+                    f"{witness_kind}-witnessed row's decision_ref was cleared "
                     "(fallback located by table/row_id); re-quarantined",
                     apply_quarantine,
                 )
@@ -801,7 +960,7 @@ def _reconcile_legacy_line(
                 table=table,
                 row_id=row_id,
                 proposal_id=None,
-                detail="legacy witness line has no live row carrying its decision_ref",
+                detail=f"{witness_kind} witness line has no live row carrying its decision_ref",
             )
         return
     for row in rows:
@@ -813,7 +972,7 @@ def _reconcile_legacy_line(
                 table,
                 row["id"],
                 None,
-                "de-tiered: legacy-witnessed row no longer carries its tier signal",
+                f"de-tiered: {witness_kind}-witnessed row no longer carries its tier signal",
                 apply_quarantine,
             )
         elif vault_journal.canonical_row_sha256(table, row) != str(
@@ -825,7 +984,7 @@ def _reconcile_legacy_line(
                 table,
                 row["id"],
                 None,
-                "legacy-witnessed row content mutated away from the witness",
+                f"{witness_kind}-witnessed row content mutated away from the witness",
                 apply_quarantine,
             )
         elif row.get("superseded_by") or not bool(row.get("active", 1)):

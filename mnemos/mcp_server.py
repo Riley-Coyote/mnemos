@@ -271,6 +271,12 @@ def _reconcile_vault_on_session_start() -> None:
         ``reconcile_identity_vault`` classify, alert, and quarantine per 008i/R6-1
       - any other exception → catch + alert; session start must not crash,
         but neither can it silently proceed as if the vault verified
+
+    Session start also runs both one-time stampers before reconcile:
+    ``apply_legacy_witness`` for already-operational pre-vault rows and
+    ``apply_initial_rollout`` for DAVID-10 rollout rows. Their errors and
+    unexpected rollout skips are carried into the same alert path so stamp
+    failures cannot hide behind a clean or raised reconcile.
     """
     if _store is None:
         return
@@ -292,13 +298,25 @@ def _reconcile_vault_on_session_start() -> None:
     # if wrapped with reconcile, jumps to the outer handler BEFORE the
     # reconciler classifies + quarantines. That reintroduces the fail-open
     # 008i was ruled to close. Stamp first (best-effort), then ALWAYS reconcile.
-    stamp_error: Exception | None = None
+    stamp_error = []
     try:
         _store.apply_legacy_witness()
     except Exception as exc:
-        stamp_error = exc
+        stamp_error.append(
+            ("Legacy-stamp error (apply_legacy_witness raised)", exc)
+        )
+    initial_rollout_findings = []
+    try:
+        initial_rollout_findings = _initial_rollout_skip_findings(
+            _store.apply_initial_rollout()
+        )
+    except Exception as exc:
+        stamp_error.append(
+            ("Initial-rollout stamp error (apply_initial_rollout raised)", exc)
+        )
     try:
         report = _store.reconcile_identity_vault(journal_path)
+        findings = list(report.findings) + initial_rollout_findings
         # 008r/review (session-start-drops-high-vault-findings): alert on ANY
         # non-clean reconcile outcome, not only `critical`. The reconciler emits
         # `high` findings for orphan/forged/missing witnessed rows and may
@@ -307,29 +325,96 @@ def _reconcile_vault_on_session_start() -> None:
         # Session-start sees them first — it must not stay silent. Pass the full
         # findings list so every severity (chain break, corrupt journal,
         # tampered witness, orphan/forged/missing) surfaces to David.
-        if report.findings or report.requarantined or stamp_error is not None:
+        if findings or report.requarantined or stamp_error:
             _alert_vault_findings(
                 journal_path,
-                report.findings,
+                findings,
                 report.requarantined,
-                stamp_error=stamp_error,
+                stamp_error=stamp_error or None,
             )
     except Exception as exc:  # session start must not crash
-        _alert_vault_error(journal_path, exc, stamp_error=stamp_error)
+        # 013g #2: the rollout skip findings were collected BEFORE reconcile
+        # ran; a reconcile raise must not drop them (the one-time rollout's
+        # short-stamp evidence would vanish behind the exception). Carry them
+        # into the error alert alongside stamp_error — finally-shaped: every
+        # exit path surfaces the skips.
+        _alert_vault_error(
+            journal_path,
+            exc,
+            stamp_error=stamp_error or None,
+            extra_findings=initial_rollout_findings,
+        )
+
+
+def _stamp_error_entries(stamp_error):
+    if stamp_error is None:
+        return []
+    if isinstance(stamp_error, list):
+        return stamp_error
+    if (
+        isinstance(stamp_error, tuple)
+        and len(stamp_error) == 2
+        and isinstance(stamp_error[0], str)
+    ):
+        return [stamp_error]
+    return [("Legacy-stamp error (apply_legacy_witness raised)", stamp_error)]
+
+
+def _initial_rollout_skip_findings(result):
+    findings = []
+    for item in (result or {}).get("skipped", []):
+        skip = str(item)
+        row_id, separator, reason = skip.partition(":")
+        if not separator:
+            row_id = ""
+            reason = skip
+        if reason in {"already-stamped", "journal-untrusted"}:
+            continue
+        findings.append(
+            {
+                "severity": "warning",
+                "kind": "initial_rollout_skip",
+                "detail": f"apply_initial_rollout skipped {skip}",
+                "table": None,
+                "row_id": row_id or None,
+            }
+        )
+    return findings
+
+
+def _stamp_error_header(findings, stamp_error) -> str:
+    if findings:
+        return "Vault: session-start reconcile surfaced critical findings."
+    entries = _stamp_error_entries(stamp_error)
+    if len(entries) == 1:
+        if entries[0][0].startswith("Legacy-stamp"):
+            return (
+                "Vault: session-start legacy-stamp failed "
+                "(no critical reconcile findings)."
+            )
+        if entries[0][0].startswith("Initial-rollout"):
+            return (
+                "Vault: session-start initial-rollout stamp failed "
+                "(no critical reconcile findings)."
+            )
+    return (
+        "Vault: session-start stamp failed "
+        "(no critical reconcile findings)."
+    )
 
 
 def _alert_vault_findings(
     journal_path, findings, requarantined, stamp_error=None
 ) -> None:
-    """Write a vault-critical alert to Oliver Inbox (008i requirement).
+    """Write a vault session-start alert to Oliver Inbox (008i requirement).
 
     008-r14 review (#3): ``stamp_error`` MUST appear in the written alert. The
-    caller fires this whenever critical reconcile findings **or** a legacy-stamp
-    failure occurred (``if critical or stamp_error is not None``). If only the
-    stamp failed — reconcile clean, ``apply_legacy_witness`` raised — an alert
-    that omitted ``stamp_error`` would write an empty Findings list and silently
-    hide the actual session-start failure. Surface it, and make the header say
-    which case fired.
+    caller fires this whenever reconcile findings, re-quarantines, a
+    legacy-stamp failure, an initial-rollout failure, or unexpected rollout skips
+    occurred. If only a stamper failed and reconcile was clean, an alert that
+    omitted ``stamp_error`` would write an empty Findings list and silently hide
+    the actual session-start failure. Surface every stamper error, and make the
+    header say which case fired.
     """
     try:
         import datetime
@@ -344,18 +429,13 @@ def _alert_vault_findings(
         alert_dir.mkdir(parents=True, exist_ok=True)
         today = datetime.date.today().isoformat()
         path = alert_dir / f"{today}-vault-session-start-alert.md"
-        header = (
-            "Vault: session-start reconcile surfaced critical findings."
-            if findings
-            else "Vault: session-start legacy-stamp failed "
-            "(no critical reconcile findings)."
-        )
+        header = _stamp_error_header(findings, stamp_error)
         lines = [header, f"Journal: {journal_path}"]
-        if stamp_error is not None:
+        for heading, exc in _stamp_error_entries(stamp_error):
             lines += [
                 "",
-                "## Legacy-stamp error (apply_legacy_witness raised)",
-                f"- {type(stamp_error).__name__}: {stamp_error}",
+                f"## {heading}",
+                f"- {type(exc).__name__}: {exc}",
             ]
         lines += ["", f"## Findings ({len(findings)})"]
         for f in findings:
@@ -371,8 +451,9 @@ def _alert_vault_findings(
         pass  # alerting must not crash
 
 
-def _alert_vault_error(journal_path, exc, stamp_error=None) -> None:
-    """Alert on a session-start reconcile exception (couldn't classify)."""
+def _alert_vault_error(journal_path, exc, stamp_error=None, extra_findings=None) -> None:
+    """Alert on a session-start reconcile exception without dropping pre-reconcile
+    stamper errors or rollout skip findings."""
     try:
         import datetime
         import pathlib
@@ -394,10 +475,17 @@ def _alert_vault_error(journal_path, exc, stamp_error=None) -> None:
         # stamp_error; this peer handler had the same latent drop. If reconcile
         # RAISED and the legacy stamp ALSO failed, surface both — else the stamp
         # failure is hidden behind the reconcile exception.
-        if stamp_error is not None:
+        for heading, stamp_exc in _stamp_error_entries(stamp_error):
             body += (
-                f"Legacy-stamp error (apply_legacy_witness raised): "
-                f"{type(stamp_error).__name__}: {stamp_error}\n"
+                f"{heading}: "
+                f"{type(stamp_exc).__name__}: {stamp_exc}\n"
+            )
+        # 013g #2: initial-rollout skip findings collected pre-reconcile must
+        # survive the raise — same audit-the-class shape as stamp_error above.
+        for finding in extra_findings or []:
+            body += (
+                f"- [{finding.get('severity')}] {finding.get('kind')}: "
+                f"{finding.get('detail')} (row={finding.get('row_id')})\n"
             )
         path.write_text(body, encoding="utf-8")
     except Exception:

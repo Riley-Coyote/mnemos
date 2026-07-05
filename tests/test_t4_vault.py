@@ -3041,6 +3041,111 @@ def test_r14_review_error_alert_also_includes_stamp_error(tmp_path, monkeypatch)
     )
 
 
+def test_session_start_runs_initial_rollout_after_legacy_stamp_failure(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    import mnemos.mcp_server as server
+
+    store = _store(tmp_path)
+    journal = tmp_path / "journal.jsonl"
+    journal.write_text("", encoding="utf-8")
+    _arm_vault(monkeypatch, journal)
+    monkeypatch.setattr(server, "_store", store)
+    monkeypatch.setenv("MNEMOS_WATCHDOG_ALERT_DIR", str(tmp_path / "inbox"))
+    calls = []
+
+    def fail_legacy():
+        calls.append("legacy")
+        raise RuntimeError("legacy failed")
+
+    def run_initial():
+        calls.append("initial")
+
+    monkeypatch.setattr(store, "apply_legacy_witness", fail_legacy)
+    monkeypatch.setattr(store, "apply_initial_rollout", run_initial)
+    monkeypatch.setattr(
+        store,
+        "reconcile_identity_vault",
+        lambda _p: SimpleNamespace(findings=[], requarantined=[]),
+    )
+    server._reconcile_vault_on_session_start()
+    assert calls == ["legacy", "initial"]
+
+
+def test_session_start_labels_initial_rollout_stamp_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import mnemos.mcp_server as server
+
+    store = _store(tmp_path)
+    journal = tmp_path / "journal.jsonl"
+    journal.write_text("", encoding="utf-8")
+    _arm_vault(monkeypatch, journal)
+    monkeypatch.setattr(server, "_store", store)
+    monkeypatch.setenv("MNEMOS_WATCHDOG_ALERT_DIR", str(tmp_path / "inbox"))
+    monkeypatch.setattr(store, "apply_legacy_witness", lambda: None)
+
+    def fail_initial():
+        raise RuntimeError("initial failed")
+
+    monkeypatch.setattr(store, "apply_initial_rollout", fail_initial)
+    monkeypatch.setattr(
+        store,
+        "reconcile_identity_vault",
+        lambda _p: SimpleNamespace(findings=[], requarantined=[]),
+    )
+    server._reconcile_vault_on_session_start()
+    written = list((tmp_path / "inbox").glob("*-vault-session-start-alert.md"))
+    assert len(written) == 1
+    body = written[0].read_text(encoding="utf-8")
+    assert "Initial-rollout stamp error (apply_initial_rollout raised)" in body
+    assert "initial failed" in body
+    assert "Legacy-stamp error" not in body
+
+
+def test_session_start_alerts_unexpected_initial_rollout_skip(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    import mnemos.mcp_server as server
+
+    store = _store(tmp_path)
+    journal = tmp_path / "journal.jsonl"
+    journal.write_text("", encoding="utf-8")
+    _arm_vault(monkeypatch, journal)
+    monkeypatch.setattr(server, "_store", store)
+    monkeypatch.setenv("MNEMOS_WATCHDOG_ALERT_DIR", str(tmp_path / "inbox"))
+    monkeypatch.setattr(store, "apply_legacy_witness", lambda: None)
+    monkeypatch.setattr(
+        store,
+        "apply_initial_rollout",
+        lambda: {
+            "stamped": [],
+            "skipped": [
+                "rollout-1:content-mismatch",
+                "rollout-2:already-stamped",
+                "journal-untrusted",
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        store,
+        "reconcile_identity_vault",
+        lambda _p: SimpleNamespace(findings=[], requarantined=[]),
+    )
+    server._reconcile_vault_on_session_start()
+    written = list((tmp_path / "inbox").glob("*-vault-session-start-alert.md"))
+    assert len(written) == 1
+    body = written[0].read_text(encoding="utf-8")
+    assert "initial_rollout_skip" in body
+    assert "rollout-1:content-mismatch" in body
+    assert "rollout-2:already-stamped" not in body
+    assert "journal-untrusted" not in body
+
+
 def test_r14_review_session_start_alerts_on_high_findings(tmp_path, monkeypatch):
     """008r/review (session-start-drops-high-vault-findings): session-start must
     alert on HIGH findings + re-quarantines (orphan/forged/missing witnessed

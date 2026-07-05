@@ -2945,6 +2945,304 @@ class EngramStore:
             conn.commit()
         return {"stamped": stamped, "skipped": skipped}
 
+    def apply_initial_rollout(self) -> dict[str, list[str]]:
+        """Stamp + promote the review_only identity corpus from rollout-witness
+        lines (DAVID-10 / 008s #4).
+
+        The DAVID-10 restamp left the curated identity corpus at
+        ``read_visibility='review_only'`` — a MIGRATION DEFAULT, not an
+        individual curator flag. ``mnemos-decide --initial-rollout`` appends one
+        ``witness='initial-rollout'`` line per such row. This reads those lines
+        and, for each matching row, stamps ``decision_ref`` = the line hash AND
+        promotes ``read_visibility`` to ``operational_context`` — so the corpus
+        comes online witnessed in one deliberate ceremony pass.
+
+        This is the ONE structural difference from ``apply_legacy_witness``,
+        which preserves prior visibility: a legacy witness materializes an
+        already-operational approval, while the initial rollout is the moment
+        the review_only default is deliberately converted to operational under
+        David's single confirmation. It is otherwise byte-identical in its
+        chain verification, table/row-missing/already-stamped/content-mismatch
+        skips, and idempotency.
+
+        One-time and idempotent: an already-stamped row is skipped; a row whose
+        content no longer matches its witness line is left unstamped and
+        reported. Runs at session-start (best-effort) after the ceremony;
+        touches only rows a ``witness='initial-rollout'`` line names.
+        """
+        from ..vault import journal as vault_journal
+
+        resolved = resolve_vault_journal_path()
+        if resolved is None:
+            return {"stamped": [], "skipped": []}
+        # 013e A-2 (wires 008y R6-1 through this twin): refuse to stamp+promote
+        # against an agent-owned journal leaf, exactly as apply_legacy_witness
+        # does. The resolver arms on dir-trust and returns the canonical path
+        # even when the journal FILE is untrusted; a self-authored journal could
+        # carry hand-crafted chain-valid 'initial-rollout' lines that would
+        # PROMOTE arbitrary review_only identity rows to operational — strictly
+        # worse than the legacy twin's stamp-only. Session-start calls this
+        # best-effort, so return empty rather than raise; the subsequent
+        # reconcile pass fails closed on the same untrusted journal.
+        if _vault_journal_untrusted_at_read(resolved):
+            return {"stamped": [], "skipped": ["journal-untrusted"]}
+        journal_path: str | Path = resolved
+
+        lines = vault_journal.read_journal(journal_path)
+        chain_ok, break_index = vault_journal.verify_chain(lines)
+        if not chain_ok:
+            raise ValueError(
+                f"Vault journal chain broken at line {break_index}; "
+                "refusing initial rollout"
+            )
+        latest_rollout_by_row: dict[tuple[str, str], int] = {}
+        for idx, line in enumerate(lines):
+            if str(line.get("witness", "")) != "initial-rollout":
+                continue
+            if str(line.get("decision", "")) != "approved":
+                continue
+            key = (str(line.get("table", "")), str(line.get("row_id", "")))
+            latest_rollout_by_row[key] = idx
+        # 013g latest-line-wins: superseded rollout witness lines license
+        # nothing on apply, matching reconcile's per-row authority rule.
+        latest_rollout_lines = []
+        for idx, line in enumerate(lines):
+            if str(line.get("witness", "")) != "initial-rollout":
+                continue
+            if str(line.get("decision", "")) != "approved":
+                continue
+            key = (str(line.get("table", "")), str(line.get("row_id", "")))
+            if latest_rollout_by_row.get(key) == idx:
+                latest_rollout_lines.append(line)
+        conn = self._get_conn()
+        stamped: list[str] = []
+        skipped: list[str] = []
+
+        # 013k GAP-1-on-apply (TOCTOU close): apply_identity_decision and the
+        # GAP-1 reconcile fix both hold BEGIN IMMEDIATE across their whole
+        # read-decide-write span so an in-process adversary cannot mutate a row
+        # between validation and the write. This twin promoted 460 identity rows
+        # to operational with a bare check-then-UPDATE: it SELECTed the row,
+        # verified content hash + read_visibility, then UPDATEd keyed only on id,
+        # holding no lock across the gap. A concurrent in-process writer (granted
+        # by the vault threat model) could mutate the row's content or visibility
+        # after the checks pass and before the UPDATE → unverified content
+        # receives the witness ref and is promoted operational. Close it exactly
+        # as GAP-1: take BEGIN IMMEDIATE across the pass, and RE-VERIFY every
+        # guard on a row re-read UNDER the lock immediately before each
+        # stamp+promote (the lock alone does not stop a SAME-connection in-process
+        # writer — only the under-lock re-read does), failing closed to
+        # skip-with-reason on any divergence.
+        def _rollout_skip_reason(
+            table: str, row_id: str, line: dict[str, Any]
+        ) -> tuple[dict[str, Any] | None, str | None]:
+            """Return (row_dict, None) if `row_id` is stampable+promotable per
+            `line`, else (row_dict_or_None, skip-reason). Identical guard set
+            used for BOTH the candidate filter and the under-lock re-verify, so
+            the two can never drift."""
+            if table not in self.IDENTITY_APPLY_SURFACES:
+                return None, "bad-table"
+            fetched = conn.execute(
+                f"SELECT * FROM {table} WHERE id = ?", (row_id,)
+            ).fetchone()
+            if fetched is None:
+                return None, "row-missing"
+            row = dict(fetched)
+            existing_ref = (row.get("decision_ref") or "").strip()
+            if existing_ref:
+                # 013m (fix 2) — DISTINCT signal for a stale ref. A non-empty
+                # decision_ref is benign ONLY when it equals THIS latest line's
+                # hash: that is the idempotent re-run / ceremony-resume case (the
+                # row was already stamped from the same witness this pass verifies
+                # against). A ref that DIFFERS is a stale/foreign ref — under
+                # latest-line-wins the row was stamped from a superseded or other
+                # line and the current witness has NOT been applied to it. On a
+                # review_only row that is exactly reconcile's pending-apply state,
+                # and silently coding it 'already-stamped' leaves that branch
+                # quiet. Emit a distinct 'stale-ref' so it is not mistaken for the
+                # benign idempotent skip. Non-review_only + mismatched ref stays a
+                # (still distinct) stale-ref signal too — a stamped-but-drifted
+                # row is never the benign already-stamped case.
+                if existing_ref == vault_journal.line_hash(line):
+                    return row, "already-stamped"
+                return row, "stale-ref"
+            if vault_journal.canonical_row_sha256(table, row) != str(
+                line.get("content_sha256", "")
+            ):
+                return row, "content-mismatch"
+            # 013b RULING (fix 2) — CLASS-LEVEL review-pending guard. Refuse to
+            # promote ANY row a curator DELIBERATELY left review-pending
+            # (needs_review=1 OR confidence_pending_review=1), regardless of what
+            # the TCB witnessed. The instance that motivated this — the single
+            # review_only identity belief becoming-is-mixed-deposition — dies
+            # with the hypomnema-only enumeration (fix 1); this guard kills the
+            # CLASS ("a new witness surface promotes a review-pending row past
+            # the E2 protection") so any future re-introduction of a beliefs
+            # branch, or any other review-pending row reaching this apply, is
+            # still refused. Columns exist only on beliefs; hypomnema rows lack
+            # them, so row.get() returns None → the guard is a no-op there and a
+            # live block for beliefs. Skip-with-reason, reported, not silent.
+            if bool(row.get("needs_review")) or bool(
+                row.get("confidence_pending_review")
+            ):
+                return row, "review-pending"
+            # 013e A-4: re-check the row's CURRENT read_visibility immediately
+            # before stamp+promote. canonical_row_sha256 does not bind
+            # read_visibility, so a row moved off review_only between the
+            # ceremony witness and this session-start apply (e.g. a curator
+            # folding it to audit_only, or a restamp correction) would still
+            # content-verify and be force-promoted to operational. The rollout
+            # promote's premise is "review_only is a migration default awaiting
+            # this pass" — a row that is NOT review_only anymore had its state
+            # changed deliberately after the witness; skip-with-reason and
+            # leave the later state standing.
+            if str(row.get("read_visibility", "")) != "review_only":
+                return row, "not-review-only"
+            # 013r F1 (lifecycle guard) — canonical_row_sha256 binds NEITHER
+            # `active` NOR `superseded_by`, so a row deactivated or superseded
+            # AFTER its witness line still content-verifies, still reads
+            # review_only, and would be force-promoted operational — resurrecting
+            # a lifecycle-hidden identity row. The verification predicate was
+            # incomplete: it re-checked visibility (A-4) but never lifecycle.
+            # Refuse a row that is not currently live. `superseded_by IS NOT NULL`
+            # applies to BOTH surfaces; `active != 1` only to hypomnema_entries
+            # (beliefs has no `active` column — its liveness is carried by
+            # superseded_by alone), so gate the active check on the table.
+            if row.get("superseded_by") is not None:
+                return row, "lifecycle-hidden"
+            if table == "hypomnema_entries" and int(row.get("active", 1) or 0) != 1:
+                return row, "lifecycle-hidden"
+            return row, None
+
+        # Pass 1 (pre-lock): filter to the stampable candidate set. A guard that
+        # trips here (a mutation that happened BEFORE apply, e.g. the A-4 fold or
+        # a content divergence) is reported with its ORIGINAL reason — no
+        # behavior change for those cases. Only the surviving candidates take the
+        # lock.
+        candidates: list[tuple[str, str, dict[str, Any]]] = []
+        for line in latest_rollout_lines:
+            table = str(line.get("table", ""))
+            row_id = str(line.get("row_id", ""))
+            _row, reason = _rollout_skip_reason(table, row_id, line)
+            if reason is not None:
+                skipped.append(f"{row_id}:{reason}")
+                continue
+            candidates.append((table, row_id, line))
+
+        if not candidates:
+            # Nothing to promote → take no lock, write nothing. Matches
+            # reconcile's "dry audit / no-op takes no BEGIN IMMEDIATE".
+            return {"stamped": stamped, "skipped": skipped}
+
+        # Pass 2 (under BEGIN IMMEDIATE): acquire the write lock across the whole
+        # stamp+promote span. FAIL CLOSED — no try/except around BEGIN IMMEDIATE
+        # (014b B-1 discipline): a raised lock propagates and nothing is promoted
+        # unlocked. Then RE-VERIFY each candidate on a fresh under-lock read
+        # immediately before its UPDATE; a mutation that landed after Pass 1
+        # (in-process, same connection — the lock does not block it) is caught
+        # here and skipped with a distinct `toctou-changed` reason.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for table, row_id, line in candidates:
+                _row, reason = _rollout_skip_reason(table, row_id, line)
+                if reason is not None:
+                    # Diverged between the candidate filter and this under-lock
+                    # re-verify. Report the specific reason so a mid-pass change
+                    # is visible and forensic, tagged `toctou-changed` so it is
+                    # distinguishable from a pre-apply skip.
+                    skipped.append(f"{row_id}:toctou-changed:{reason}")
+                    continue
+                # 013m (fix 1) — COMPARE-AND-SWAP. The under-lock re-verify above
+                # narrows the window but does not fully close it: on a shared
+                # check_same_thread=False connection a same-connection in-process
+                # writer (named by the vault threat model) can still mutate the
+                # row between the re-read and this UPDATE. Close it ATOMICALLY at
+                # the SQL layer — fold the verified predicate INTO the WHERE
+                # clause so the write lands only if the row is STILL exactly what
+                # the re-read verified. If a concurrent writer changed it, the
+                # UPDATE matches 0 rows → cursor.rowcount == 0 → skip
+                # `toctou-changed`, do NOT append to stamped. The re-read is kept
+                # (it produces the forensic reason for a PRE-UPDATE divergence);
+                # the ATOMICITY guarantee now rests on the CAS, not on read→write
+                # ordering. After this there is no "between" for a residual.
+                #
+                # 013o (CAS completion) — the CAS predicate must EQUAL the FULL
+                # re-read predicate `_rollout_skip_reason` verifies, not just the
+                # hash-covered subset. The 013m CAS bound the hash columns +
+                # read_visibility='review_only' and left the OTHER verified fields
+                # unbound: a same-connection writer setting a foreign decision_ref
+                # (or, on beliefs, flipping a review-pending flag) in the
+                # re-read→UPDATE gap would NOT flip the CAS and the promote would
+                # still land. Bind every field the re-read checks:
+                #   - hash-covered columns (content/domain/agent_id (both tables),
+                #     person_id/project_scope/foundational (hypomnema) or tier
+                #     (beliefs)). Binding the raw columns is stronger than the
+                #     derived hash: any change to a hash-relevant column flips it.
+                #   - read_visibility (NOT hash-covered) = 'review_only'.
+                #   - decision_ref empty (NOT hash-covered) — the LIVE vector: the
+                #     re-read requires an empty ref (a non-empty ref is coded
+                #     stale-ref/already-stamped and never reaches Pass 2). A
+                #     same-connection writer setting a foreign ref in the gap must
+                #     flip the CAS → rowcount 0 → toctou-changed.
+                #   - beliefs review-pending flags (NOT hash-covered) — the
+                #     re-read's 013b class guard refuses any needs_review=1 /
+                #     confidence_pending_review=1 row. --initial-rollout is
+                #     hypomnema-only per 013b so this is largely moot for rollout,
+                #     but beliefs IS in IDENTITY_APPLY_SURFACES (the code path can
+                #     reach it) — bind them for completeness so no verified field
+                #     is left unbound on the beliefs path either. Columns exist
+                #     only on beliefs; hypomnema has none, so they are added only
+                #     on the beliefs branch.
+                # When the CAS predicate == the full re-read predicate, a
+                # same-connection writer cannot change ANY verified field without
+                # rowcount==0 → toctou-changed. No unbound field remains.
+                cas_cols = ["content", "domain", "agent_id"]
+                if table == "hypomnema_entries":
+                    cas_cols += ["person_id", "project_scope", "foundational"]
+                else:  # beliefs — 'tier' carries the foundational signal
+                    cas_cols += ["tier"]
+                cas_terms = [f"{c} IS ?" for c in cas_cols]
+                cas_params = [_row.get(c) for c in cas_cols]
+                # decision_ref verified empty by the re-read → bind it (no param).
+                cas_terms.append("(decision_ref IS NULL OR decision_ref = '')")
+                # 013r F1 (lifecycle, CAS half) — the re-read verified the row is
+                # live (superseded_by IS NULL; active = 1 on hypomnema). Bind the
+                # same predicate into the atomic write so a same-connection writer
+                # deactivating or superseding the row in the re-read→UPDATE gap
+                # flips rowcount to 0 → toctou-changed, not a promote. Keeps
+                # "CAS predicate == full re-read predicate" TRUE, now including
+                # lifecycle. superseded_by on both surfaces; active only on
+                # hypomnema (beliefs has no `active` column).
+                cas_terms.append("superseded_by IS NULL")
+                if table == "hypomnema_entries":
+                    cas_terms.append("active = 1")
+                if table == "beliefs":
+                    # review-pending flags verified 0 by the re-read → bind them.
+                    cas_terms.append(
+                        "COALESCE(needs_review, 0) = 0 "
+                        "AND COALESCE(confidence_pending_review, 0) = 0"
+                    )
+                cas_where = " AND ".join(cas_terms)
+                cur = conn.execute(
+                    f"UPDATE {table} SET decision_ref = ?, "
+                    "read_visibility = 'operational_context' "
+                    f"WHERE id = ? AND read_visibility = 'review_only' "
+                    f"AND {cas_where}",
+                    (vault_journal.line_hash(line), row_id, *cas_params),
+                )
+                if cur.rowcount == 0:
+                    # A concurrent writer changed the row (or its visibility)
+                    # between the under-lock re-read and this atomic write. The
+                    # CAS refused it — report forensically, promote nothing.
+                    skipped.append(f"{row_id}:toctou-changed:cas-miss")
+                    continue
+                stamped.append(row_id)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return {"stamped": stamped, "skipped": skipped}
+
     def _apply_identity_write_no_commit(
         self,
         conn: sqlite3.Connection,

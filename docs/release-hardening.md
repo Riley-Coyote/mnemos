@@ -116,9 +116,14 @@ Use this checklist before publishing Mnemos or opening a release PR.
   prose in the operational restart proof.
 - When the T4 vault is installed, identity/foundational beliefs and hypomnema
   rows require a valid `decision_ref` before operational reads can surface
-  them. Apply and legacy-witness paths must read only the canonical
-  `/usr/local/var/mnemos-vault/decisions.jsonl` journal and must reject or skip
-  a present agent-owned/agent-writable journal leaf.
+  them. Apply, legacy-witness, and initial-rollout paths must read only the
+  canonical `/usr/local/var/mnemos-vault/decisions.jsonl` journal and must reject
+  or skip a present agent-owned/agent-writable journal leaf.
+- The DAVID-10 initial rollout is hypomnema-only and source-map constrained:
+  `mnemos-decide --initial-rollout` may witness mapped review-only identity
+  hypomnema, and `apply_initial_rollout()` may promote only rows that still
+  verify under the write lock and carry no review-pending/lifecycle-hidden
+  state.
 - Session-start/watchdog reconciliation must fail closed for missing, corrupt,
   unreadable, or untrusted journals; it must hold a `BEGIN IMMEDIATE` span lock
   across quarantine-all and normal reconcile writes.

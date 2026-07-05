@@ -40,6 +40,7 @@
 ## Why This Structure
 
 - **Isolation**: The dev worktree doesn't touch the live source. Feature branches are tested in a separate working directory.
+- **Test hygiene**: Pytest autouse fixtures clear ambient Mnemos/provider configuration, disable dotenv reads, refuse the live `~/.mnemos/memory.db`, and redirect vault alerts into per-test temp directories by default.
 - **Safety**: The production clone only advances when you explicitly `git pull` after merging to main in the dev tree.
 - **The harness as a gate**: `scripts/health_check.py` verifies 52 invariants before you commit to main — storage integrity, recall, the full lifecycle, no hard deletes, schema consistency.
 

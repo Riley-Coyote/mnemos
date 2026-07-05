@@ -895,11 +895,17 @@ def test_r2_3_session_start_stamps_when_default_vault_installed(tmp_path, monkey
     monkeypatch.setattr(
         store, "apply_legacy_witness", lambda **kw: called.setdefault("stamp", True)
     )
-    monkeypatch.setattr(
-        store,
-        "reconcile_identity_vault",
-        lambda p: called.setdefault("reconcile_path", str(p)),
-    )
+    # Return a real ReconcileReport, not the str dict.setdefault yields:
+    # session-start now inspects report.findings (008r/review), so a str return
+    # raised AttributeError into _alert_vault_error and leaked a vault-alert file
+    # into the real ~/Oliver Inbox. The path capture (the actual assertion) stays.
+    from mnemos.vault.reconcile import ReconcileReport
+
+    def _fake_reconcile(p):
+        called["reconcile_path"] = str(p)
+        return ReconcileReport()
+
+    monkeypatch.setattr(store, "reconcile_identity_vault", _fake_reconcile)
     server._reconcile_vault_on_session_start()
     assert called.get("stamp") is True, (
         "008e-r2 #3: session-start did not run the legacy-witness stamp"
@@ -907,6 +913,59 @@ def test_r2_3_session_start_stamps_when_default_vault_installed(tmp_path, monkey
     assert called.get("reconcile_path") == str(fake_default), (
         "008e-r2 #3 / 008m: session-start missed the default-install probe "
         "or passed the wrong path to reconcile"
+    )
+
+
+def test_isolate_env_redirects_vault_alert_off_real_inbox(tmp_path, monkeypatch):
+    """Mutation guard for the inbox-leak fix: the autouse _isolate_mnemos_env
+    fixture (conftest) redirects MNEMOS_WATCHDOG_ALERT_DIR to a tmp dir, so a
+    session-start vault alert can never write the developer's real ~/Oliver
+    Inbox. Revert that setenv in conftest and this goes RED — and a suite run
+    leaks a vault-session-start file into the real inbox again.
+    """
+    import os
+    import pathlib
+    from types import SimpleNamespace
+
+    import mnemos.mcp_server as server
+
+    # 1. The autouse fixture must have redirected the alert dir off the real inbox.
+    alert_dir = os.environ.get("MNEMOS_WATCHDOG_ALERT_DIR")
+    assert alert_dir, (
+        "conftest _isolate_mnemos_env must set MNEMOS_WATCHDOG_ALERT_DIR so no "
+        "test can write the real ~/Oliver Inbox"
+    )
+    assert (
+        pathlib.Path(alert_dir).expanduser().resolve()
+        != pathlib.Path("~/Oliver Inbox").expanduser().resolve()
+    ), "the redirected alert dir must not be the real inbox"
+
+    # 2. Drive a real session-start alert WITHOUT setting our own alert dir, so it
+    #    exercises the conftest default; it must land in the redirected dir.
+    store = _store(tmp_path)
+    journal = tmp_path / "j.jsonl"
+    journal.write_text("", encoding="utf-8")
+    fake_report = SimpleNamespace(
+        findings=[
+            {
+                "severity": "high",
+                "kind": "orphan_identity_row",
+                "detail": "d",
+                "table": "beliefs",
+                "row_id": "b",
+            }
+        ],
+        requarantined=[],
+    )
+    monkeypatch.setattr(store, "reconcile_identity_vault", lambda *a, **k: fake_report)
+    monkeypatch.setattr(server, "_store", store)
+    _arm_vault(monkeypatch, journal)
+    server._reconcile_vault_on_session_start()
+
+    landed = list(pathlib.Path(alert_dir).glob("*-vault-session-start-*.md"))
+    assert landed, (
+        "session-start alert did not land in the redirected tmp dir; the "
+        "MNEMOS_WATCHDOG_ALERT_DIR default redirect is not in effect"
     )
 
 

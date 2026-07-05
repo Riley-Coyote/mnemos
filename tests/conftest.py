@@ -45,13 +45,16 @@ def _forbid_live_mnemos_db(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_mnemos_env(monkeypatch):
+def _isolate_mnemos_env(monkeypatch, tmp_path):
     """No developer's real environment bleeds into tests.
 
     MNEMOS_DISABLE_DOTENV stops llm._load_env_key (and the OpenClaw key
     lookup) from reading workspace .env files; the MNEMOS_*/provider
     variables are cleared so every test starts from a clean slate and
-    sets exactly what it needs via monkeypatch.setenv.
+    sets exactly what it needs via monkeypatch.setenv. Vault alert output is
+    also redirected to a per-test temp dir by default, so tests cannot write
+    session-start/watchdog alerts into a real Oliver Inbox unless they
+    explicitly override the alert dir.
     """
     for var in (
         "MNEMOS_LLM_PROVIDER",
@@ -66,12 +69,22 @@ def _isolate_mnemos_env(monkeypatch):
         "MNEMOS_WORKSPACE",
         "MNEMOS_MODE",
         "MNEMOS_VAULT_JOURNAL",
+        "MNEMOS_WATCHDOG_ALERT_DIR",
         "ANTHROPIC_API_KEY",
         "OPENROUTER_API_KEY",
         "OPENAI_API_KEY",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("MNEMOS_DISABLE_DOTENV", "1")
+    # The vault's session-start / watchdog alert path (mnemos.mcp_server) defaults
+    # to the developer's REAL ~/Oliver Inbox when MNEMOS_WATCHDOG_ALERT_DIR is
+    # unset. A test that triggers a session-start alert — reconcile raising, or a
+    # stale monkeypatch returning a non-ReconcileReport — would then write a
+    # vault-alert file straight into the real inbox: a passing test with an
+    # invisible real-filesystem side effect. Redirect every test's alerts to a
+    # per-test tmp dir so no test can ever leak. (Tests needing to read the alert
+    # still monkeypatch.setenv their own dir; this only changes the default.)
+    monkeypatch.setenv("MNEMOS_WATCHDOG_ALERT_DIR", str(tmp_path / "vault-alerts"))
     # T4 vault (008r-review): the resolver reads NO env — default every test
     # store INERT by pointing the resolution seam's dir at a path that does not
     # exist, so no test arms against a post-ceremony system vault by accident.

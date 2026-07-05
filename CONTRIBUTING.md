@@ -16,6 +16,10 @@ pip install -e ".[all,dev]"
 pytest tests/
 ```
 
+The shared test harness clears ambient Mnemos/provider environment variables,
+disables dotenv reads, refuses the live `~/.mnemos/memory.db`, and redirects
+vault alert output to per-test temp directories unless a test overrides it.
+
 ## Code Style
 
 - Python 3.10+

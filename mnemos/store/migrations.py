@@ -864,6 +864,23 @@ def migrate_v8_inner_life_events(conn: sqlite3.Connection) -> None:
     apply_u6_6_inner_life_schema_migration(conn)
 
 
+@register_migration(9, "T4 vault: identity-tier decision_ref columns")
+def migrate_v9_vault_decision_ref(conn: sqlite3.Connection) -> None:
+    """Add the vault ``decision_ref`` column to the two identity-tier tables.
+
+    Only beliefs and hypomnema_entries can structurally express identity tier
+    (beliefs.tier / hypomnema.foundational + domain); engrams and
+    functional_memories carry no domain/tier signal, so identity content never
+    lands there (apply_identity_decision rejects those surfaces). The column is
+    the anchor the read-path validator and the reconciler check: an
+    identity/foundational row with NULL/'' decision_ref is not a witnessed row
+    and is forced review_only. Idempotent — SQL_CREATE_TABLES already adds the
+    column on fresh DBs; this catches pre-v9 DBs.
+    """
+    _add_column_if_missing(conn, "beliefs", "decision_ref", "TEXT")
+    _add_column_if_missing(conn, "hypomnema_entries", "decision_ref", "TEXT")
+
+
 def insert_pai_import_event(
     conn: sqlite3.Connection,
     *,

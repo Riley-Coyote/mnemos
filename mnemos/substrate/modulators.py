@@ -127,8 +127,19 @@ def compute_modulators(
     if agent_id is not None:
         belief_predicates.append("agent_id = ?")
         belief_params.append(agent_id)
+    # 008g-r9 #1: extend the T4 vault gate to this raw-SQL peer surface.
+    # Modulators drive openness/temperature; an unwitnessed identity belief
+    # skewing belief_count would change the agent's substrate behavior even
+    # though get_beliefs hides the same row. Same predicate, one source.
+    from mnemos.store.sqlite_store import (
+        _resolve_vault_active,
+        identity_decision_gate_sql,
+    )
+    _gate = identity_decision_gate_sql("beliefs", active=_resolve_vault_active(None))
     belief_count = conn.execute(
-        f"SELECT COUNT(*) FROM beliefs WHERE {' AND '.join(belief_predicates)}",
+        "SELECT COUNT(*) FROM beliefs WHERE "
+        + " AND ".join(belief_predicates)
+        + _gate,
         belief_params,
     ).fetchone()[0]
 

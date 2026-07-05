@@ -45,7 +45,7 @@ from .read_visibility import (
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 VALID_PROPOSAL_AUTHORITIES = {
     "user_stated",
@@ -190,6 +190,7 @@ _BELIEF_COLUMNS = frozenset(
         "needs_review",
         "confidence_pending_review",
         "read_visibility",
+        "decision_ref",
     }
 )
 
@@ -277,7 +278,10 @@ CREATE TABLE IF NOT EXISTS beliefs (
     confidence_pending_review INTEGER NOT NULL DEFAULT 0
         CHECK (confidence_pending_review IN (0, 1)),
     read_visibility TEXT NOT NULL DEFAULT 'operational_context'
-        CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only'))
+        CHECK (read_visibility IN ('operational_context', 'review_only', 'audit_only')),
+    -- T4 vault: journal-line hash licensing an identity-tier row to be operational.
+    -- NULL/'' on an identity/foundational row → forced review_only by the read-path validator.
+    decision_ref TEXT
 );
 
 -- Hypomnema: scoped durable continuity that can revise before promotion
@@ -308,7 +312,10 @@ CREATE TABLE IF NOT EXISTS hypomnema_entries (
     superseded_by TEXT REFERENCES hypomnema_entries(id),
     created_at TEXT NOT NULL,
     last_revised_at TEXT NOT NULL,
-    last_challenged_at TEXT
+    last_challenged_at TEXT,
+    -- T4 vault: journal-line hash licensing an identity-tier row to be operational.
+    -- NULL/'' on an identity/foundational row → forced review_only by the read-path validator.
+    decision_ref TEXT
 );
 
 -- Functional memory sessions: the active conversational frame
@@ -660,6 +667,170 @@ def _apply_read_visibility_filter(
     return _append_read_visibility_filter(sql, params, column, normalized)
 
 
+# Identity-tier signal per table — the columns that make a row identity/foundational.
+# Only these two tables can express it; engrams/functional_memories cannot (no
+# domain/tier column), so identity content never lands there (apply rejects them).
+# 008g-r6 #4 (bug caught by test): tier is nullable on beliefs, so a plain
+# `tier = 'foundational' OR ...` evaluates to NULL for regular beliefs (tier
+# is NULL) — then `NOT NULL` is NULL, which SQL treats as false in WHERE,
+# silently excluding non-identity beliefs from ANY query that carries the
+# gate. IFNULL forces a defined value so the OR short-circuits correctly.
+_IDENTITY_TIER_SIGNAL_SQL = {
+    "beliefs": (
+        "(IFNULL(tier, '') = 'foundational' "
+        "OR domain IN ('identity', 'foundational'))"
+    ),
+    "hypomnema_entries": "(foundational = 1 OR domain IN ('identity', 'foundational'))",
+}
+
+
+_CANONICAL_VAULT_DIR = "/usr/local/var/mnemos-vault"
+_CANONICAL_VAULT_JOURNAL = "/usr/local/var/mnemos-vault/decisions.jsonl"
+
+# 008r-review (env-resolver-redirects-agent-vault): tests-only injection seam,
+# SPLIT from production. resolve_vault_journal_path() reads NO environment — an
+# agent controls its own env, so honoring MNEMOS_VAULT_JOURNAL let it redirect
+# every vault read/write to a fake journal, or set the var empty to DISABLE the
+# gate outright (identity rows read operational, unverified, until the next
+# watchdog cron). These default to the pinned canonical paths; only tests
+# reassign them (monkeypatch-class — a subprocess or separate MCP server never
+# inherits them, unlike env). Production cannot reach this channel.
+_VAULT_DIR_FOR_RESOLUTION = _CANONICAL_VAULT_DIR
+_VAULT_JOURNAL_FOR_RESOLUTION = _CANONICAL_VAULT_JOURNAL
+
+
+def _resolve_vault_active(vault_active: bool | None) -> bool:
+    """Infer whether the T4 read-path validator enforces (008e E1).
+
+    Explicit bool wins. Otherwise the vault is active iff
+    ``resolve_vault_journal_path()`` is non-None — i.e. the canonical vault
+    directory exists (008r-review: no env channel; the install *is* the
+    directory appearing at ``/usr/local/var/mnemos-vault``). Tests that need the
+    gate armed/inert set ``_VAULT_DIR_FOR_RESOLUTION`` (the conftest points it at
+    a non-existent path by default so no test arms against a system vault by
+    accident). Statted once at store construction, never on the read path.
+    """
+    if vault_active is not None:
+        return vault_active
+    return resolve_vault_journal_path() is not None
+
+
+def _vault_object_trusted(path: str) -> bool:
+    """True iff ``path`` is a root/vault-owned object the agent cannot forge.
+
+    008r-review (vault-resolver-trusts-unverified-path): the arm-check must not
+    trust a path the current (agent) user owns or can write — otherwise a
+    pre-created fake vault dir + journal on a user-writable /usr/local would be
+    treated as installed. Rejected iff the current process owns the object or
+    can write it (``os.access`` honors macOS ACLs). Root (uid 0) is trusted (the
+    vault user / installer context). Tests monkeypatch this to accept the tmp
+    fixtures they own.
+    """
+    import os as _os
+    try:
+        st = _os.stat(path)
+    except OSError:
+        return False  # unstattable → not trustworthy
+    uid = _os.getuid()
+    if uid == 0:
+        return True
+    if st.st_uid == uid:
+        return False  # the agent owns it → could have forged it
+    if _os.access(path, _os.W_OK):
+        return False  # agent-writable (POSIX bits or ACL) → forgeable
+    return True
+
+
+def resolve_vault_journal_path() -> str | None:
+    """Return the canonical vault journal path if the vault is installed, else None.
+
+    008r-review (env-resolver-redirects-agent-vault): NO environment channel.
+    Single source of truth for the arm-check and downstream consumers (apply,
+    apply_legacy_witness, session-start reconcile, read-path gate activation).
+    An agent controls its own environment; honoring ``MNEMOS_VAULT_JOURNAL``
+    let it redirect all of these to a fake journal, or set it empty to disable
+    the gate. Removed — production pins the canonical path.
+
+    The vault is ARMED iff its DIRECTORY exists — David's install *is* the
+    directory appearing at ``/usr/local/var/mnemos-vault``.
+
+    **008g-r6 fail-CLOSED preserved.** The dir and journal are root/vault-owned
+    (0750 / 0640 uappnd); the agent cannot delete them to disarm. If the journal
+    FILE is missing while the dir exists (a privileged deletion, a typo during a
+    manual repair), the path still arms and ``read_journal([])`` returns empty →
+    the reconciler re-quarantines every stamped identity row rather than
+    silently fail-open. Only the *absence of the vault dir* (never installed, or
+    a deliberate root-level uninstall) is inert.
+
+    Tests inject a fixture via ``_VAULT_DIR_FOR_RESOLUTION`` /
+    ``_VAULT_JOURNAL_FOR_RESOLUTION`` and monkeypatch ``_vault_object_trusted``
+    to accept the tmp fixtures they own (production never sets them).
+    """
+    vault_dir = _VAULT_DIR_FOR_RESOLUTION
+    if not Path(vault_dir).exists():
+        return None  # pre-install → inert
+    # 008r-review (vault-resolver-trusts-unverified-path): existence is not
+    # enough. On a user-writable /usr/local (Homebrew — the installer's own
+    # ancestor check warns about it), an agent could pre-create the vault dir +
+    # a fake decisions.jsonl and make every vault read/apply/session-start trust
+    # an attacker-controlled journal. So the DIRECTORY must be root/vault-owned
+    # and not agent-writable (os.access honors ACLs). An agent-owned dir means
+    # no real vault was ever installed here → inert (no stamped rows to protect).
+    if not _vault_object_trusted(vault_dir):
+        return None
+    # 008r-review (vault-untrusted-journal-disarms-gate): the dir is a TRUSTED
+    # install, so ARM unconditionally — return the canonical journal path even
+    # if the journal is missing or (despite the 0750 dir that should prevent it)
+    # untrusted. That is an installed-but-BROKEN state, and the gate must FAIL
+    # CLOSED: armed → session-start reconciles, sees the missing/empty/broken
+    # journal, and re-quarantines every stamped identity row. Returning None
+    # here on an untrusted journal (an earlier revision did) is fail-OPEN —
+    # reads would skip the identity gate and reconciliation would not run.
+    return _VAULT_JOURNAL_FOR_RESOLUTION
+
+
+def identity_decision_gate_sql(table: str, *, active: bool) -> str:
+    """Return the T4 vault gate SQL fragment (008e E3: single source of truth).
+
+    Empty string when inert or the table has no identity signal — safe to
+    unconditionally append. The predicate is **row-by-row against the row's own
+    ``read_visibility``** (008e #4 correction): an identity-tier row without a
+    ``decision_ref`` is excluded only from *operational* reads, so a mixed
+    ``(operational_context, review_only)`` request drops the unwitnessed row
+    from the operational half of the union but keeps it visible for review.
+
+    Same predicate used by ``EngramStore`` and by raw-SQL peer surfaces (e.g.
+    the visualization dashboard) — no textual duplication, no drift risk.
+    """
+    if not active:
+        return ""
+    tier_signal = _IDENTITY_TIER_SIGNAL_SQL.get(table)
+    if tier_signal is None:
+        return ""
+    return (
+        f" AND NOT ({table}.read_visibility = '{READ_VISIBILITY_OPERATIONAL}' "
+        f"AND {tier_signal} "
+        "AND (decision_ref IS NULL OR decision_ref = ''))"
+    )
+
+
+def _append_identity_decision_gate(
+    sql: str,
+    table: str,
+    visibility_values: tuple[str, ...] | None,
+    active: bool,
+) -> str:
+    """Store-side compose helper: wraps :func:`identity_decision_gate_sql`.
+
+    No-op when the caller opts fully into admin (``visibility_values is None``);
+    the row-by-row predicate is safe even when operational_context is present
+    alongside review_only in a mixed set (008e #4).
+    """
+    if visibility_values is None:
+        return sql
+    return sql + identity_decision_gate_sql(table, active=active)
+
+
 def _stricter_read_visibility(
     existing_visibility: str,
     incoming_visibility: str,
@@ -771,7 +942,13 @@ class EngramStore:
         engram = store.get_engram("engram_abc123")
     """
 
-    def __init__(self, db_path: str | Path, *, read_only: bool = False):
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        read_only: bool = False,
+        vault_active: bool | None = None,
+    ):
         """Open a Mnemos store.
 
         Args:
@@ -783,9 +960,18 @@ class EngramStore:
                 migrations, and a `meta` write on every instantiation, which
                 silently upgrades older-schema DBs and writes 2+ bytes even on
                 already-current DBs. Caller must guarantee the DB exists.
+            vault_active: Whether the T4 read-path validator enforces the
+                witnessed-decision requirement on identity-tier reads. When
+                ``None`` (default) it is inferred: active iff a vault journal is
+                configured (``MNEMOS_VAULT_JOURNAL``) AND the file exists — i.e.
+                David has run the install ceremony. Before the vault exists the
+                gate is inert, so the pre-vault identity corpus reads exactly as
+                it does today (design §6: "stays where it is now until
+                installed"). Apply and reconcile are always on regardless.
         """
         self.db_path = Path(db_path).expanduser()
         self._read_only = read_only
+        self._vault_active = _resolve_vault_active(vault_active)
         self._conn: sqlite3.Connection | None = None
         if read_only:
             if not self.db_path.exists():
@@ -1459,6 +1645,175 @@ class EngramStore:
         self._save_belief_no_commit(conn, belief, allow_visibility_promotion=True)
         conn.commit()
 
+    def _maybe_degrade_witnessed_belief(
+        self, conn: sqlite3.Connection, belief: Belief
+    ) -> dict[str, str] | None:
+        """008g E7: witnessed-field split for belief upserts.
+
+        Returns None when no witness is at stake (no existing row, no existing
+        decision_ref, or witnessed fields byte-unchanged). Returns a degrade
+        record when a witnessed field would change — the caller then clears
+        the ref, forces review_only, and emits a trace proposal, all in the
+        same transaction.
+
+        Witnessed fields per ``canonical_row_sha256``: content, domain, tier
+        (foundational-equivalent), agent_id. Everything else — confidence,
+        timestamps, revision_history — is NOT witnessed and does not degrade.
+        """
+        from ..vault import journal as vault_journal
+
+        existing = conn.execute(
+            "SELECT id, agent_id, content, domain, tier, decision_ref "
+            "FROM beliefs WHERE id = ?",
+            (belief.id,),
+        ).fetchone()
+        if existing is None:
+            return None
+        existing = dict(existing)
+        if not (existing.get("decision_ref") or "").strip():
+            return None
+        # Beliefs have no 'foundational' column; canonical_row_sha256 normalizes
+        # from tier=='foundational' so we don't need to inject the field.
+        old_hash = vault_journal.canonical_row_sha256("beliefs", existing)
+        new_shape = {
+            "id": belief.id,
+            "agent_id": belief.agent_id,
+            "content": belief.content,
+            "domain": belief.domain,
+            "tier": belief.tier or "",
+        }
+        new_hash = vault_journal.canonical_row_sha256("beliefs", new_shape)
+        if old_hash == new_hash:
+            return None
+        return {
+            "old_hash": old_hash,
+            "new_hash": new_hash,
+            "prior_decision_ref": str(existing["decision_ref"]),
+        }
+
+    def _emit_witness_degrade_trace(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        table: str,
+        row_id: str,
+        agent_id: str,
+        person_id: str,
+        project_scope: str,
+        domain: str,
+        degrade: dict[str, str],
+    ) -> None:
+        """008g E7/E8: emit the review-queue trace for a witnessed-field degrade.
+
+        Deterministic ``id`` from (table, row_id, new_hash) so repeated identical
+        mutations are idempotent, but a NEW mutation to the same row emits a
+        distinct trace. Payload carries old/new witness hashes so David can
+        diff exactly what changed.
+        """
+        trace_id = f"degrade-{table}-{row_id}-{degrade['new_hash'][:16]}"
+        payload = {
+            "old_row_hash": degrade["old_hash"],
+            "new_row_hash": degrade["new_hash"],
+            "prior_decision_ref": degrade["prior_decision_ref"],
+            "row_id": row_id,
+            "table": table,
+        }
+        now = int(datetime.now(timezone.utc).timestamp())
+        conn.execute(
+            """
+            INSERT INTO proposal_ledger (
+                id, agent_id, person_id, project_scope, source_authority, kind,
+                domain, target_surface, transition, blast_radius, read_visibility,
+                status, reason, gate_version, target_id, provenance_ids_json,
+                payload_json, created_at, updated_at, decided_at, applied_at
+            ) VALUES (?, ?, ?, ?, 'observed', 'semantic', ?, ?,
+                      'witnessed row mutation degrade', 'identity', 'audit_only',
+                      'pending_review', ?, 'affmem-v1', ?, '[]', ?, ?, ?, NULL, NULL)
+            ON CONFLICT(id) DO NOTHING
+            """,
+            (
+                trace_id,
+                agent_id,
+                person_id,
+                project_scope,
+                domain,
+                table,
+                f"witnessed {table} row {row_id} mutated; degraded pending re-witness",
+                row_id,
+                _encode_json(payload),
+                now,
+                now,
+            ),
+        )
+
+    def _degrade_and_trace_lifecycle(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        table: str,
+        row_id: str,
+        prior_decision_ref: str,
+        reason: str,
+        agent_id: str,
+        person_id: str,
+        project_scope: str,
+        domain: str,
+        trace_detail: str | None = None,
+    ) -> None:
+        """008k E2B: clear decision_ref + force review_only on a witnessed row
+        whose lifecycle/content changed outside the vault path, and emit a
+        D4-shaped trace proposal — all inside the caller's transaction.
+
+        Used by supersede/archive (lifecycle) and PAI re-import (008k-r13 #3/#4:
+        content/domain/tier or deactivate). ``trace_detail`` overrides the
+        review-queue text so David sees WHY the row degraded. The trace ``id``
+        is deterministic per (table, row_id, prior_decision_ref) so an
+        idempotent repeat doesn't multiply traces.
+        """
+        conn.execute(
+            f"UPDATE {table} SET decision_ref = NULL, "
+            "read_visibility = 'review_only' WHERE id = ?",
+            (row_id,),
+        )
+        trace_id = f"lifecycle-{table}-{row_id}-{prior_decision_ref[:16]}"
+        payload = {
+            "prior_decision_ref": prior_decision_ref,
+            "reason": reason,
+            "row_id": row_id,
+            "table": table,
+        }
+        detail = trace_detail or (
+            f"witnessed {table} row {row_id} superseded/archived; "
+            "degraded pending re-witness"
+        )
+        now = int(datetime.now(timezone.utc).timestamp())
+        conn.execute(
+            """
+            INSERT INTO proposal_ledger (
+                id, agent_id, person_id, project_scope, source_authority, kind,
+                domain, target_surface, transition, blast_radius, read_visibility,
+                status, reason, gate_version, target_id, provenance_ids_json,
+                payload_json, created_at, updated_at, decided_at, applied_at
+            ) VALUES (?, ?, ?, ?, 'observed', 'semantic', ?, ?,
+                      'witnessed row lifecycle degrade', 'identity', 'audit_only',
+                      'pending_review', ?, 'affmem-v1', ?, '[]', ?, ?, ?, NULL, NULL)
+            ON CONFLICT(id) DO NOTHING
+            """,
+            (
+                trace_id,
+                agent_id,
+                person_id,
+                project_scope,
+                domain or "general",
+                table,
+                detail,
+                row_id,
+                _encode_json(payload),
+                now,
+                now,
+            ),
+        )
+
     def _save_belief_no_commit(
         self,
         conn: sqlite3.Connection,
@@ -1466,6 +1821,9 @@ class EngramStore:
         *,
         allow_visibility_promotion: bool = False,
     ) -> None:
+        # 008g E7: witnessed-field split — check BEFORE the upsert whether this
+        # write changes any witnessed field on a ref-carrying row.
+        degrade = self._maybe_degrade_witnessed_belief(conn, belief)
         data = belief.to_dict()
 
         # Validate column names
@@ -1492,6 +1850,24 @@ class EngramStore:
             f"ON CONFLICT(id) DO UPDATE SET {updates}",
             list(safe_data.values()),
         )
+        if degrade is not None:
+            # 008g E7: atomic degrade — same transaction as the upsert, so no
+            # reader sees the mutated row operational with the stale ref.
+            conn.execute(
+                "UPDATE beliefs SET decision_ref = NULL, "
+                "read_visibility = 'review_only' WHERE id = ?",
+                (belief.id,),
+            )
+            self._emit_witness_degrade_trace(
+                conn,
+                table="beliefs",
+                row_id=belief.id,
+                agent_id=belief.agent_id,
+                person_id="user",
+                project_scope="global",
+                domain=belief.domain,
+                degrade=degrade,
+            )
 
     def get_beliefs(
         self,
@@ -1535,6 +1911,7 @@ class EngramStore:
             "read_visibility",
             visibility_values,
         )
+        query = _append_identity_decision_gate(query, "beliefs", visibility_values, self._vault_active)
 
         query += " ORDER BY confidence DESC"
         rows = conn.execute(query, params).fetchall()
@@ -1625,6 +2002,15 @@ class EngramStore:
             raise ValueError("Proposal transition cannot be empty")
 
         pid = (proposal_id or "").strip() or _new_id()
+        # 008e-r2 #1: identity/foundational blast MUST carry a stable target_id
+        # BEFORE the journal line is written (target_id is in the hashed content
+        # field-set). Auto-generate here for producers that leave it None, so
+        # the reconciler's fallback locator has a target to look up even after
+        # a triple-clear attack. Non-identity proposals keep the None option.
+        if blast_radius in ("identity", "foundational"):
+            resolved_target_id = (target_id or "").strip() or _new_id()
+        else:
+            resolved_target_id = (target_id or "").strip() or None
         conn = self._get_conn()
         existing = conn.execute(
             "SELECT status FROM proposal_ledger WHERE id = ?",
@@ -1703,7 +2089,7 @@ class EngramStore:
                 status,
                 reason.strip(),
                 gate_version.strip() or "affmem-v1",
-                (target_id or "").strip() or None,
+                resolved_target_id,
                 _encode_json(provenance),
                 payload_json,
                 now,
@@ -1822,6 +2208,452 @@ class EngramStore:
         row["provenance_ids"] = _decode_json(row.pop("provenance_ids_json", "[]"), [])
         row["payload"] = _decode_json(row.pop("payload_json", "{}"), {})
         return row
+
+    # ── Vault: identity-tier decision application ──
+
+    # The only surfaces that can structurally carry an identity tier signal, so
+    # the only surfaces a witnessed identity decision may write. engrams /
+    # functional_memories have no domain/tier column — applying identity content
+    # there would launder it past the read-path validator into permanent
+    # invisibility, so those surfaces are a loud error, not a silent write.
+    IDENTITY_APPLY_SURFACES = ("beliefs", "hypomnema_entries")
+
+    def apply_identity_decision(
+        self,
+        proposal_id: str,
+        *,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Apply (or terminally reject) an identity-tier proposal per the vault journal.
+
+        008r (overturns 008m): apply has NO journal-path parameter. The
+        canonical vault journal path is resolved here
+        (``resolve_vault_journal_path``) and nowhere else, so apply can only
+        ever read the real vault — the decision *which journal is authoritative*
+        is not in-process code's to make. Tests inject a fixture journal by
+        monkeypatching the resolver (a mechanism that cannot ship), never
+        through a call parameter: a parameter is an affordance that will
+        eventually be passed by someone with a plausible reason, while a
+        monkeypatch is a git-visible edit to the vault module. This aligns the
+        applier with 008m's watchdog Addition 1 — no production component of the
+        vault has a redirectable journal path.
+
+        The journal — a vault-owned, append-only, hash-chained file the agent
+        cannot write — is the sole authority. This method reads it, and does
+        nothing durable unless it can cite a chain-verified line whose
+        ``content_sha256`` matches the proposal's content recomputed *now*
+        (closing TOCTOU) and whose decision is ``approved`` or ``rejected``.
+
+        All verification completes BEFORE the write transaction opens: no BEGIN
+        until the chain is intact and the hash matches. An approved decision
+        writes the target row ``operational_context`` with
+        ``decision_ref`` = the journal line's hash (the one thing that licenses
+        an identity row to be operational) and flips the proposal to ``applied``.
+        A rejected decision flips the proposal to ``rejected`` with the same
+        ``decision_ref`` discipline and writes no target row.
+
+        Raises ``ValueError`` (never a silent no-op) on: unknown proposal,
+        non-identity blast radius, unsupported target surface, missing journal
+        line, broken chain, hash mismatch, or a non-terminal-eligible decision.
+        """
+        from ..vault import journal as vault_journal
+
+        # 008r (overturns 008m): resolve the canonical vault journal path here
+        # and NOWHERE else — no parameter can redirect it. Tests inject via the
+        # resolver seam (monkeypatch resolve_vault_journal_path).
+        resolved = resolve_vault_journal_path()
+        if resolved is None:
+            raise ValueError(
+                "Vault not armed (no journal path resolved); cannot apply "
+                "an identity decision without a canonical vault journal"
+            )
+        journal_path: str | Path = resolved
+
+        # Journal read + chain verify happen OUTSIDE the transaction — the
+        # journal is a separate file owned by the vault user, not the DB.
+        # Everything that touches the proposal ledger row happens under the
+        # write lock (BEGIN IMMEDIATE) so a concurrent write_proposal cannot
+        # mutate hashed fields or flip the status between validation and
+        # apply — 008g-r8 #1 (TOCTOU close).
+        lines = vault_journal.read_journal(journal_path)
+        chain_ok, break_index = vault_journal.verify_chain(lines)
+        if not chain_ok:
+            raise ValueError(
+                f"Vault journal chain broken at line {break_index}; refusing apply"
+            )
+        decision = vault_journal.find_decision(lines, proposal_id)
+        if decision is None:
+            raise ValueError(
+                f"No vault journal decision for proposal {proposal_id}; "
+                "identity-tier apply requires a witnessed journal line"
+            )
+        decision_kind = str(decision.get("decision", ""))
+        if decision_kind not in ("approved", "rejected"):
+            raise ValueError(
+                f"Journal decision for {proposal_id} is {decision_kind!r}; "
+                "only 'approved' or 'rejected' are applicable"
+            )
+        # decision_ref is the hash of the raw stored line (not the augmented
+        # dict find_decision returns — that carries a synthetic _line_index).
+        decision_ref = vault_journal.line_hash(lines[decision["_line_index"]])
+
+        now_ts = now or _utc_now()
+        conn = self._get_conn()
+        # 008g-r8 #1: BEGIN IMMEDIATE takes the write lock now — any other
+        # writer blocks until we commit/rollback. Then we RELOAD the proposal
+        # inside the lock and re-run every validation; nothing can change the
+        # ledger row between validation and apply.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            proposal = self.get_proposal(proposal_id)
+            if proposal is None:
+                raise ValueError(f"Unknown proposal: {proposal_id}")
+            if proposal["blast_radius"] not in ("identity", "foundational"):
+                raise ValueError(
+                    "apply_identity_decision is only for identity/foundational "
+                    f"proposals; proposal {proposal_id} has "
+                    f"blast_radius={proposal['blast_radius']!r}"
+                )
+            if proposal["status"] not in ("pending_review", "deferred"):
+                raise ValueError(
+                    f"Proposal {proposal_id} is not applicable in status "
+                    f"{proposal['status']!r}"
+                )
+            surface = proposal["target_surface"]
+            if surface not in self.IDENTITY_APPLY_SURFACES:
+                raise ValueError(
+                    "identity-tier apply supports beliefs/hypomnema_entries; "
+                    f"extending to {surface} requires a schema unit — escalate"
+                )
+            # 008g-r8 #2: fail closed on empty target_id. r2 #1 auto-gens for
+            # NEW proposals via write_proposal, but a pre-v9 pending proposal
+            # in the DB may have target_id=NULL and its journal line was
+            # hashed with target_id=''. Applying would invent an id and the
+            # row's fields would never match the hash — an immediate reconcile
+            # tamper. David re-files with target_id specified.
+            if not str(proposal.get("target_id") or "").strip():
+                raise ValueError(
+                    f"Proposal {proposal_id} has no target_id — refusing apply "
+                    "(pre-v9 unbound proposals must be re-filed with a stable "
+                    "target_id before witnessing)"
+                )
+            live_hash = vault_journal.canonical_content_sha256(proposal)
+            if str(decision.get("content_sha256", "")) != live_hash:
+                raise ValueError(
+                    f"Content hash mismatch for {proposal_id}: proposal changed "
+                    "since the decision was recorded; refusing apply"
+                )
+
+            target_row_id: str | None = None
+            if decision_kind == "approved":
+                target_row_id = self._apply_identity_write_no_commit(
+                    conn, proposal, decision_ref=decision_ref, now_ts=now_ts
+                )
+                new_status = "applied"
+            else:
+                new_status = "rejected"
+            # 008e #2 residual (declared): we do NOT write the resolved
+            # target_id back to proposal_ledger — target_id is in the content
+            # hash field-set, so mutating it after apply would break the
+            # reconciler's TOCTOU hash check. The fallback locator works when
+            # the producer specified target_id up-front (typical); auto-
+            # generated target_ids fall through to direction-B's
+            # "missing_witnessed_row" finding (visible, David-actionable) but
+            # cannot re-quarantine automatically. Silently keeping the row
+            # operational as non-identity is a determined-adversary path that
+            # the design's §1 already declares out-of-in-account-scope.
+            cursor = conn.execute(
+                """
+                UPDATE proposal_ledger
+                SET status = ?, decided_at = ?, applied_at = ?, updated_at = ?
+                WHERE id = ? AND status IN ('pending_review', 'deferred')
+                """,
+                (
+                    new_status,
+                    now_ts if new_status == "rejected" else proposal.get("decided_at"),
+                    now_ts if new_status == "applied" else None,
+                    now_ts,
+                    proposal_id,
+                ),
+            )
+            # 008g-r8 #1: if the UPDATE affected zero rows, the ledger row
+            # changed status between load-under-lock and here (should be
+            # impossible since we hold BEGIN IMMEDIATE, but defense-in-depth).
+            # Roll back — a target row must not survive an unmatched ledger update.
+            if cursor.rowcount != 1:
+                raise ValueError(
+                    f"Proposal {proposal_id} ledger status update matched "
+                    f"{cursor.rowcount} rows; refusing to leave a witnessed row "
+                    "with an unwritten ledger transition"
+                )
+            _ = target_row_id  # kept for future ledger-side reference tracking
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        result = self.get_proposal(proposal_id)
+        assert result is not None
+        result["decision_ref"] = decision_ref
+        return result
+
+    def reconcile_identity_vault(
+        self,
+        journal_path: str | Path,
+        *,
+        apply_quarantine: bool = True,
+    ) -> Any:
+        """Reconcile identity-tier rows against the vault journal (both directions).
+
+        Thin delegate to ``mnemos.vault.reconcile``. Run at session-start and by
+        the watchdog; ``apply_quarantine=False`` is a dry audit.
+        """
+        from ..vault.reconcile import reconcile_identity_tier
+
+        return reconcile_identity_tier(
+            self, journal_path, apply_quarantine=apply_quarantine
+        )
+
+    def apply_legacy_witness(self) -> dict[str, list[str]]:
+        """Stamp legacy identity rows from batch-witness journal lines (DAVID-9 c).
+
+        008r (overturns 008m): no journal-path parameter. The canonical vault
+        path is resolved here and nowhere else; tests inject via the resolver
+        seam (monkeypatch resolve_vault_journal_path), never a call parameter.
+
+        The imported SOUL corpus predates the proposal ledger, so those rows have
+        no proposal to witness. ``mnemos-decide --witness-legacy`` appends one
+        ``witness='legacy'`` line per row (hashing the row itself via
+        ``canonical_row_sha256``); this reads those lines and stamps each
+        matching row's ``decision_ref`` = the line hash, keeping it operational.
+
+        One-time and idempotent: an already-stamped row is skipped; a row whose
+        content no longer matches its witness line is left unstamped and
+        reported (the witness stopped describing the row). Runs at session-start;
+        touches only rows a witness line names.
+        """
+        from ..vault import journal as vault_journal
+
+        # 008r: no redirectable journal path (see apply_identity_decision).
+        resolved = resolve_vault_journal_path()
+        if resolved is None:
+            # No vault armed → nothing to stamp; return empty result rather
+            # than raise (session-start calls this best-effort).
+            return {"stamped": [], "skipped": []}
+        journal_path: str | Path = resolved
+
+        lines = vault_journal.read_journal(journal_path)
+        chain_ok, break_index = vault_journal.verify_chain(lines)
+        if not chain_ok:
+            raise ValueError(
+                f"Vault journal chain broken at line {break_index}; "
+                "refusing legacy witness"
+            )
+        conn = self._get_conn()
+        stamped: list[str] = []
+        skipped: list[str] = []
+        changed = False
+        for line in lines:
+            if str(line.get("witness", "")) != "legacy":
+                continue
+            if str(line.get("decision", "")) != "approved":
+                continue
+            table = str(line.get("table", ""))
+            row_id = str(line.get("row_id", ""))
+            if table not in self.IDENTITY_APPLY_SURFACES:
+                skipped.append(f"{row_id}:bad-table")
+                continue
+            row = conn.execute(
+                f"SELECT * FROM {table} WHERE id = ?", (row_id,)
+            ).fetchone()
+            if row is None:
+                skipped.append(f"{row_id}:row-missing")
+                continue
+            row = dict(row)
+            if (row.get("decision_ref") or "").strip():
+                skipped.append(f"{row_id}:already-stamped")
+                continue
+            if vault_journal.canonical_row_sha256(table, row) != str(
+                line.get("content_sha256", "")
+            ):
+                skipped.append(f"{row_id}:content-mismatch")
+                continue
+            # 008e E2: stamp decision_ref ONLY. Preserve prior read_visibility —
+            # a pre-vault row that was intentionally review_only/audit_only was
+            # NOT part of the U4/06-28 approval this batch materializes; it was
+            # flagged for review, and the curator's intent stands. Rows the TCB
+            # batch offered were already filtered to operational-only.
+            conn.execute(
+                f"UPDATE {table} SET decision_ref = ? WHERE id = ?",
+                (vault_journal.line_hash(line), row_id),
+            )
+            changed = True
+            stamped.append(row_id)
+        if changed:
+            conn.commit()
+        return {"stamped": stamped, "skipped": skipped}
+
+    def _apply_identity_write_no_commit(
+        self,
+        conn: sqlite3.Connection,
+        proposal: dict[str, Any],
+        *,
+        decision_ref: str,
+        now_ts: str,
+    ) -> str:
+        """Write the witnessed identity row operational with its decision_ref.
+
+        Returns the resolved ``target_id`` so ``apply_identity_decision`` can
+        persist it back to the proposal ledger — the reconciler's fallback
+        locator (008e #2) depends on it.
+
+        Bypasses the review-only floor that ``classify_hypomnema_read_visibility``
+        imposes on identity content precisely because ``decision_ref`` is what
+        licenses operational visibility — a row written here without going
+        through the journal-verified path above cannot exist.
+        """
+        payload = proposal.get("payload") or {}
+        content = str(payload.get("content", "")).strip()
+        if not content:
+            raise ValueError("Identity decision payload has no content to apply")
+        surface = proposal["target_surface"]
+        target_id = (proposal.get("target_id") or "").strip() or _new_id()
+        domain = proposal["domain"]
+        # 008-r14 #2: reject a scope mismatch BEFORE the upsert. The upsert
+        # overwrites content/domain/decision_ref on an existing row id but does
+        # NOT rewrite agent_id/person_id/project_scope — so a proposal whose
+        # target_id collides with an existing row in a DIFFERENT scope would
+        # write witnessed identity content into that other scope. Refuse: a
+        # witnessed decision applies only to a row in its own scope (or a new
+        # row). This mirrors the scope binding reconcile already enforces.
+        prop_agent = str(proposal.get("agent_id", "default"))
+        prop_person = str(proposal.get("person_id", "user"))
+        prop_scope = str(proposal.get("project_scope", "global"))
+        existing_scope = conn.execute(
+            "SELECT agent_id"
+            + (", person_id, project_scope" if surface == "hypomnema_entries" else "")
+            + f" FROM {surface} WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        if existing_scope is not None:
+            existing_scope = dict(existing_scope)
+            if str(existing_scope.get("agent_id", "")) != prop_agent or (
+                surface == "hypomnema_entries"
+                and (
+                    str(existing_scope.get("person_id", "")) != prop_person
+                    or str(existing_scope.get("project_scope", "")) != prop_scope
+                )
+            ):
+                raise ValueError(
+                    f"identity apply target {target_id!r} exists in a different "
+                    "scope than the proposal; refusing cross-scope witnessed write"
+                )
+        # 008e #7: the written row MUST carry an identity-tier signal, else the
+        # read-path validator can't police it — an identity-blast proposal with
+        # payload tier='operational' or domain='general' would otherwise apply
+        # as a non-identity-tier row that is operational forever regardless of
+        # decision_ref. Enforce here, at the apply chokepoint.
+        if domain not in ("identity", "foundational"):
+            raise ValueError(
+                "identity-blast proposal must carry identity/foundational domain; "
+                f"got domain={domain!r} — reject or re-file with a legal domain"
+            )
+
+        if surface == "beliefs":
+            confidence = float(payload.get("confidence", 0.3) or 0.3)
+            # Force foundational tier for identity blast — payload cannot
+            # downgrade the tier signal to operational/tactical.
+            tier = "foundational"
+            conn.execute(
+                """
+                INSERT INTO beliefs (
+                    id, agent_id, content, confidence, domain, created_at,
+                    last_revised, last_challenged, tier, needs_review,
+                    confidence_pending_review, read_visibility, decision_ref
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'operational_context', ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    content = excluded.content,
+                    confidence = excluded.confidence,
+                    domain = excluded.domain,
+                    tier = excluded.tier,
+                    last_revised = excluded.last_revised,
+                    needs_review = 0,
+                    confidence_pending_review = 0,
+                    read_visibility = 'operational_context',
+                    decision_ref = excluded.decision_ref,
+                    -- 008g-r7 #3: reset lifecycle fields on re-approval, or a
+                    -- previously-superseded belief stays invisible AND
+                    -- reconcile (r6 #3) would flag the newly-witnessed row as
+                    -- tamper because superseded_by wasn't cleared.
+                    superseded_by = NULL
+                """,
+                (
+                    target_id,
+                    proposal.get("agent_id", "default"),
+                    content,
+                    confidence,
+                    domain,
+                    now_ts,
+                    now_ts,
+                    now_ts,
+                    tier,
+                    decision_ref,
+                ),
+            )
+        else:  # hypomnema_entries
+            density = float(payload.get("density", 0.5) or 0.5)
+            confidence = float(payload.get("confidence", 0.6) or 0.6)
+            salience = float(payload.get("salience", 0.5) or 0.5)
+            source = str(payload.get("source", "co-formed")) or "co-formed"
+            if source not in VALID_HYPO_SOURCES:
+                raise ValueError(f"Unsupported hypomnema source: {source}")
+            tags_json = _encode_json(
+                list(payload["tags"])
+                if isinstance(payload.get("tags"), (list, tuple))
+                else []
+            )
+            conn.execute(
+                """
+                INSERT INTO hypomnema_entries (
+                    id, agent_id, person_id, project_scope, content, source,
+                    density, domain, read_visibility, tags_json, confidence,
+                    salience, active, foundational, revision_count, revisions_json,
+                    created_at, last_revised_at, decision_ref
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'operational_context', ?, ?, ?,
+                          1, 1, 0, '[]', ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    content = excluded.content,
+                    source = excluded.source,
+                    density = excluded.density,
+                    domain = excluded.domain,
+                    read_visibility = 'operational_context',
+                    tags_json = excluded.tags_json,
+                    confidence = excluded.confidence,
+                    salience = excluded.salience,
+                    foundational = 1,
+                    last_revised_at = excluded.last_revised_at,
+                    decision_ref = excluded.decision_ref,
+                    -- 008g-r7 #3: reset lifecycle fields on re-approval.
+                    active = 1,
+                    superseded_by = NULL
+                """,
+                (
+                    target_id,
+                    proposal.get("agent_id", "default"),
+                    proposal.get("person_id", "user"),
+                    proposal.get("project_scope", "global"),
+                    content,
+                    source,
+                    density,
+                    domain,
+                    tags_json,
+                    confidence,
+                    salience,
+                    now_ts,
+                    now_ts,
+                    decision_ref,
+                ),
+            )
+        return target_id
 
     # ── Functional Memory ──
 
@@ -2417,12 +3249,45 @@ class EngramStore:
         existing = conn.execute(
             """
             SELECT agent_id, person_id, project_scope, content, revision_count,
-                   revisions_json, read_visibility
+                   revisions_json, read_visibility, domain, foundational,
+                   decision_ref
             FROM hypomnema_entries
             WHERE id = ?
             """,
             (entry_id,),
         ).fetchone()
+        # 008g E8: witnessed-field split — check BEFORE the upsert whether this
+        # write changes any witnessed field on a ref-carrying row. Trace emit
+        # happens after the upsert; the whole thing lives in the caller's
+        # transaction so no reader sees an intermediate state.
+        hypo_degrade: dict[str, str] | None = None
+        if existing is not None and (
+            str(dict(existing).get("decision_ref") or "").strip()
+        ):
+            from ..vault import journal as vault_journal
+            existing_dict = dict(existing)
+            existing_dict["id"] = entry_id
+            old_hash = vault_journal.canonical_row_sha256(
+                "hypomnema_entries", existing_dict
+            )
+            new_shape = {
+                "id": entry_id,
+                "agent_id": agent_id,
+                "person_id": person_id,
+                "project_scope": project_scope,
+                "content": content.strip(),
+                "domain": domain,
+                "foundational": 1 if foundational else 0,
+            }
+            new_hash = vault_journal.canonical_row_sha256(
+                "hypomnema_entries", new_shape
+            )
+            if old_hash != new_hash:
+                hypo_degrade = {
+                    "old_hash": old_hash,
+                    "new_hash": new_hash,
+                    "prior_decision_ref": str(existing_dict["decision_ref"]),
+                }
         if existing is not None and (
             existing["agent_id"] != agent_id
             or existing["person_id"] != person_id
@@ -2522,6 +3387,23 @@ class EngramStore:
                 now,
             ),
         )
+        if hypo_degrade is not None:
+            # 008g E8: atomic degrade — same transaction as the upsert.
+            conn.execute(
+                "UPDATE hypomnema_entries SET decision_ref = NULL, "
+                "read_visibility = 'review_only' WHERE id = ?",
+                (entry_id,),
+            )
+            self._emit_witness_degrade_trace(
+                conn,
+                table="hypomnema_entries",
+                row_id=entry_id,
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+                domain=domain,
+                degrade=hypo_degrade,
+            )
         return entry_id
 
     def get_hypomnema_entry(
@@ -2548,11 +3430,15 @@ class EngramStore:
         params: list[Any] = [entry_id, agent_id, person_id, project_scope]
         if active_only:
             query += " AND active = 1"
-        query = _apply_read_visibility_filter(
+        visibility_values = _normalize_read_visibility_values(read_visibility)
+        query = _append_read_visibility_filter(
             query,
             params,
             "read_visibility",
-            read_visibility,
+            visibility_values,
+        )
+        query = _append_identity_decision_gate(
+            query, "hypomnema_entries", visibility_values, self._vault_active
         )
         row = conn.execute(query, params).fetchone()
         if row is None:
@@ -2592,6 +3478,7 @@ class EngramStore:
             "read_visibility",
             visibility_values,
         )
+        sql = _append_identity_decision_gate(sql, "hypomnema_entries", visibility_values, self._vault_active)
         if exclude_promotion_candidates:
             sql = _append_hypomnema_review_candidate_filter(
                 sql,
@@ -2655,6 +3542,7 @@ class EngramStore:
             "read_visibility",
             visibility_values,
         )
+        sql = _append_identity_decision_gate(sql, "hypomnema_entries", visibility_values, self._vault_active)
         sql += " ORDER BY last_revised_at DESC LIMIT ?"
         params.append(max(1, limit))
         rows = conn.execute(sql, params).fetchall()
@@ -2728,6 +3616,38 @@ class EngramStore:
             row["read_visibility"],
             classified_visibility,
         )
+        # 008g E8 (round 5): revise_hypomnema_entry is a second write path that
+        # was missing the witnessed-field check. Compute the same degrade
+        # signal here — content/domain/foundational/scope changes on a ref-
+        # carrying row must clear the ref + review_only + trace, same
+        # transaction as the UPDATE, or the vault silently accepts mutations
+        # via this API.
+        row_dict = dict(row)
+        rev_degrade: dict[str, str] | None = None
+        if str(row_dict.get("decision_ref") or "").strip():
+            from ..vault import journal as vault_journal
+            row_dict["id"] = entry_id
+            old_hash = vault_journal.canonical_row_sha256(
+                "hypomnema_entries", row_dict
+            )
+            new_shape = {
+                "id": entry_id,
+                "agent_id": agent_id,
+                "person_id": person_id,
+                "project_scope": project_scope,
+                "content": new_content.strip(),
+                "domain": new_domain,
+                "foundational": 1 if new_foundational else 0,
+            }
+            new_hash = vault_journal.canonical_row_sha256(
+                "hypomnema_entries", new_shape
+            )
+            if old_hash != new_hash:
+                rev_degrade = {
+                    "old_hash": old_hash,
+                    "new_hash": new_hash,
+                    "prior_decision_ref": str(row_dict["decision_ref"]),
+                }
         conn.execute(
             """
             UPDATE hypomnema_entries
@@ -2754,6 +3674,23 @@ class EngramStore:
                 entry_id,
             ),
         )
+        if rev_degrade is not None:
+            # 008g E8: atomic degrade in the same transaction.
+            conn.execute(
+                "UPDATE hypomnema_entries SET decision_ref = NULL, "
+                "read_visibility = 'review_only' WHERE id = ?",
+                (entry_id,),
+            )
+            self._emit_witness_degrade_trace(
+                conn,
+                table="hypomnema_entries",
+                row_id=entry_id,
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+                domain=new_domain,
+                degrade=rev_degrade,
+            )
         conn.commit()
         return entry_id
 
@@ -2821,19 +3758,43 @@ class EngramStore:
             }
         )
         conn = self._get_conn()
-        conn.execute(
-            """
-            UPDATE hypomnema_entries
-            SET active = 0,
-                superseded_by = ?,
-                revision_count = revision_count + 1,
-                revisions_json = ?,
-                last_revised_at = ?
-            WHERE id = ?
-            """,
-            (new_id, _encode_json(revisions), now, entry_id),
-        )
-        conn.commit()
+        # 008k E2B: if the row being superseded carries a witness (decision_ref),
+        # clear that ref + force review_only + emit a D4-shaped trace proposal
+        # in the SAME transaction as the supersede write. Reconcile's r6 #3
+        # lifecycle check (superseded_by NOT NULL) then never false-fires on
+        # legitimate flows — write-side degrade is primary; reconcile catches
+        # only raw-SQL bypass.
+        witness_ref = str(row.get("decision_ref") or "").strip()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                """
+                UPDATE hypomnema_entries
+                SET active = 0,
+                    superseded_by = ?,
+                    revision_count = revision_count + 1,
+                    revisions_json = ?,
+                    last_revised_at = ?
+                WHERE id = ?
+                """,
+                (new_id, _encode_json(revisions), now, entry_id),
+            )
+            if witness_ref:
+                self._degrade_and_trace_lifecycle(
+                    conn,
+                    table="hypomnema_entries",
+                    row_id=entry_id,
+                    prior_decision_ref=witness_ref,
+                    reason=f"superseded: {reason.strip()}",
+                    agent_id=agent_id,
+                    person_id=person_id,
+                    project_scope=project_scope,
+                    domain=str(row.get("domain") or ""),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         return new_id
 
     def archive_hypomnema_entry(
@@ -2871,18 +3832,37 @@ class EngramStore:
             }
         )
         conn = self._get_conn()
-        conn.execute(
-            """
-            UPDATE hypomnema_entries
-            SET active = 0,
-                revision_count = revision_count + 1,
-                revisions_json = ?,
-                last_revised_at = ?
-            WHERE id = ?
-            """,
-            (_encode_json(revisions), now, entry_id),
-        )
-        conn.commit()
+        # 008k E2B: same clear-and-quarantine + trace as supersede path.
+        witness_ref = str(row.get("decision_ref") or "").strip()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                """
+                UPDATE hypomnema_entries
+                SET active = 0,
+                    revision_count = revision_count + 1,
+                    revisions_json = ?,
+                    last_revised_at = ?
+                WHERE id = ?
+                """,
+                (_encode_json(revisions), now, entry_id),
+            )
+            if witness_ref:
+                self._degrade_and_trace_lifecycle(
+                    conn,
+                    table="hypomnema_entries",
+                    row_id=entry_id,
+                    prior_decision_ref=witness_ref,
+                    reason=f"archived: {reason.strip()}",
+                    agent_id=agent_id,
+                    person_id=person_id,
+                    project_scope=project_scope,
+                    domain=str(row.get("domain") or ""),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         return entry_id
 
     def mark_hypomnema_promoted(self, entry_id: str, engram_id: str) -> None:
@@ -2927,6 +3907,7 @@ class EngramStore:
             "read_visibility",
             visibility_values,
         )
+        sql = _append_identity_decision_gate(sql, "hypomnema_entries", visibility_values, self._vault_active)
         sql += (
             " ORDER BY foundational DESC, confidence DESC, salience DESC, created_at ASC"
             " LIMIT ?"
@@ -2959,6 +3940,18 @@ class EngramStore:
             where.append(f"read_visibility IN ({placeholders})")
             params.extend(visibility_values)
         where_sql = " AND ".join(where)
+        # 008g-r6 #4: extend T4 gate to hypomnema stats. Unwitnessed identity
+        # rows must not steer counts even if operational_context slips through.
+        # 008k-r12 #2: but an explicit admin read (read_visibility=None →
+        # visibility_values is None) must see everything, matching the
+        # store/audit contract and get_beliefs' read_visibility=None semantics.
+        gate = (
+            ""
+            if visibility_values is None
+            else identity_decision_gate_sql(
+                "hypomnema_entries", active=self._vault_active
+            )
+        )
         row = conn.execute(
             f"""
             SELECT
@@ -2967,7 +3960,7 @@ class EngramStore:
               SUM(CASE WHEN foundational = 1 AND active = 1 THEN 1 ELSE 0 END) AS foundational,
               SUM(CASE WHEN graduated_to_engram_id IS NOT NULL THEN 1 ELSE 0 END) AS promoted
             FROM hypomnema_entries
-            WHERE {where_sql}
+            WHERE {where_sql}{gate}
             """,
             params,
         ).fetchone()
@@ -2976,6 +3969,11 @@ class EngramStore:
             f"SELECT COUNT(*) FROM hypomnema_entries WHERE {where_sql}",
             candidate_params,
         )
+        # 008g-r7 #4: the promotion-candidate count also flows into status/
+        # context surfaces (belief_review, IdentityProfile weighting). Apply
+        # the same T4 gate so an unwitnessed identity hypomnema can't drive
+        # promotion signals.
+        candidate_query += gate
         candidate_row = conn.execute(candidate_query, candidate_params).fetchone()
         candidates = int(candidate_row[0] or 0)
         return {
@@ -3464,6 +4462,15 @@ class EngramStore:
             "read_visibility",
             visibility_values,
         )
+        # 008g-r6 #4: extend the T4 gate to belief count. Unwitnessed identity
+        # rows must not steer dashboards/modulators via beliefs_active even if
+        # they somehow reach operational_context. Same predicate the store
+        # applies at get_beliefs.
+        # 008k-r12 #2: admin read (visibility_values is None) bypasses the gate.
+        if visibility_values is not None:
+            belief_query += identity_decision_gate_sql(
+                "beliefs", active=self._vault_active
+            )
         row = conn.execute(belief_query, belief_params).fetchone()
         stats["beliefs_active"] = row[0] if row else 0
 

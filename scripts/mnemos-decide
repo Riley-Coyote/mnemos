@@ -1,0 +1,542 @@
+#!/usr/bin/python3
+"""mnemos-decide — the vault's Trusted Computing Base.
+
+David installs this by hand, root-owned, outside every agent-writable path, and
+runs it via sudo (which demands his password — a credential the agent provably
+does not have). It is the ONLY writer of the decision journal, and it NEVER
+writes memory.db (it opens it read-only). Keep it small: every line here is a
+line David must be able to read and trust at his kitchen counter.
+
+Behaviour:
+  1. Open memory.db read-only. List pending/deferred proposals whose
+     blast_radius or domain is identity/foundational.
+  2. For each: print the RAW ledger prose (no summarization), full provenance,
+     and the content SHA-256 computed live from the row.
+  3. Prompt [a]pprove / [r]eject / [d]efer / [s]kip. On a/r, append a
+     hash-chained line to the journal (append-only file the vault owns).
+
+The hash + chain logic below is a deliberate, self-contained copy of
+mnemos/vault/journal.py. tests/test_vault_journal_twin.py pins the two to
+byte-identical output. Auditability of this file outranks not-repeating-myself.
+
+Stdlib only: sqlite3, hashlib, json, os, sys, datetime.
+"""
+
+import argparse
+import datetime
+import hashlib
+import json
+import os
+import pwd
+import sqlite3
+import sys
+
+JOURNAL_SCHEMA_VERSION = 1
+_GENESIS_STRING = "mnemos-vault-journal-genesis-v%d" % JOURNAL_SCHEMA_VERSION
+
+
+# 008r/review (redirectable-tcb-journal-path): the TCB is the vault's trusted
+# WRITER. Honoring MNEMOS_VAULT_JOURNAL / MNEMOS_DB_PATH from the environment
+# made the writer itself path-redirectable — an invocation that preserved the
+# env could print "Recorded" while appending to a NONCANONICAL journal that
+# apply/reconcile/watchdog never treat as ground truth, so David would believe
+# he witnessed a decision that isn't in the real journal. NO env honor. The
+# journal is pinned; the DB is derived from SUDO_USER (set by sudo, unforgeable
+# without already being David). Tests inject via --db/--journal, which sudo and
+# launchd never pass. This is the watchdog's 008m Addition 1 discipline applied
+# to the writer: no production vault component reads a redirectable path.
+_argp = argparse.ArgumentParser(add_help=False)
+_argp.add_argument("--db", default=None)       # tests-only; never passed under sudo
+_argp.add_argument("--journal", default=None)  # tests-only; never passed under sudo
+_ARGS, _ = _argp.parse_known_args()
+
+CANONICAL_JOURNAL_PATH = "/usr/local/var/mnemos-vault/decisions.jsonl"
+
+
+def _resolve_db_path():
+    # --db is a tests-only injection (sudo/launchd never pass it). Production
+    # derives David's real DB from SUDO_USER: under sudo, HOME is the vault
+    # user's (/var/empty), so os.path.expanduser("~") would resolve to
+    # /var/empty/.mnemos and exit 2. SUDO_USER is the invoking user, set by
+    # sudo, not forgeable without already being David — absolute-path
+    # resolution as the design's §2.2 line requires. No MNEMOS_DB_PATH env.
+    if _ARGS.db:
+        return _ARGS.db
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user:
+        return os.path.join(pwd.getpwnam(sudo_user).pw_dir, ".mnemos", "memory.db")
+    return os.path.expanduser("~/.mnemos/memory.db")
+
+
+DB_PATH = _resolve_db_path()
+# Pinned canonical journal — NOT redirectable. --journal is tests-only.
+JOURNAL_PATH = _ARGS.journal or CANONICAL_JOURNAL_PATH
+
+# Must match mnemos/vault/journal.py::_CONTENT_FIELDS exactly (twin-locked).
+_CONTENT_FIELDS = (
+    "proposal_id",
+    "agent_id",
+    "person_id",
+    "project_scope",
+    "source_authority",
+    "kind",
+    "domain",
+    "blast_radius",
+    "target_surface",
+    "target_id",
+    "transition",
+    "payload",
+    "provenance_ids",
+)
+
+
+def _canonical_json(obj):
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _sha256_hex(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def canonical_content_sha256(proposal):
+    content = {}
+    for field in _CONTENT_FIELDS:
+        if field == "proposal_id":
+            value = proposal.get("proposal_id", proposal.get("id"))
+        else:
+            value = proposal.get(field)
+        if field == "payload":
+            content[field] = value if isinstance(value, dict) else {}
+        elif field == "provenance_ids":
+            content[field] = list(value) if isinstance(value, (list, tuple)) else []
+        else:
+            content[field] = "" if value is None else str(value)
+    return _sha256_hex(_canonical_json(content))
+
+
+def canonical_row_sha256(table, row):
+    # Twin of mnemos/vault/journal.py::canonical_row_sha256. Witnesses an
+    # existing legacy row (no proposal). Keep byte-identical to the package.
+    # 008e-r4 #3: binds agent_id + (for hypomnema) person_id/project_scope.
+    foundational = bool(row.get("foundational")) or str(row.get("tier", "")) == (
+        "foundational"
+    )
+    content = {
+        "table": str(table),
+        "row_id": str(row.get("id", row.get("row_id", ""))),
+        "content": str(row.get("content", "")),
+        "domain": str(row.get("domain", "")),
+        "foundational": foundational,
+        "agent_id": str(row.get("agent_id", "")),
+    }
+    if table == "hypomnema_entries":
+        content["person_id"] = str(row.get("person_id", ""))
+        content["project_scope"] = str(row.get("project_scope", ""))
+    return _sha256_hex(_canonical_json(content))
+
+
+def genesis_prev_hash():
+    return _sha256_hex(_GENESIS_STRING)
+
+
+def line_hash(line):
+    return _sha256_hex(_canonical_json(dict(line)))
+
+
+_LAST_READ_TORN_TAIL = [False]
+
+
+def read_journal(path):
+    # 008i — torn-tail tolerance twin. The TCB uses read_journal only to
+    # discover the previous chain tip; a torn final line (power loss during
+    # append) means "chain ends at the last good line" and is safe to
+    # continue appending after. Mid-file malformation is fatal.
+    # 008i-r10 #3: BUT — the append-only journal cannot REMOVE the torn
+    # bytes. A new line appended after them would land as [torn][new],
+    # which future reads classify as mid-file corruption (torn is no longer
+    # the last line). Set a flag so writers refuse to append until David
+    # repairs the tail manually.
+    _LAST_READ_TORN_TAIL[0] = False
+    if not os.path.exists(path):
+        return []
+    lines = []
+    with open(path, "r", encoding="utf-8") as handle:
+        raw_lines = handle.readlines()
+    last_content_idx = -1
+    for i, raw in enumerate(raw_lines):
+        if raw.strip():
+            last_content_idx = i
+    for lineno, raw in enumerate(raw_lines, start=1):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            if lineno - 1 == last_content_idx:
+                sys.stderr.write(
+                    "note: final journal line %d torn (skipping)\n" % lineno
+                )
+                _LAST_READ_TORN_TAIL[0] = True
+                break
+            raise
+        if not isinstance(obj, dict):
+            if lineno - 1 == last_content_idx:
+                sys.stderr.write(
+                    "note: final journal line %d torn (skipping)\n" % lineno
+                )
+                _LAST_READ_TORN_TAIL[0] = True
+                break
+            raise ValueError("Journal line %d is not a JSON object" % lineno)
+        lines.append(obj)
+    return lines
+
+
+def _refuse_if_torn_tail():
+    """008i-r10 #3: refuse to append when the previous read hit a torn tail."""
+    if _LAST_READ_TORN_TAIL[0]:
+        sys.stderr.write(
+            "REFUSING: journal has a torn final line that append cannot "
+            "remove — repair the tail manually (as David under his own "
+            "sudo/unset uappnd) before decisions can be witnessed again.\n"
+        )
+        sys.exit(4)
+
+
+def verify_chain(lines):
+    expected_prev = genesis_prev_hash()
+    for index, line in enumerate(lines):
+        if str(line.get("prev_sha256", "")) != expected_prev:
+            return (False, index)
+        expected_prev = line_hash(line)
+    return (True, -1)
+
+
+def _hydrate(row):
+    row = dict(row)
+    row["provenance_ids"] = json.loads(row.get("provenance_ids_json") or "[]")
+    row["payload"] = json.loads(row.get("payload_json") or "{}")
+    return row
+
+
+def _pending_identity_proposals(conn):
+    # r3 #3 + r4 #2 + r5 #1: TCB query mirrors EVERY apply precondition:
+    #   - blast_radius in {identity, foundational}          (r3 #3)
+    #   - target_surface in {beliefs, hypomnema_entries}    (r4 #2)
+    #   - domain in {identity, foundational}                (r5 #1, r2 #7)
+    #   - payload has non-empty content                     (r5 #1)
+    # The payload check also excludes the 008g degrade-* trace proposals —
+    # they carry {old_row_hash, new_row_hash, ...} but no 'content' key, so
+    # apply would refuse them. Trace rows belong to David's review queue via
+    # mnemos_proposal_audit, NOT via the TCB approval flow.
+    # 008g-r8 #2: target_id must be present and non-empty. A pre-v9 pending
+    # proposal with target_id=NULL was hashed with target_id='' — approving
+    # it would apply to an invented row id that could never match the hash,
+    # producing an immediate reconcile-tamper. Refile with target_id, don't
+    # offer it here.
+    cur = conn.execute(
+        "SELECT * FROM proposal_ledger "
+        "WHERE status IN ('pending_review', 'deferred') "
+        "AND blast_radius IN ('identity','foundational') "
+        "AND target_surface IN ('beliefs','hypomnema_entries') "
+        "AND domain IN ('identity','foundational') "
+        "AND target_id IS NOT NULL AND target_id != '' "
+        "ORDER BY created_at ASC"
+    )
+    proposals = [_hydrate(r) for r in cur.fetchall()]
+    return [
+        p for p in proposals
+        if str((p.get("payload") or {}).get("content", "")).strip()
+    ]
+
+
+def _safe(value):
+    """Render a proposal-controlled scalar without letting it drive the terminal.
+
+    008g-r6 #1: proposal fields (transition, provenance, payload strings,
+    ids) are attacker-controllable. A malicious ANSI sequence in `transition`
+    can clear the screen, spoof the [a/r/s] prompt, or hide the payload
+    right before David types 'a'. Neutralize by replacing every non-printable
+    character (except a plain space) with the Unicode replacement char.
+    Preserves visible content; strips all terminal-control power. Includes
+    newlines/tabs — the TCB renders each field on its own line so embedded
+    line breaks in scalar data would fake structure.
+    """
+    return "".join(
+        c if c.isprintable() and c != "\x7f" else "�"
+        for c in str(value)
+    )
+
+
+def _safe_json_scalars(obj):
+    """Recursively sanitize scalar strings in a JSON-ish structure."""
+    if isinstance(obj, dict):
+        return {_safe(k): _safe_json_scalars(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_safe_json_scalars(v) for v in obj]
+    if isinstance(obj, str):
+        return _safe(obj)
+    return obj
+
+
+def _render(proposal, content_hash):
+    print("=" * 72)
+    print("proposal_id : %s" % _safe(proposal["id"]))
+    print("scope       : %s/%s/%s" % (
+        _safe(proposal.get("agent_id")), _safe(proposal.get("person_id")),
+        _safe(proposal.get("project_scope"))))
+    print("authority   : %s   kind: %s" % (
+        _safe(proposal.get("source_authority")), _safe(proposal.get("kind"))))
+    print("domain      : %s   blast_radius: %s" % (
+        _safe(proposal.get("domain")), _safe(proposal.get("blast_radius"))))
+    print("surface     : %s   target_id: %s" % (
+        _safe(proposal.get("target_surface")),
+        _safe(proposal.get("target_id") or "(new)")))
+    print("provenance  : %s" % ", ".join(
+        _safe(p) for p in (proposal.get("provenance_ids") or [])
+    ))
+    print("-" * 72)
+    print("transition  :")
+    print(_safe(proposal.get("transition", "")))
+    print("-" * 72)
+    print("payload (raw):")
+    # Rendered indented for David to actually READ — T4 of the threat model
+    # (presentation attack) is defended by him reading what he approves. The
+    # HASH stays over the canonical compact form (canonical_content_sha256);
+    # this indent is display only and never touches the twins. Scalar strings
+    # inside the payload are sanitized too — the hash is over the raw bytes,
+    # so what David sees is a safe rendering of exactly what would apply.
+    print(json.dumps(
+        _safe_json_scalars(proposal.get("payload") or {}),
+        indent=2, sort_keys=True, ensure_ascii=False,
+    ))
+    print("-" * 72)
+    print("content SHA-256 (computed live): %s" % content_hash)
+    print("=" * 72)
+
+
+def _append_line(proposal, content_hash, decision, prev):
+    line = {
+        "v": JOURNAL_SCHEMA_VERSION,
+        "ts": datetime.datetime.now(datetime.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"),
+        "proposal_id": proposal["id"],
+        "content_sha256": content_hash,
+        "decision": decision,
+        "scope": proposal.get("blast_radius"),
+        "prev_sha256": prev,
+        "tty": os.environ.get("SSH_TTY") or os.ttyname(0) if os.isatty(0) else "",
+        "sudo_user": os.environ.get("SUDO_USER", os.environ.get("USER", "")),
+    }
+    with open(JOURNAL_PATH, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(line) + "\n")
+    return line_hash(line)
+
+
+# 008e E2: batch enumerates OPERATIONAL identity rows only. A pre-vault row that
+# was intentionally review_only or audit_only was flagged for individual review
+# and is NOT part of the U4/06-28 approval this batch materializes; leaving it
+# out keeps the curator's intent intact. No --include-review flag by design
+# (Fable): every TCB line David audits under his password; an escape hatch he
+# shouldn't use is pure audit cost. Individual witness of non-operational
+# legacy rows belongs to the reviewed-decision lifecycle (U4-adjacent).
+_LEGACY_SQL = {
+    "beliefs": (
+        "SELECT * FROM beliefs WHERE (tier = 'foundational' "
+        "OR domain IN ('identity','foundational')) "
+        "AND (decision_ref IS NULL OR decision_ref = '') "
+        "AND read_visibility = 'operational_context' ORDER BY id"
+    ),
+    "hypomnema_entries": (
+        "SELECT * FROM hypomnema_entries WHERE (foundational = 1 "
+        "OR domain IN ('identity','foundational')) "
+        "AND (decision_ref IS NULL OR decision_ref = '') "
+        "AND read_visibility = 'operational_context' ORDER BY id"
+    ),
+}
+
+
+def _append_legacy_line(table, row, prev):
+    row = dict(row)
+    line = {
+        "v": JOURNAL_SCHEMA_VERSION,
+        "ts": datetime.datetime.now(datetime.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"),
+        "witness": "legacy",
+        "table": table,
+        "row_id": row.get("id"),
+        "content_sha256": canonical_row_sha256(table, row),
+        "decision": "approved",
+        "scope": row.get("domain"),
+        "prev_sha256": prev,
+        "sudo_user": os.environ.get("SUDO_USER", os.environ.get("USER", "")),
+    }
+    with open(JOURNAL_PATH, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(line) + "\n")
+    return line_hash(line)
+
+
+def witness_legacy(conn):
+    """DAVID-9(c): one-time batch witness of the pre-vault identity corpus.
+
+    Enumerates identity/foundational rows that have no decision_ref (the imported
+    SOUL corpus), shows the count, a sample, and an aggregate hash, takes ONE
+    confirmation, and appends real per-row 'legacy' journal lines in one chained
+    batch. The agent then stamps each row's decision_ref from these lines
+    (apply_legacy_witness). Materializes the prior U4/import approval into the
+    journal's permanence — honest witnessing, not a sentinel.
+    """
+    rows_by_table = {t: conn.execute(sql).fetchall() for t, sql in _LEGACY_SQL.items()}
+    total = sum(len(v) for v in rows_by_table.values())
+    if total == 0:
+        print("No un-witnessed legacy identity rows.")
+        return 0
+    per_row_hashes = []
+    print("Legacy identity rows to witness: %d" % total)
+    for table, rows in rows_by_table.items():
+        print("  %s: %d" % (table, len(rows)))
+        for row in rows:
+            per_row_hashes.append(canonical_row_sha256(table, dict(row)))
+    # Aggregate hash over all per-row hashes — David eyeballs one number.
+    aggregate = _sha256_hex("".join(sorted(per_row_hashes)))
+    print("aggregate sha256: %s" % aggregate)
+    sample = None
+    for rows in rows_by_table.values():
+        if rows:
+            sample = dict(rows[0]).get("content", "")[:80]
+            break
+    # 008g-r7 #2: legacy identity content IS the untrusted pre-vault corpus
+    # being witnessed — its bytes come straight from David's SOUL rows and
+    # can carry ANSI/control characters that spoof the y/N prompt below.
+    # Sanitize with the same _safe helper the normal proposal render uses.
+    print("sample: %s" % _safe(sample or ""))
+    answer = input("Witness all %d as approved? [y/N] " % total).strip().lower()
+    if answer != "y":
+        print("Aborted — nothing written.")
+        return 1
+    existing = read_journal(JOURNAL_PATH)
+    _refuse_if_torn_tail()  # 008i-r10 #3
+    ok, brk = verify_chain(existing)
+    if not ok:
+        sys.stderr.write("REFUSING: journal chain broken at line %d.\n" % brk)
+        return 4
+    # 008g-r9 #2: dedupe against already-witnessed legacy rows in the journal.
+    # The TCB read is DB-only (agent-side stamp happens later), so a rerun or
+    # resume of --witness-legacy before apply_legacy_witness would append a
+    # SECOND legacy line for a row that already has a witness. Reconcile then
+    # treats the stale line's ref hash as "no live row" (missing_witnessed_row)
+    # and can re-quarantine the correctly-stamped row when the newer line
+    # takes effect. Skip rows whose (table, row_id, content_sha256) already
+    # appears as an approved legacy witness in the journal — identical
+    # re-witnesses are no-ops.
+    already_witnessed = set()
+    for line in existing:
+        if str(line.get("witness", "")) != "legacy":
+            continue
+        if str(line.get("decision", "")) != "approved":
+            continue
+        already_witnessed.add((
+            str(line.get("table", "")),
+            str(line.get("row_id", "")),
+            str(line.get("content_sha256", "")),
+        ))
+    prev = line_hash(existing[-1]) if existing else genesis_prev_hash()
+    written = 0
+    skipped = 0
+    for table, rows in rows_by_table.items():
+        for row in rows:
+            row_hash = canonical_row_sha256(table, dict(row))
+            key = (table, str(dict(row).get("id", "")), row_hash)
+            if key in already_witnessed:
+                skipped += 1
+                continue
+            prev = _append_legacy_line(table, row, prev)
+            written += 1
+    print(
+        "Witnessed %d legacy rows (chained batch appended); "
+        "%d already-witnessed rows skipped." % (written, skipped)
+    )
+    return 0
+
+
+def main():
+    # 008r-review (sudoers-allows-tcb-redirect-args): --db/--journal are
+    # tests-only. Under sudo (every real ceremony invocation) SUDO_USER is set —
+    # refuse the redirect flags here so they can never reach a production run
+    # even if the sudoers rule were mis-scoped. Enforced at the TCB, not merely
+    # assumed from how sudo is configured. (The sudoers rule ALSO restricts args
+    # to the no-arg and --witness-legacy forms; this is the belt to that brace.)
+    if os.environ.get("SUDO_USER") and (_ARGS.db or _ARGS.journal):
+        sys.stderr.write(
+            "REFUSING: --db/--journal are tests-only and must not be passed "
+            "under sudo — they would redirect the canonical journal/DB the "
+            "vault treats as ground truth.\n"
+        )
+        return 2
+    if not os.path.exists(DB_PATH):
+        sys.stderr.write("memory.db not found: %s\n" % DB_PATH)
+        return 2
+    # 008r-review (tcb-recreates-missing-journal): the installed journal must
+    # already EXIST. Appending to a missing path silently creates a fresh
+    # genesis chain and erases the prior audit history. If decisions.jsonl is
+    # absent (deleted or replaced), REFUSE and require manual repair — the
+    # installer creates the journal, so only tampering/loss reaches here. (The
+    # reconciler independently treats absence as fail-closed and re-quarantines;
+    # the writer must not paper over it by starting a new chain.)
+    if not os.path.exists(JOURNAL_PATH):
+        sys.stderr.write(
+            "REFUSING: vault journal is MISSING (%s). Appending would start a "
+            "new genesis chain and lose the prior audit history. Restore it "
+            "from backup or re-run the installer before witnessing.\n"
+            % JOURNAL_PATH
+        )
+        return 2
+    # Read-only: a buggy TCB can never corrupt the memory store.
+    conn = sqlite3.connect("file:%s?mode=ro" % DB_PATH, uri=True)
+    conn.row_factory = sqlite3.Row
+    if "--witness-legacy" in sys.argv:
+        return witness_legacy(conn)
+    proposals = _pending_identity_proposals(conn)
+    if not proposals:
+        print("No pending identity/foundational proposals.")
+        return 0
+
+    existing = read_journal(JOURNAL_PATH)
+    _refuse_if_torn_tail()  # 008i-r10 #3
+    ok, brk = verify_chain(existing)
+    if not ok:
+        sys.stderr.write(
+            "REFUSING: journal chain broken at line %d — investigate before "
+            "appending.\n" % brk)
+        return 4
+    prev = line_hash(existing[-1]) if existing else genesis_prev_hash()
+
+    print("%d proposal(s) awaiting your decision.\n" % len(proposals))
+    for proposal in proposals:
+        content_hash = canonical_content_sha256(proposal)
+        _render(proposal, content_hash)
+        # 008e-r3 #4: [d]efer removed — it wrote neither DB nor journal, so it
+        # was functionally identical to [s]kip and misled David into thinking
+        # something durable happened. A real deferred-status transition
+        # belongs to the reviewed-decision lifecycle (U4-adjacent, per Fable
+        # 008e residual). Skip is still available for "come back to this later"
+        # — the proposal stays pending_review and re-lists next invocation.
+        while True:
+            choice = input("[a]pprove / [r]eject / [s]kip > ").strip().lower()
+            if choice in ("a", "r", "s"):
+                break
+            print("Please answer a, r, or s.")
+        if choice == "s":
+            continue
+        decision = "approved" if choice == "a" else "rejected"
+        prev = _append_line(proposal, content_hash, decision, prev)
+        # 008i-r11 #1: sanitize the recorded-id line too. r6 #1 covered the
+        # approval-screen render but this print runs AFTER the decision — a
+        # malicious proposal_id with ANSI could clear the screen before the
+        # next proposal appears, hiding what David just approved.
+        print("Recorded: %s → %s\n" % (_safe(proposal["id"]), decision))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

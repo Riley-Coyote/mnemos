@@ -203,13 +203,31 @@ def _extract_beliefs(
             predicates.append("read_visibility = ?")
             predicates.append("confidence_pending_review = 0")
             params.append(READ_VISIBILITY_OPERATIONAL)
-        for r in db.execute(
+        # 008e E3: extend the T4 vault gate to this raw-SQL peer surface via the
+        # one exported predicate — no textual duplication, no drift risk. On an
+        # armed vault, an unwitnessed identity/foundational belief with
+        # operational visibility is excluded from the dashboard exactly as it
+        # is from the store's get_beliefs.
+        # 008e-r2 #4: admin/audit dashboards (include_non_operational=True) skip
+        # the gate — matches the store's read_visibility=None admin semantics
+        # so David can SEE unwitnessed identity rows for review.
+        from mnemos.store.sqlite_store import (
+            _resolve_vault_active,
+            identity_decision_gate_sql,
+        )
+        gate = (
+            ""
+            if include_non_operational
+            else identity_decision_gate_sql("beliefs", active=_resolve_vault_active(None))
+        )
+        sql = (
             "SELECT id, content, confidence, domain, created_at, last_revised, "
             "revision_history FROM beliefs WHERE "
             + " AND ".join(predicates)
-            + " ORDER BY confidence DESC",
-            params,
-        ).fetchall():
+            + gate
+            + " ORDER BY confidence DESC"
+        )
+        for r in db.execute(sql, params).fetchall():
             beliefs.append({
                 "id": r["id"],
                 "content": r["content"] or "",

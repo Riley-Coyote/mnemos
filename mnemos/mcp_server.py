@@ -260,6 +260,144 @@ def _ensure_store() -> EngramStore:
     return _store  # type: ignore
 
 
+def _reconcile_vault_on_session_start() -> None:
+    """Reconcile identity-tier rows against the vault journal at session start.
+
+    008i — the previous ``except Exception: pass`` **swallow is dead**. It was
+    exactly how the corrupt-journal fail-open hole existed: an unreadable
+    journal became "we didn't reconcile" silently. Now:
+      - resolver returns None → vault not armed, nothing to do
+      - journal read raises → catch, classify, ALERT (Oliver Inbox), let
+        ``reconcile_identity_vault`` handle the quarantine per 008i
+      - any other exception → catch + alert; session start must not crash,
+        but neither can it silently proceed as if the vault verified
+    """
+    if _store is None:
+        return
+    from mnemos.store.sqlite_store import resolve_vault_journal_path
+    journal_path = resolve_vault_journal_path()
+    if not journal_path:
+        return
+    # 008-r14 #3: _vault_active is frozen at store construction. A long-running
+    # MCP server started BEFORE the vault journal existed keeps
+    # _vault_active=False; once install creates the journal, session-start
+    # resolves it (above) but the read APIs would still skip the gate. Refresh
+    # the flag now that a journal has resolved, so the read-path gate arms for
+    # the rest of this process's life without needing a restart.
+    _store._vault_active = True
+    # 008i-r10 #1: apply_legacy_witness and reconcile MUST NOT share a try —
+    # a corrupt/broken-chain journal raises inside apply_legacy_witness and,
+    # if wrapped with reconcile, jumps to the outer handler BEFORE the
+    # reconciler classifies + quarantines. That reintroduces the fail-open
+    # 008i was ruled to close. Stamp first (best-effort), then ALWAYS reconcile.
+    stamp_error: Exception | None = None
+    try:
+        _store.apply_legacy_witness()
+    except Exception as exc:
+        stamp_error = exc
+    try:
+        report = _store.reconcile_identity_vault(journal_path)
+        # 008r/review (session-start-drops-high-vault-findings): alert on ANY
+        # non-clean reconcile outcome, not only `critical`. The reconciler emits
+        # `high` findings for orphan/forged/missing witnessed rows and may
+        # re-quarantine them; gating the alert on `critical` let those
+        # divergences be handled SILENTLY until the watchdog cron next ran.
+        # Session-start sees them first — it must not stay silent. Pass the full
+        # findings list so every severity (chain break, corrupt journal,
+        # tampered witness, orphan/forged/missing) surfaces to David.
+        if report.findings or report.requarantined or stamp_error is not None:
+            _alert_vault_findings(
+                journal_path,
+                report.findings,
+                report.requarantined,
+                stamp_error=stamp_error,
+            )
+    except Exception as exc:  # session start must not crash
+        _alert_vault_error(journal_path, exc, stamp_error=stamp_error)
+
+
+def _alert_vault_findings(journal_path, findings, requarantined, stamp_error=None) -> None:
+    """Write a vault-critical alert to Oliver Inbox (008i requirement).
+
+    008-r14 review (#3): ``stamp_error`` MUST appear in the written alert. The
+    caller fires this whenever critical reconcile findings **or** a legacy-stamp
+    failure occurred (``if critical or stamp_error is not None``). If only the
+    stamp failed — reconcile clean, ``apply_legacy_witness`` raised — an alert
+    that omitted ``stamp_error`` would write an empty Findings list and silently
+    hide the actual session-start failure. Surface it, and make the header say
+    which case fired.
+    """
+    try:
+        import datetime
+        import pathlib
+        alert_dir = pathlib.Path(
+            os.environ.get(
+                "MNEMOS_WATCHDOG_ALERT_DIR",
+                os.path.expanduser("~/Oliver Inbox"),
+            )
+        )
+        alert_dir.mkdir(parents=True, exist_ok=True)
+        today = datetime.date.today().isoformat()
+        path = alert_dir / f"{today}-vault-session-start-alert.md"
+        header = (
+            "Vault: session-start reconcile surfaced critical findings."
+            if findings
+            else "Vault: session-start legacy-stamp failed "
+            "(no critical reconcile findings)."
+        )
+        lines = [header, f"Journal: {journal_path}"]
+        if stamp_error is not None:
+            lines += [
+                "",
+                "## Legacy-stamp error (apply_legacy_witness raised)",
+                f"- {type(stamp_error).__name__}: {stamp_error}",
+            ]
+        lines += ["", f"## Findings ({len(findings)})"]
+        for f in findings:
+            lines.append(
+                f"- [{f['severity']}] {f['kind']}: {f['detail']} "
+                f"(table={f.get('table')}, row={f.get('row_id')})"
+            )
+        lines.append(f"\n## Re-quarantined ({len(requarantined)})")
+        for item in requarantined:
+            lines.append(f"- {item['table']}/{item['row_id']}: {item['detail']}")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception:
+        pass  # alerting must not crash
+
+
+def _alert_vault_error(journal_path, exc, stamp_error=None) -> None:
+    """Alert on a session-start reconcile exception (couldn't classify)."""
+    try:
+        import datetime
+        import pathlib
+        alert_dir = pathlib.Path(
+            os.environ.get(
+                "MNEMOS_WATCHDOG_ALERT_DIR",
+                os.path.expanduser("~/Oliver Inbox"),
+            )
+        )
+        alert_dir.mkdir(parents=True, exist_ok=True)
+        today = datetime.date.today().isoformat()
+        path = alert_dir / f"{today}-vault-session-start-error.md"
+        body = (
+            f"Vault: session-start reconcile raised.\n\n"
+            f"Journal: {journal_path}\nError: {type(exc).__name__}: {exc}\n"
+        )
+        # 008-r14 review #3 (audit-the-class): _alert_vault_findings dropped
+        # stamp_error; this peer handler had the same latent drop. If reconcile
+        # RAISED and the legacy stamp ALSO failed, surface both — else the stamp
+        # failure is hidden behind the reconcile exception.
+        if stamp_error is not None:
+            body += (
+                f"Legacy-stamp error (apply_legacy_witness raised): "
+                f"{type(stamp_error).__name__}: {stamp_error}\n"
+            )
+        path.write_text(body, encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _slugify(value: str, fallback: str = "default") -> str:
     """Make a stable lowercase ID from a human label."""
     clean = "".join(ch.lower() if ch.isalnum() else "-" for ch in value.strip())
@@ -897,6 +1035,7 @@ def mnemos_session_start(
     agent_id, person_id, project_scope = _effective_scope(
         agent_id, person_id, project_scope
     )
+    _reconcile_vault_on_session_start()
     session = _store.start_memory_session(  # type: ignore
         session_id=session_id or None,
         title=title,

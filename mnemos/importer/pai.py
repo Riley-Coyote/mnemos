@@ -454,7 +454,7 @@ def apply_pai_watch_update(
                 applied.append(row)
                 continue
             if row.action in _U3C_RESERVED_ACTIONS:
-                changed = _apply_u3c_lifecycle_row_no_commit(conn, row)
+                changed = _apply_u3c_lifecycle_row_no_commit(store, conn, row)
                 if changed:
                     insert_pai_import_event(
                         conn,
@@ -849,9 +849,24 @@ def _write_pai_belief_no_commit(store: EngramStore, conn, row: PaiImportRow) -> 
         )
 
     read_visibility = _pai_belief_review_visibility(existing)
-    # U3b hardening CB3: re-imported beliefs return to needs_review=True. The
-    # substrate's prior review work is preserved in revision_history (above);
-    # the flag flips so the next consolidation pass knows to re-evaluate.
+    # 008k-r13 #3: if the belief being re-imported carries a vault witness
+    # (decision_ref) and a WITNESSED field (content/domain/tier) is changing,
+    # degrade it the same way the ordinary write path does — clear the ref,
+    # force review_only, emit a trace — so a legitimate re-import doesn't
+    # leave a stale witness that reconcile later reports as tamper. Uses the
+    # store's canonical degrade helper for one definition across surfaces.
+    existing_keys = existing.keys() if hasattr(existing, "keys") else []
+    prior_ref = (
+        str(existing["decision_ref"] or "").strip()
+        if "decision_ref" in existing_keys
+        else ""
+    )
+    witnessed_changed = (
+        existing["content"] != row.content
+        or str(existing["domain"] or "") != str(row.domain or "")
+        or str(existing["tier"] or "") != str(row.tier or "")
+    )
+    degrade = bool(prior_ref) and witnessed_changed
     conn.execute(
         """
         UPDATE beliefs
@@ -881,9 +896,26 @@ def _write_pai_belief_no_commit(store: EngramStore, conn, row: PaiImportRow) -> 
             row.target_id,
         ),
     )
+    if degrade:
+        # The helper clears decision_ref + forces review_only + emits the
+        # trace — overriding the read_visibility just set above.
+        store._degrade_and_trace_lifecycle(
+            conn,
+            table="beliefs",
+            row_id=row.target_id,
+            prior_decision_ref=prior_ref,
+            reason=f"pai_reimport_{row.action}",
+            agent_id=row.agent_id,
+            person_id="user",
+            project_scope="global",
+            domain=str(row.domain or ""),
+            trace_detail=f"witnessed belief {row.target_id} re-imported "
+            f"({row.action}) with changed content/domain/tier; "
+            "degraded pending re-witness",
+        )
 
 
-def _apply_u3c_lifecycle_row_no_commit(conn, row: PaiImportRow) -> bool:
+def _apply_u3c_lifecycle_row_no_commit(store, conn, row: PaiImportRow) -> bool:
     if row.action == ACTION_TOMBSTONE:
         if row.target_table != TARGET_ENGRAMS:
             raise ValueError("ACTION_TOMBSTONE requires an engrams target")
@@ -891,7 +923,7 @@ def _apply_u3c_lifecycle_row_no_commit(conn, row: PaiImportRow) -> bool:
     if row.action == ACTION_DEACTIVATE:
         if row.target_table != TARGET_HYPOMNEMA:
             raise ValueError("ACTION_DEACTIVATE requires a hypomnema target")
-        return _deactivate_pai_hypomnema_no_commit(conn, row)
+        return _deactivate_pai_hypomnema_no_commit(store, conn, row)
     if row.action == ACTION_REVIEW:
         if row.target_table != TARGET_BELIEFS:
             raise ValueError("ACTION_REVIEW requires a beliefs target")
@@ -953,7 +985,7 @@ def _tombstone_pai_engram_no_commit(conn, row: PaiImportRow) -> bool:
     return True
 
 
-def _deactivate_pai_hypomnema_no_commit(conn, row: PaiImportRow) -> bool:
+def _deactivate_pai_hypomnema_no_commit(store, conn, row: PaiImportRow) -> bool:
     existing = _target_record(conn, row)
     if existing is None:
         raise ValueError(
@@ -984,6 +1016,30 @@ def _deactivate_pai_hypomnema_no_commit(conn, row: PaiImportRow) -> bool:
         """,
         (json.dumps(revisions), now, row.target_id),
     )
+    # 008k-r13 #4: deactivation is a lifecycle-visibility change — if the row
+    # carried a vault witness, degrade it (clear ref + review_only + trace) the
+    # same way archive/supersede do, so a witnessed row isn't left with a stale
+    # ref that reconcile later reports as tamper.
+    existing_keys = existing.keys() if hasattr(existing, "keys") else []
+    prior_ref = (
+        str(existing["decision_ref"] or "").strip()
+        if "decision_ref" in existing_keys
+        else ""
+    )
+    if prior_ref:
+        store._degrade_and_trace_lifecycle(
+            conn,
+            table="hypomnema_entries",
+            row_id=row.target_id,
+            prior_decision_ref=prior_ref,
+            reason=f"pai_import_deactivate:{row.job_id}",
+            agent_id=row.agent_id,
+            person_id=str(existing["person_id"] or "user"),
+            project_scope=str(existing["project_scope"] or "global"),
+            domain=str(existing["domain"] or ""),
+            trace_detail=f"witnessed hypomnema {row.target_id} deactivated via "
+            "PAI import; degraded pending re-witness",
+        )
     return True
 
 

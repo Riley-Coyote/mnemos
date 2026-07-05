@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from . import journal as vault_journal
 
@@ -145,6 +145,64 @@ def _applied_fields_match_payload(
     return True
 
 
+def _witness_reverifies_proposal(
+    store: Any,
+    table: str,
+    row: dict[str, Any],
+    line: Mapping[str, Any],
+    proposal_id: str,
+) -> bool:
+    """008y J: does a proposal-witnessed row STILL fully verify against its line?
+
+    The discriminator that separates a raw-SQL *hide* (ref cleared, content
+    intact — no legitimate producer) from a genuine *degrade* (a witnessed field
+    actually changed → the write-path E7/E8/E2B cleared the ref legitimately).
+    A full re-verify means: the line's content still hashes to the approved
+    content AND every witnessed field on the row still matches the payload. If
+    it fully verifies but the ref was cleared, the only way that state exists is
+    a raw-SQL clear — a hidden witness, not a legitimate degrade.
+
+    Trace-presence is NOT the discriminator (the raw-SQL adversary forges the
+    trace the same way it clears the ref); witness re-verification is unforgeable
+    because it anchors in the TCB-owned journal's content hash.
+    """
+    proposal = store.get_proposal(proposal_id)
+    if proposal is None:
+        return False
+    content_ok = vault_journal.canonical_content_sha256(proposal) == str(
+        line.get("content_sha256", "")
+    )
+    if not content_ok:
+        return False
+    return _applied_fields_match_payload(table, row, proposal)
+
+
+def _witness_reverifies_legacy(
+    table: str,
+    row: dict[str, Any],
+    line: Mapping[str, Any],
+) -> bool:
+    """008y J (legacy twin): does a legacy-witnessed row STILL fully verify?
+
+    Legacy lines witness the row itself (``canonical_row_sha256``), so a full
+    re-verify is: the row still hashes to the witness AND still carries its tier
+    signal AND is not lifecycle-hidden (superseded/deactivated — the K checks).
+    Same discriminator as the proposal twin: full-verify + cleared ref = a
+    raw-SQL hide, not a legitimate degrade.
+    """
+    if not _is_tier_signalled(table, row):
+        return False
+    if vault_journal.canonical_row_sha256(table, row) != str(
+        line.get("content_sha256", "")
+    ):
+        return False
+    if row.get("superseded_by"):
+        return False
+    if table == "hypomnema_entries" and not bool(row.get("active", 1)):
+        return False
+    return True
+
+
 def _requarantine(conn: Any, table: str, row_id: str) -> bool:
     """Force a row to review_only from ANY non-review_only state. Returns True if changed.
 
@@ -170,15 +228,98 @@ def reconcile_identity_tier(
     journal_path: str | Path,
     *,
     apply_quarantine: bool = True,
+    journal_untrusted: bool = False,
 ) -> ReconcileReport:
     """Reconcile identity-tier rows against the vault journal, both directions.
 
     ``store`` is an ``EngramStore``. ``apply_quarantine=False`` runs a dry audit
     (findings only, no writes) — used by tests that assert detection without
     mutation. Returns a :class:`ReconcileReport`.
+
+    008y R6-1: ``journal_untrusted`` is the store's ownership verdict on the
+    journal FILE (computed there — this module has zero ownership knowledge). An
+    existing agent-owned journal is unusable-at-read and is routed into the
+    IDENTICAL quarantine-all fail-closed handling the ``corrupt`` classification
+    uses, with a distinct forensic label (``journal_untrusted``). Never inert,
+    never trusted, never fail-open.
     """
     report = ReconcileReport()
     conn = store._get_conn()
+
+    # 008y GAP-1 + 014b B-1 + 014c B-3: the write span runs LOCKED, UNIFORMLY
+    # across EVERY write branch. Three things compose here:
+    #   GAP-1  — reconcile's main read-decide-write span must hold BEGIN IMMEDIATE
+    #            (apply_identity_decision already does) so an in-process adversary
+    #            cannot mutate a row between reconcile's SELECT and its UPDATE.
+    #   B-1    — the acquisition must FAIL CLOSED: no try/except around BEGIN
+    #            IMMEDIATE, so a raised lock propagates and no write branch ever
+    #            runs unlocked (degraded protection must be LOUD, not silent).
+    #   B-3    — the TWO early fail-closed quarantine-all branches
+    #            (journal_untrusted, corrupt) also write (they iterate
+    #            _requarantine UPDATEs — NOT statement-atomic) and previously ran
+    #            BEFORE the lock. So acquire the span lock ONCE at function entry
+    #            on the write path — it covers the two early branches AND the main
+    #            body — and commit ONCE at the end.
+    # No production caller invokes reconcile inside an open transaction
+    # (session-start runs apply_legacy_witness then reconcile, each committing;
+    # the watchdog calls reconcile as its first op; every store write method
+    # commits before returning), so a raised BEGIN IMMEDIATE is a real acquisition
+    # failure (an unexpected open transaction, a busy timeout) and MUST propagate.
+    # Only taken on the write path (apply_quarantine=True); a dry audit is
+    # read-only and takes no lock. Reconcile is bounded by identity-row count.
+    span_lock = False
+    if apply_quarantine:
+        conn.execute("BEGIN IMMEDIATE")
+        span_lock = True
+
+    try:
+        _reconcile_under_lock(
+            store, conn, journal_path, report, apply_quarantine, journal_untrusted
+        )
+    except Exception:
+        if span_lock:
+            conn.rollback()
+        raise
+    # Commit once at the end of the span (releases the lock, persists EVERY write
+    # branch atomically). A dry audit takes no lock and writes nothing.
+    if span_lock:
+        conn.commit()
+    return report
+
+
+def _reconcile_under_lock(
+    store: Any,
+    conn: Any,
+    journal_path: str | Path,
+    report: ReconcileReport,
+    apply_quarantine: bool,
+    journal_untrusted: bool,
+) -> None:
+    """Journal classification + decision + all writes, run under the B-3 entry
+    lock when ``apply_quarantine`` is True. Performs NO commits — the caller
+    (``reconcile_identity_tier``) commits once around the whole span so every
+    write branch (the two early quarantine-all branches and the main body) is
+    both atomic and locked."""
+    # 008y R6-1: an existing agent-owned journal leaf is untrustworthy — its
+    # self-authored (chain-valid) lines must not drive apply/reconcile. Handle
+    # BEFORE reading the lines: identical fail-closed quarantine-all as corrupt,
+    # distinct label. journal.py stays format-only; the store decided trust.
+    if journal_untrusted:
+        report._add(
+            report.findings,
+            severity="critical",
+            kind="journal_untrusted",
+            table=None,
+            row_id=None,
+            proposal_id=None,
+            detail="vault journal file is agent-owned/agent-writable (untrusted "
+            "leaf) — quarantining every operational witnessed identity row; a "
+            "self-authored journal cannot witness identity content "
+            "(restore-on-verify runs once a trusted journal is in place)",
+        )
+        if apply_quarantine:
+            _fail_closed_quarantine_all_witnessed(conn, report)
+        return
 
     # 008i — classify the journal read. Mid-file corruption fails CLOSED:
     # quarantine every operational identity row with a ref (they can't be
@@ -199,8 +340,7 @@ def reconcile_identity_tier(
         )
         if apply_quarantine:
             _fail_closed_quarantine_all_witnessed(conn, report)
-            conn.commit()
-        return report
+        return
     if journal_read.error == "torn_tail":
         report._add(
             report.findings,
@@ -251,6 +391,18 @@ def reconcile_identity_tier(
             continue
         ref_to_line[vault_journal.line_hash(line)] = {**line, "_line_index": idx}
 
+    _reconcile_body(store, conn, report, ref_to_line, apply_quarantine)
+
+
+def _reconcile_body(
+    store: Any,
+    conn: Any,
+    report: ReconcileReport,
+    ref_to_line: dict[str, dict[str, Any]],
+    apply_quarantine: bool,
+) -> None:
+    """The read-decide-write span, run under the GAP-1 BEGIN IMMEDIATE lock when
+    ``apply_quarantine`` is True (see reconcile_identity_tier)."""
     changed = False
 
     # ── Direction A: table → journal ──
@@ -282,8 +434,12 @@ def reconcile_identity_tier(
                 if apply_quarantine and _requarantine(conn, table, row["id"]):
                     changed = True
                     report._add(
-                        report.requarantined, severity="high", kind="requarantined",
-                        table=table, row_id=row["id"], proposal_id=None,
+                        report.requarantined,
+                        severity="high",
+                        kind="requarantined",
+                        table=table,
+                        row_id=row["id"],
+                        proposal_id=None,
                         detail="forced review_only (orphan)",
                     )
             elif ref not in ref_to_line:
@@ -299,8 +455,12 @@ def reconcile_identity_tier(
                 if apply_quarantine and _requarantine(conn, table, row["id"]):
                     changed = True
                     report._add(
-                        report.requarantined, severity="high", kind="requarantined",
-                        table=table, row_id=row["id"], proposal_id=None,
+                        report.requarantined,
+                        severity="high",
+                        kind="requarantined",
+                        table=table,
+                        row_id=row["id"],
+                        proposal_id=None,
                         detail="forced review_only (forged/broken ref)",
                     )
 
@@ -337,8 +497,12 @@ def reconcile_identity_tier(
             if apply_quarantine and _requarantine(conn, table, row["id"]):
                 changed = True
                 report._add(
-                    report.requarantined, severity="high", kind="requarantined",
-                    table=table, row_id=row["id"], proposal_id=None,
+                    report.requarantined,
+                    severity="high",
+                    kind="requarantined",
+                    table=table,
+                    row_id=row["id"],
+                    proposal_id=None,
                     detail="forced review_only (untrusted ref, any tier)",
                 )
 
@@ -352,9 +516,7 @@ def reconcile_identity_tier(
         # not a proposal. Steady-state read path is unaffected: the stamped row
         # carries an ordinary decision_ref.
         if str(line.get("witness", "")) == "legacy":
-            _reconcile_legacy_line(
-                report, conn, ref, line, apply_quarantine
-            )
+            _reconcile_legacy_line(report, conn, ref, line, apply_quarantine)
             changed = changed or apply_quarantine
             continue
         proposal_id = str(line.get("proposal_id", ""))
@@ -382,28 +544,44 @@ def reconcile_identity_tier(
                 )
                 if not is_tier:
                     _flag_and_quarantine(
-                        report, conn, table, row["id"], proposal_id,
+                        report,
+                        conn,
+                        table,
+                        row["id"],
+                        proposal_id,
                         "de-tiered: row no longer carries its identity tier signal",
                         apply_quarantine,
                     )
                     changed = changed or apply_quarantine
                 elif proposal is None:
                     _flag_and_quarantine(
-                        report, conn, table, row["id"], proposal_id,
+                        report,
+                        conn,
+                        table,
+                        row["id"],
+                        proposal_id,
                         "witnessed row's proposal row is gone",
                         apply_quarantine,
                     )
                     changed = changed or apply_quarantine
                 elif not proposal_ok:
                     _flag_and_quarantine(
-                        report, conn, table, row["id"], proposal_id,
+                        report,
+                        conn,
+                        table,
+                        row["id"],
+                        proposal_id,
                         "proposal content no longer hashes to the approved content",
                         apply_quarantine,
                     )
                     changed = changed or apply_quarantine
                 elif not fields_ok:
                     _flag_and_quarantine(
-                        report, conn, table, row["id"], proposal_id,
+                        report,
+                        conn,
+                        table,
+                        row["id"],
+                        proposal_id,
                         "row's applied fields no longer match the witnessed payload",
                         apply_quarantine,
                     )
@@ -425,18 +603,23 @@ def reconcile_identity_tier(
                     if apply_quarantine and vis and vis != "operational_context":
                         if vis == "audit_only":
                             report._add(
-                                report.findings, severity="high",
+                                report.findings,
+                                severity="high",
                                 kind="witnessed_row_hidden",
-                                table=table, row_id=row["id"],
+                                table=table,
+                                row_id=row["id"],
                                 proposal_id=proposal_id,
                                 detail="witnessed identity row hidden via "
-                                       "audit_only — restored to operational",
+                                "audit_only — restored to operational",
                             )
                         if _restore_operational(conn, table, row["id"]):
                             changed = True
                             report._add(
-                                report.requarantined, severity="info",
-                                kind="restored", table=table, row_id=row["id"],
+                                report.requarantined,
+                                severity="info",
+                                kind="restored",
+                                table=table,
+                                row_id=row["id"],
                                 proposal_id=proposal_id,
                                 detail="witness re-verified; restored to operational",
                             )
@@ -457,17 +640,65 @@ def reconcile_identity_tier(
                     f"SELECT * FROM {fallback_table} WHERE id = ?", (fallback_id,)
                 ).fetchone()
             if fallback_row is not None:
-                # 008k E2B composition: if the row is already at review_only
-                # (legitimately degraded via the write path per E7/E8/E2B),
-                # the ref was cleared through the correct channel — don't
-                # re-flag as tamper. The fallback exists to catch the raw-SQL
-                # bypass case where the row is still operational with no ref.
+                # 008k E2B composition, NARROWED by 008y J: a review_only row
+                # with a cleared ref is normally a legitimate write-path degrade
+                # (E7/E8/E2B) — BUT only if a witnessed field actually changed.
+                # If the row STILL fully verifies against its journal line
+                # (content hash + every applied field intact) yet the ref was
+                # cleared, no legitimate producer exists: a legitimate de-witness
+                # flows through the TCB journal (Direction B locates it), a
+                # legitimate degrade mutates a witnessed field. Full-verify +
+                # cleared-ref = a raw-SQL HIDE → restore + finding. This narrows
+                # the E2B exemption from "any review_only" to "review_only AND a
+                # witnessed field genuinely changed" (fail-direction: toward
+                # visibility). The discriminator is witness re-verification, not
+                # trace-presence (the raw-SQL agent forges the trace).
                 fallback_row_dict = dict(fallback_row)
-                if fallback_row_dict.get("read_visibility") == "review_only":
-                    pass  # legitimately degraded; no finding
+                vis = fallback_row_dict.get("read_visibility")
+                hidden = _witness_reverifies_proposal(
+                    store, fallback_table, fallback_row_dict, line, proposal_id
+                )
+                if vis == "review_only" and not hidden:
+                    pass  # genuine degrade (a witnessed field changed); no finding
+                elif hidden:
+                    # 008y J: witness fully re-verifies but the ref was cleared —
+                    # a raw-SQL hide. Restore to operational and flag.
+                    report._add(
+                        report.findings,
+                        severity="high",
+                        kind="witnessed_row_hidden",
+                        table=fallback_table,
+                        row_id=fallback_id,
+                        proposal_id=proposal_id,
+                        detail="witnessed row's decision_ref cleared while the "
+                        "witness still fully verifies (raw-SQL hide) — restored "
+                        "to operational",
+                    )
+                    # 014c B-2: restore the decision_ref (this Direction-B ref =
+                    # the journal line hash that just re-verified) atomically with
+                    # the visibility flip, or the row stays ref-less and the next
+                    # Direction A re-orphans it (restore→requarantine loop).
+                    if apply_quarantine and _restore_operational(
+                        conn, fallback_table, fallback_id, decision_ref=ref
+                    ):
+                        changed = True
+                        report._add(
+                            report.requarantined,
+                            severity="info",
+                            kind="restored",
+                            table=fallback_table,
+                            row_id=fallback_id,
+                            proposal_id=proposal_id,
+                            detail="witness re-verified; ref + visibility restored "
+                            "to operational",
+                        )
                 else:
                     _flag_and_quarantine(
-                        report, conn, fallback_table, fallback_id, proposal_id,
+                        report,
+                        conn,
+                        fallback_table,
+                        fallback_id,
+                        proposal_id,
                         "witnessed row's decision_ref was cleared (fallback located "
                         "by target_surface/target_id); re-quarantined",
                         apply_quarantine,
@@ -484,9 +715,7 @@ def reconcile_identity_tier(
                     detail="approved journal line has no live row carrying its decision_ref",
                 )
 
-    if changed:
-        conn.commit()
-    return report
+    return changed
 
 
 def _reconcile_legacy_line(
@@ -512,13 +741,54 @@ def _reconcile_legacy_line(
             f"SELECT * FROM {table} WHERE id = ?", (row_id,)
         ).fetchone()
         if fallback is not None:
-            # 008k E2B composition: legitimately-degraded (review_only + ref
-            # cleared via the write-path E7/E8/E2B) → no finding.
-            if dict(fallback).get("read_visibility") == "review_only":
-                pass
+            # 008k E2B composition, NARROWED by 008y J (legacy twin): a
+            # review_only row with a cleared ref is a legitimate write-path
+            # degrade ONLY if a witnessed field actually changed. If the row
+            # STILL fully verifies against its legacy witness line (row hash +
+            # tier signal intact, not lifecycle-hidden) yet the ref was cleared,
+            # it is a raw-SQL HIDE → restore + finding. Same discriminator as
+            # the proposal fallback: witness re-verification, not trace-presence.
+            fallback_dict = dict(fallback)
+            vis = fallback_dict.get("read_visibility")
+            hidden = _witness_reverifies_legacy(table, fallback_dict, line)
+            if vis == "review_only" and not hidden:
+                pass  # genuine degrade (a witnessed field changed); no finding
+            elif hidden:
+                report._add(
+                    report.findings,
+                    severity="high",
+                    kind="witnessed_row_hidden",
+                    table=table,
+                    row_id=row_id,
+                    proposal_id=None,
+                    detail="legacy-witnessed row's decision_ref cleared while the "
+                    "witness still fully verifies (raw-SQL hide) — restored to "
+                    "operational",
+                )
+                # 014c B-2: restore the decision_ref (this legacy line's hash =
+                # `ref`, the license that just re-verified) atomically with the
+                # visibility flip, or the row stays ref-less and the next
+                # Direction A re-orphans it (restore→requarantine loop).
+                if apply_quarantine and _restore_operational(
+                    conn, table, row_id, decision_ref=ref
+                ):
+                    report._add(
+                        report.requarantined,
+                        severity="info",
+                        kind="restored",
+                        table=table,
+                        row_id=row_id,
+                        proposal_id=None,
+                        detail="legacy witness re-verified; ref + visibility "
+                        "restored to operational",
+                    )
             else:
                 _flag_and_quarantine(
-                    report, conn, table, row_id, None,
+                    report,
+                    conn,
+                    table,
+                    row_id,
+                    None,
                     "legacy-witnessed row's decision_ref was cleared "
                     "(fallback located by table/row_id); re-quarantined",
                     apply_quarantine,
@@ -538,7 +808,11 @@ def _reconcile_legacy_line(
         row = dict(row)
         if not _is_tier_signalled(table, row):
             _flag_and_quarantine(
-                report, conn, table, row["id"], None,
+                report,
+                conn,
+                table,
+                row["id"],
+                None,
                 "de-tiered: legacy-witnessed row no longer carries its tier signal",
                 apply_quarantine,
             )
@@ -546,7 +820,11 @@ def _reconcile_legacy_line(
             line.get("content_sha256", "")
         ):
             _flag_and_quarantine(
-                report, conn, table, row["id"], None,
+                report,
+                conn,
+                table,
+                row["id"],
+                None,
                 "legacy-witnessed row content mutated away from the witness",
                 apply_quarantine,
             )
@@ -563,7 +841,11 @@ def _reconcile_legacy_line(
             # raw-SQL hide. Flag as tamper + force review_only so David is
             # alerted and the row is on the review surface.
             _flag_and_quarantine(
-                report, conn, table, row["id"], None,
+                report,
+                conn,
+                table,
+                row["id"],
+                None,
                 "legacy-witnessed row hidden via lifecycle (superseded_by set "
                 "or active=0) while still witness-verifying — re-quarantined",
                 apply_quarantine,
@@ -580,16 +862,22 @@ def _reconcile_legacy_line(
             if apply_quarantine and vis and vis != "operational_context":
                 if vis == "audit_only":
                     report._add(
-                        report.findings, severity="high",
-                        kind="witnessed_row_hidden", table=table,
-                        row_id=row["id"], proposal_id=None,
+                        report.findings,
+                        severity="high",
+                        kind="witnessed_row_hidden",
+                        table=table,
+                        row_id=row["id"],
+                        proposal_id=None,
                         detail="legacy-witnessed identity row hidden via "
-                               "audit_only — restored to operational",
+                        "audit_only — restored to operational",
                     )
                 if _restore_operational(conn, table, row["id"]):
                     report._add(
-                        report.requarantined, severity="info",
-                        kind="restored", table=table, row_id=row["id"],
+                        report.requarantined,
+                        severity="info",
+                        kind="restored",
+                        table=table,
+                        row_id=row["id"],
                         proposal_id=None,
                         detail="legacy witness re-verified; restored to operational",
                     )
@@ -614,13 +902,22 @@ def _flag_and_quarantine(
     apply_quarantine: bool,
 ) -> None:
     report._add(
-        report.findings, severity="critical", kind="witnessed_row_tampered",
-        table=table, row_id=row_id, proposal_id=proposal_id, detail=detail,
+        report.findings,
+        severity="critical",
+        kind="witnessed_row_tampered",
+        table=table,
+        row_id=row_id,
+        proposal_id=proposal_id,
+        detail=detail,
     )
     if apply_quarantine and _requarantine(conn, table, row_id):
         report._add(
-            report.requarantined, severity="critical", kind="requarantined",
-            table=table, row_id=row_id, proposal_id=proposal_id,
+            report.requarantined,
+            severity="critical",
+            kind="requarantined",
+            table=table,
+            row_id=row_id,
+            proposal_id=proposal_id,
             detail="forced review_only (tamper)",
         )
 
@@ -644,14 +941,19 @@ def _fail_closed_quarantine_all_witnessed(conn: Any, report: ReconcileReport) ->
         for row in rows:
             if _requarantine(conn, table, row["id"]):
                 report._add(
-                    report.requarantined, severity="critical",
+                    report.requarantined,
+                    severity="critical",
                     kind="requarantined_journal_corrupt",
-                    table=table, row_id=row["id"], proposal_id=None,
+                    table=table,
+                    row_id=row["id"],
+                    proposal_id=None,
                     detail="corrupt journal — witness cannot be verified",
                 )
 
 
-def _restore_operational(conn: Any, table: str, row_id: str) -> bool:
+def _restore_operational(
+    conn: Any, table: str, row_id: str, *, decision_ref: str | None = None
+) -> bool:
     """Promote a row from ANY non-operational visibility back to operational.
 
     008r-review (reconcile-misses-audit-only-hide): the WHERE clause was
@@ -659,7 +961,27 @@ def _restore_operational(conn: Any, table: str, row_id: str) -> bool:
     restored even when its witness verified — the caller's guard was widened to
     all non-operational states, so this UPDATE must be too, or the hide
     survives. Returns True if a row changed.
+
+    014c B-2 (restore-without-decision-ref): a J-hidden row was hidden by
+    CLEARING its ``decision_ref`` (not just flipping visibility). Restoring
+    visibility ALONE leaves the ref empty, so the identity read gate STILL
+    excludes it (operational + identity-tier + no ref) and the next reconcile
+    Direction A re-orphans and re-quarantines it — a restore→requarantine LOOP,
+    not a recovery. When ``decision_ref`` is passed (the journal line hash that
+    JUST re-verified — the line IS the license), restore it atomically with the
+    visibility flip so the row both READS operational and STAYS operational on
+    the next pass. When ``decision_ref`` is None (K's visibility-only hide, where
+    the ref is intact), the ref is untouched — that path stays correct.
     """
+    if decision_ref is not None:
+        cur = conn.execute(
+            f"UPDATE {table} SET read_visibility = 'operational_context', "
+            "decision_ref = ? WHERE id = ? AND (read_visibility != "
+            "'operational_context' OR decision_ref IS NULL OR decision_ref = '' "
+            "OR decision_ref != ?)",
+            (decision_ref, row_id, decision_ref),
+        )
+        return cur.rowcount > 0
     cur = conn.execute(
         f"UPDATE {table} SET read_visibility = 'operational_context' "
         f"WHERE id = ? AND read_visibility != 'operational_context'",

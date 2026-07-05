@@ -67,6 +67,14 @@ The fundamental unit of memory. Each engram has:
   proposal. Proposed durable transitions are tracked in
   `proposal_ledger` with authority, target surface, transition, blast radius,
   visibility, status, reason, gate version, provenance, and payload fields.
+- **Identity vault controls** (schema v9): identity/foundational rows in
+  `beliefs` and `hypomnema_entries` additionally carry `decision_ref`, the hash
+  of an approved line in the canonical root/vault-owned decisions journal.
+  When the vault directory is installed and trusted, operational reads exclude
+  identity-tier rows with no ref, and apply/legacy-witness paths read only the
+  canonical journal. A present agent-owned or agent-writable journal leaf is
+  unusable-at-read: apply refuses it and reconciliation routes it through the
+  same quarantine-all fail-closed handling as a corrupt journal.
 - **Gated inner-life controls** (schema v8): generated reflection, wandering,
   and dream rows pass through the narrative gate and low-stakes writer before
   persistence. Passed rows are private, low-confidence, audit-only engrams
@@ -115,8 +123,12 @@ Operational retrieval uses `read_visibility="operational_context"` before FTS,
 embedding hits, graph propagation, scoring, and reconsolidation. Store helpers
 that load by ID, traverse connections, read versions, search archive rows, or
 load functional/hypomnema rows also default to operational visibility; explicit
-`read_visibility=None` is the unfiltered admin opt-in. Explicit review callers
-can request `review_only`; audit-only rows stay out of normal review flows.
+`read_visibility=None` is the unfiltered admin opt-in. Version history inherits
+the parent engram's visibility after the parent row has cleared the caller's
+filter; list/read paths that intentionally include multiple visibilities gate
+versions with an `IN` filter rather than leaking ungated history. Explicit
+review callers can request `review_only`; audit-only rows stay out of normal
+review flows.
 
 Every retrieval updates the returned visible memory — access count, strength,
 new connections. Operational paths return operational rows. Memories are living
@@ -137,6 +149,19 @@ operational packet so generated or review-shaped material can be audited before
 it becomes operating context. Audit-only proposal rows require the explicit
 `mnemos_proposal_audit` admin/audit surface and do not appear in ordinary
 operational or review packets.
+
+The T4 identity vault is the additional reviewer gate for identity/foundational
+belief and hypomnema rows. `apply_identity_decision()` applies only a
+chain-verified approved/rejected journal line whose content hash still matches
+the proposal under the write lock; `apply_legacy_witness()` stamps pre-vault
+identity rows from legacy witness lines without promoting rows that were already
+review/audit-only. `reconcile_identity_vault()` runs at session start and from
+the watchdog. It holds a `BEGIN IMMEDIATE` span lock while it checks both
+directions (table -> journal and journal -> table), quarantines orphaned,
+forged, de-tiered, content-mutated, lifecycle-hidden, or unverified rows, and
+restores operational visibility only when the journal witness fully re-verifies.
+For a raw-SQL hide that cleared `decision_ref`, restore writes the verified ref
+and visibility together so the next pass does not re-orphan the row.
 
 ## Layer 2: Substrate (Inner Life / Consolidation)
 

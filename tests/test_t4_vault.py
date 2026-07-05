@@ -51,6 +51,7 @@ def _arm_vault(monkeypatch, journal_path):
     journal file itself may or may not exist (a missing file still arms —
     fail-closed — and read_journal([]) drives re-quarantine)."""
     import pathlib as _pl
+
     monkeypatch.setattr(_sq, "_VAULT_JOURNAL_FOR_RESOLUTION", str(journal_path))
     monkeypatch.setattr(
         _sq, "_VAULT_DIR_FOR_RESOLUTION", str(_pl.Path(journal_path).parent)
@@ -156,8 +157,9 @@ def test_p1_hypomnema_surface_applies(tmp_path):
     _append_journal(journal, [(proposal, "approved")])
     result = _apply_identity(store, proposal["id"], journal)
     assert result["status"] == "applied"
-    hits = store.search_hypomnema("Oliver", agent_id="oliver", person_id="david",
-                                  project_scope="pai")
+    hits = store.search_hypomnema(
+        "Oliver", agent_id="oliver", person_id="david", project_scope="pai"
+    )
     assert any("I am Oliver" in h["content"] for h in hits)
 
 
@@ -214,10 +216,17 @@ def test_n2_hash_mismatch_refuses(tmp_path):
     _append_journal(journal, [(proposal, "approved")])
     # Mutate the pending proposal's content after the decision was recorded.
     store.write_proposal(
-        source_authority="user_stated", kind="semantic", target_surface="beliefs",
-        transition="install identity claim", domain="identity", blast_radius="identity",
-        agent_id="oliver", person_id="david", project_scope="pai",
-        payload={"content": "TAMPERED content"}, provenance_ids=["soul-md-1"],
+        source_authority="user_stated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="install identity claim",
+        domain="identity",
+        blast_radius="identity",
+        agent_id="oliver",
+        person_id="david",
+        project_scope="pai",
+        payload={"content": "TAMPERED content"},
+        provenance_ids=["soul-md-1"],
         proposal_id=proposal["id"],
     )
     with pytest.raises(ValueError, match="hash mismatch"):
@@ -277,8 +286,9 @@ def test_n4_orphan_hypomnema_excluded(tmp_path):
         " '[]', 't', 't')"
     )
     conn.commit()
-    hits = store.search_hypomnema("forged", agent_id="oliver", person_id="david",
-                                  project_scope="pai")
+    hits = store.search_hypomnema(
+        "forged", agent_id="oliver", person_id="david", project_scope="pai"
+    )
     assert all(h["content"] != "forged hypo" for h in hits)
 
 
@@ -460,9 +470,12 @@ def test_reconciler_catches_legacy_witness_tamper(tmp_path):
     conn.commit()
     report = store.reconcile_identity_vault(journal)
     assert any(f["kind"] == "witnessed_row_tampered" for f in report.findings)
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='legacy1'"
-    ).fetchone()[0] == "review_only"
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='legacy1'"
+        ).fetchone()[0]
+        == "review_only"
+    )
 
 
 # ── Apply surface restriction (deviation #1) ──
@@ -510,6 +523,7 @@ def test_rejected_decision_terminal_no_write(tmp_path):
 def test_e1_seam_arms_when_vault_dir_exists(tmp_path, monkeypatch):
     """008r-review: the gate arms iff the vault DIR exists (no env channel)."""
     from mnemos.store.sqlite_store import _resolve_vault_active
+
     j = tmp_path / "journal.jsonl"
     j.write_text("", encoding="utf-8")
     _arm_vault(monkeypatch, j)
@@ -521,6 +535,7 @@ def test_e1_inert_when_vault_dir_absent(tmp_path, monkeypatch):
     sentinel to force-disable an installed vault — and, crucially, no env to
     force-ENABLE a fake one (the redirect hole 008r-review closed)."""
     from mnemos.store import sqlite_store
+
     _disarm_vault(monkeypatch)
     assert sqlite_store._resolve_vault_active(None) is False
 
@@ -530,6 +545,7 @@ def test_e1_dir_probe_is_the_install_signal(tmp_path, monkeypatch):
     deliberate root-level uninstall) returns to inert. The journal file alone is
     not the signal — a missing journal under an existing dir still arms."""
     from mnemos.store import sqlite_store
+
     j = tmp_path / "journal.jsonl"
     j.write_text("", encoding="utf-8")
     _arm_vault(monkeypatch, j)
@@ -573,8 +589,11 @@ def test_e2_legacy_witness_preserves_review_only_visibility(tmp_path):
 # E3: visualization dashboard uses the same gate
 
 
-def test_e3_dashboard_excludes_unwitnessed_identity_when_vault_active(tmp_path, monkeypatch):
+def test_e3_dashboard_excludes_unwitnessed_identity_when_vault_active(
+    tmp_path, monkeypatch
+):
     from mnemos.visualization import data as viz
+
     store = EngramStore(tmp_path / "viz.db")
     conn = store._get_conn()
     # An unwitnessed identity belief that snuck in as operational.
@@ -598,6 +617,7 @@ def test_e3_dashboard_excludes_unwitnessed_identity_when_vault_active(tmp_path, 
 
 def test_e3_dashboard_shows_row_when_vault_inert(tmp_path, monkeypatch):
     from mnemos.visualization import data as viz
+
     store = EngramStore(tmp_path / "viz2.db")
     conn = store._get_conn()
     conn.execute(
@@ -641,9 +661,12 @@ def test_hash_2_reconcile_catches_cleared_ref_plus_detier(tmp_path):
     assert any(f["kind"] == "witnessed_row_tampered" for f in report.findings), (
         "008e #2: fallback locator did not catch cleared_ref + de-tier"
     )
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='fixed-belief-id'"
-    ).fetchone()[0] == "review_only"
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='fixed-belief-id'"
+        ).fetchone()[0]
+        == "review_only"
+    )
 
 
 # #4 mixed-visibility predicate correction
@@ -737,7 +760,9 @@ def test_hash_7_identity_apply_forces_foundational_tier(tmp_path):
     _append_journal(journal, [(proposal, "approved")])
     _apply_identity(store, "p-tier", journal)
     conn = store._get_conn()
-    row = conn.execute("SELECT tier FROM beliefs WHERE id != 'p-tier' AND content='identity claim'").fetchone()
+    row = conn.execute(
+        "SELECT tier FROM beliefs WHERE id != 'p-tier' AND content='identity claim'"
+    ).fetchone()
     assert row[0] == "foundational", (
         "008e #7: payload's tier='operational' was accepted; must be forced foundational"
     )
@@ -812,11 +837,12 @@ def test_008k_belief_confidence_mutation_is_NOT_tamper(tmp_path):
         "008k: confidence is NOT witnessed — reconcile must not flag its "
         "mutation as tamper (008g E7/E8 explicit rule)"
     )
-    assert conn.execute(
-        "SELECT read_visibility, decision_ref FROM beliefs WHERE id='b-conf'"
-    ).fetchone()[0] == "operational_context", (
-        "008k: witnessed belief must stay operational after confidence bump"
-    )
+    assert (
+        conn.execute(
+            "SELECT read_visibility, decision_ref FROM beliefs WHERE id='b-conf'"
+        ).fetchone()[0]
+        == "operational_context"
+    ), "008k: witnessed belief must stay operational after confidence bump"
 
 
 def test_008k_hypomnema_confidence_density_mutation_is_NOT_tamper(tmp_path):
@@ -840,18 +866,20 @@ def test_008k_hypomnema_confidence_density_mutation_is_NOT_tamper(tmp_path):
         "008k: density/confidence/salience are NOT witnessed — reconcile "
         "must not flag their mutation as tamper (008g E7/E8 rule)"
     )
-    assert conn.execute(
-        "SELECT read_visibility FROM hypomnema_entries WHERE id='h-den'"
-    ).fetchone()[0] == "operational_context"
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM hypomnema_entries WHERE id='h-den'"
+        ).fetchone()[0]
+        == "operational_context"
+    )
 
 
 # r2 #3: session-start honors default-vault activation
 
 
-def test_r2_3_session_start_stamps_when_default_vault_installed(
-    tmp_path, monkeypatch
-):
+def test_r2_3_session_start_stamps_when_default_vault_installed(tmp_path, monkeypatch):
     import mnemos.mcp_server as server
+
     store = EngramStore(tmp_path / "s.db")
     # A default-install: the canonical vault dir exists (008r-review — no env).
     fake_default = tmp_path / "system_journal.jsonl"
@@ -887,6 +915,7 @@ def test_r2_3_session_start_stamps_when_default_vault_installed(
 
 def test_r2_4_audit_dashboard_shows_unwitnessed_identity(tmp_path, monkeypatch):
     from mnemos.visualization import data as viz
+
     store = EngramStore(tmp_path / "aud.db")
     conn = store._get_conn()
     conn.execute(
@@ -943,9 +972,12 @@ def test_r3_1_reconcile_rejects_copied_decision_ref_to_duplicate_row(tmp_path):
     assert any(f["kind"] == "witnessed_row_tampered" for f in report.findings), (
         "008e-r3 #1: reconcile passed a copied-ref duplicate row as clean"
     )
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='b-duplicate'"
-    ).fetchone()[0] == "review_only"
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='b-duplicate'"
+        ).fetchone()[0]
+        == "review_only"
+    )
 
 
 # r3 #2: expanded-path consistency
@@ -957,6 +989,7 @@ def test_r3_2_resolver_returns_absolute_pinned_path(monkeypatch):
     the pin is absolute (no literal ~ that would empty the journal read) and
     that resolve returns it when the vault dir is present."""
     from mnemos.store import sqlite_store
+
     assert sqlite_store._CANONICAL_VAULT_JOURNAL.startswith("/")
     assert "~" not in sqlite_store._CANONICAL_VAULT_JOURNAL
     # Armed (dir present) → returns the pinned journal, absolute, no ~.
@@ -976,15 +1009,24 @@ def test_r3_3_tcb_lists_only_identity_blast_proposals(tmp_path):
     # Two proposals: one identity blast (should show), one blast=medium +
     # domain=identity (should NOT show — apply refuses that shape).
     store.write_proposal(
-        source_authority="user_stated", kind="semantic", target_surface="beliefs",
-        transition="real identity claim", domain="identity", blast_radius="identity",
-        payload={"content": "real"}, proposal_id="p-real",
+        source_authority="user_stated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="real identity claim",
+        domain="identity",
+        blast_radius="identity",
+        payload={"content": "real"},
+        proposal_id="p-real",
     )
     store.write_proposal(
-        source_authority="user_stated", kind="semantic", target_surface="beliefs",
+        source_authority="user_stated",
+        kind="semantic",
+        target_surface="beliefs",
         transition="mislabeled — medium blast + identity domain",
-        domain="identity", blast_radius="medium",
-        payload={"content": "mislabeled"}, proposal_id="p-mislabel",
+        domain="identity",
+        blast_radius="medium",
+        payload={"content": "mislabeled"},
+        proposal_id="p-mislabel",
     )
     journal = tmp_path / "decisions.jsonl"
     result = _run_tcb_wrapper(store.db_path, journal, "s\n")
@@ -998,6 +1040,7 @@ def _run_tcb_wrapper(db_path, journal_path, stdin_text, args=()):
     import pathlib
     import subprocess
     import sys
+
     tcb = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "mnemos-decide"
     # 008r/review: the TCB no longer honors MNEMOS_DB_PATH / MNEMOS_VAULT_JOURNAL
     # env (a redirectable writer). Tests inject via --db/--journal flags, which
@@ -1007,9 +1050,18 @@ def _run_tcb_wrapper(db_path, journal_path, stdin_text, args=()):
     pathlib.Path(journal_path).parent.mkdir(parents=True, exist_ok=True)
     pathlib.Path(journal_path).touch(exist_ok=True)
     return subprocess.run(
-        [sys.executable, str(tcb),
-         "--db", str(db_path), "--journal", str(journal_path), *args],
-        input=stdin_text, capture_output=True, text=True,
+        [
+            sys.executable,
+            str(tcb),
+            "--db",
+            str(db_path),
+            "--journal",
+            str(journal_path),
+            *args,
+        ],
+        input=stdin_text,
+        capture_output=True,
+        text=True,
         env={"PATH": "/usr/bin:/bin"},
     )
 
@@ -1023,9 +1075,14 @@ def test_r3_4_tcb_defer_option_removed(tmp_path):
     durable happened)."""
     store = EngramStore(tmp_path / "def.db")
     store.write_proposal(
-        source_authority="user_stated", kind="semantic", target_surface="beliefs",
-        transition="x", domain="identity", blast_radius="identity",
-        payload={"content": "x"}, proposal_id="p-def",
+        source_authority="user_stated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="x",
+        domain="identity",
+        blast_radius="identity",
+        payload={"content": "x"},
+        proposal_id="p-def",
     )
     result = _run_tcb_wrapper(store.db_path, tmp_path / "j.jsonl", "s\n")
     assert "[d]efer" not in result.stdout, (
@@ -1046,16 +1103,24 @@ def test_r4_2_tcb_hides_engrams_targeted_identity_proposal(tmp_path):
     'missing_witnessed_row' finding."""
     store = EngramStore(tmp_path / "tcb.db")
     store.write_proposal(
-        source_authority="user_stated", kind="semantic",
-        target_surface="beliefs", transition="valid",
-        domain="identity", blast_radius="identity",
-        payload={"content": "valid"}, proposal_id="p-ok",
+        source_authority="user_stated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="valid",
+        domain="identity",
+        blast_radius="identity",
+        payload={"content": "valid"},
+        proposal_id="p-ok",
     )
     store.write_proposal(
-        source_authority="user_stated", kind="semantic",
-        target_surface="engrams", transition="engram-targeted identity",
-        domain="identity", blast_radius="identity",
-        payload={"content": "unappliable"}, proposal_id="p-engram",
+        source_authority="user_stated",
+        kind="semantic",
+        target_surface="engrams",
+        transition="engram-targeted identity",
+        domain="identity",
+        blast_radius="identity",
+        payload={"content": "unappliable"},
+        proposal_id="p-engram",
     )
     result = _run_tcb_wrapper(store.db_path, tmp_path / "j.jsonl", "s\n")
     assert "p-ok" in result.stdout
@@ -1069,8 +1134,14 @@ def test_r4_2_tcb_hides_engrams_targeted_identity_proposal(tmp_path):
 
 def test_r4_3_row_hash_binds_agent_id():
     from mnemos.vault import journal as vj
-    row_a = {"id": "b1", "content": "x", "domain": "identity",
-             "foundational": 1, "agent_id": "oliver"}
+
+    row_a = {
+        "id": "b1",
+        "content": "x",
+        "domain": "identity",
+        "foundational": 1,
+        "agent_id": "oliver",
+    }
     row_b = {**row_a, "agent_id": "attacker"}
     assert vj.canonical_row_sha256("beliefs", row_a) != vj.canonical_row_sha256(
         "beliefs", row_b
@@ -1079,9 +1150,16 @@ def test_r4_3_row_hash_binds_agent_id():
 
 def test_r4_3_row_hash_binds_hypomnema_scope():
     from mnemos.vault import journal as vj
-    row_a = {"id": "h1", "content": "x", "domain": "identity",
-             "foundational": 1, "agent_id": "oliver",
-             "person_id": "david", "project_scope": "pai"}
+
+    row_a = {
+        "id": "h1",
+        "content": "x",
+        "domain": "identity",
+        "foundational": 1,
+        "agent_id": "oliver",
+        "person_id": "david",
+        "project_scope": "pai",
+    }
     for changed in ("person_id", "project_scope"):
         row_b = {**row_a, changed: "other"}
         assert vj.canonical_row_sha256("hypomnema_entries", row_a) != (
@@ -1104,9 +1182,7 @@ def test_r4_6_reconcile_does_not_flag_review_only_orphans(tmp_path):
     )
     conn.commit()
     report = store.reconcile_identity_vault(tmp_path / "empty.jsonl")
-    orphan_findings = [
-        f for f in report.findings if f["kind"] == "orphan_identity_row"
-    ]
+    orphan_findings = [f for f in report.findings if f["kind"] == "orphan_identity_row"]
     assert not orphan_findings, (
         f"008e-r4 #6: reconcile spammed orphan finding on review_only row: {orphan_findings}"
     )
@@ -1115,8 +1191,14 @@ def test_r4_6_reconcile_does_not_flag_review_only_orphans(tmp_path):
 # ── 008g E7/E8: witnessed-field split on upsert (chokepoint semantics) ──
 
 
-def _witnessed_belief(store, bid="wb", agent="oliver", content="witnessed claim",
-                     domain="identity", tier="foundational"):
+def _witnessed_belief(
+    store,
+    bid="wb",
+    agent="oliver",
+    content="witnessed claim",
+    domain="identity",
+    tier="foundational",
+):
     """Insert a belief as if it had been vault-witnessed (fake decision_ref)."""
     conn = store._get_conn()
     conn.execute(
@@ -1132,10 +1214,17 @@ def _witnessed_belief(store, bid="wb", agent="oliver", content="witnessed claim"
 def test_g_e7_confidence_only_upsert_preserves_ref_and_operational(tmp_path):
     """A consolidation confidence bump on a witnessed belief must NOT degrade."""
     from mnemos.core.belief import Belief
+
     store = _store(tmp_path)
     _witnessed_belief(store)
-    updated = Belief(id="wb", agent_id="oliver", content="witnessed claim",
-                     confidence=0.92, domain="identity", tier="foundational")
+    updated = Belief(
+        id="wb",
+        agent_id="oliver",
+        content="witnessed claim",
+        confidence=0.92,
+        domain="identity",
+        tier="foundational",
+    )
     store.save_belief(updated)
     conn = store._get_conn()
     row = conn.execute(
@@ -1151,10 +1240,17 @@ def test_g_e7_confidence_only_upsert_preserves_ref_and_operational(tmp_path):
 def test_g_e7_content_change_atomic_degrade(tmp_path):
     """A content change on a witnessed belief must clear ref + review_only ATOMICALLY."""
     from mnemos.core.belief import Belief
+
     store = _store(tmp_path)
     _witnessed_belief(store, content="original")
-    mutated = Belief(id="wb", agent_id="oliver", content="MUTATED",
-                     confidence=0.7, domain="identity", tier="foundational")
+    mutated = Belief(
+        id="wb",
+        agent_id="oliver",
+        content="MUTATED",
+        confidence=0.7,
+        domain="identity",
+        tier="foundational",
+    )
     store.save_belief(mutated)
     conn = store._get_conn()
     row = conn.execute(
@@ -1169,24 +1265,39 @@ def test_g_e7_content_change_atomic_degrade(tmp_path):
 
 def test_g_e7_domain_change_degrades(tmp_path):
     from mnemos.core.belief import Belief
+
     store = _store(tmp_path)
     _witnessed_belief(store)
-    mutated = Belief(id="wb", agent_id="oliver", content="witnessed claim",
-                     confidence=0.7, domain="general", tier="foundational")
+    mutated = Belief(
+        id="wb",
+        agent_id="oliver",
+        content="witnessed claim",
+        confidence=0.7,
+        domain="general",
+        tier="foundational",
+    )
     store.save_belief(mutated)
     conn = store._get_conn()
-    assert conn.execute(
-        "SELECT decision_ref FROM beliefs WHERE id='wb'"
-    ).fetchone()[0] is None
+    assert (
+        conn.execute("SELECT decision_ref FROM beliefs WHERE id='wb'").fetchone()[0]
+        is None
+    )
 
 
 def test_g_e7_identical_rewrite_preserves_ref(tmp_path):
     """Byte-identical rewrite of every witnessed field must NOT degrade."""
     from mnemos.core.belief import Belief
+
     store = _store(tmp_path)
     _witnessed_belief(store)
-    same = Belief(id="wb", agent_id="oliver", content="witnessed claim",
-                  confidence=0.7, domain="identity", tier="foundational")
+    same = Belief(
+        id="wb",
+        agent_id="oliver",
+        content="witnessed claim",
+        confidence=0.7,
+        domain="identity",
+        tier="foundational",
+    )
     store.save_belief(same)
     conn = store._get_conn()
     ref = conn.execute("SELECT decision_ref FROM beliefs WHERE id='wb'").fetchone()[0]
@@ -1197,10 +1308,17 @@ def test_g_e7_identical_rewrite_preserves_ref(tmp_path):
 
 def test_g_e7_degrade_emits_trace_proposal(tmp_path):
     from mnemos.core.belief import Belief
+
     store = _store(tmp_path)
     _witnessed_belief(store)
-    mutated = Belief(id="wb", agent_id="oliver", content="MUTATED",
-                     confidence=0.7, domain="identity", tier="foundational")
+    mutated = Belief(
+        id="wb",
+        agent_id="oliver",
+        content="MUTATED",
+        confidence=0.7,
+        domain="identity",
+        tier="foundational",
+    )
     store.save_belief(mutated)
     conn = store._get_conn()
     traces = conn.execute(
@@ -1234,9 +1352,16 @@ def test_g_e8_hypomnema_content_change_degrades_and_emits_trace(tmp_path):
     # Ordinary write attempts to change content — must degrade.
     store.write_hypomnema_entry(
         content="MUTATED HYPO",
-        entry_id="wh", agent_id="oliver", person_id="david",
-        project_scope="pai", source="observed", density=0.5,
-        domain="identity", confidence=0.6, salience=0.5, foundational=True,
+        entry_id="wh",
+        agent_id="oliver",
+        person_id="david",
+        project_scope="pai",
+        source="observed",
+        density=0.5,
+        domain="identity",
+        confidence=0.6,
+        salience=0.5,
+        foundational=True,
     )
     row = conn.execute(
         "SELECT decision_ref, read_visibility FROM hypomnema_entries WHERE id='wh'"
@@ -1264,9 +1389,16 @@ def test_g_e8_hypomnema_confidence_only_preserves_ref(tmp_path):
     conn.commit()
     store.write_hypomnema_entry(
         content="stable",  # unchanged
-        entry_id="wh2", agent_id="oliver", person_id="david",
-        project_scope="pai", source="observed", density=0.5,
-        domain="identity", confidence=0.99, salience=0.9, foundational=True,
+        entry_id="wh2",
+        agent_id="oliver",
+        person_id="david",
+        project_scope="pai",
+        source="observed",
+        density=0.5,
+        domain="identity",
+        confidence=0.99,
+        salience=0.9,
+        foundational=True,
     )
     row = conn.execute(
         "SELECT decision_ref FROM hypomnema_entries WHERE id='wh2'"
@@ -1299,16 +1431,23 @@ def test_r5_1_tcb_excludes_degrade_trace_proposals(tmp_path):
     store = EngramStore(tmp_path / "tcb.db")
     # A real applyable proposal.
     store.write_proposal(
-        source_authority="user_stated", kind="semantic",
-        target_surface="beliefs", transition="real claim",
-        domain="identity", blast_radius="identity",
-        payload={"content": "I am Oliver."}, proposal_id="p-real",
+        source_authority="user_stated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="real claim",
+        domain="identity",
+        blast_radius="identity",
+        payload={"content": "I am Oliver."},
+        proposal_id="p-real",
     )
     # A degrade trace: identity blast, but payload has no 'content'.
     store.write_proposal(
-        source_authority="observed", kind="semantic",
-        target_surface="beliefs", transition="witnessed row degrade",
-        domain="identity", blast_radius="identity",
+        source_authority="observed",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="witnessed row degrade",
+        domain="identity",
+        blast_radius="identity",
         payload={"old_row_hash": "abc", "new_row_hash": "def"},
         proposal_id="degrade-beliefs-wb-0000000000000000",
     )
@@ -1323,16 +1462,24 @@ def test_r5_1_tcb_excludes_general_domain_identity_blast(tmp_path):
     """Apply requires domain in {identity, foundational} (r2 #7). TCB now mirrors."""
     store = EngramStore(tmp_path / "tcb.db")
     store.write_proposal(
-        source_authority="user_stated", kind="semantic",
-        target_surface="beliefs", transition="normal",
-        domain="identity", blast_radius="identity",
-        payload={"content": "ok"}, proposal_id="p-ok",
+        source_authority="user_stated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="normal",
+        domain="identity",
+        blast_radius="identity",
+        payload={"content": "ok"},
+        proposal_id="p-ok",
     )
     store.write_proposal(
-        source_authority="user_stated", kind="semantic",
-        target_surface="beliefs", transition="mislabeled",
-        domain="general", blast_radius="identity",
-        payload={"content": "bad"}, proposal_id="p-bad-domain",
+        source_authority="user_stated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="mislabeled",
+        domain="general",
+        blast_radius="identity",
+        payload={"content": "bad"},
+        proposal_id="p-bad-domain",
     )
     result = _run_tcb_wrapper(store.db_path, tmp_path / "j.jsonl", "s\n")
     assert "p-ok" in result.stdout
@@ -1358,8 +1505,12 @@ def test_r5_2_revise_hypomnema_content_change_degrades(tmp_path):
     )
     conn.commit()
     store.revise_hypomnema_entry(
-        entry_id="wr", new_content="mutated via revise", reason="test",
-        agent_id="oliver", person_id="david", project_scope="pai",
+        entry_id="wr",
+        new_content="mutated via revise",
+        reason="test",
+        agent_id="oliver",
+        person_id="david",
+        project_scope="pai",
     )
     row = conn.execute(
         "SELECT decision_ref, read_visibility FROM hypomnema_entries WHERE id='wr'"
@@ -1392,7 +1543,12 @@ def _load_watchdog_module(db_path, journal_path):
     import importlib.util
     import pathlib
     from importlib.machinery import SourceFileLoader
-    wd_path = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "mnemos-vault-watchdog.py"
+
+    wd_path = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "scripts"
+        / "mnemos-vault-watchdog.py"
+    )
     loader = SourceFileLoader("mnemos_watchdog_r5", str(wd_path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
@@ -1417,8 +1573,10 @@ def test_r5_3_watchdog_catches_corrupt_journal_and_alerts(tmp_path, monkeypatch)
     # 008i: single-line malformation now classifies as torn-tail (recoverable
     # power-loss shape). Write MID-FILE corruption to trigger the corrupt
     # class: valid line, then garbage, then a valid-looking tail.
-    good = ('{"v":1,"proposal_id":"p","content_sha256":"x","decision":"approved"'
-            ',"scope":"identity","prev_sha256":"0"}')
+    good = (
+        '{"v":1,"proposal_id":"p","content_sha256":"x","decision":"approved"'
+        ',"scope":"identity","prev_sha256":"0"}'
+    )
     journal.write_text(
         good + "\n{garbage in the middle\n" + good + "\n",
         encoding="utf-8",
@@ -1473,11 +1631,14 @@ def test_r6_1_tcb_neutralizes_ansi_in_transition(tmp_path):
     """A malicious ANSI in `transition` must not reach David's terminal."""
     store = EngramStore(tmp_path / "tcb.db")
     store.write_proposal(
-        source_authority="user_stated", kind="semantic",
+        source_authority="user_stated",
+        kind="semantic",
         target_surface="beliefs",
         transition="\x1b[2J\x1b[H  FAKE PROMPT: enter approval > ",
-        domain="identity", blast_radius="identity",
-        payload={"content": "attacker payload"}, proposal_id="p-inject",
+        domain="identity",
+        blast_radius="identity",
+        payload={"content": "attacker payload"},
+        proposal_id="p-inject",
     )
     result = _run_tcb_wrapper(store.db_path, tmp_path / "j.jsonl", "s\n")
     assert "\x1b[2J" not in result.stdout, (
@@ -1491,9 +1652,12 @@ def test_r6_1_tcb_neutralizes_ansi_in_transition(tmp_path):
 def test_r6_1_tcb_neutralizes_ansi_in_payload_content(tmp_path):
     store = EngramStore(tmp_path / "tcb.db")
     store.write_proposal(
-        source_authority="user_stated", kind="semantic",
-        target_surface="beliefs", transition="normal",
-        domain="identity", blast_radius="identity",
+        source_authority="user_stated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="normal",
+        domain="identity",
+        blast_radius="identity",
         payload={"content": "harmless\x1b[31mred\x1b[0m"},
         proposal_id="p-p",
     )
@@ -1509,7 +1673,11 @@ def test_r6_2_missing_journal_arms_and_re_quarantines(tmp_path, monkeypatch):
     exists but the journal FILE is missing → still arms, so reconcile sees an
     empty journal and re-quarantines stamped identity rows — NOT silently
     un-arm (fail-open)."""
-    from mnemos.store.sqlite_store import _resolve_vault_active, resolve_vault_journal_path
+    from mnemos.store.sqlite_store import (
+        _resolve_vault_active,
+        resolve_vault_journal_path,
+    )
+
     ghost = tmp_path / "does-not-exist.jsonl"  # file missing; parent dir exists
     _arm_vault(monkeypatch, ghost)
     assert _resolve_vault_active(None) is True, (
@@ -1532,9 +1700,7 @@ def test_r6_2_missing_journal_re_quarantines_stamped_rows(tmp_path):
     report = store.reconcile_identity_vault(journal)
     assert not report.ok
     conn = store._get_conn()
-    row = conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='b-x'"
-    ).fetchone()
+    row = conn.execute("SELECT read_visibility FROM beliefs WHERE id='b-x'").fetchone()
     assert row[0] == "review_only"
 
 
@@ -1563,7 +1729,9 @@ def test_r6_3_reconcile_catches_witnessed_hypomnema_deactivated(tmp_path):
     store = _store(tmp_path)
     journal = tmp_path / "decisions.jsonl"
     proposal = _make_identity_proposal(
-        store, surface="hypomnema_entries", target_id="h-off",
+        store,
+        surface="hypomnema_entries",
+        target_id="h-off",
         content="witnessed hypo",
     )
     _append_journal(journal, [(proposal, "approved")])
@@ -1625,7 +1793,9 @@ def test_r6_4_hypomnema_stats_exclude_unwitnessed_identity(tmp_path, monkeypatch
         " 't', 't')"
     )
     conn.commit()
-    stats = store.get_hypomnema_stats(agent_id="oliver", read_visibility="operational_context")
+    stats = store.get_hypomnema_stats(
+        agent_id="oliver", read_visibility="operational_context"
+    )
     assert stats["hypomnema_total"] == 0, (
         f"008g-r6 #4: unwitnessed identity hypomnema counted in stats "
         f"(got {stats['hypomnema_total']}, expected 0)"
@@ -1703,7 +1873,10 @@ def test_r7_3_apply_re_witness_resets_hypomnema_active_and_superseded(tmp_path):
     conn.commit()
     journal = tmp_path / "decisions.jsonl"
     proposal = _make_identity_proposal(
-        store, surface="hypomnema_entries", target_id="h-rewit", content="new hypo",
+        store,
+        surface="hypomnema_entries",
+        target_id="h-rewit",
+        content="new hypo",
     )
     _append_journal(journal, [(proposal, "approved")])
     _apply_identity(store, proposal["id"], journal)
@@ -1738,7 +1911,9 @@ def test_r7_4_hypomnema_promotion_candidates_excludes_unwitnessed_identity(
         " 't', 't')"
     )
     conn.commit()
-    stats = store.get_hypomnema_stats(agent_id="oliver", read_visibility="operational_context")
+    stats = store.get_hypomnema_stats(
+        agent_id="oliver", read_visibility="operational_context"
+    )
     assert stats["hypomnema_promotion_candidates"] == 0, (
         f"008g-r7 #4: unwitnessed identity hypomnema still in candidate count "
         f"({stats['hypomnema_promotion_candidates']})"
@@ -1771,9 +1946,7 @@ def test_r8_1_apply_rejects_when_ledger_flipped_to_terminal(tmp_path):
         _apply_identity(store, proposal["id"], journal)
     # And the target row must NOT exist — the write is inside the transaction
     # that got rolled back.
-    row = conn.execute(
-        "SELECT id FROM beliefs WHERE id='b-toctou'"
-    ).fetchone()
+    row = conn.execute("SELECT id FROM beliefs WHERE id='b-toctou'").fetchone()
     assert row is None, (
         "008g-r8 #1: target belief committed despite ledger already terminal"
     )
@@ -1814,6 +1987,7 @@ def test_r8_2_apply_refuses_empty_target_id(tmp_path):
 def test_r8_2_tcb_hides_null_target_id_proposals(tmp_path):
     """The TCB must not offer proposals with target_id=NULL — apply refuses them."""
     from datetime import datetime as _dt, timezone as _tz
+
     store = EngramStore(tmp_path / "tcb.db")
     conn = store._get_conn()
     now = int(_dt.now(_tz.utc).timestamp())
@@ -1826,7 +2000,7 @@ def test_r8_2_tcb_hides_null_target_id_proposals(tmp_path):
         " ('p-null', 'oliver', 'david', 'pai', 'user_stated', 'semantic',"
         " 'identity', 'beliefs', 't', 'identity', 'audit_only',"
         " 'pending_review', '', 'affmem-v1', NULL, '[]', "
-        "'{\"content\": \"x\"}', ?, ?, NULL, NULL)",
+        '\'{"content": "x"}\', ?, ?, NULL, NULL)',
         (now, now),
     )
     conn.commit()
@@ -1848,6 +2022,7 @@ def test_r9_1_modulator_belief_count_excludes_unwitnessed_identity(
     """Modulators drive openness/temperature; an unwitnessed identity belief
     must not skew belief_count when the vault is armed."""
     from mnemos.substrate.modulators import compute_modulators
+
     j = tmp_path / "vault.jsonl"
     j.write_text("", encoding="utf-8")
     _arm_vault(monkeypatch, j)
@@ -1944,14 +2119,17 @@ def test_008i_torn_tail_is_alert_only_no_quarantine(tmp_path):
     assert any(f["kind"] == "journal_torn_tail" for f in report.findings), (
         "008i: torn tail must alert"
     )
-    assert not any(
-        f["kind"] == "journal_corrupt" for f in report.findings
-    ), "008i: torn tail must NOT be treated as corrupt"
+    assert not any(f["kind"] == "journal_corrupt" for f in report.findings), (
+        "008i: torn tail must NOT be treated as corrupt"
+    )
     # Row stays operational — no quarantine on torn-tail.
     conn = store._get_conn()
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='b-torn'"
-    ).fetchone()[0] == "operational_context"
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='b-torn'"
+        ).fetchone()[0]
+        == "operational_context"
+    )
 
 
 def test_008i_mid_file_corruption_quarantines_witnessed_rows(tmp_path):
@@ -1962,13 +2140,18 @@ def test_008i_mid_file_corruption_quarantines_witnessed_rows(tmp_path):
     _append_journal(journal, [(proposal, "approved")])
     _apply_identity(store, proposal["id"], journal)
     conn = store._get_conn()
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='b-corr'"
-    ).fetchone()[0] == "operational_context"
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='b-corr'"
+        ).fetchone()[0]
+        == "operational_context"
+    )
     # Corrupt the MIDDLE of the journal: valid line, garbage, valid line.
     original = journal.read_text(encoding="utf-8")
-    good_line = ('{"v":1,"proposal_id":"p2","content_sha256":"y",'
-                 '"decision":"approved","scope":"identity","prev_sha256":"z"}')
+    good_line = (
+        '{"v":1,"proposal_id":"p2","content_sha256":"y",'
+        '"decision":"approved","scope":"identity","prev_sha256":"z"}'
+    )
     journal.write_text(
         original + "{garbage-mid-file\n" + good_line + "\n",
         encoding="utf-8",
@@ -1978,9 +2161,12 @@ def test_008i_mid_file_corruption_quarantines_witnessed_rows(tmp_path):
         "008i: mid-file corruption must produce a journal_corrupt finding"
     )
     # The witnessed row is now quarantined pending David's journal repair.
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='b-corr'"
-    ).fetchone()[0] == "review_only"
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='b-corr'"
+        ).fetchone()[0]
+        == "review_only"
+    )
 
 
 def test_008i_restore_on_verify_after_journal_repair(tmp_path):
@@ -1996,17 +2182,21 @@ def test_008i_restore_on_verify_after_journal_repair(tmp_path):
     original = journal.read_text(encoding="utf-8")
     journal.write_text(original + "{mid-garbage\n" + original, encoding="utf-8")
     store.reconcile_identity_vault(journal)
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='b-restore'"
-    ).fetchone()[0] == "review_only"
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='b-restore'"
+        ).fetchone()[0]
+        == "review_only"
+    )
     # David repairs the journal (removes the mid-file garbage).
     journal.write_text(original, encoding="utf-8")
     report = store.reconcile_identity_vault(journal)
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='b-restore'"
-    ).fetchone()[0] == "operational_context", (
-        "008i: restore-on-verify did not promote the row after journal repair"
-    )
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='b-restore'"
+        ).fetchone()[0]
+        == "operational_context"
+    ), "008i: restore-on-verify did not promote the row after journal repair"
     # And the restore is recorded.
     assert any(item.get("kind") == "restored" for item in report.requarantined), (
         "008i: restore event not surfaced in the report"
@@ -2027,11 +2217,12 @@ def test_008i_curator_flagged_row_stays_review_only_after_repair(tmp_path):
     journal = tmp_path / "j.jsonl"
     journal.write_text("", encoding="utf-8")
     store.reconcile_identity_vault(journal)
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='flagged'"
-    ).fetchone()[0] == "review_only", (
-        "008i: curator-flagged (no-ref) row was falsely restored"
-    )
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='flagged'"
+        ).fetchone()[0]
+        == "review_only"
+    ), "008i: curator-flagged (no-ref) row was falsely restored"
 
 
 def test_008i_upsert_degraded_row_stays_review_only(tmp_path):
@@ -2052,11 +2243,12 @@ def test_008i_upsert_degraded_row_stays_review_only(tmp_path):
     journal = tmp_path / "j.jsonl"
     journal.write_text("", encoding="utf-8")
     store.reconcile_identity_vault(journal)
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='degraded'"
-    ).fetchone()[0] == "review_only", (
-        "008i: upsert-degraded row was falsely restored"
-    )
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='degraded'"
+        ).fetchone()[0]
+        == "review_only"
+    ), "008i: upsert-degraded row was falsely restored"
 
 
 # ── 008i-r10 gap fixes ──
@@ -2068,6 +2260,7 @@ def test_r10_1_session_start_runs_reconcile_when_legacy_stamp_fails(
     """apply_legacy_witness raising on corrupt journal must NOT prevent
     reconcile from running — that's the fail-open path this closes."""
     import mnemos.mcp_server as server
+
     store = _store(tmp_path)
     # Seed a witnessed row so quarantine has something to touch.
     journal = tmp_path / "journal.jsonl"
@@ -2078,8 +2271,10 @@ def test_r10_1_session_start_runs_reconcile_when_legacy_stamp_fails(
     # Corrupt the journal MID-FILE so both apply_legacy_witness AND reconcile
     # will see it. apply_legacy_witness raises first (chain broken).
     original = journal.read_text(encoding="utf-8")
-    good_line = ('{"v":1,"proposal_id":"p2","content_sha256":"y",'
-                 '"decision":"approved","scope":"identity","prev_sha256":"z"}')
+    good_line = (
+        '{"v":1,"proposal_id":"p2","content_sha256":"y",'
+        '"decision":"approved","scope":"identity","prev_sha256":"z"}'
+    )
     journal.write_text(
         original + "{mid-garbage\n" + good_line + "\n",
         encoding="utf-8",
@@ -2090,9 +2285,12 @@ def test_r10_1_session_start_runs_reconcile_when_legacy_stamp_fails(
     server._reconcile_vault_on_session_start()
     # The witnessed row must have been quarantined by the reconcile pass,
     # despite apply_legacy_witness raising first.
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='b-r10'"
-    ).fetchone()[0] == "review_only", (
+    assert (
+        conn.execute("SELECT read_visibility FROM beliefs WHERE id='b-r10'").fetchone()[
+            0
+        ]
+        == "review_only"
+    ), (
         "008i-r10 #1: session-start failed open when apply_legacy_witness "
         "raised — reconcile never ran"
     )
@@ -2109,14 +2307,15 @@ def test_r10_2_corrupt_journal_quarantines_detiered_witnessed_row(tmp_path):
     conn = store._get_conn()
     # Raw-SQL de-tier the row but keep decision_ref + operational.
     conn.execute(
-        "UPDATE beliefs SET tier='operational', domain='general' "
-        "WHERE id='b-detier'"
+        "UPDATE beliefs SET tier='operational', domain='general' WHERE id='b-detier'"
     )
     conn.commit()
     # Now corrupt the journal mid-file.
     original = journal.read_text(encoding="utf-8")
-    good_line = ('{"v":1,"proposal_id":"p2","content_sha256":"y",'
-                 '"decision":"approved","scope":"identity","prev_sha256":"z"}')
+    good_line = (
+        '{"v":1,"proposal_id":"p2","content_sha256":"y",'
+        '"decision":"approved","scope":"identity","prev_sha256":"z"}'
+    )
     journal.write_text(
         original + "{mid-garbage\n" + good_line + "\n",
         encoding="utf-8",
@@ -2125,12 +2324,12 @@ def test_r10_2_corrupt_journal_quarantines_detiered_witnessed_row(tmp_path):
     # The de-tiered row still carries decision_ref — corrupt-journal must
     # quarantine it too, not skip it because the tier predicate no longer
     # matches.
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='b-detier'"
-    ).fetchone()[0] == "review_only", (
-        "008i-r10 #2: corrupt-journal fail-closed missed the de-tiered "
-        "witnessed row"
-    )
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='b-detier'"
+        ).fetchone()[0]
+        == "review_only"
+    ), "008i-r10 #2: corrupt-journal fail-closed missed the de-tiered witnessed row"
 
 
 def test_r10_3_tcb_refuses_to_append_after_torn_tail(tmp_path):
@@ -2139,17 +2338,23 @@ def test_r10_3_tcb_refuses_to_append_after_torn_tail(tmp_path):
     as [torn][new] which future reads classify as mid-file corruption."""
     store = EngramStore(tmp_path / "torn.db")
     store.write_proposal(
-        source_authority="user_stated", kind="semantic",
+        source_authority="user_stated",
+        kind="semantic",
         target_surface="beliefs",
         transition="post-torn approval",
-        domain="identity", blast_radius="identity",
-        payload={"content": "x"}, proposal_id="p-r10-3",
+        domain="identity",
+        blast_radius="identity",
+        payload={"content": "x"},
+        proposal_id="p-r10-3",
     )
     journal = tmp_path / "j.jsonl"
     # Simulate a torn tail: valid line + partial garbage at end.
-    good_line = ('{"v":1,"proposal_id":"prior","content_sha256":"z",'
-                 '"decision":"approved","scope":"identity","prev_sha256":"'
-                 + vj.genesis_prev_hash() + '"}')
+    good_line = (
+        '{"v":1,"proposal_id":"prior","content_sha256":"z",'
+        '"decision":"approved","scope":"identity","prev_sha256":"'
+        + vj.genesis_prev_hash()
+        + '"}'
+    )
     journal.write_text(good_line + "\n{partial-torn-", encoding="utf-8")
     result = _run_tcb_wrapper(store.db_path, journal, "a\n")
     assert result.returncode == 4, (
@@ -2184,24 +2389,30 @@ def test_r10_4_legacy_witness_restored_on_verify(tmp_path):
     _apply_legacy(store, journal)
     # Corrupt → quarantines the legacy row too.
     original = journal.read_text(encoding="utf-8")
-    good_line = ('{"v":1,"proposal_id":"p2","content_sha256":"y",'
-                 '"decision":"approved","scope":"identity","prev_sha256":"z"}')
+    good_line = (
+        '{"v":1,"proposal_id":"p2","content_sha256":"y",'
+        '"decision":"approved","scope":"identity","prev_sha256":"z"}'
+    )
     journal.write_text(
         original + "{mid-garbage\n" + good_line + "\n",
         encoding="utf-8",
     )
     store.reconcile_identity_vault(journal)
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='legacy-restore'"
-    ).fetchone()[0] == "review_only"
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='legacy-restore'"
+        ).fetchone()[0]
+        == "review_only"
+    )
     # Repair: rewrite the journal without the mid-file corruption.
     journal.write_text(original, encoding="utf-8")
     store.reconcile_identity_vault(journal)
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='legacy-restore'"
-    ).fetchone()[0] == "operational_context", (
-        "008i-r10 #4: legacy-witnessed row not restored after journal repair"
-    )
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='legacy-restore'"
+        ).fetchone()[0]
+        == "operational_context"
+    ), "008i-r10 #4: legacy-witnessed row not restored after journal repair"
 
 
 # ── 008-r14 in-band fixes ──
@@ -2261,6 +2472,7 @@ def test_r14_3_session_start_refreshes_vault_active(tmp_path, monkeypatch):
     _vault_active=False; after the journal appears, session-start must
     refresh the flag so read APIs gate for the rest of the process."""
     import mnemos.mcp_server as server
+
     # Construct with no journal → inert.
     store = EngramStore(tmp_path / "s.db", vault_active=False)
     assert store._vault_active is False
@@ -2282,6 +2494,7 @@ def test_r13_1_unreadable_journal_fails_closed(tmp_path):
     """An unreadable journal (OSError on read) classifies as corrupt →
     quarantines witnessed operational rows, not silently absent."""
     from mnemos.vault import journal as vjmod
+
     store = _store(tmp_path)
     journal = tmp_path / "j.jsonl"
     proposal = _make_identity_proposal(store, target_id="b-unread")
@@ -2291,8 +2504,10 @@ def test_r13_1_unreadable_journal_fails_closed(tmp_path):
     # Make the journal unreadable (chmod 000). Skip if running as root (can't
     # simulate permission denial as root).
     import os
+
     if os.geteuid() == 0:
         import pytest
+
         pytest.skip("cannot simulate permission denial as root")
     journal.chmod(0o000)
     try:
@@ -2301,11 +2516,12 @@ def test_r13_1_unreadable_journal_fails_closed(tmp_path):
             "008k-r13 #1: unreadable journal did not classify as corrupt"
         )
         store.reconcile_identity_vault(journal)
-        assert conn.execute(
-            "SELECT read_visibility FROM beliefs WHERE id='b-unread'"
-        ).fetchone()[0] == "review_only", (
-            "008k-r13 #1: witnessed row not quarantined on unreadable journal"
-        )
+        assert (
+            conn.execute(
+                "SELECT read_visibility FROM beliefs WHERE id='b-unread'"
+            ).fetchone()[0]
+            == "review_only"
+        ), "008k-r13 #1: witnessed row not quarantined on unreadable journal"
     finally:
         journal.chmod(0o644)
 
@@ -2314,11 +2530,14 @@ def test_r13_3_pai_reimport_witnessed_belief_degrades(tmp_path):
     """Re-importing a witnessed belief with changed content must degrade the
     row (clear ref + review_only + trace), not leave a stale witness."""
     from mnemos.importer import pai
+
     store = _store(tmp_path)
     conn = store._get_conn()
     # A witnessed belief already in the store (simulate a prior apply + witness).
     bid = pai._target_id(
-        job_id="j1", source_path="SOUL.md", source_anchor="h:test:001",
+        job_id="j1",
+        source_path="SOUL.md",
+        source_anchor="h:test:001",
         target_table="beliefs",
     )
     conn.execute(
@@ -2340,13 +2559,23 @@ def test_r13_3_pai_reimport_witnessed_belief_degrades(tmp_path):
     # Build a re-import row with CHANGED content.
     profile = pai._PROFILES["beliefs"]
     row = pai.PaiImportRow(
-        job_id="j1", source_path="SOUL.md", source_anchor="h:test:001",
-        source_kind="beliefs", target_table="beliefs", target_id=bid,
-        source_hash="newhash", content="REVISED witnessed content",
-        action=pai.ACTION_UPDATE, reason="content changed",
-        mapped_source_hash="oldhash", target_projection_hash="x",
-        original_substrate="s", original_timestamp=None,
-        tags=profile.tags, domain=profile.domain, tier=profile.tier,
+        job_id="j1",
+        source_path="SOUL.md",
+        source_anchor="h:test:001",
+        source_kind="beliefs",
+        target_table="beliefs",
+        target_id=bid,
+        source_hash="newhash",
+        content="REVISED witnessed content",
+        action=pai.ACTION_UPDATE,
+        reason="content changed",
+        mapped_source_hash="oldhash",
+        target_projection_hash="x",
+        original_substrate="s",
+        original_timestamp=None,
+        tags=profile.tags,
+        domain=profile.domain,
+        tier=profile.tier,
         confidence=profile.confidence,
         voice_exemplar_eligible=profile.voice_exemplar_eligible,
         softening_protected=profile.softening_protected,
@@ -2371,10 +2600,13 @@ def test_r13_4_pai_deactivate_witnessed_hypomnema_degrades(tmp_path):
     """PAI deactivate of a witnessed hypomnema must degrade (clear ref +
     review_only + trace)."""
     from mnemos.importer import pai
+
     store = _store(tmp_path)
     conn = store._get_conn()
     hid = pai._target_id(
-        job_id="j1", source_path="SOUL.md", source_anchor="h:hypo:001",
+        job_id="j1",
+        source_path="SOUL.md",
+        source_anchor="h:hypo:001",
         target_table="hypomnema_entries",
     )
     conn.execute(
@@ -2389,12 +2621,23 @@ def test_r13_4_pai_deactivate_witnessed_hypomnema_degrades(tmp_path):
     conn.commit()
     profile = pai._PROFILES["hypomnema"]
     row = pai.PaiImportRow(
-        job_id="j1", source_path="SOUL.md", source_anchor="h:hypo:001",
-        source_kind="hypomnema", target_table="hypomnema_entries", target_id=hid,
-        source_hash="h", content="witnessed hypo", action=pai.ACTION_DEACTIVATE,
-        reason="deactivate", mapped_source_hash="h", target_projection_hash="x",
-        original_substrate="s", original_timestamp=None,
-        tags=profile.tags, domain=profile.domain, tier=profile.tier,
+        job_id="j1",
+        source_path="SOUL.md",
+        source_anchor="h:hypo:001",
+        source_kind="hypomnema",
+        target_table="hypomnema_entries",
+        target_id=hid,
+        source_hash="h",
+        content="witnessed hypo",
+        action=pai.ACTION_DEACTIVATE,
+        reason="deactivate",
+        mapped_source_hash="h",
+        target_projection_hash="x",
+        original_substrate="s",
+        original_timestamp=None,
+        tags=profile.tags,
+        domain=profile.domain,
+        tier=profile.tier,
         confidence=profile.confidence,
         voice_exemplar_eligible=profile.voice_exemplar_eligible,
         softening_protected=profile.softening_protected,
@@ -2431,11 +2674,12 @@ def test_r12_1_detiered_witnessed_row_quarantined_on_missing_journal(tmp_path):
     conn.commit()
     journal.unlink()
     store.reconcile_identity_vault(journal)
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='b-esc'"
-    ).fetchone()[0] == "review_only", (
-        "008k-r12 #1: de-tiered witnessed row escaped quarantine on missing journal"
-    )
+    assert (
+        conn.execute("SELECT read_visibility FROM beliefs WHERE id='b-esc'").fetchone()[
+            0
+        ]
+        == "review_only"
+    ), "008k-r12 #1: de-tiered witnessed row escaped quarantine on missing journal"
 
 
 def test_r12_1_detiered_row_quarantined_after_chain_break(tmp_path):
@@ -2455,11 +2699,10 @@ def test_r12_1_detiered_row_quarantined_after_chain_break(tmp_path):
     obj["prev_sha256"] = "0" * 64
     journal.write_text(json.dumps(obj) + "\n", encoding="utf-8")
     store.reconcile_identity_vault(journal)
-    assert conn.execute(
-        "SELECT read_visibility FROM beliefs WHERE id='b-a'"
-    ).fetchone()[0] == "review_only", (
-        "008k-r12 #1: de-tiered row with post-break ref escaped quarantine"
-    )
+    assert (
+        conn.execute("SELECT read_visibility FROM beliefs WHERE id='b-a'").fetchone()[0]
+        == "review_only"
+    ), "008k-r12 #1: de-tiered row with post-break ref escaped quarantine"
 
 
 def test_r12_2_hypomnema_stats_admin_read_bypasses_gate(tmp_path, monkeypatch):
@@ -2521,7 +2764,9 @@ def test_008k_e2b_supersede_witnessed_hypomnema_degrades_and_traces(tmp_path):
     store = _store(tmp_path)
     journal = tmp_path / "j.jsonl"
     proposal = _make_identity_proposal(
-        store, surface="hypomnema_entries", target_id="h-sup",
+        store,
+        surface="hypomnema_entries",
+        target_id="h-sup",
         content="original identity claim",
     )
     _append_journal(journal, [(proposal, "approved")])
@@ -2529,18 +2774,19 @@ def test_008k_e2b_supersede_witnessed_hypomnema_degrades_and_traces(tmp_path):
     conn = store._get_conn()
     # Row is witnessed + operational at this point.
     assert conn.execute(
-        "SELECT decision_ref, read_visibility FROM hypomnema_entries "
-        "WHERE id='h-sup'"
+        "SELECT decision_ref, read_visibility FROM hypomnema_entries WHERE id='h-sup'"
     ).fetchone()[0]
     # Ordinary supersede via the public API.
     new_id = store.supersede_hypomnema_entry(
-        "h-sup", "revised claim",
+        "h-sup",
+        "revised claim",
         reason="consolidation",
-        agent_id="oliver", person_id="david", project_scope="pai",
+        agent_id="oliver",
+        person_id="david",
+        project_scope="pai",
     )
     row = conn.execute(
-        "SELECT decision_ref, read_visibility FROM hypomnema_entries "
-        "WHERE id='h-sup'"
+        "SELECT decision_ref, read_visibility FROM hypomnema_entries WHERE id='h-sup'"
     ).fetchone()
     assert row[0] is None, (
         "008k E2B: supersede did not clear decision_ref on witnessed row"
@@ -2559,7 +2805,8 @@ def test_008k_e2b_supersede_witnessed_hypomnema_degrades_and_traces(tmp_path):
     # false-fire because the ref was cleared at the mutation site.
     report = store.reconcile_identity_vault(journal)
     tampered = [
-        f for f in report.findings
+        f
+        for f in report.findings
         if f["kind"] == "witnessed_row_tampered" and f.get("row_id") == "h-sup"
     ]
     assert not tampered, (
@@ -2573,19 +2820,23 @@ def test_008k_e2b_archive_witnessed_hypomnema_degrades_and_traces(tmp_path):
     store = _store(tmp_path)
     journal = tmp_path / "j.jsonl"
     proposal = _make_identity_proposal(
-        store, surface="hypomnema_entries", target_id="h-arc",
+        store,
+        surface="hypomnema_entries",
+        target_id="h-arc",
         content="to be archived",
     )
     _append_journal(journal, [(proposal, "approved")])
     _apply_identity(store, proposal["id"], journal)
     store.archive_hypomnema_entry(
-        "h-arc", reason="retired",
-        agent_id="oliver", person_id="david", project_scope="pai",
+        "h-arc",
+        reason="retired",
+        agent_id="oliver",
+        person_id="david",
+        project_scope="pai",
     )
     conn = store._get_conn()
     row = conn.execute(
-        "SELECT decision_ref, read_visibility FROM hypomnema_entries "
-        "WHERE id='h-arc'"
+        "SELECT decision_ref, read_visibility FROM hypomnema_entries WHERE id='h-arc'"
     ).fetchone()
     assert row[0] is None
     assert row[1] == "review_only"
@@ -2603,16 +2854,16 @@ def test_008k_e2b_raw_sql_supersede_still_caught_by_reconcile(tmp_path):
     store = _store(tmp_path)
     journal = tmp_path / "j.jsonl"
     proposal = _make_identity_proposal(
-        store, surface="hypomnema_entries", target_id="h-raw",
+        store,
+        surface="hypomnema_entries",
+        target_id="h-raw",
         content="raw-sql bypass target",
     )
     _append_journal(journal, [(proposal, "approved")])
     _apply_identity(store, proposal["id"], journal)
     conn = store._get_conn()
     # Raw-SQL supersede, keeps decision_ref (bypasses supersede_hypomnema_entry).
-    conn.execute(
-        "UPDATE hypomnema_entries SET active = 0 WHERE id='h-raw'"
-    )
+    conn.execute("UPDATE hypomnema_entries SET active = 0 WHERE id='h-raw'")
     conn.commit()
     report = store.reconcile_identity_vault(journal)
     assert any(
@@ -2630,9 +2881,12 @@ def test_r11_1_tcb_recorded_line_sanitizes_proposal_id(tmp_path):
     right after David approves, hiding what he just did."""
     store = EngramStore(tmp_path / "tcb.db")
     store.write_proposal(
-        source_authority="user_stated", kind="semantic",
-        target_surface="beliefs", transition="normal",
-        domain="identity", blast_radius="identity",
+        source_authority="user_stated",
+        kind="semantic",
+        target_surface="beliefs",
+        transition="normal",
+        domain="identity",
+        blast_radius="identity",
         payload={"content": "x"},
         proposal_id="p\x1b[2Jinject",
     )
@@ -2691,9 +2945,7 @@ def test_r14_review_alert_writes_stamp_error_with_no_critical_findings(
     stamp_error = RuntimeError("apply_legacy_witness exploded: broken chain")
     # findings=[] simulates a clean reconcile; the alert fired only because the
     # legacy stamp raised.
-    server._alert_vault_findings(
-        "/some/journal.jsonl", [], [], stamp_error=stamp_error
-    )
+    server._alert_vault_findings("/some/journal.jsonl", [], [], stamp_error=stamp_error)
     written = list(inbox.glob("*-vault-session-start-alert.md"))
     assert len(written) == 1, "alert file was not written"
     body = written[0].read_text(encoding="utf-8")
@@ -2743,15 +2995,22 @@ def test_r14_review_session_start_alerts_on_high_findings(tmp_path, monkeypatch)
     journal.write_text("", encoding="utf-8")  # present → resolver arms the vault
     # Reconcile returns a HIGH finding + a re-quarantine, NO critical.
     fake_report = SimpleNamespace(
-        findings=[{
-            "severity": "high", "kind": "orphan_identity_row",
-            "detail": "decision_ref not in journal", "table": "beliefs",
-            "row_id": "b-orphan",
-        }],
-        requarantined=[{
-            "table": "beliefs", "row_id": "b-orphan",
-            "detail": "forced review_only (orphan)",
-        }],
+        findings=[
+            {
+                "severity": "high",
+                "kind": "orphan_identity_row",
+                "detail": "decision_ref not in journal",
+                "table": "beliefs",
+                "row_id": "b-orphan",
+            }
+        ],
+        requarantined=[
+            {
+                "table": "beliefs",
+                "row_id": "b-orphan",
+                "detail": "forced review_only (orphan)",
+            }
+        ],
     )
     monkeypatch.setattr(store, "reconcile_identity_vault", lambda *a, **k: fake_report)
     monkeypatch.setattr(server, "_store", store)
@@ -2879,14 +3138,14 @@ def test_r14_review_watchdog_has_no_redirect_flags():
         / "mnemos-vault-watchdog.py"
     ).read_text(encoding="utf-8")
     assert "add_argument" not in wd, "watchdog exposes a CLI flag — redirect vector"
-    assert "argparse" not in wd, "watchdog imports argparse — read pinned constants only"
+    assert "argparse" not in wd, (
+        "watchdog imports argparse — read pinned constants only"
+    )
     assert "DB_PATH = pathlib.Path(CANONICAL_DB_PATH)" in wd
     assert "JOURNAL_PATH = CANONICAL_JOURNAL_PATH" in wd
 
 
-def test_r14_review_installed_but_broken_vault_arms_fail_closed(
-    tmp_path, monkeypatch
-):
+def test_r14_review_installed_but_broken_vault_arms_fail_closed(tmp_path, monkeypatch):
     """008r-review (vault-untrusted-journal-disarms-gate): a TRUSTED install dir
     with a missing (or untrusted) journal is installed-but-BROKEN, not
     pre-install. It must ARM (fail-closed → reconciler re-quarantines), not go
@@ -2918,9 +3177,7 @@ def test_r14_review_audit_only_hide_is_caught_and_restored(tmp_path):
     _append_journal(journal, [(proposal, "approved")])
     _apply_identity(store, proposal["id"], journal)  # operational + decision_ref
     conn = store._get_conn()
-    conn.execute(
-        "UPDATE beliefs SET read_visibility='audit_only' WHERE id='b-hide'"
-    )
+    conn.execute("UPDATE beliefs SET read_visibility='audit_only' WHERE id='b-hide'")
     conn.commit()
     report = store.reconcile_identity_vault(str(journal))
     vis = conn.execute(
@@ -2929,9 +3186,9 @@ def test_r14_review_audit_only_hide_is_caught_and_restored(tmp_path):
     assert vis == "operational_context", (
         "audit_only-hidden witnessed row was not restored — the hide survived"
     )
-    assert any(
-        f.get("kind") == "witnessed_row_hidden" for f in report.findings
-    ), "reconcile did not flag the audit_only hide as tamper (reported clean)"
+    assert any(f.get("kind") == "witnessed_row_hidden" for f in report.findings), (
+        "reconcile did not flag the audit_only hide as tamper (reported clean)"
+    )
 
 
 def test_r14_review_legacy_lifecycle_hide_is_caught(tmp_path):
@@ -2996,10 +3253,1035 @@ def test_008r_apply_methods_have_no_journal_path_kwarg():
     for name in ("apply_identity_decision", "apply_legacy_witness"):
         params = list(inspect.signature(getattr(EngramStore, name)).parameters)
         offenders = [
-            p for p in params
-            if "journal" in p.lower() or "override" in p.lower()
+            p for p in params if "journal" in p.lower() or "override" in p.lower()
         ]
         assert not offenders, (
             f"{name} accepts journal-path kwarg(s) {offenders} — 008r removed "
             "the redirectable path; tests inject via the resolver seam instead"
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# T5 — reconciler audit + residuals (012 §2 rulings; report 014).
+# Every NEG assertion has a mutation proof recorded in report 014 §per-fix:
+# reverting the guard makes the test go red.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+# ── RULING J: witness re-verification discriminator in the not-located fallback ──
+# Amends 008k E2B: exemption narrows from "any review_only" to
+# "review_only AND a witnessed field genuinely changed".
+
+
+def test_t5_J_proposal_fallback_hide_is_caught_and_restored(tmp_path):
+    """J (proposal path): clear decision_ref + review_only via raw SQL with NO
+    witnessed field changed → witness still fully verifies → raw-SQL HIDE.
+    Reconcile must RESTORE it to operational and fire witnessed_row_hidden, not
+    exempt it as a legitimate degrade. Mutation proof: reverting the fallback to
+    the blanket `if review_only: pass` makes this red (hide survives)."""
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-Jhide")
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    conn = store._get_conn()
+    conn.execute(
+        "UPDATE beliefs SET decision_ref=NULL, read_visibility='review_only' "
+        "WHERE id='b-Jhide'"
+    )
+    conn.commit()
+    report = store.reconcile_identity_vault(str(journal))
+    vis = conn.execute(
+        "SELECT read_visibility FROM beliefs WHERE id='b-Jhide'"
+    ).fetchone()[0]
+    assert vis == "operational_context", "J: raw-SQL hide was not restored"
+    assert any(f.get("kind") == "witnessed_row_hidden" for f in report.findings), (
+        "J: reconcile did not flag the cleared-ref hide (reported clean)"
+    )
+
+
+def test_t5_J_proposal_genuine_degrade_stays_quarantined(tmp_path):
+    """J counter-case (proposal): a GENUINE degrade — a witnessed field (content)
+    changed AND ref cleared + review_only (what the write-path E7/E8/E2B does) —
+    must NOT be re-flagged as a hide, and must STAY at review_only. Mutation proof:
+    dropping the `not hidden` guard would restore/flag it (008g no-review-fatigue
+    intent violated), turning this red."""
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-Jdeg", content="orig")
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    conn = store._get_conn()
+    conn.execute(
+        "UPDATE beliefs SET content='changed', decision_ref=NULL, "
+        "read_visibility='review_only' WHERE id='b-Jdeg'"
+    )
+    conn.commit()
+    report = store.reconcile_identity_vault(str(journal))
+    vis = conn.execute(
+        "SELECT read_visibility FROM beliefs WHERE id='b-Jdeg'"
+    ).fetchone()[0]
+    assert vis == "review_only", "J: genuine degrade was wrongly restored"
+    assert not any(f.get("kind") == "witnessed_row_hidden" for f in report.findings), (
+        "J: genuine degrade wrongly flagged as a hide (review-fatigue regression)"
+    )
+
+
+def test_t5_J_legacy_fallback_hide_is_caught_and_restored(tmp_path):
+    """J (legacy path): same discriminator on _reconcile_legacy_line's fallback.
+    Clear ref + review_only, content intact → legacy witness fully re-verifies →
+    raw-SQL hide → restore + finding. Mutation proof: reverting the legacy
+    fallback to the blanket `if review_only: pass` makes this red."""
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    row = _insert_legacy_belief(store, bid="legJhide", content="I am Oliver.")
+    _append_legacy(journal, "beliefs", row)
+    _apply_legacy(store, journal)
+    conn = store._get_conn()
+    conn.execute(
+        "UPDATE beliefs SET decision_ref=NULL, read_visibility='review_only' "
+        "WHERE id='legJhide'"
+    )
+    conn.commit()
+    report = store.reconcile_identity_vault(str(journal))
+    vis = conn.execute(
+        "SELECT read_visibility FROM beliefs WHERE id='legJhide'"
+    ).fetchone()[0]
+    assert vis == "operational_context", "J legacy: raw-SQL hide was not restored"
+    assert any(f.get("kind") == "witnessed_row_hidden" for f in report.findings), (
+        "J legacy: reconcile did not flag the cleared-ref hide"
+    )
+
+
+def test_t5_J_legacy_genuine_degrade_stays_quarantined(tmp_path):
+    """J counter-case (legacy): a genuine content change + degrade must stay
+    review_only, not restore. Mutation proof: dropping the `not hidden` guard
+    restores it, turning this red."""
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    row = _insert_legacy_belief(store, bid="legJdeg", content="I am Oliver.")
+    _append_legacy(journal, "beliefs", row)
+    _apply_legacy(store, journal)
+    conn = store._get_conn()
+    conn.execute(
+        "UPDATE beliefs SET content='TAMPERED', decision_ref=NULL, "
+        "read_visibility='review_only' WHERE id='legJdeg'"
+    )
+    conn.commit()
+    report = store.reconcile_identity_vault(str(journal))
+    vis = conn.execute(
+        "SELECT read_visibility FROM beliefs WHERE id='legJdeg'"
+    ).fetchone()[0]
+    assert vis == "review_only", "J legacy: genuine degrade was wrongly restored"
+    assert not any(f.get("kind") == "witnessed_row_hidden" for f in report.findings), (
+        "J legacy: genuine degrade wrongly flagged as a hide"
+    )
+
+
+# ── RULING R6-1: existing agent-owned journal → unusable-at-read, quarantine-all ──
+# Detection in the store (owns the trust check); handling IDENTICAL to corrupt;
+# journal.py stays format-only; distinct label `journal_untrusted` permitted.
+
+
+def test_t5_R6_1_agent_owned_journal_quarantines_all(tmp_path, monkeypatch):
+    """R6-1: an existing agent-owned decisions.jsonl under a (dir-)trusted vault
+    is a self-authored leaf — its chain-valid lines must NOT witness identity
+    content. Reconcile must classify it unusable-at-read and route into the
+    IDENTICAL quarantine-all fail-closed handling the corrupt path uses, with a
+    distinct `journal_untrusted` label. Mutation proof: removing the
+    journal_untrusted branch in reconcile (or the store's trust check) lets the
+    witnessed row stay operational — this goes red."""
+    # Enable the real ownership check (conftest defaults it off). The tmp journal
+    # is owned by the test process → agent-owned → untrusted.
+    monkeypatch.setattr(_sq, "_JOURNAL_TRUST_CHECK_ENABLED", True)
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-r61")
+    _append_journal(journal, [(proposal, "approved")])
+    # Stamp the row operational by applying against the (still-trusted-at-apply)
+    # journal, then reconcile with the trust check on.
+    monkeypatch.setattr(_sq, "_JOURNAL_TRUST_CHECK_ENABLED", False)
+    _apply_identity(store, proposal["id"], journal)
+    monkeypatch.setattr(_sq, "_JOURNAL_TRUST_CHECK_ENABLED", True)
+    conn = store._get_conn()
+    assert (
+        conn.execute("SELECT read_visibility FROM beliefs WHERE id='b-r61'").fetchone()[
+            0
+        ]
+        == "operational_context"
+    )
+    report = store.reconcile_identity_vault(journal)
+    # Distinct forensic label, identical fail-closed handling.
+    assert any(f["kind"] == "journal_untrusted" for f in report.findings), (
+        "R6-1: agent-owned journal not classified untrusted"
+    )
+    # Quarantine-all: the witnessed row is forced review_only (never fail-open).
+    assert (
+        conn.execute("SELECT read_visibility FROM beliefs WHERE id='b-r61'").fetchone()[
+            0
+        ]
+        == "review_only"
+    ), "R6-1: witnessed row stayed operational — agent-owned journal was trusted"
+
+
+def test_t5_R6_1_untrusted_handling_is_identical_to_corrupt(tmp_path, monkeypatch):
+    """R6-1: the untrusted-journal handling must be BYTE-IDENTICAL to the corrupt
+    handling (only the label differs). Both quarantine every operational
+    witnessed identity row via _fail_closed_quarantine_all_witnessed. Assert the
+    requarantine records match in shape and coverage."""
+    monkeypatch.setattr(_sq, "_JOURNAL_TRUST_CHECK_ENABLED", False)
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-ident")
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    # Untrusted-journal report.
+    monkeypatch.setattr(_sq, "_JOURNAL_TRUST_CHECK_ENABLED", True)
+    untrusted_report = store.reconcile_identity_vault(journal)
+    conn = store._get_conn()
+    untrusted_vis = conn.execute(
+        "SELECT read_visibility FROM beliefs WHERE id='b-ident'"
+    ).fetchone()[0]
+    # Same fail-closed coverage: the witnessed operational row is re-quarantined.
+    assert untrusted_vis == "review_only"
+    assert any(
+        r["kind"] == "requarantined_journal_corrupt"
+        for r in untrusted_report.requarantined
+    ), "R6-1: untrusted path did not use the identical corrupt quarantine handling"
+
+
+def test_t5_R6_1_valid_trusted_journal_no_false_quarantine(tmp_path, monkeypatch):
+    """R6-1 counter-case: a trusted journal (the _vault_object_trusted seam
+    accepts it, as production's root-owned journal is) must reconcile normally —
+    NO false quarantine. Mutation proof: making the trust check always-True would
+    quarantine this valid case, turning it red."""
+    monkeypatch.setattr(_sq, "_JOURNAL_TRUST_CHECK_ENABLED", True)
+    # Trust the fixture (mirrors production's root-owned journal / _arm_vault).
+    monkeypatch.setattr(_sq, "_vault_object_trusted", lambda _p: True)
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-valid")
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    report = store.reconcile_identity_vault(journal)
+    assert report.ok, "R6-1: trusted journal false-quarantined (valid case broke)"
+    conn = store._get_conn()
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='b-valid'"
+        ).fetchone()[0]
+        == "operational_context"
+    )
+
+
+def test_t5_R6_1_round4_fail_open_regression_stays_red_provable(tmp_path, monkeypatch):
+    """R6-1: the round-4 fail-open regression (an untrusted journal must NEVER be
+    returned as authoritative / inert) stays red-provable. With the check on and
+    an agent-owned journal, reconcile must NOT be a no-op (fail-open) — it must
+    fail closed. Assert the report is NOT ok (a fail-open no-op would be ok)."""
+    monkeypatch.setattr(_sq, "_JOURNAL_TRUST_CHECK_ENABLED", False)
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-r4")
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    monkeypatch.setattr(_sq, "_JOURNAL_TRUST_CHECK_ENABLED", True)
+    report = store.reconcile_identity_vault(journal)
+    assert not report.ok, (
+        "R6-1: untrusted journal reconciled clean (fail-open) — never inert, "
+        "never trusted, never fail-open"
+    )
+
+
+def test_t5_R6_1_journal_module_has_no_ownership_knowledge():
+    """R6-1: journal.py (the stdlib TCB twin) must gain ZERO ownership knowledge —
+    it stays format-only. Grep the module for ownership/uid tokens; the trust
+    check lives in the store, not here."""
+    import pathlib
+
+    src = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "mnemos"
+        / "vault"
+        / "journal.py"
+    ).read_text(encoding="utf-8")
+    for token in (
+        "st_uid",
+        "getuid",
+        "geteuid",
+        "os.access",
+        "_vault_object_trusted",
+        "owner",
+        "_JOURNAL_TRUST",
+    ):
+        assert token not in src, (
+            f"journal.py gained ownership knowledge ({token!r}) — R6-1 requires "
+            "it stay format-only; the trust check belongs in the store"
+        )
+
+
+def test_t5_R6_1_apply_refuses_untrusted_journal(tmp_path, monkeypatch):
+    """R6-1 (apply path): apply_identity_decision must refuse to witness against
+    an agent-owned journal — an agent could hand-craft a chain-valid,
+    hash-matching line for its own content. Fail closed with a raise. Mutation
+    proof: removing the apply-side trust check lets the apply succeed."""
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-applyr61")
+    _append_journal(journal, [(proposal, "approved")])
+    # Enable the real ownership check; the tmp journal is agent-owned.
+    monkeypatch.setattr(_sq, "_JOURNAL_TRUST_CHECK_ENABLED", True)
+    prev = _sq.resolve_vault_journal_path
+    _sq.resolve_vault_journal_path = lambda: str(journal)
+    try:
+        with pytest.raises(ValueError, match="agent-owned|untrusted"):
+            store.apply_identity_decision(proposal["id"])
+    finally:
+        _sq.resolve_vault_journal_path = prev
+
+
+def test_t5_R6_1_legacy_apply_refuses_untrusted_journal(tmp_path, monkeypatch):
+    """R6-1 (legacy apply path): apply_legacy_witness must not stamp from an
+    agent-owned journal. Best-effort (session-start), so it returns empty with a
+    'journal-untrusted' skip rather than raising — but never stamps."""
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    row = _insert_legacy_belief(store, bid="legr61", content="I am Oliver.")
+    _append_legacy(journal, "beliefs", row)
+    monkeypatch.setattr(_sq, "_JOURNAL_TRUST_CHECK_ENABLED", True)
+    prev = _sq.resolve_vault_journal_path
+    _sq.resolve_vault_journal_path = lambda: str(journal)
+    try:
+        res = store.apply_legacy_witness()
+    finally:
+        _sq.resolve_vault_journal_path = prev
+    assert res["stamped"] == [], "R6-1: legacy witness stamped from untrusted journal"
+    assert "journal-untrusted" in res["skipped"]
+
+
+# ── RULING GAP-1: reconcile read-decide-write span runs under BEGIN IMMEDIATE ──
+
+
+def test_t5_GAP1_reconcile_takes_begin_immediate(tmp_path):
+    """GAP-1: reconcile must hold BEGIN IMMEDIATE across its read-decide-write
+    span (apply already does; reconcile did not). Observe the lock is taken.
+    Mutation proof: removing the BEGIN IMMEDIATE wrap makes this red."""
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-gap1")
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    real_conn = store._get_conn()
+    seen = {"immediate": False}
+
+    class _TracingConn:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, sql, *a, **k):
+            if isinstance(sql, str) and "BEGIN IMMEDIATE" in sql.upper():
+                seen["immediate"] = True
+            return self._inner.execute(sql, *a, **k)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    orig = store._get_conn
+    store._get_conn = lambda: _TracingConn(real_conn)  # type: ignore[assignment]
+    try:
+        store.reconcile_identity_vault(str(journal))
+    finally:
+        store._get_conn = orig  # type: ignore[assignment]
+    assert seen["immediate"] is True, (
+        "GAP-1: reconcile did not take BEGIN IMMEDIATE across the span (TOCTOU open)"
+    )
+
+
+def test_t5_GAP1_concurrent_writer_blocked_during_reconcile_span(tmp_path):
+    """GAP-1 TOCTOU closed: while RECONCILE's own BEGIN IMMEDIATE is held, a
+    concurrent writer (separate connection) attempting a mutation is BLOCKED.
+    The concurrent write is injected from a hook that fires the moment reconcile
+    opens its span lock — proving reconcile's OWN lock (not a manually-held one)
+    makes the read-decide-write atomic. Mutation proof: with the GAP-1 lock
+    removed, reconcile opens no BEGIN IMMEDIATE, the hook never fires — this
+    goes red on the `fired` assertion."""
+    import sqlite3
+
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-gap1c")
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    db_path = str(tmp_path / "vault.db")
+    real_conn = store._get_conn()
+    state = {"blocked": None, "fired": False}
+
+    class _HookConn:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, sql, *a, **k):
+            result = self._inner.execute(sql, *a, **k)
+            if (
+                isinstance(sql, str)
+                and "BEGIN IMMEDIATE" in sql.upper()
+                and not state["fired"]
+            ):
+                state["fired"] = True
+                # reconcile now holds the write lock — a concurrent writer must block.
+                attacker = sqlite3.connect(db_path, timeout=0.2)
+                try:
+                    attacker.execute(
+                        "UPDATE beliefs SET read_visibility='operational_context' "
+                        "WHERE id='b-gap1c'"
+                    )
+                    attacker.commit()
+                    state["blocked"] = False
+                except sqlite3.OperationalError:
+                    state["blocked"] = True
+                finally:
+                    attacker.close()
+            return result
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    orig = store._get_conn
+    store._get_conn = lambda: _HookConn(real_conn)  # type: ignore[assignment]
+    try:
+        store.reconcile_identity_vault(str(journal))
+    finally:
+        store._get_conn = orig  # type: ignore[assignment]
+    assert state["fired"] is True, (
+        "GAP-1: reconcile never opened BEGIN IMMEDIATE — the hook did not fire"
+    )
+    assert state["blocked"] is True, (
+        "GAP-1: a concurrent writer was NOT blocked during reconcile's span "
+        "(TOCTOU still open)"
+    )
+
+
+def test_t5_GAP1_reconcile_populated_db_stays_interactive(tmp_path):
+    """GAP-1 sanity: a reconcile pass on a POPULATED DB completes promptly (does
+    not deadlock on its own lock). Exercises the full span with real rows."""
+    import time
+
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    # Populate several witnessed identity rows + non-identity noise.
+    for i in range(20):
+        p = _make_identity_proposal(store, target_id=f"b-pop{i}", pid=f"prop-pop{i}")
+        _append_journal(journal, [(p, "approved")])
+        _apply_identity(store, p["id"], journal)
+    t0 = time.monotonic()
+    report = store.reconcile_identity_vault(str(journal))
+    elapsed = time.monotonic() - t0
+    assert report.ok, f"populated reconcile produced findings: {report.findings}"
+    assert elapsed < 5.0, f"reconcile took {elapsed:.2f}s — not interactive"
+
+
+def test_t5_GAP1_B1_lock_acquisition_fails_closed(tmp_path):
+    """014b B-1: if BEGIN IMMEDIATE cannot be acquired, reconcile must FAIL CLOSED
+    (raise) — it must NEVER run the write path unlocked. A swallowed lock failure
+    silently reopens the exact TOCTOU GAP-1 closed (the T4 fail-direction class
+    applied to a lock: degraded protection must be loud). Force the lock
+    acquisition to raise and assert reconcile propagates it AND performs no
+    requarantine write. Mutation proof: reintroducing
+    `try/except Exception: span_lock = False` around the BEGIN IMMEDIATE makes
+    reconcile swallow the error, run the write path unlocked, and return a report
+    → pytest.raises finds no exception → RED."""
+    import sqlite3
+
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-failclosed")
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    # Detier so the write path (Direction B requarantine) WOULD run if unlocked.
+    conn0 = store._get_conn()
+    conn0.execute(
+        "UPDATE beliefs SET domain='general', tier='operational' WHERE id='b-failclosed'"
+    )
+    conn0.commit()
+    real_conn = store._get_conn()
+
+    class _NoLockConn:
+        """Raises exactly on BEGIN IMMEDIATE — simulates an unacquirable lock."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, sql, *a, **k):
+            if isinstance(sql, str) and "BEGIN IMMEDIATE" in sql.upper():
+                raise sqlite3.OperationalError("simulated: cannot acquire write lock")
+            return self._inner.execute(sql, *a, **k)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    orig = store._get_conn
+    store._get_conn = lambda: _NoLockConn(real_conn)  # type: ignore[assignment]
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            store.reconcile_identity_vault(str(journal))
+    finally:
+        store._get_conn = orig  # type: ignore[assignment]
+    # Fail-closed: the write path never ran, so the row is untouched (still the
+    # de-tiered operational_context we left it at — NOT requarantined by an
+    # unlocked pass).
+    row_vis = real_conn.execute(
+        "SELECT read_visibility FROM beliefs WHERE id='b-failclosed'"
+    ).fetchone()[0]
+    assert row_vis == "operational_context", (
+        "B-1: reconcile mutated a row despite failing to acquire the lock — "
+        "the write path ran unlocked (fail-open)"
+    )
+
+
+# ── RULING GAP-2: migration re-run safety on a populated identity table ──
+
+
+def test_t5_GAP2_migration_rerun_preserves_witnessed_identity_rows(tmp_path):
+    """GAP-2: an agent forcing meta.schema_version back to 4 re-runs v5..v9.
+    v6's backfill UPDATEs previously fired unconditionally and downgraded a
+    WITNESSED identity hypomnema (operational + decision_ref) to review_only.
+    The witnessed-guard exempts rows carrying a decision_ref. Re-run must leave
+    witnessed identity rows BYTE-IDENTICAL. Mutation proof: removing the
+    `_witnessed_guard` in apply_afferent_membrane_v1_schema_migration makes this
+    red (hypomnema flips to review_only)."""
+    import sqlite3
+
+    db = tmp_path / "gap2.db"
+    store = EngramStore(db, vault_active=True)
+    conn = store._get_conn()
+    head = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[
+        0
+    ]
+    conn.execute(
+        "INSERT INTO hypomnema_entries (id, agent_id, person_id, project_scope, "
+        "content, source, density, domain, read_visibility, tags_json, confidence, "
+        "salience, active, foundational, revision_count, revisions_json, created_at, "
+        "last_revised_at, decision_ref) VALUES "
+        "('h-wit','oliver','david','pai','I am Oliver.','observed',0.5,'identity',"
+        "'operational_context','[]',0.9,0.9,1,1,1,'[]','t','t','refhash123')"
+    )
+    conn.execute(
+        "INSERT INTO beliefs (id, agent_id, content, confidence, domain, created_at, "
+        "last_revised, last_challenged, tier, read_visibility, decision_ref) VALUES "
+        "('b-wit','oliver','I am Oliver.',0.9,'identity','t','t','t','foundational',"
+        "'operational_context','brefhash')"
+    )
+    conn.commit()
+    before_h = tuple(
+        conn.execute(
+            "SELECT read_visibility, decision_ref FROM hypomnema_entries WHERE id='h-wit'"
+        ).fetchone()
+    )
+    before_b = tuple(
+        conn.execute(
+            "SELECT read_visibility, decision_ref FROM beliefs WHERE id='b-wit'"
+        ).fetchone()
+    )
+    store.close()
+    raw = sqlite3.connect(db)
+    raw.execute("UPDATE meta SET value='4' WHERE key='schema_version'")
+    raw.commit()
+    raw.close()
+    store2 = EngramStore(db, vault_active=True)
+    conn2 = store2._get_conn()
+    after_h = tuple(
+        conn2.execute(
+            "SELECT read_visibility, decision_ref FROM hypomnema_entries WHERE id='h-wit'"
+        ).fetchone()
+    )
+    after_b = tuple(
+        conn2.execute(
+            "SELECT read_visibility, decision_ref FROM beliefs WHERE id='b-wit'"
+        ).fetchone()
+    )
+    after_ver = conn2.execute(
+        "SELECT value FROM meta WHERE key='schema_version'"
+    ).fetchone()[0]
+    store2.close()
+    assert str(after_ver) == str(head), "migrations did not re-run to head"
+    assert after_h == before_h, (
+        f"GAP-2: witnessed hypomnema clobbered on re-run: {before_h} -> {after_h}"
+    )
+    assert after_b == before_b, (
+        f"GAP-2: witnessed belief clobbered on re-run: {before_b} -> {after_b}"
+    )
+
+
+def test_t5_GAP2_unknown_read_visibility_fails_closed_at_read(tmp_path):
+    """GAP-2 (CHECK-drop vector): if a table rebuild dropped the read_visibility
+    CHECK and an attacker wrote a 4th (unknown) value on an identity row, an
+    operational read must NOT return it — reads filter by exact-match
+    `read_visibility = 'operational_context'`, so any unknown value is excluded
+    by construction (fail-closed on unknown enum). Pin this property against
+    future refactors that might use a NOT-IN or negation predicate."""
+    # Two-part fail-closed proof for the CHECK-drop vector:
+    # (1) the read gate uses EXACT-match (IN (literal)), so any value other than
+    #     the operational literal is excluded from operational reads by
+    #     construction — an unknown 4th enum value can never read as operational;
+    # (2) reconcile's requarantine scan (!= 'review_only') sweeps an unknown
+    #     value into review_only, so an unknown-enum witnessed row fails closed.
+    from mnemos.store.sqlite_store import _append_read_visibility_filter
+
+    params: list = []
+    sql = _append_read_visibility_filter(
+        "SELECT id FROM beliefs WHERE agent_id = 'oliver'",
+        params,
+        "read_visibility",
+        ("operational_context",),
+    )
+    assert "read_visibility IN (?)" in sql, (
+        "read gate is not exact-match — a NOT-IN/negation predicate could let an "
+        "unknown enum leak operational"
+    )
+    assert params == ["operational_context"], (
+        "read gate does not bind the operational literal exactly"
+    )
+    # Dispositive on real data: an in-memory table without the CHECK, holding an
+    # unknown value, is excluded by the exact-match operational filter and swept
+    # by the != 'review_only' requarantine scan.
+    import sqlite3
+
+    mem = sqlite3.connect(":memory:")
+    mem.execute("CREATE TABLE b (id TEXT, read_visibility TEXT)")  # no CHECK
+    mem.execute(
+        "INSERT INTO b VALUES ('op','operational_context'),('unk','xxx_unknown'),"
+        "('rev','review_only')"
+    )
+    ops = [
+        r[0]
+        for r in mem.execute(
+            "SELECT id FROM b WHERE read_visibility = 'operational_context'"
+        )
+    ]
+    assert "unk" not in ops, "unknown enum leaked into an exact-match operational read"
+    req = [
+        r[0]
+        for r in mem.execute("SELECT id FROM b WHERE read_visibility != 'review_only'")
+    ]
+    assert "unk" in req, "requarantine scan (!= review_only) missed the unknown enum"
+    mem.close()
+
+
+# ── RULING GAP-5: write-time classifier coverage (detect-not-prevent) ──
+
+
+def test_t5_GAP5_write_hypomnema_floors_identity_to_review(tmp_path):
+    """GAP-5 coverage: write_hypomnema_entry routes through
+    classify_hypomnema_read_visibility, flooring identity/foundational content to
+    review_only. An agent cannot set operational directly on identity content via
+    this path. Mutation proof: removing the classifier floor lets it write
+    operational."""
+    store = _store(tmp_path)
+    eid = store.write_hypomnema_entry(
+        "I am Oliver, David's agent.",
+        agent_id="oliver",
+        person_id="david",
+        project_scope="pai",
+        domain="identity",
+        foundational=True,
+    )
+    conn = store._get_conn()
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM hypomnema_entries WHERE id=?", (eid,)
+        ).fetchone()[0]
+        == "review_only"
+    ), "GAP-5: identity hypomnema wrote operational"
+    # Even an explicit operational request is rejected (the classifier floor).
+    with pytest.raises(ValueError, match="review"):
+        store.write_hypomnema_entry(
+            "More identity content.",
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            domain="identity",
+            foundational=True,
+            read_visibility="operational_context",
+        )
+
+
+def test_t5_GAP5_revise_hypomnema_floors_identity_to_review(tmp_path):
+    """GAP-5 coverage: revise_hypomnema_entry (the second write path) also routes
+    through the classifier — revising toward identity content floors to
+    review_only, never below the stricter of existing/classified."""
+    store = _store(tmp_path)
+    eid = store.write_hypomnema_entry(
+        "A topical note.",
+        agent_id="oliver",
+        person_id="david",
+        project_scope="pai",
+        domain="topical",
+    )
+    conn = store._get_conn()
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM hypomnema_entries WHERE id=?", (eid,)
+        ).fetchone()[0]
+        == "operational_context"
+    )
+    store.revise_hypomnema_entry(
+        eid,
+        new_content="I am Oliver — this is identity now.",
+        reason="became identity",
+        agent_id="oliver",
+        person_id="david",
+        project_scope="pai",
+    )
+    assert (
+        conn.execute(
+            "SELECT read_visibility FROM hypomnema_entries WHERE id=?", (eid,)
+        ).fetchone()[0]
+        == "review_only"
+    ), "GAP-5: revise did not floor identity content to review_only"
+
+
+def test_t5_GAP5_only_vault_apply_bypasses_classifier(tmp_path):
+    """GAP-5 coverage: the ONLY hypomnema insert that writes operational identity
+    content directly is the vault apply path — and it carries a decision_ref (the
+    journal line hash that licenses operational visibility). Prove the bypass is
+    gated on a witnessed decision: an applied identity hypomnema is operational
+    AND has a decision_ref; nothing else writes operational identity content."""
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(
+        store, surface="hypomnema_entries", target_id="h-gap5", content="I am Oliver."
+    )
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    conn = store._get_conn()
+    vis, ref = conn.execute(
+        "SELECT read_visibility, decision_ref FROM hypomnema_entries WHERE id='h-gap5'"
+    ).fetchone()
+    assert vis == "operational_context", "vault apply did not write operational"
+    assert ref, (
+        "vault apply wrote operational WITHOUT a decision_ref — bypass unguarded"
+    )
+
+
+def test_t5_GAP5_belief_identity_without_ref_excluded_from_operational_reads(tmp_path):
+    """GAP-5 coverage (beliefs): beliefs have no hypomnema-style write classifier;
+    their structural defense is the READ gate. An identity belief written
+    operational with NO decision_ref must be excluded from operational reads by
+    _append_identity_decision_gate. Prove the read-gate coverage."""
+    store = _store(tmp_path)
+    conn = store._get_conn()
+    conn.execute(
+        "INSERT INTO beliefs (id, agent_id, content, confidence, domain, created_at, "
+        "last_revised, last_challenged, tier, read_visibility) VALUES "
+        "('b-gap5','oliver','sneaky identity',0.9,'identity','t','t','t',"
+        "'foundational','operational_context')"
+    )
+    conn.commit()
+    ops = store.get_beliefs("oliver", read_visibility="operational_context")
+    assert all(b.content != "sneaky identity" for b in ops), (
+        "GAP-5: unwitnessed identity belief leaked into operational reads"
+    )
+
+
+# ── E2B lifecycle residual composed with J (008k as amended) ──
+
+
+def test_t5_J_E2B_legitimate_lifecycle_degrade_not_restored(tmp_path):
+    """J × E2B composition: a row legitimately degraded via a lifecycle change
+    (superseded_by set + ref cleared + review_only, as the write-path E2B
+    produces) has a CHANGED witnessed field (lifecycle), so _witness_reverifies
+    returns False → it is a genuine degrade, NOT a hide. The J fix must NOT
+    restore it. Pins that J narrows E2B to 'review_only AND a witnessed field
+    changed', and lifecycle counts as a witnessed change."""
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-e2bj")
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    conn = store._get_conn()
+    # Legitimate E2B lifecycle degrade: supersede + clear ref + review_only.
+    conn.execute(
+        "UPDATE beliefs SET superseded_by='new-belief', decision_ref=NULL, "
+        "read_visibility='review_only' WHERE id='b-e2bj'"
+    )
+    conn.commit()
+    report = store.reconcile_identity_vault(str(journal))
+    vis = conn.execute(
+        "SELECT read_visibility FROM beliefs WHERE id='b-e2bj'"
+    ).fetchone()[0]
+    assert vis == "review_only", "J×E2B: legitimate lifecycle degrade wrongly restored"
+    assert not any(f.get("kind") == "witnessed_row_hidden" for f in report.findings), (
+        "J×E2B: legitimate lifecycle degrade wrongly flagged as a hide"
+    )
+
+
+# ── 014c B-2: J restore must restore the decision_ref too (loop closure) ──
+
+
+def test_t5_B2_proposal_J_restore_closes_the_loop(tmp_path):
+    """014c B-2: a J-restored row must get its decision_ref back (the verified
+    line hash), not just its visibility — else the identity read gate still
+    excludes it (operational + identity-tier + no ref), the NEXT reconcile
+    Direction A re-orphans it, and 'restore' becomes a restore→requarantine loop.
+    Asserts: (a) post-restore decision_ref == the journal line hash; (b) the row
+    is readable through the operational identity gate; (c) a SECOND reconcile
+    pass is clean — no re-quarantine, no new findings. Mutation proof: reverting
+    _restore_operational to visibility-only (drop the decision_ref arg effect)
+    makes the second pass re-quarantine the row → this test RED."""
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-b2", content="I am Oliver.")
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    conn = store._get_conn()
+    # The line hash the row SHOULD carry (what apply stamped).
+    expected_ref = conn.execute(
+        "SELECT decision_ref FROM beliefs WHERE id='b-b2'"
+    ).fetchone()[0]
+    assert expected_ref, "precondition: row was not stamped operational"
+    # Raw-SQL hide: clear the ref + review_only, no witnessed field changed.
+    conn.execute(
+        "UPDATE beliefs SET decision_ref=NULL, read_visibility='review_only' "
+        "WHERE id='b-b2'"
+    )
+    conn.commit()
+    # First reconcile: J detects the hide and restores.
+    report1 = store.reconcile_identity_vault(str(journal))
+    assert any(f.get("kind") == "witnessed_row_hidden" for f in report1.findings)
+    # (a) decision_ref restored to the verified line hash.
+    vis, ref = conn.execute(
+        "SELECT read_visibility, decision_ref FROM beliefs WHERE id='b-b2'"
+    ).fetchone()
+    assert vis == "operational_context", "B-2: visibility not restored"
+    assert ref == expected_ref, (
+        "B-2: decision_ref not restored — the row is still ref-less and will "
+        "re-orphan on the next pass"
+    )
+    # (b) readable through the operational identity gate.
+    ops = store.get_beliefs("oliver", read_visibility="operational_context")
+    assert any(b.content == "I am Oliver." for b in ops), (
+        "B-2: restored row is not readable through the operational identity gate"
+    )
+    # (c) SECOND reconcile pass is clean — the loop is closed.
+    report2 = store.reconcile_identity_vault(str(journal))
+    assert report2.ok, (
+        f"B-2: second reconcile re-quarantined the restored row (loop not "
+        f"closed): findings={report2.findings} requarantined={report2.requarantined}"
+    )
+    vis2 = conn.execute(
+        "SELECT read_visibility FROM beliefs WHERE id='b-b2'"
+    ).fetchone()[0]
+    assert vis2 == "operational_context", "B-2: row re-quarantined on the 2nd pass"
+
+
+def test_t5_B2_legacy_J_restore_closes_the_loop(tmp_path):
+    """014c B-2 (legacy twin): the legacy J fallback restore must also restore the
+    decision_ref, and a second reconcile pass must be clean."""
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    row = _insert_legacy_belief(store, bid="leg-b2", content="I am Oliver.")
+    _append_legacy(journal, "beliefs", row)
+    _apply_legacy(store, journal)
+    conn = store._get_conn()
+    expected_ref = conn.execute(
+        "SELECT decision_ref FROM beliefs WHERE id='leg-b2'"
+    ).fetchone()[0]
+    assert expected_ref
+    conn.execute(
+        "UPDATE beliefs SET decision_ref=NULL, read_visibility='review_only' "
+        "WHERE id='leg-b2'"
+    )
+    conn.commit()
+    report1 = store.reconcile_identity_vault(str(journal))
+    assert any(f.get("kind") == "witnessed_row_hidden" for f in report1.findings)
+    vis, ref = conn.execute(
+        "SELECT read_visibility, decision_ref FROM beliefs WHERE id='leg-b2'"
+    ).fetchone()
+    assert vis == "operational_context"
+    assert ref == expected_ref, "B-2 legacy: decision_ref not restored"
+    report2 = store.reconcile_identity_vault(str(journal))
+    assert report2.ok, (
+        f"B-2 legacy: second reconcile re-quarantined (loop not closed): "
+        f"{report2.findings}"
+    )
+
+
+def test_t5_B2_K_audit_only_restore_stays_visibility_only(tmp_path):
+    """014c B-2 CAUTION: K's round-6 restore path handles a visibility-only hide
+    (audit_only) where the decision_ref is INTACT. That path must stay
+    visibility-only — do NOT regress it into rewriting the ref. Prove the K path
+    still restores an audit_only-hidden row whose ref never changed, and the ref
+    is unchanged (not rewritten by a B-2 code path)."""
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-k", content="I am Oliver.")
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    conn = store._get_conn()
+    orig_ref = conn.execute(
+        "SELECT decision_ref FROM beliefs WHERE id='b-k'"
+    ).fetchone()[0]
+    # K hide: flip to audit_only but LEAVE the decision_ref intact.
+    conn.execute("UPDATE beliefs SET read_visibility='audit_only' WHERE id='b-k'")
+    conn.commit()
+    report = store.reconcile_identity_vault(str(journal))
+    vis, ref = conn.execute(
+        "SELECT read_visibility, decision_ref FROM beliefs WHERE id='b-k'"
+    ).fetchone()
+    assert vis == "operational_context", "K path: audit_only hide not restored"
+    assert ref == orig_ref, "K path regressed: intact ref was rewritten"
+    assert any(f.get("kind") == "witnessed_row_hidden" for f in report.findings)
+
+
+# ── 014c B-3: the early quarantine-all write branches run UNDER the span lock ──
+
+
+def test_t5_B3_untrusted_quarantine_runs_under_lock(tmp_path, monkeypatch):
+    """014c B-3: the journal_untrusted fail-closed quarantine-all branch writes
+    (it iterates _requarantine UPDATEs) and must run UNDER the span lock, not
+    before it. Observe that reconcile opens BEGIN IMMEDIATE on the untrusted
+    branch. Mutation proof: removing the entry lock (reverting to the per-branch
+    inline commit that ran before BEGIN IMMEDIATE) → no BEGIN IMMEDIATE on this
+    branch → RED."""
+    monkeypatch.setattr(_sq, "_JOURNAL_TRUST_CHECK_ENABLED", False)
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-b3u")
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    monkeypatch.setattr(_sq, "_JOURNAL_TRUST_CHECK_ENABLED", True)
+    real_conn = store._get_conn()
+    seen = {"immediate": False}
+
+    class _TracingConn:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, sql, *a, **k):
+            if isinstance(sql, str) and "BEGIN IMMEDIATE" in sql.upper():
+                seen["immediate"] = True
+            return self._inner.execute(sql, *a, **k)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    orig = store._get_conn
+    store._get_conn = lambda: _TracingConn(real_conn)  # type: ignore[assignment]
+    try:
+        report = store.reconcile_identity_vault(str(journal))
+    finally:
+        store._get_conn = orig  # type: ignore[assignment]
+    assert any(f["kind"] == "journal_untrusted" for f in report.findings)
+    assert seen["immediate"] is True, (
+        "B-3: the untrusted quarantine-all branch ran WITHOUT the span lock"
+    )
+    # The witnessed row was actually re-quarantined (the branch did write).
+    assert (
+        real_conn.execute(
+            "SELECT read_visibility FROM beliefs WHERE id='b-b3u'"
+        ).fetchone()[0]
+        == "review_only"
+    )
+
+
+def test_t5_B3_corrupt_quarantine_runs_under_lock(tmp_path):
+    """014c B-3: the corrupt-journal fail-closed quarantine-all branch must also
+    run under the span lock. Force a mid-file-corrupt journal and observe BEGIN
+    IMMEDIATE is taken before the quarantine-all writes."""
+    import json as _json
+
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-b3c")
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    # Corrupt the journal mid-file: append a valid line then a broken one is
+    # "torn tail"; to force `corrupt`, put malformed content BEFORE the last line.
+    good = _json.loads(journal.read_text().splitlines()[0])
+    journal.write_text(
+        _json.dumps(good) + "\n" + "{not valid json\n" + _json.dumps(good) + "\n"
+    )
+    real_conn = store._get_conn()
+    seen = {"immediate": False}
+
+    class _TracingConn:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, sql, *a, **k):
+            if isinstance(sql, str) and "BEGIN IMMEDIATE" in sql.upper():
+                seen["immediate"] = True
+            return self._inner.execute(sql, *a, **k)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    orig = store._get_conn
+    store._get_conn = lambda: _TracingConn(real_conn)  # type: ignore[assignment]
+    try:
+        report = store.reconcile_identity_vault(str(journal))
+    finally:
+        store._get_conn = orig  # type: ignore[assignment]
+    assert any(f["kind"] == "journal_corrupt" for f in report.findings)
+    assert seen["immediate"] is True, (
+        "B-3: the corrupt quarantine-all branch ran WITHOUT the span lock"
+    )
+
+
+def test_t5_B3_untrusted_quarantine_concurrent_writer_blocked(tmp_path, monkeypatch):
+    """014c B-3 teeth: while reconcile runs the untrusted quarantine-all branch
+    under its lock, a concurrent writer is BLOCKED — proving the branch's writes
+    are atomic under the span lock (not a pre-lock unlocked iteration)."""
+    import sqlite3
+
+    monkeypatch.setattr(_sq, "_JOURNAL_TRUST_CHECK_ENABLED", False)
+    store = _store(tmp_path)
+    journal = tmp_path / "decisions.jsonl"
+    proposal = _make_identity_proposal(store, target_id="b-b3blk")
+    _append_journal(journal, [(proposal, "approved")])
+    _apply_identity(store, proposal["id"], journal)
+    monkeypatch.setattr(_sq, "_JOURNAL_TRUST_CHECK_ENABLED", True)
+    db_path = str(tmp_path / "vault.db")
+    real_conn = store._get_conn()
+    state = {"blocked": None, "fired": False}
+
+    class _HookConn:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, sql, *a, **k):
+            result = self._inner.execute(sql, *a, **k)
+            if (
+                isinstance(sql, str)
+                and "BEGIN IMMEDIATE" in sql.upper()
+                and not state["fired"]
+            ):
+                state["fired"] = True
+                attacker = sqlite3.connect(db_path, timeout=0.2)
+                try:
+                    attacker.execute(
+                        "UPDATE beliefs SET read_visibility='operational_context' "
+                        "WHERE id='b-b3blk'"
+                    )
+                    attacker.commit()
+                    state["blocked"] = False
+                except sqlite3.OperationalError:
+                    state["blocked"] = True
+                finally:
+                    attacker.close()
+            return result
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    orig = store._get_conn
+    store._get_conn = lambda: _HookConn(real_conn)  # type: ignore[assignment]
+    try:
+        store.reconcile_identity_vault(str(journal))
+    finally:
+        store._get_conn = orig  # type: ignore[assignment]
+    assert state["fired"] is True, "B-3: untrusted branch never opened BEGIN IMMEDIATE"
+    assert state["blocked"] is True, (
+        "B-3: a concurrent writer was NOT blocked during the untrusted "
+        "quarantine-all branch (it ran unlocked)"
+    )

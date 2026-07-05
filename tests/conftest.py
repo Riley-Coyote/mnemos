@@ -1,4 +1,5 @@
 """Shared test fixtures for Mnemos."""
+
 import os
 import pathlib
 import pytest
@@ -53,11 +54,21 @@ def _isolate_mnemos_env(monkeypatch):
     sets exactly what it needs via monkeypatch.setenv.
     """
     for var in (
-        "MNEMOS_LLM_PROVIDER", "MNEMOS_MODEL", "MNEMOS_AGENT_MODEL",
-        "MNEMOS_SUBSTRATE_AFFINITY", "MNEMOS_AGENT_ID", "MNEMOS_PERSON_ID",
-        "MNEMOS_PROJECT_SCOPE", "MNEMOS_DB_PATH", "MNEMOS_ENV_PATHS",
-        "MNEMOS_WORKSPACE", "MNEMOS_MODE", "MNEMOS_VAULT_JOURNAL",
-        "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY",
+        "MNEMOS_LLM_PROVIDER",
+        "MNEMOS_MODEL",
+        "MNEMOS_AGENT_MODEL",
+        "MNEMOS_SUBSTRATE_AFFINITY",
+        "MNEMOS_AGENT_ID",
+        "MNEMOS_PERSON_ID",
+        "MNEMOS_PROJECT_SCOPE",
+        "MNEMOS_DB_PATH",
+        "MNEMOS_ENV_PATHS",
+        "MNEMOS_WORKSPACE",
+        "MNEMOS_MODE",
+        "MNEMOS_VAULT_JOURNAL",
+        "ANTHROPIC_API_KEY",
+        "OPENROUTER_API_KEY",
+        "OPENAI_API_KEY",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("MNEMOS_DISABLE_DOTENV", "1")
@@ -66,10 +77,19 @@ def _isolate_mnemos_env(monkeypatch):
     # exist, so no test arms against a post-ceremony system vault by accident.
     # Tests that need the gate armed use _arm_vault() or pass vault_active=True.
     from mnemos.store import sqlite_store
+
     monkeypatch.setattr(
-        sqlite_store, "_VAULT_DIR_FOR_RESOLUTION",
+        sqlite_store,
+        "_VAULT_DIR_FOR_RESOLUTION",
         "/nonexistent/mnemos-vault-test-inert",
     )
+    # T5 008y R6-1: the journal-file ownership check is DISABLED by default in
+    # tests — a test's tmp journal is agent-owned but legitimate, and reconcile
+    # against it must NOT false-quarantine ("valid case" per the ruling). The
+    # dedicated R6-1 test re-enables it (monkeypatch True) to exercise the real
+    # ownership predicate against an agent-owned fixture. Production leaves it
+    # True (the shipped journal is root-owned; an agent-owned leaf is the hazard).
+    monkeypatch.setattr(sqlite_store, "_JOURNAL_TRUST_CHECK_ENABLED", False)
 
 
 @pytest.fixture
@@ -82,6 +102,7 @@ def tmp_db(tmp_path):
 def store(tmp_db):
     """Create a temporary EngramStore."""
     from mnemos.store.sqlite_store import EngramStore
+
     s = EngramStore(tmp_db)
     yield s
     s.close()
@@ -91,6 +112,7 @@ def store(tmp_db):
 def encoder(store):
     """Create an Encoder with no LLM (rule-based fallback)."""
     from mnemos.encoding.encoder import Encoder
+
     return Encoder(store, llm_client=None)
 
 
@@ -98,4 +120,5 @@ def encoder(store):
 def retriever(store):
     """Create a ReactiveRetriever."""
     from mnemos.retrieval.reactive import ReactiveRetriever
+
     return ReactiveRetriever(store)

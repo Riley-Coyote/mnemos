@@ -5,7 +5,10 @@ Extends the mnemos-identity-watchdog pattern (checksum tripwire) with the T4
 vault's journal reconciliation: it walks the decision journal against the
 identity-tier rows in memory.db, in BOTH directions, and re-quarantines any row
 that no longer matches a witnessed decision (orphan, forged ref, de-tiered,
-content-mutated). Findings are written to a log and surfaced to Oliver Inbox.
+content-mutated, lifecycle-hidden, or unverified). It also reports a
+present-but-agent-owned journal as `journal_untrusted` and fails closed the same
+way it does for corruption. Findings are written to a log and surfaced to
+Oliver Inbox.
 
 Scheduling and installation are David's (a LaunchAgent, like the existing
 watchdog). This wrapper only runs one pass. It uses the ordinary EngramStore, so
@@ -13,7 +16,9 @@ it must run inside the mnemos venv (unlike the TCB, which is stdlib-only).
 
 Usage:
     mnemos-vault-watchdog.py
-    MNEMOS_DB_PATH=/tmp/t.db MNEMOS_VAULT_JOURNAL=/tmp/j.jsonl ./mnemos-vault-watchdog.py
+
+DB and journal paths are pinned below. Environment variables cannot redirect
+the trust-bearing read paths; only log/alert destinations are env-configurable.
 
 Exit codes:
     0 — reconciled clean (no findings)
@@ -95,13 +100,13 @@ def main() -> int:
         return 2
     from mnemos.store.sqlite_store import EngramStore
 
-    # 008m Addition 1: the watchdog reads the PINNED canonical journal path
-    # (JOURNAL_PATH constant / --journal flag), NOT resolve_vault_journal_path()
-    # — that resolver honors MNEMOS_VAULT_JOURNAL, and an env-poisonable
-    # detector defeats the independence that makes tamper-evidence real. If the
-    # canonical journal is absent, that itself is a divergence (the vault
-    # should exist once installed); reconcile against the (missing/empty)
-    # canonical path fails closed and quarantines, which is the correct alarm.
+    # 008m Addition 1 + 008r/008y: the watchdog reads the PINNED canonical
+    # journal path, NOT an environment variable, command-line flag, or resolver
+    # decision. An env/arg-poisonable detector defeats the independence that
+    # makes tamper-evidence real. If the canonical journal is absent,
+    # unreadable, corrupt, or agent-owned, that itself is a divergence; reconcile
+    # against the canonical path fails closed and quarantines, which is the
+    # correct alarm.
     resolved = os.path.expanduser(str(JOURNAL_PATH))
     if not resolved:
         sys.stderr.write("no canonical journal path configured\n")

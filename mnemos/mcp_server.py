@@ -267,23 +267,25 @@ def _reconcile_vault_on_session_start() -> None:
     exactly how the corrupt-journal fail-open hole existed: an unreadable
     journal became "we didn't reconcile" silently. Now:
       - resolver returns None → vault not armed, nothing to do
-      - journal read raises → catch, classify, ALERT (Oliver Inbox), let
-        ``reconcile_identity_vault`` handle the quarantine per 008i
+      - missing/corrupt/unreadable/untrusted journal path → let
+        ``reconcile_identity_vault`` classify, alert, and quarantine per 008i/R6-1
       - any other exception → catch + alert; session start must not crash,
         but neither can it silently proceed as if the vault verified
     """
     if _store is None:
         return
     from mnemos.store.sqlite_store import resolve_vault_journal_path
+
     journal_path = resolve_vault_journal_path()
     if not journal_path:
         return
     # 008-r14 #3: _vault_active is frozen at store construction. A long-running
-    # MCP server started BEFORE the vault journal existed keeps
-    # _vault_active=False; once install creates the journal, session-start
-    # resolves it (above) but the read APIs would still skip the gate. Refresh
-    # the flag now that a journal has resolved, so the read-path gate arms for
-    # the rest of this process's life without needing a restart.
+    # MCP server started BEFORE the canonical vault was installed keeps
+    # _vault_active=False; once install creates the trusted vault directory,
+    # session-start resolves the pinned journal path (above) but the read APIs
+    # would still skip the gate. Refresh the flag now that a journal path has
+    # resolved, so the read-path gate arms for the rest of this process's life
+    # without needing a restart.
     _store._vault_active = True
     # 008i-r10 #1: apply_legacy_witness and reconcile MUST NOT share a try —
     # a corrupt/broken-chain journal raises inside apply_legacy_witness and,
@@ -316,7 +318,9 @@ def _reconcile_vault_on_session_start() -> None:
         _alert_vault_error(journal_path, exc, stamp_error=stamp_error)
 
 
-def _alert_vault_findings(journal_path, findings, requarantined, stamp_error=None) -> None:
+def _alert_vault_findings(
+    journal_path, findings, requarantined, stamp_error=None
+) -> None:
     """Write a vault-critical alert to Oliver Inbox (008i requirement).
 
     008-r14 review (#3): ``stamp_error`` MUST appear in the written alert. The
@@ -330,6 +334,7 @@ def _alert_vault_findings(journal_path, findings, requarantined, stamp_error=Non
     try:
         import datetime
         import pathlib
+
         alert_dir = pathlib.Path(
             os.environ.get(
                 "MNEMOS_WATCHDOG_ALERT_DIR",
@@ -371,6 +376,7 @@ def _alert_vault_error(journal_path, exc, stamp_error=None) -> None:
     try:
         import datetime
         import pathlib
+
         alert_dir = pathlib.Path(
             os.environ.get(
                 "MNEMOS_WATCHDOG_ALERT_DIR",

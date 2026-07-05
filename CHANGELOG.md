@@ -51,6 +51,9 @@
   `read_visibility=None`; this covers direct engram loads, connection loads and
   traversal, version history, archive search, functional memory by ID, and
   hypomnema by ID.
+- `get_engram()` now gates loaded version history by the engram's own
+  visibility after the parent row has passed the caller filter; version reads
+  also accept multi-visibility filters for review/admin list surfaces.
 - Proposal rows now enum-check domains against `general` plus the six
   hypomnema domains, so unknown non-empty domains fail closed before ledger
   persistence.
@@ -64,6 +67,18 @@
   registrations, and the v7 repair path applies the membrane schema only when
   read-visibility columns are absent so inner-life-origin v6 databases upgrade
   without downgrading existing quarantine rows.
+- Re-run-safe v6/v7 hypomnema visibility repairs now exempt already witnessed
+  rows carrying `decision_ref`, so migration replay cannot clobber
+  journal-governed operational identity rows.
+- Schema v9 identity-vault hardening requires identity/foundational
+  `beliefs` and `hypomnema_entries` to carry a vault `decision_ref` before
+  operational reads surface them. Apply, legacy witness stamping, session-start
+  reconcile, and the watchdog use only the canonical
+  `/usr/local/var/mnemos-vault/decisions.jsonl` journal.
+- The vault reconciler now rejects an agent-owned/agent-writable journal leaf,
+  fails closed on missing/corrupt/untrusted journals, runs quarantine-all and
+  normal writes under one `BEGIN IMMEDIATE` span, and restores cleared-ref raw
+  SQL hides only when the witness fully re-verifies.
 
 ### Gated Inner Life And Full Soak
 - Schema v8 adds `inner_life_events`, a private sub-ledger for turn/session

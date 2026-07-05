@@ -464,6 +464,22 @@ def apply_afferent_membrane_v1_schema_migration(conn: sqlite3.Connection) -> Non
         WHERE needs_confirmation = 1
         """
     )
+    # 008y GAP-2: these backfill UPDATEs fire UNCONDITIONALLY, so on a re-run
+    # (an agent forces `meta.schema_version` back to 4, re-running v5..v9) they
+    # would rewrite read_visibility on rows that are ALREADY WITNESSED — a
+    # witnessed identity hypomnema (a review-candidate by foundational/identity)
+    # would be downgraded operational→review_only, and a non-candidate witnessed
+    # row promoted without journal verification. A witnessed row's visibility is
+    # journal-governed (decision_ref set), NOT migration-governed. So exempt any
+    # row carrying a decision_ref — but ONLY when that column exists (it is a v9
+    # column; on the FORWARD migration at v6 the column is absent and no row is
+    # witnessed yet, so the guard is a no-op). This makes v6 idempotent against a
+    # populated identity table per the GAP-2 ruling.
+    _witnessed_guard = (
+        " AND (decision_ref IS NULL OR decision_ref = '')"
+        if _has_column(conn, "hypomnema_entries", "decision_ref")
+        else ""
+    )
     conn.execute(
         """
         UPDATE hypomnema_entries
@@ -475,17 +491,18 @@ def apply_afferent_membrane_v1_schema_migration(conn: sqlite3.Connection) -> Non
             AND salience >= ?
             AND (revision_count >= 1 OR foundational = 1)
         )
-        """,
+        """
+        + _witnessed_guard,
         (HYPO_PROMOTION_MIN_CONFIDENCE, HYPO_PROMOTION_MIN_SALIENCE),
     )
     conn.execute(
         """
         UPDATE hypomnema_entries
         SET read_visibility = 'review_only'
-        WHERE """
+        WHERE ("""
         + HYPO_REVIEW_CANDIDATE_SQL
-        + """
-        """,
+        + ")"
+        + _witnessed_guard,
         (HYPO_PROMOTION_MIN_CONFIDENCE, HYPO_PROMOTION_MIN_SALIENCE),
     )
 
@@ -598,15 +615,23 @@ def _repair_stale_v6_hypomnema_visibility(conn: sqlite3.Connection) -> None:
     finally:
         conn.execute("PRAGMA writable_schema=OFF")
 
+    # 008y GAP-2: exempt already-witnessed rows (decision_ref set) from this
+    # stale-default repair too — their visibility is journal-governed. Guard is
+    # a no-op when the v9 decision_ref column is absent.
+    _witnessed_guard = (
+        " AND (decision_ref IS NULL OR decision_ref = '')"
+        if _has_column(conn, "hypomnema_entries", "decision_ref")
+        else ""
+    )
     conn.execute(
         """
         UPDATE hypomnema_entries
         SET read_visibility = 'review_only'
-        WHERE """
+        WHERE ("""
         + HYPO_REVIEW_CANDIDATE_SQL
-        + """
-          AND read_visibility = 'operational_context'
-        """,
+        + ")"
+        + "\n          AND read_visibility = 'operational_context'"
+        + _witnessed_guard,
         (HYPO_PROMOTION_MIN_CONFIDENCE, HYPO_PROMOTION_MIN_SALIENCE),
     )
 

@@ -117,6 +117,36 @@ material:
   `source_authority`, and payload text claiming `user_stated` or `imported`
   authority does not elevate the row.
 
+## Identity Vault And Reconciliation
+
+The T4 vault adds a second boundary around identity/foundational rows after the
+afferent membrane. The canonical vault is active only when the trusted directory
+`/usr/local/var/mnemos-vault` exists. Its journal path is pinned to
+`/usr/local/var/mnemos-vault/decisions.jsonl`; production apply, legacy witness,
+session-start reconcile, and the watchdog do not accept environment or
+call-argument redirects for that trust-bearing path.
+
+When the vault is active:
+
+- Operational reads of identity-tier `beliefs` and `hypomnema_entries` require
+  `decision_ref`, the hash of an approved journal line.
+- The journal file must be root/vault-owned and not agent-writable. A present
+  agent-owned or agent-writable `decisions.jsonl` is unusable: apply refuses to
+  witness against it, legacy stamping skips it, and reconcile reports
+  `journal_untrusted` while quarantining already witnessed operational identity
+  rows.
+- Missing, unreadable, corrupt, or untrusted journals fail closed. Reconcile
+  leaves no witnessed operational identity row trusted solely because the
+  journal cannot be verified.
+- Reconcile checks both table-to-journal and journal-to-table. It catches
+  de-tiering, re-domain changes, content mutation, lifecycle hiding, forged or
+  missing refs, and cleared-ref hides that would otherwise disappear from an
+  identity-tier query.
+- A cleared-ref row is restored only when its witness still fully re-verifies.
+  Reconcile restores the verified `decision_ref` and operational visibility in
+  the same transaction; genuine witnessed-field changes stay `review_only`
+  until re-approved.
+
 ## Gated Inner Life And Soak
 
 The U6.6/U7 inner-life and soak surfaces are operator/pre-soak tooling, not

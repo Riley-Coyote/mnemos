@@ -677,8 +677,7 @@ def _apply_read_visibility_filter(
 # gate. IFNULL forces a defined value so the OR short-circuits correctly.
 _IDENTITY_TIER_SIGNAL_SQL = {
     "beliefs": (
-        "(IFNULL(tier, '') = 'foundational' "
-        "OR domain IN ('identity', 'foundational'))"
+        "(IFNULL(tier, '') = 'foundational' OR domain IN ('identity', 'foundational'))"
     ),
     "hypomnema_entries": "(foundational = 1 OR domain IN ('identity', 'foundational'))",
 }
@@ -727,6 +726,7 @@ def _vault_object_trusted(path: str) -> bool:
     fixtures they own.
     """
     import os as _os
+
     try:
         st = _os.stat(path)
     except OSError:
@@ -739,6 +739,44 @@ def _vault_object_trusted(path: str) -> bool:
     if _os.access(path, _os.W_OK):
         return False  # agent-writable (POSIX bits or ACL) → forgeable
     return True
+
+
+# 008y R6-1: journal-file ownership trust is a SEPARATE seam from the dir-trust
+# check so tests can default it "trusted" (production's journal is root-owned;
+# a test's tmp journal is agent-owned but legitimate) while the dedicated R6-1
+# test overrides it to exercise the real ownership predicate. Mirrors how
+# _VAULT_DIR_FOR_RESOLUTION is defaulted inert by conftest and armed by
+# _arm_vault. Production never sets this — it uses the real _vault_object_trusted.
+_JOURNAL_TRUST_CHECK_ENABLED = True
+
+
+def _vault_journal_untrusted_at_read(path: str | Path) -> bool:
+    """008y R6-1: True iff an EXISTING journal file is agent-owned/agent-writable.
+
+    The resolver arms on DIR-trust and returns the canonical journal path even
+    when the journal file itself is untrusted (installed-but-broken fails
+    closed). But an existing agent-owned ``decisions.jsonl`` under a trusted dir
+    is a forged leaf the agent authored — its chain-valid-but-self-authored
+    lines must NOT be read as authoritative. Reuse the SAME ownership predicate
+    the dir-trust check uses (``_vault_object_trusted``): an untrusted file is
+    one the current (agent) process owns or can write.
+
+    A MISSING journal is NOT "untrusted" — it is the installed-but-broken state
+    the resolver already fails closed on (empty read → quarantine-all). Only a
+    present, agent-owned/writable file is the R6-1 hazard.
+
+    ``_JOURNAL_TRUST_CHECK_ENABLED`` is the test seam: conftest defaults it False
+    (test tmp journals are agent-owned but legitimate — the "valid case, no false
+    quarantine" the ruling requires); production leaves it True. When disabled,
+    an armed vault whose ``_vault_object_trusted`` seam is patched (``_arm_vault``)
+    still fails closed on genuinely-untrusted journals via that seam.
+    """
+    if not _JOURNAL_TRUST_CHECK_ENABLED:
+        return False
+    p = Path(path)
+    if not p.exists():
+        return False  # missing → installed-but-broken, handled by empty read
+    return not _vault_object_trusted(str(p))
 
 
 def resolve_vault_journal_path() -> str | None:
@@ -962,12 +1000,15 @@ class EngramStore:
                 already-current DBs. Caller must guarantee the DB exists.
             vault_active: Whether the T4 read-path validator enforces the
                 witnessed-decision requirement on identity-tier reads. When
-                ``None`` (default) it is inferred: active iff a vault journal is
-                configured (``MNEMOS_VAULT_JOURNAL``) AND the file exists — i.e.
-                David has run the install ceremony. Before the vault exists the
-                gate is inert, so the pre-vault identity corpus reads exactly as
-                it does today (design §6: "stays where it is now until
-                installed"). Apply and reconcile are always on regardless.
+                ``None`` (default) it is inferred from the canonical vault
+                install: active iff the trusted
+                ``/usr/local/var/mnemos-vault`` directory exists. The journal
+                path itself is pinned, never environment-configured; a missing,
+                unreadable, corrupt, or untrusted journal stays armed and fails
+                closed in apply/reconcile. Before the vault directory exists
+                the gate is inert, so the pre-vault identity corpus reads
+                exactly as it does today (design §6: "stays where it is now
+                until installed"). Apply and reconcile are always on regardless.
         """
         self.db_path = Path(db_path).expanduser()
         self._read_only = read_only
@@ -1141,8 +1182,17 @@ class EngramStore:
             read_visibility=read_visibility,
         )
 
-        # Load versions (inherit the caller's visibility filter)
-        engram.versions = self._get_versions(engram_id, read_visibility=read_visibility)
+        # 007 §5.1 (T5): gate versions by the ENGRAM's OWN read_visibility, not
+        # the raw caller filter. The engram already cleared the caller's filter
+        # (it is in the result), so its version history should inherit its own
+        # tier — a single value, safe even when the caller passed `None` (admin)
+        # or a sequence. Threading the caller's raw `None` returned FULL history
+        # ungated (admin-convenience, not safety); threading a sequence would
+        # raise in _normalize_read_visibility. Mirrors get_active_engrams, which
+        # already gates versions by `engram.read_visibility`.
+        engram.versions = self._get_versions(
+            engram_id, read_visibility=engram.read_visibility
+        )
 
         return engram
 
@@ -1535,30 +1585,37 @@ class EngramStore:
         self,
         engram_id: str,
         *,
-        read_visibility: str | None = READ_VISIBILITY_OPERATIONAL,
+        read_visibility: str | Sequence[str] | None = READ_VISIBILITY_OPERATIONAL,
     ) -> list[VersionRef]:
         """Get version history for an engram.
 
         R5 (T3): the ``versions`` table has no visibility column, so version
         history inherits the parent engram's ``read_visibility`` — when a
         filter is active, versions are returned only if the parent engram
-        satisfies it (fail-closed via JOIN). Called from ``get_engram`` with
-        the caller's filter threaded through; direct callers default operational.
+        satisfies it (fail-closed via JOIN).
+
+        007 §5.1 (T5): sequence-and-None-aware. ``None`` → full history (admin);
+        a single value or a SEQUENCE → JOIN-gated to parent engrams whose
+        visibility is IN the set. ``get_engram`` passes the engram's OWN
+        (single) visibility so the history inherits the row's tier; a direct
+        caller may pass a sequence for a review/admin list read. Previously a
+        sequence raised in ``_normalize_read_visibility`` (str|None only).
         """
         conn = self._get_conn()
-        normalized = _normalize_read_visibility(read_visibility)
-        if normalized is None:
+        values = _normalize_read_visibility_values(read_visibility)
+        if values is None:
             rows = conn.execute(
                 "SELECT * FROM versions WHERE engram_id = ? ORDER BY version_num",
                 (engram_id,),
             ).fetchall()
         else:
+            placeholders = ", ".join("?" for _ in values)
             rows = conn.execute(
                 "SELECT v.* FROM versions v "
                 "JOIN engrams e ON e.id = v.engram_id "
-                "WHERE v.engram_id = ? AND e.read_visibility = ? "
+                f"WHERE v.engram_id = ? AND e.read_visibility IN ({placeholders}) "
                 "ORDER BY v.version_num",
-                (engram_id, normalized),
+                (engram_id, *values),
             ).fetchall()
         return [VersionRef.from_dict(dict(r)) for r in rows]
 
@@ -1911,7 +1968,9 @@ class EngramStore:
             "read_visibility",
             visibility_values,
         )
-        query = _append_identity_decision_gate(query, "beliefs", visibility_values, self._vault_active)
+        query = _append_identity_decision_gate(
+            query, "beliefs", visibility_values, self._vault_active
+        )
 
         query += " ORDER BY confidence DESC"
         rows = conn.execute(query, params).fetchall()
@@ -2267,6 +2326,18 @@ class EngramStore:
                 "Vault not armed (no journal path resolved); cannot apply "
                 "an identity decision without a canonical vault journal"
             )
+        # 008y R6-1: refuse to witness against an agent-owned journal leaf. The
+        # resolver arms on dir-trust and hands back the canonical path even when
+        # the journal FILE is untrusted; apply must not read a self-authored
+        # journal as authoritative (an agent could hand-craft a chain-valid,
+        # hash-matching line for its own content). Fail closed with a raise —
+        # same class as a broken chain. journal.py stays format-only.
+        if _vault_journal_untrusted_at_read(resolved):
+            raise ValueError(
+                "Vault journal file is agent-owned/agent-writable (untrusted "
+                "leaf); refusing to witness identity content against a "
+                "self-authored journal"
+            )
         journal_path: str | Path = resolved
 
         # Journal read + chain verify happen OUTSIDE the transaction — the
@@ -2406,11 +2477,27 @@ class EngramStore:
 
         Thin delegate to ``mnemos.vault.reconcile``. Run at session-start and by
         the watchdog; ``apply_quarantine=False`` is a dry audit.
+
+        008y R6-1: the STORE (which already owns the vault-object trust check)
+        classifies the journal FILE's ownership here — the resolver arms on
+        dir-trust and returns the canonical journal path unconditionally, so an
+        existing agent-owned ``decisions.jsonl`` under a trusted dir would
+        otherwise be read as authoritative. An existing-but-untrusted journal is
+        unusable-at-read: pass ``journal_untrusted=True`` so reconcile routes it
+        into the IDENTICAL quarantine-all fail-closed handling the corrupt
+        classification uses (distinct label ``journal_untrusted``, byte-identical
+        handling). ``mnemos.vault.journal`` gains zero ownership knowledge — the
+        ownership check stays in the store, per the ruling.
         """
         from ..vault.reconcile import reconcile_identity_tier
 
+        journal_untrusted = _vault_journal_untrusted_at_read(journal_path)
+
         return reconcile_identity_tier(
-            self, journal_path, apply_quarantine=apply_quarantine
+            self,
+            journal_path,
+            apply_quarantine=apply_quarantine,
+            journal_untrusted=journal_untrusted,
         )
 
     def apply_legacy_witness(self) -> dict[str, list[str]]:
@@ -2439,6 +2526,13 @@ class EngramStore:
             # No vault armed → nothing to stamp; return empty result rather
             # than raise (session-start calls this best-effort).
             return {"stamped": [], "skipped": []}
+        # 008y R6-1: refuse to stamp legacy rows against an agent-owned journal.
+        # Session-start calls this best-effort, so return empty (nothing stamped)
+        # rather than raise — but NEVER stamp from a self-authored journal. The
+        # subsequent session-start reconcile pass fails closed on the same
+        # untrusted journal and quarantines any already-stamped rows.
+        if _vault_journal_untrusted_at_read(resolved):
+            return {"stamped": [], "skipped": ["journal-untrusted"]}
         journal_path: str | Path = resolved
 
         lines = vault_journal.read_journal(journal_path)
@@ -3265,6 +3359,7 @@ class EngramStore:
             str(dict(existing).get("decision_ref") or "").strip()
         ):
             from ..vault import journal as vault_journal
+
             existing_dict = dict(existing)
             existing_dict["id"] = entry_id
             old_hash = vault_journal.canonical_row_sha256(
@@ -3478,7 +3573,9 @@ class EngramStore:
             "read_visibility",
             visibility_values,
         )
-        sql = _append_identity_decision_gate(sql, "hypomnema_entries", visibility_values, self._vault_active)
+        sql = _append_identity_decision_gate(
+            sql, "hypomnema_entries", visibility_values, self._vault_active
+        )
         if exclude_promotion_candidates:
             sql = _append_hypomnema_review_candidate_filter(
                 sql,
@@ -3542,7 +3639,9 @@ class EngramStore:
             "read_visibility",
             visibility_values,
         )
-        sql = _append_identity_decision_gate(sql, "hypomnema_entries", visibility_values, self._vault_active)
+        sql = _append_identity_decision_gate(
+            sql, "hypomnema_entries", visibility_values, self._vault_active
+        )
         sql += " ORDER BY last_revised_at DESC LIMIT ?"
         params.append(max(1, limit))
         rows = conn.execute(sql, params).fetchall()
@@ -3626,10 +3725,9 @@ class EngramStore:
         rev_degrade: dict[str, str] | None = None
         if str(row_dict.get("decision_ref") or "").strip():
             from ..vault import journal as vault_journal
+
             row_dict["id"] = entry_id
-            old_hash = vault_journal.canonical_row_sha256(
-                "hypomnema_entries", row_dict
-            )
+            old_hash = vault_journal.canonical_row_sha256("hypomnema_entries", row_dict)
             new_shape = {
                 "id": entry_id,
                 "agent_id": agent_id,
@@ -3907,7 +4005,9 @@ class EngramStore:
             "read_visibility",
             visibility_values,
         )
-        sql = _append_identity_decision_gate(sql, "hypomnema_entries", visibility_values, self._vault_active)
+        sql = _append_identity_decision_gate(
+            sql, "hypomnema_entries", visibility_values, self._vault_active
+        )
         sql += (
             " ORDER BY foundational DESC, confidence DESC, salience DESC, created_at ASC"
             " LIMIT ?"

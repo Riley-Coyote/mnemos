@@ -81,7 +81,9 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Low-level direct readers (`get_engram`, graph connections/traversal,
   archived search, functional memory, and hypomnema by ID) default to
   operational visibility; unfiltered access is explicit `read_visibility=None`
-  and reserved for audit/admin code paths.
+  and reserved for audit/admin code paths. Engram version history inherits the
+  already-visible parent engram's visibility, and multi-visibility list paths
+  gate versions with an `IN` filter.
 - Every durable engram write stamps source authority from the trusted channel:
   MCP/runtime/session-indexer surfaces use `observed`, curated PAI import uses
   `imported`, autonomous producers use `generated`, and legacy source records
@@ -95,6 +97,9 @@ Use this checklist before publishing Mnemos or opening a release PR.
   surfaces.
 - Schema v6/v7 migrations default existing pending beliefs, confirmation-needed
   functional memories, and hypomnema promotion candidates to review visibility.
+- Re-running v6/v7 repair migrations on a populated v9 database must not
+  rewrite `read_visibility` for already witnessed hypomnema rows carrying
+  `decision_ref`; their visibility is journal-governed.
 - Fresh live hypomnema writes that already meet stable promotion criteria, or
   that carry identity/foundational scope, default to `review_only`; the raw
   hypomnema SQL default remains `operational_context` for legacy compatibility,
@@ -107,6 +112,18 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Simple-mode first-capture verification records review-only/audit-only
   captures as existence-only metadata and never stores or re-quotes their
   prose in the operational restart proof.
+- When the T4 vault is installed, identity/foundational beliefs and hypomnema
+  rows require a valid `decision_ref` before operational reads can surface
+  them. Apply and legacy-witness paths must read only the canonical
+  `/usr/local/var/mnemos-vault/decisions.jsonl` journal and must reject or skip
+  a present agent-owned/agent-writable journal leaf.
+- Session-start/watchdog reconciliation must fail closed for missing, corrupt,
+  unreadable, or untrusted journals; it must hold a `BEGIN IMMEDIATE` span lock
+  across quarantine-all and normal reconcile writes.
+- Reconcile must check both directions and distinguish cleared-ref hides from
+  genuine write-path degrades: fully re-verified witnesses restore ref plus
+  operational visibility, while mutated witnessed fields stay `review_only` for
+  re-approval.
 - Schema v8 adds `inner_life_events` as the private sub-ledger for U6.6/U7
   provenance, gate decisions, skips/drops, scheduled-run telemetry, and soak
   tick summaries.

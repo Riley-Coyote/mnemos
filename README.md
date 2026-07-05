@@ -255,6 +255,27 @@ down to `topical` to bypass review. Underclaimed writes are stored at the
 effective domain, routed to review, and duplicate scoped content claims collapse
 to one pending review row.
 
+### Identity Vault For Foundational Rows
+
+When the canonical vault is installed, identity/foundational rows in beliefs and
+hypomnema require a vault witness before they can read as operational. The
+witness is `decision_ref`, the hash of an approved line in the root/vault-owned
+`/usr/local/var/mnemos-vault/decisions.jsonl` journal.
+
+Identity apply and legacy witness stamping read only the canonical journal path;
+environment variables and call arguments cannot redirect them. If the journal
+file exists but is agent-owned or agent-writable, apply refuses it and
+session-start/watchdog reconciliation fails closed with `journal_untrusted`,
+quarantining already witnessed operational identity rows until a trusted journal
+is restored.
+
+Reconciliation runs in both directions: table rows must resolve to approved
+journal lines, and approved journal lines must still have live matching rows. A
+missing, corrupt, or untrusted journal quarantines witnessed operational rows.
+If raw SQL clears a `decision_ref` but the row still fully matches its witness,
+reconcile restores both the ref and operational visibility; if witnessed fields
+changed, the row stays `review_only` for re-approval.
+
 ### Prompt For An Advanced MCP Agent
 
 ```text

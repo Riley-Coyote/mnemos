@@ -906,6 +906,96 @@ def migrate_v9_vault_decision_ref(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "hypomnema_entries", "decision_ref", "TEXT")
 
 
+def apply_dynamic_modulation_storage_migration(conn: sqlite3.Connection) -> None:
+    """Apply the U5 inert DynamicModulation storage schema.
+
+    U5 ships the persistence layer for DynamicModulation values with **no read
+    path**: nothing in retrieval, salience, context-packet assembly, or identity
+    profile queries this table (architecture review §5.9 / hidden-assumption #9 —
+    inertness enforced by the ABSENCE of a read path, never a disabled flag).
+    U6b (ExperienceTick) proposes modulations through the proposal ledger
+    (``target_surface='dynamic_modulations'``, already a valid surface); a future
+    U6 activation unit, under its own ruling, would build the read/apply path.
+
+    The migration is a pure ``CREATE TABLE IF NOT EXISTS`` + index build with **no
+    backfill UPDATE** — structurally idempotent and re-run safe on a populated DB
+    (the GAP-2 lesson: v6's unconditional backfill UPDATE was the clobber hazard;
+    this migration has no UPDATE, so a re-run on populated rows is a no-op and
+    cannot clobber any existing modulation row). The CHECK constraints pin the
+    structural invariants of a DynamicModulation: ``evidentiary`` FALSE always,
+    ``recurrence_promote`` FORBIDDEN, ``identity_authority`` NONE, magnitude
+    capped to ±1.0, ``rollout_tag`` non-empty AND edge-whitespace-normalized
+    over the FULL ASCII whitespace charset (016c U5-g1 + 016d U5-g3:
+    backout-by-tag is structural and the whitespace-bypass class is closed in
+    the schema — a padded tag would be unreachable by the normalizing backout
+    delete; SQLite's bare ``trim()`` strips only 0x20, so the charset must
+    match ``MODULATION_TAG_EDGE_WS`` in sqlite_store.py exactly),
+    ``ttl_seconds`` positive (016c U5-g2:
+    no permanent modulation), ``expires_at`` NOT NULL and strictly after
+    ``created_at`` (016d U5-g4: the invariant pins on the OPERATIVE column —
+    raw SQL could otherwise mint ttl>0 with NULL expiry, permanent anyway).
+    Idempotent — SQL_CREATE_TABLES already creates the table on fresh DBs; this
+    catches pre-v10 DBs.
+
+    016c/016d amendment note: the g1/g2 CHECKs (016c) and the g3/g4 CHECKs
+    (016d) were added to THIS v10 in place rather than as v11/v12, because no
+    deployed v10 schema exists to migrate — the branch is unmerged, live
+    ``~/.mnemos`` is untouched, and the only DBs ever created at v10 were
+    ephemeral test fixtures destroyed with their tmpdirs. Pre-merge, the
+    migration IS the deployment surface; amending it keeps one canonical
+    modulation schema instead of a multi-step history nothing ever traversed.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dynamic_modulations (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL DEFAULT 'default',
+            person_id TEXT NOT NULL DEFAULT 'user',
+            project_scope TEXT NOT NULL DEFAULT 'global',
+            source_authority TEXT NOT NULL
+                CHECK (source_authority IN ('generated', 'observed')),
+            target TEXT NOT NULL
+                CHECK (target IN ('salience', 'activation', 'retrieval_weight')),
+            target_topic TEXT NOT NULL DEFAULT '',
+            valence REAL NOT NULL DEFAULT 0.0,
+            magnitude REAL NOT NULL
+                CHECK (magnitude >= -1.0 AND magnitude <= 1.0),
+            ttl_seconds INTEGER NOT NULL
+                CHECK (ttl_seconds > 0),
+            decay_rate REAL NOT NULL DEFAULT 0.0
+                CHECK (decay_rate >= 0.0),
+            evidentiary INTEGER NOT NULL DEFAULT 0
+                CHECK (evidentiary = 0),
+            recurrence_promote INTEGER NOT NULL DEFAULT 0
+                CHECK (recurrence_promote = 0),
+            identity_authority INTEGER NOT NULL DEFAULT 0
+                CHECK (identity_authority = 0),
+            rollout_tag TEXT NOT NULL
+                CHECK (rollout_tag <> '' AND rollout_tag = trim(rollout_tag,
+                    ' ' || char(9) || char(10) || char(13) || char(11) || char(12))),
+            provenance_ids_json TEXT NOT NULL DEFAULT '[]',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL
+                CHECK (expires_at > created_at)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dynamic_modulations_rollout "
+        "ON dynamic_modulations(rollout_tag, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dynamic_modulations_scope "
+        "ON dynamic_modulations(agent_id, person_id, project_scope, created_at)"
+    )
+
+
+@register_migration(10, "U5 inert DynamicModulation storage (no read path)")
+def migrate_v10_dynamic_modulation_storage(conn: sqlite3.Connection) -> None:
+    apply_dynamic_modulation_storage_migration(conn)
+
+
 def insert_pai_import_event(
     conn: sqlite3.Connection,
     *,

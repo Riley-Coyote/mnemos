@@ -58,6 +58,11 @@ private provenance, gate decisions, skips/drops, and tick telemetry live in
 memory is private `audit_only` low-stakes memory and does not enter ordinary
 context or recall.
 
+DynamicModulation rows are also outside the turnkey session loop. Schema v10
+can store bounded, rollout-tagged, non-evidentiary modulation records for future
+ExperienceTick work, but they are inert: ordinary context, recall, identity,
+substrate, and MCP tools do not read or apply them.
+
 ## Onboarding Walkthrough
 
 The agent should walk the human through:

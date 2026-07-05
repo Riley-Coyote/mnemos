@@ -75,6 +75,16 @@ The fundamental unit of memory. Each engram has:
   canonical journal. A present agent-owned or agent-writable journal leaf is
   unusable-at-read: apply refuses it and reconciliation routes it through the
   same quarantine-all fail-closed handling as a corrupt journal.
+- **DynamicModulation storage** (schema v10): the `dynamic_modulations` table is
+  an inert persistence and backout surface, not an active retrieval signal.
+  `EngramStore.store_dynamic_modulation()` can persist reversible,
+  non-evidentiary modulation rows with `generated` or `observed` authority,
+  bounded magnitude, positive TTL, normalized non-empty rollout tags, and
+  `expires_at > created_at`; `get_dynamic_modulation()`,
+  `count_dynamic_modulations()`, and
+  `delete_dynamic_modulations_by_rollout_tag()` are lifecycle, telemetry, and
+  backout helpers. Retrieval, salience, context packets, identity profiles,
+  consolidation, substrate producers, and MCP tools do not read this table.
 - **Gated inner-life controls** (schema v8): generated reflection, wandering,
   and dream rows pass through the narrative gate and low-stakes writer before
   persistence. Passed rows are private, low-confidence, audit-only engrams
@@ -233,6 +243,9 @@ Six emotional modulators that influence retrieval and encoding:
 - **Surprise sensitivity**: Threshold for surprise detection
 
 Modulators are recalculated every substrate tick based on recent activity.
+They are separate from schema v10 DynamicModulation rows, which are stored
+inertly for future bounded influence work and are not read by substrate
+modulator recalculation.
 
 ## Layer 3: Cron Suite (Sensory System)
 

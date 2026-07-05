@@ -831,7 +831,15 @@ def test_migration_version_guards(tmp_path):
     try:
         # Bootstrap empty DB to the current latest schema (v8 after the
         # PR4 × inner-life merge: v6 membrane, v7 U2.5, v8 inner-life ledger).
-        assert run_migrations(empty, target_version=SCHEMA_VERSION) == [4, 5, 6, 7, 8, 9]
+        assert run_migrations(empty, target_version=SCHEMA_VERSION) == [
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+        ]
         assert empty.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
         ).fetchone()["value"] == str(SCHEMA_VERSION)
@@ -894,17 +902,17 @@ def test_migration_version_guards(tmp_path):
 
 
 def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
-    """v9 is real now (…v8 inner-life ledger, v9 vault decision_ref); use slot
-    10 to test failure isolation.
+    """v10 is real now (…v9 vault decision_ref, v10 U5 inert modulation
+    storage); use slot 11 to test failure isolation.
 
-    The DB rolls back to v9 (current latest) when a hypothetical v10 migration
-    fails partway through.
+    The DB rolls back to v10 (current latest) when a hypothetical v11
+    migration fails partway through.
     """
     db_path = tmp_path / "rollback.db"
     store = EngramStore(db_path)
     store.close()
 
-    previous = migrations._MIGRATIONS.get(10)
+    previous = migrations._MIGRATIONS.get(11)
 
     def fail_after_writes(conn):
         conn.execute("CREATE TABLE u3a_failure_probe (id TEXT PRIMARY KEY)")
@@ -913,11 +921,11 @@ def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
         )
         raise ValueError("synthetic migration failure")
 
-    migrations._MIGRATIONS[10] = ("synthetic failing migration", fail_after_writes)
+    migrations._MIGRATIONS[11] = ("synthetic failing migration", fail_after_writes)
     conn = sqlite3.connect(db_path)
     try:
-        with pytest.raises(RuntimeError, match="Migration 10 failed"):
-            run_migrations(conn, target_version=10)
+        with pytest.raises(RuntimeError, match="Migration 11 failed"):
+            run_migrations(conn, target_version=11)
         assert conn.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
         ).fetchone()[0] == str(SCHEMA_VERSION)
@@ -930,9 +938,9 @@ def test_failed_migration_rolls_back_and_preserves_schema_version(tmp_path):
     finally:
         conn.close()
         if previous is None:
-            del migrations._MIGRATIONS[10]
+            del migrations._MIGRATIONS[11]
         else:
-            migrations._MIGRATIONS[10] = previous
+            migrations._MIGRATIONS[11] = previous
 
 
 def test_future_schema_store_open_fails_before_mutating_schema(tmp_path):

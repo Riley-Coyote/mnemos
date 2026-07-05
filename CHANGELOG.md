@@ -79,6 +79,13 @@
   fails closed on missing/corrupt/untrusted journals, runs quarantine-all and
   normal writes under one `BEGIN IMMEDIATE` span, and restores cleared-ref raw
   SQL hides only when the witness fully re-verifies.
+- Schema v10 adds inert `dynamic_modulations` storage for future
+  DynamicModulation work. Rows can be persisted, loaded by primary key,
+  counted for telemetry/backout, and deleted by normalized `rollout_tag`, but
+  no retrieval, salience, context-packet, identity, consolidation, substrate, or
+  MCP read path consumes them. The schema pins non-evidentiary authority
+  (`generated`/`observed` only), magnitude <= +/-1.0, positive `ttl_seconds`,
+  non-empty edge-normalized `rollout_tag`, and `expires_at > created_at`.
 
 ### Gated Inner Life And Full Soak
 - Schema v8 adds `inner_life_events`, a private sub-ledger for turn/session

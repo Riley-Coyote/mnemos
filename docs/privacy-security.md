@@ -111,6 +111,15 @@ material:
   target surface, transition, blast radius, status, gate version, provenance,
   and payload fields so candidate state is inspectable without becoming
   operating context.
+- Schema v10 `dynamic_modulations` rows are inert storage for future bounded
+  DynamicModulation work, not operational steering. The only store reads are
+  by-primary-key lifecycle inspection and integer counts for telemetry/backout;
+  no retrieval, salience, context packet, identity, consolidation, substrate, or
+  MCP path reads the table into operating context. Every row requires a
+  non-empty ASCII-edge-normalized `rollout_tag`, positive `ttl_seconds`,
+  `expires_at > created_at`, non-evidentiary authority (`generated` or
+  `observed`), no recurrence promotion, no identity authority, and bounded
+  magnitude. Backout deletes rows by normalized rollout tag.
 - Engram source authority is harness-stamped from the channel:
   `observed` for MCP/runtime/session-indexer surfaces, `imported` for curated
   PAI import, and `generated` for autonomous producers. MCP callers cannot pass

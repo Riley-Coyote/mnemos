@@ -97,7 +97,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
   surfaces.
 - Schema v6/v7 migrations default existing pending beliefs, confirmation-needed
   functional memories, and hypomnema promotion candidates to review visibility.
-- Re-running v6/v7 repair migrations on a populated v9 database must not
+- Re-running v6/v7 repair migrations on a populated v9-or-later database must not
   rewrite `read_visibility` for already witnessed hypomnema rows carrying
   `decision_ref`; their visibility is journal-governed.
 - Fresh live hypomnema writes that already meet stable promotion criteria, or
@@ -127,6 +127,18 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Schema v8 adds `inner_life_events` as the private sub-ledger for U6.6/U7
   provenance, gate decisions, skips/drops, scheduled-run telemetry, and soak
   tick summaries.
+- Schema v10 adds `dynamic_modulations` as inert store/backout scaffolding only:
+  release candidates must prove no package module outside `mnemos/store`
+  references the table, sanctioned reads are limited to by-ID inspection and
+  integer counts, and normal retrieval, salience, context, identity,
+  consolidation, substrate, and MCP surfaces are byte-identical with or without
+  modulation rows.
+- DynamicModulation rows must be structurally bounded by CHECK constraints and
+  writer validation: `source_authority` is `generated` or `observed`,
+  `evidentiary = 0`, `recurrence_promote = 0`, `identity_authority = 0`,
+  magnitude is within +/-1.0, `rollout_tag` is required and normalized over the
+  same ASCII edge-whitespace charset used by count/backout filters,
+  `ttl_seconds > 0`, and `expires_at > created_at`.
 - Generated inner-life reflection, wandering, and dream rows pass the
   narrative gate and are written only as private, low-confidence,
   `audit_only` low-stakes engrams; generated identity/foundational-domain

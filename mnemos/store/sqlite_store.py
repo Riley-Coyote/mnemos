@@ -26,6 +26,7 @@ from ..core.belief import Belief
 from ..core.emotional_state import EmotionalState
 from ..core.identity import AgentIdentity
 from .migrations import (
+    apply_dynamic_modulation_storage_migration,
     apply_u3a_schema_migration,
     apply_u3b_hardening_schema_migration,
     apply_u6_6_inner_life_schema_migration,
@@ -45,7 +46,7 @@ from .read_visibility import (
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 VALID_PROPOSAL_AUTHORITIES = {
     "user_stated",
@@ -97,6 +98,35 @@ RAW_PROPOSAL_STATUSES = {"pending_review", "deferred", "rejected"}
 # Terminal for raw write_proposal upserts. Future reviewed decision APIs may
 # decide deferred proposals through a separate append-only audit path.
 PROPOSAL_TERMINAL_STATUSES = VALID_PROPOSAL_STATUSES - {"pending_review"}
+
+# ── U5: DynamicModulation (inert modulation storage) ──────────────────────────
+# The persistence layer for DynamicModulation values. INERT BY ABSENCE OF A READ
+# PATH: nothing in retrieval / salience / context-packet / identity-profile ever
+# reads this table (architecture review §5.9, hidden-assumption #9 — a missing
+# read path, not a disabled flag). U6b (ExperienceTick) proposes modulations via
+# the proposal ledger (target_surface='dynamic_modulations'); a future U6
+# activation unit, under its own ruling, would build the read path that applies
+# them. This unit ships the vessel only: schema + write/persist + backout.
+#
+# Field set derives from mnemos-system-overview.md §5 (line 60):
+#   {source_authority (harness-stamped), target (salience/activation/
+#    retrieval-weight), magnitude (capped), ttl/decay, evidentiary: FALSE always,
+#    recurrence_promote: FORBIDDEN, identity_authority: NONE}
+# plus the shape-bound operands (line 65 / the R7 addendum): target_topic +
+# valence, stored so the future read path CAN enforce opposite-valence-same-topic
+# protection — U5 only records them.
+VALID_MODULATION_TARGETS = {"salience", "activation", "retrieval_weight"}
+# evidentiary is FALSE always → a modulation may never carry user/imported
+# authority (those are the evidentiary channels). Only model-side channels.
+VALID_MODULATION_AUTHORITIES = {"generated", "observed"}
+MODULATION_MAGNITUDE_CAP = 1.0
+# 016d U5-g3: THE tag normalization, defined once. The schema CHECK's trim
+# charset and this Python strip set must be the SAME character set, or a tag
+# becomes schema-legal but backout-unreachable (SQLite's bare trim() strips
+# only 0x20; Python's bare .strip() strips all unicode whitespace — the gap
+# between them is exactly the whitespace-bypass class g3 closes). Full ASCII
+# whitespace: space, \t, \n, \r, \v, \f.
+MODULATION_TAG_EDGE_WS = " \t\n\r\x0b\x0c"
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -490,6 +520,67 @@ CREATE TABLE IF NOT EXISTS proposal_ledger (
     applied_at INTEGER
 );
 
+-- U5 DynamicModulation: inert persistence layer for reversible, decaying,
+-- non-evidentiary live-processing influence. INERT BY ABSENCE OF A READ PATH —
+-- no retrieval/salience/context/identity reader queries this table. U6b proposes
+-- into it via the proposal ledger; a future U6 activation unit builds the read
+-- path under its own ruling. Shape (mnemos-system-overview.md §5): a modulation
+-- is non-evidentiary always, may not promote by recurrence, carries no identity
+-- authority; magnitude is capped and it decays by TTL. target_topic + valence
+-- are stored (not read here) so the future shape bound can protect
+-- opposite-valence-same-topic disconfirmers.
+-- CHECK invariants: evidentiary FALSE always; recurrence_promote FORBIDDEN;
+-- identity_authority NONE; magnitude capped ±1.0; rollout_tag non-empty AND
+-- edge-whitespace-normalized (016c U5-g1 + 016d U5-g3 — backout-by-tag is
+-- structural and the T3 whitespace-bypass class is closed in the schema: a
+-- padded tag would pass a bare non-empty CHECK yet be unreachable by the
+-- normalizing backout delete, so only normalized tags can exist. The trim
+-- charset is the FULL ASCII whitespace set, not SQLite's space-only default
+-- trim(): bare trim() lets tab- and newline-edged tags through while the
+-- Python-side strip removes them — proven live; the charset must match
+-- MODULATION_TAG_EDGE_WS exactly or the closure property breaks);
+-- ttl_seconds positive (016c U5-g2 — a modulation is decaying residue by
+-- spec, a permanent row has no legitimate producer); expires_at NOT NULL and
+-- strictly after created_at (016d U5-g4 — the invariant pins on the
+-- OPERATIVE column: ttl_seconds is the input, expires_at is what any future
+-- decay/backout sweep would read, and raw SQL could otherwise mint ttl>0
+-- with NULL expiry — permanent anyway). A future ruling wanting a
+-- deliberate-permanent class widens these CHECKs under its own authority.
+-- This CREATE body must stay byte-identical to the one in
+-- apply_dynamic_modulation_storage_migration (migrations.py).
+CREATE TABLE IF NOT EXISTS dynamic_modulations (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL DEFAULT 'default',
+    person_id TEXT NOT NULL DEFAULT 'user',
+    project_scope TEXT NOT NULL DEFAULT 'global',
+    source_authority TEXT NOT NULL
+        CHECK (source_authority IN ('generated', 'observed')),
+    target TEXT NOT NULL
+        CHECK (target IN ('salience', 'activation', 'retrieval_weight')),
+    target_topic TEXT NOT NULL DEFAULT '',
+    valence REAL NOT NULL DEFAULT 0.0,
+    magnitude REAL NOT NULL
+        CHECK (magnitude >= -1.0 AND magnitude <= 1.0),
+    ttl_seconds INTEGER NOT NULL
+        CHECK (ttl_seconds > 0),
+    decay_rate REAL NOT NULL DEFAULT 0.0
+        CHECK (decay_rate >= 0.0),
+    evidentiary INTEGER NOT NULL DEFAULT 0
+        CHECK (evidentiary = 0),
+    recurrence_promote INTEGER NOT NULL DEFAULT 0
+        CHECK (recurrence_promote = 0),
+    identity_authority INTEGER NOT NULL DEFAULT 0
+        CHECK (identity_authority = 0),
+    rollout_tag TEXT NOT NULL
+        CHECK (rollout_tag <> '' AND rollout_tag = trim(rollout_tag,
+            ' ' || char(9) || char(10) || char(13) || char(11) || char(12))),
+    provenance_ids_json TEXT NOT NULL DEFAULT '[]',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+        CHECK (expires_at > created_at)
+);
+
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -537,6 +628,10 @@ CREATE INDEX IF NOT EXISTS idx_inner_life_events_session
     ON inner_life_events(session_id, event_type, created_at);
 CREATE INDEX IF NOT EXISTS idx_inner_life_events_rollout
     ON inner_life_events(rollout_tag, event_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_dynamic_modulations_rollout
+    ON dynamic_modulations(rollout_tag, created_at);
+CREATE INDEX IF NOT EXISTS idx_dynamic_modulations_scope
+    ON dynamic_modulations(agent_id, person_id, project_scope, created_at);
 """
 
 
@@ -1051,6 +1146,7 @@ class EngramStore:
         apply_u3a_schema_migration(conn)
         apply_u3b_hardening_schema_migration(conn)
         apply_u6_6_inner_life_schema_migration(conn)
+        apply_dynamic_modulation_storage_migration(conn)
         # Set schema version
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
@@ -2166,6 +2262,250 @@ class EngramStore:
         if proposal is None:
             raise RuntimeError(f"Failed to write proposal: {pid}")
         return proposal
+
+    # ── U5: DynamicModulation inert storage ───────────────────────────────────
+    # Write/persist + backout ONLY. There is deliberately NO retrieval/salience/
+    # context reader for this table anywhere in the codebase — inertness is
+    # enforced by the ABSENCE of a read path (architecture review §5.9), not a
+    # flag. U6b proposes modulations through the proposal ledger; a future U6
+    # activation unit, under its own ruling, would add the read path. Until then
+    # these rows influence nothing. `store_dynamic_modulation` is the persist
+    # method; the by-tag deleter is the backout discipline the five-day plan
+    # requires ("every generated row is deletable by tag"); `count_*` is a
+    # telemetry/backout counter that returns an int, never row content into
+    # operational context.
+
+    def store_dynamic_modulation(
+        self,
+        *,
+        target: str,
+        magnitude: float,
+        rollout_tag: str,
+        ttl_seconds: int,
+        source_authority: str = "generated",
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        target_topic: str = "",
+        valence: float = 0.0,
+        decay_rate: float = 0.0,
+        provenance_ids: list[str] | tuple[str, ...] | None = None,
+        payload: dict[str, Any] | None = None,
+        modulation_id: str | None = None,
+        created_at: int | None = None,
+    ) -> dict[str, Any]:
+        """Persist one inert DynamicModulation row.
+
+        A DynamicModulation is a typed, reversible, non-evidentiary influence
+        (mnemos-system-overview.md §5). This method only *stores* it — nothing
+        reads the table into ranking/salience/context. Validation encodes the
+        invariants structurally so a stored row cannot claim otherwise:
+
+        - ``source_authority`` is restricted to model-side channels
+          (``generated``/``observed``); ``user_stated``/``imported`` are the
+          evidentiary channels and a modulation is ``evidentiary=FALSE`` always,
+          so those are rejected.
+        - ``target`` ∈ {salience, activation, retrieval_weight}.
+        - ``magnitude`` is capped to ±1.0.
+        - ``rollout_tag`` is REQUIRED and non-empty (016c U5-g1): the
+          Evidence-Thinness promise — every generated row is deletable by
+          tag — is structural, not conventional. An untagged row would sit
+          outside the backout path, so it cannot be written. All rows, both
+          authorities, no defaults.
+        - ``ttl_seconds`` is REQUIRED and positive (016c U5-g2): a modulation
+          is decaying residue by spec — a permanent modulation has no
+          legitimate producer. ``expires_at`` is therefore always set. A
+          future ruling wanting a deliberate-permanent class widens the
+          schema CHECK under its own authority.
+        - ``decay_rate`` is non-negative (the persistence bound lives on the
+          read/apply side, which does not exist yet; U5 only records the
+          decay parameters).
+        - ``evidentiary``, ``recurrence_promote``, ``identity_authority`` are
+          pinned to 0 by CHECK constraints — a modulation is never evidence,
+          never promotes by recurrence, never carries identity authority.
+        - ``provenance_ids`` records the source lineage.
+        """
+        target = _clean_choice(target, VALID_MODULATION_TARGETS, "modulation target")
+        source_authority = _clean_choice(
+            source_authority,
+            VALID_MODULATION_AUTHORITIES,
+            "modulation source authority",
+        )
+        try:
+            magnitude = float(magnitude)
+        except (TypeError, ValueError):
+            raise ValueError("modulation magnitude must be a number")
+        if not (-MODULATION_MAGNITUDE_CAP <= magnitude <= MODULATION_MAGNITUDE_CAP):
+            raise ValueError(
+                f"modulation magnitude {magnitude} exceeds cap "
+                f"±{MODULATION_MAGNITUDE_CAP}"
+            )
+        try:
+            valence = float(valence)
+        except (TypeError, ValueError):
+            raise ValueError("modulation valence must be a number")
+        # 016d g3: normalize with MODULATION_TAG_EDGE_WS — the exact charset
+        # the schema CHECK trims — never bare .strip() (unicode-wider than the
+        # schema can express; the mismatch reopens the bypass).
+        rollout_tag = (rollout_tag or "").strip(MODULATION_TAG_EDGE_WS)
+        if not rollout_tag:
+            raise ValueError(
+                "modulation rollout_tag is required and must be non-empty "
+                "(016c U5-g1: every row must be reachable by the tag-scoped "
+                "backout)"
+            )
+        try:
+            ttl_seconds = int(ttl_seconds)
+        except (TypeError, ValueError):
+            raise ValueError("modulation ttl_seconds must be an integer")
+        if ttl_seconds <= 0:
+            raise ValueError(
+                "modulation ttl_seconds is required and must be positive "
+                "(016c U5-g2: a modulation is decaying residue — permanent "
+                "rows have no legitimate producer)"
+            )
+        try:
+            decay_rate = float(decay_rate)
+        except (TypeError, ValueError):
+            raise ValueError("modulation decay_rate must be a number")
+        if decay_rate < 0:
+            raise ValueError("modulation decay_rate must be non-negative")
+
+        mid = (modulation_id or "").strip() or _new_id()
+        now = int(
+            created_at
+            if created_at is not None
+            else datetime.now(timezone.utc).timestamp()
+        )
+        expires_at = now + ttl_seconds
+        provenance = [
+            str(item).strip() for item in (provenance_ids or []) if str(item).strip()
+        ]
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO dynamic_modulations (
+                id, agent_id, person_id, project_scope, source_authority,
+                target, target_topic, valence, magnitude, ttl_seconds,
+                decay_rate, evidentiary, recurrence_promote, identity_authority,
+                rollout_tag, provenance_ids_json, payload_json, created_at,
+                expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?)
+            """,
+            (
+                mid,
+                agent_id,
+                person_id,
+                project_scope,
+                source_authority,
+                target,
+                target_topic,
+                valence,
+                magnitude,
+                ttl_seconds,
+                decay_rate,
+                rollout_tag,
+                _encode_json(provenance),
+                _encode_json(payload or {}),
+                now,
+                expires_at,
+            ),
+        )
+        conn.commit()
+        return self.get_dynamic_modulation(mid)  # type: ignore[return-value]
+
+    def get_dynamic_modulation(self, modulation_id: str) -> dict[str, Any] | None:
+        """Load one modulation row by ID.
+
+        Lifecycle/inspection helper for the write + backout path. This is NOT a
+        retrieval read: it returns a single row by primary key for the producer/
+        operator, never a ranked set into operational context.
+        """
+        row = (
+            self._get_conn()
+            .execute(
+                "SELECT * FROM dynamic_modulations WHERE id = ?",
+                (modulation_id,),
+            )
+            .fetchone()
+        )
+        if row is None:
+            return None
+        record = dict(row)
+        record["provenance_ids"] = _decode_json(
+            record.pop("provenance_ids_json", "[]"), []
+        )
+        record["payload"] = _decode_json(record.pop("payload_json", "{}"), {})
+        return record
+
+    def count_dynamic_modulations(
+        self,
+        *,
+        agent_id: str | None = None,
+        person_id: str | None = None,
+        project_scope: str | None = None,
+        rollout_tag: str | None = None,
+    ) -> int:
+        """Count stored modulation rows (telemetry / backout accounting).
+
+        Returns an integer only — never row content. Used by the operator plan's
+        zero-counter checks and by the by-tag backout to report how many rows a
+        tag would remove. Not a retrieval read.
+
+        The ``rollout_tag`` filter is normalized with ``MODULATION_TAG_EDGE_WS``
+        — the same charset writes and the backout delete use (016d g3 rule:
+        normalization aligned everywhere). Comparing the raw caller input would
+        make a padded operator tag report a false 0 during backout
+        verification — the one place a wrong zero is most dangerous. The scope
+        filters (agent/person/project) stay raw-vs-raw: writes store them
+        unnormalized, so raw comparison is the consistent form there.
+        """
+        if rollout_tag is not None:
+            rollout_tag = rollout_tag.strip(MODULATION_TAG_EDGE_WS)
+        predicates: list[str] = []
+        params: list[Any] = []
+        for column, value in (
+            ("agent_id", agent_id),
+            ("person_id", person_id),
+            ("project_scope", project_scope),
+            ("rollout_tag", rollout_tag),
+        ):
+            if value is not None:
+                predicates.append(f"{column} = ?")
+                params.append(value)
+        where = f" WHERE {' AND '.join(predicates)}" if predicates else ""
+        return int(
+            self._get_conn()
+            .execute(f"SELECT COUNT(*) FROM dynamic_modulations{where}", params)
+            .fetchone()[0]
+        )
+
+    def delete_dynamic_modulations_by_rollout_tag(self, rollout_tag: str) -> int:
+        """Backout: delete every modulation row carrying ``rollout_tag``.
+
+        The five-day plan's evidence-thinness mitigation names this as the
+        reversibility guarantee: every generated row is deletable by tag. Refuses
+        an empty tag so a blank cannot wipe the untagged baseline. Returns the
+        number of rows removed.
+
+        Normalizes with ``MODULATION_TAG_EDGE_WS`` — the same charset the
+        schema CHECK enforces on stored tags — so every schema-legal tag is
+        reachable (016d g3 closure property). Bare ``.strip()`` here would
+        strip unicode whitespace the schema permits and miss those rows.
+        """
+        tag = (rollout_tag or "").strip(MODULATION_TAG_EDGE_WS)
+        if not tag:
+            raise ValueError(
+                "rollout_tag is required for backout; refusing to delete on an "
+                "empty tag"
+            )
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "DELETE FROM dynamic_modulations WHERE rollout_tag = ?",
+            (tag,),
+        )
+        conn.commit()
+        return cursor.rowcount
 
     def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
         """Load one proposal ledger row by ID."""

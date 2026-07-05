@@ -255,6 +255,11 @@ down to `topical` to bypass review. Underclaimed writes are stored at the
 effective domain, routed to review, and duplicate scoped content claims collapse
 to one pending review row.
 
+Internal schema v10 DynamicModulation storage is not an MCP feature yet. It can
+persist and back out bounded, rollout-tagged modulation rows for future
+ExperienceTick work, but those rows are inert: no retrieval, salience, context,
+identity, substrate, or MCP path reads or applies them.
+
 ### Identity Vault For Foundational Rows
 
 When the canonical vault is installed, identity/foundational rows in beliefs and

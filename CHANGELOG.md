@@ -79,13 +79,23 @@
   fails closed on missing/corrupt/untrusted journals, runs quarantine-all and
   normal writes under one `BEGIN IMMEDIATE` span, and restores cleared-ref raw
   SQL hides only when the witness fully re-verifies.
-- Schema v10 adds inert `dynamic_modulations` storage for future
+- Schema v10 adds inert `dynamic_modulations` storage for bounded
   DynamicModulation work. Rows can be persisted, loaded by primary key,
   counted for telemetry/backout, and deleted by normalized `rollout_tag`, but
   no retrieval, salience, context-packet, identity, consolidation, substrate, or
   MCP read path consumes them. The schema pins non-evidentiary authority
   (`generated`/`observed` only), magnitude <= +/-1.0, positive `ttl_seconds`,
   non-empty edge-normalized `rollout_tag`, and `expires_at > created_at`.
+- U6b adds `mnemos.modulation.ExperienceTick` as a proposal-only path for
+  modulation observations. It emits `review_only` pending proposal rows for
+  `target_surface="dynamic_modulations"` with deterministic IDs, per-family
+  kill switches, required edge-normalized `rollout_tag`, positive
+  `ttl_seconds`, finite valence/decay values, identity/foundational-domain
+  refusal, and batch rollback on validation or store-level failure. It never
+  writes `dynamic_modulations` rows and adds no read/apply path.
+- `EngramStore.write_proposal(commit=False)` lets trusted callers compose
+  multiple raw proposal writes into one caller-managed transaction; the default
+  `commit=True` preserves existing auto-commit behavior.
 
 ### Gated Inner Life And Full Soak
 - Schema v8 adds `inner_life_events`, a private sub-ledger for turn/session

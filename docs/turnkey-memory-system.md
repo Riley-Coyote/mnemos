@@ -59,9 +59,11 @@ memory is private `audit_only` low-stakes memory and does not enter ordinary
 context or recall.
 
 DynamicModulation rows are also outside the turnkey session loop. Schema v10
-can store bounded, rollout-tagged, non-evidentiary modulation records for future
-ExperienceTick work, but they are inert: ordinary context, recall, identity,
-substrate, and MCP tools do not read or apply them.
+can store bounded, rollout-tagged, non-evidentiary modulation records, but they
+are inert: ordinary context, recall, identity, substrate, and MCP tools do not
+read or apply them. U6b `ExperienceTick` is proposal-only; it can emit
+review-visible proposal rows targeting the modulation surface, but it does not
+write modulation rows or activate retrieval influence.
 
 ## Onboarding Walkthrough
 

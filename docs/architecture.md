@@ -85,6 +85,14 @@ The fundamental unit of memory. Each engram has:
   `delete_dynamic_modulations_by_rollout_tag()` are lifecycle, telemetry, and
   backout helpers. Retrieval, salience, context packets, identity profiles,
   consolidation, substrate producers, and MCP tools do not read this table.
+- **ExperienceTick proposals** (U6b): `mnemos.modulation.ExperienceTick`
+  converts `ProposedModulation` observations into review-visible
+  `proposal_ledger` rows targeting the modulation surface. It is manually
+  invoked, honors per-family kill switches, rejects identity/foundational
+  domains, requires rollout tags and positive TTL, uses deterministic proposal
+  IDs for re-tick stability, and batches writes atomically through
+  `write_proposal(commit=False)`. It does not write `dynamic_modulations` rows
+  and does not add a modulation read/apply path.
 - **Gated inner-life controls** (schema v8): generated reflection, wandering,
   and dream rows pass through the narrative gate and low-stakes writer before
   persistence. Passed rows are private, low-confidence, audit-only engrams
@@ -244,8 +252,10 @@ Six emotional modulators that influence retrieval and encoding:
 
 Modulators are recalculated every substrate tick based on recent activity.
 They are separate from schema v10 DynamicModulation rows, which are stored
-inertly for future bounded influence work and are not read by substrate
-modulator recalculation.
+inertly for future bounded influence activation work and are not read by
+substrate modulator recalculation. U6b ExperienceTick proposals do not change
+that: they are review artifacts in the proposal ledger, not substrate
+modulator inputs.
 
 ## Layer 3: Cron Suite (Sensory System)
 

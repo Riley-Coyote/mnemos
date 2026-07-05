@@ -61,6 +61,8 @@ Use this checklist before publishing Mnemos or opening a release PR.
   - `mnemos/inner_life/scheduler.py`
   - `mnemos/inner_life/session_finalizer.py`
   - `mnemos/inner_life/turn_finalizer.py`
+  - `mnemos/modulation/__init__.py`
+  - `mnemos/modulation/experience_tick.py`
   - `mnemos/soak/__init__.py`
   - `mnemos/soak/preflight.py`
   - `mnemos/soak/tick.py`
@@ -139,6 +141,11 @@ Use this checklist before publishing Mnemos or opening a release PR.
   magnitude is within +/-1.0, `rollout_tag` is required and normalized over the
   same ASCII edge-whitespace charset used by count/backout filters,
   `ttl_seconds > 0`, and `expires_at > created_at`.
+- U6b `ExperienceTick` must remain proposal-only: focused proof must show
+  `review_only` pending proposal rows targeting the modulation surface,
+  deterministic re-tick IDs, per-family kill switches, identity/foundational
+  domain refusal, no `dynamic_modulations` row writes, no read/apply path, and
+  all-or-nothing rollback across validation and store-level failures.
 - Generated inner-life reflection, wandering, and dream rows pass the
   narrative gate and are written only as private, low-confidence,
   `audit_only` low-stakes engrams; generated identity/foundational-domain
@@ -242,7 +249,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
 
 ```bash
 uv run --extra dev --extra mcp pytest -q
-uv run --extra mcp python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/importer/__init__.py mnemos/importer/pai.py mnemos/importer/operator.py mnemos/importer/review_gate.py mnemos/importer/watcher.py mnemos/inner_life/*.py mnemos/soak/*.py
+uv run --extra mcp python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/importer/__init__.py mnemos/importer/pai.py mnemos/importer/operator.py mnemos/importer/review_gate.py mnemos/importer/watcher.py mnemos/inner_life/*.py mnemos/modulation/*.py mnemos/soak/*.py
 uv build
 uvx twine check dist/*
 git diff --check

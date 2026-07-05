@@ -111,7 +111,7 @@ material:
   target surface, transition, blast radius, status, gate version, provenance,
   and payload fields so candidate state is inspectable without becoming
   operating context.
-- Schema v10 `dynamic_modulations` rows are inert storage for future bounded
+- Schema v10 `dynamic_modulations` rows are inert storage for bounded
   DynamicModulation work, not operational steering. The only store reads are
   by-primary-key lifecycle inspection and integer counts for telemetry/backout;
   no retrieval, salience, context packet, identity, consolidation, substrate, or
@@ -120,6 +120,11 @@ material:
   `expires_at > created_at`, non-evidentiary authority (`generated` or
   `observed`), no recurrence promotion, no identity authority, and bounded
   magnitude. Backout deletes rows by normalized rollout tag.
+- U6b `ExperienceTick` proposes toward that modulation surface through the
+  proposal ledger only. Emitted rows are `pending_review` and `review_only`;
+  the tick refuses identity/foundational domains, disabled families, invalid
+  targets, nonpositive TTL, and non-finite valence/decay values. It writes no
+  `dynamic_modulations` row and adds no read path.
 - Engram source authority is harness-stamped from the channel:
   `observed` for MCP/runtime/session-indexer surfaces, `imported` for curated
   PAI import, and `generated` for autonomous producers. MCP callers cannot pass

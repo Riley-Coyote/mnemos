@@ -127,6 +127,13 @@ MODULATION_MAGNITUDE_CAP = 1.0
 # between them is exactly the whitespace-bypass class g3 closes). Full ASCII
 # whitespace: space, \t, \n, \r, \v, \f.
 MODULATION_TAG_EDGE_WS = " \t\n\r\x0b\x0c"
+# The proposal target_surface a modulation proposal (U6b ExperienceTick) targets.
+# Named here, in the sanctioned store layer, so a proposer can reference the
+# surface WITHOUT hardcoding the table literal — keeping the U5 source-level
+# inertness grep a pure read-path check (a real FROM/JOIN read still carries the
+# literal and is caught). U6b proposes only; a future U6 activation unit builds
+# the read path under its own ruling.
+MODULATION_PROPOSAL_SURFACE = "dynamic_modulations"
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -2094,6 +2101,7 @@ class EngramStore:
         provenance_ids: list[str] | tuple[str, ...] | None = None,
         payload: dict[str, Any] | None = None,
         proposal_id: str | None = None,
+        commit: bool = True,
     ) -> dict[str, Any]:
         """Record a durable-affecting candidate in the proposal ledger.
 
@@ -2107,6 +2115,11 @@ class EngramStore:
         ``pending_review`` rows. Once a row is ``deferred``, ``rejected``,
         ``applied``, ``approved``, or ``superseded``, raw writes fail closed;
         reviewed decisions must use a separate append-only decision path.
+
+        Pass ``commit=False`` only when a trusted caller is composing several
+        proposal writes into one caller-managed transaction. The row is still
+        returned from the open transaction; the caller must commit or roll back.
+        The default ``commit=True`` preserves the one-call auto-commit behavior.
         """
         source_authority = _clean_choice_with_aliases(
             source_authority,
@@ -2257,7 +2270,13 @@ class EngramStore:
             raise ValueError(
                 "Terminal proposal rows are immutable; use a new proposal_id"
             )
-        conn.commit()
+        # commit=False lets a caller batch several write_proposal calls into one
+        # atomic transaction (default deferred isolation auto-joins the INSERTs):
+        # the caller commits once on success and rolls back the whole batch on any
+        # store-level raise, so no partial batch is left committed. The row is
+        # still readable below within the open transaction (same connection).
+        if commit:
+            conn.commit()
         proposal = self.get_proposal(pid)
         if proposal is None:
             raise RuntimeError(f"Failed to write proposal: {pid}")

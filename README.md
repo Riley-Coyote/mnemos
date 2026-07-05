@@ -256,9 +256,11 @@ effective domain, routed to review, and duplicate scoped content claims collapse
 to one pending review row.
 
 Internal schema v10 DynamicModulation storage is not an MCP feature yet. It can
-persist and back out bounded, rollout-tagged modulation rows for future
-ExperienceTick work, but those rows are inert: no retrieval, salience, context,
-identity, substrate, or MCP path reads or applies them.
+persist and back out bounded, rollout-tagged modulation rows, but those rows are
+inert: no retrieval, salience, context, identity, substrate, or MCP path reads
+or applies them. U6b `mnemos.modulation.ExperienceTick` is proposal-only: it
+emits review-visible proposal ledger rows targeting the modulation surface and
+never writes or reads `dynamic_modulations` rows.
 
 ### Identity Vault For Foundational Rows
 
@@ -735,7 +737,7 @@ for release gates.
 ```bash
 uv run --extra dev pytest -q
 uv run --extra dev --extra mcp pytest -q tests/test_mcp_surface.py
-python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/inner_life/*.py mnemos/soak/*.py
+uv run python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/inner_life/*.py mnemos/modulation/*.py mnemos/soak/*.py
 ```
 
 ---

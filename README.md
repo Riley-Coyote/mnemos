@@ -416,10 +416,10 @@ review, reflection, dreaming, and wandering.
 The gated inner-life and full-soak commands are operator/pre-soak surfaces, not
 baseline background jobs. They require `--db-path`, refuse live `~/.mnemos`
 databases unless `--allow-live-db` is supplied, and keep generated
-reflection/wandering/dream output private and audit-only. Full scheduled
-activation intentionally keeps `affect` unscheduled until RM-7 closes the
-`emotional-driver-filter-after-limit` residual; enabling it makes preflight
-report a `known_open_issue` blocker. See
+reflection/wandering/dream output private and audit-only. Preflight blocks any
+schedule-enabled process carrying a known activation residual; the registry is
+currently empty (`affect`'s `emotional-driver-filter-after-limit` entry closed
+when RM-7 landed its paging primitive). See
 [docs/gated-inner-life.md](docs/gated-inner-life.md) before using them.
 
 ### Dedicated Model Providers

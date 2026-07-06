@@ -88,12 +88,6 @@ def test_preflight_ready_when_enabled_snapshot_provider_and_kill_switches_exist(
     db = tmp_path / "preflight-ready.db"
     EngramStore(db).close()
     config = _enabled_schedule_config(tmp_path)
-    # affect is excluded from the achievable full-ready state: it carries a known
-    # activation blocker (emotional-driver-filter-after-limit) and cannot be
-    # enabled until roadmap RM-7 lands (rulings 004/004b). The blocked path is
-    # covered by test_preflight_blocks_affect_activation_while_recency_residual_open
-    # in tests/test_t2_5_safety_gate_repairs.py. RM-7 re-enables it here.
-    config["inner_life"]["schedules"]["processes"]["affect"]["enabled"] = False
     snapshot = tmp_path / "pre-soak.db"
     snapshot.write_text("snapshot placeholder", encoding="utf-8")
 

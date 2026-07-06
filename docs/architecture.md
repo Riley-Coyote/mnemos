@@ -220,10 +220,11 @@ through the substrate event payload so their generated rows remain backoutable
 by rollout scope.
 
 Activity, cooldown, and cadence gates select eligible recent rows in SQL before
-applying scan limits. `affect` still has one accepted residual:
-`emotional-driver-filter-after-limit`, where a semantic influence filter runs
-after the recency limit. Full scheduled activation blocks `affect` while that
-residual is open, and RM-7 owns the paging/filtering fix.
+applying scan limits. The emotional driver's semantic influence filter cannot
+move into SQL, so its recency scan instead pages newest-first with a
+`(created_at, id)` cursor until enough influencing rows are collected or the
+window is exhausted (RM-7) — closing the former
+`emotional-driver-filter-after-limit` residual with unchanged affect semantics.
 
 The U7 soak tick composes enabled families from `soak.families` and
 `inner_life.schedules`, records telemetry in `inner_life_events`, and keeps

@@ -5046,6 +5046,8 @@ class EngramStore:
         rollout_tag: str | None = None,
         limit: int = 100,
         recent: bool = False,
+        before_created_at: str | None = None,
+        before_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Return private U6.6 event-ledger rows.
 
@@ -5063,7 +5065,21 @@ class EngramStore:
         ``limit`` bounds *eligible* rows. Otherwise a burst of ineligible rows
         (e.g. activity-gate telemetry) can fill the newest ``limit`` and push the
         one row the caller needs out of the slice.
+
+        Predicates that cannot move into SQL (content-semantic filters such as
+        the emotional driver's ``_event_influences``) instead page with the
+        ``before_created_at``/``before_id`` cursor (RM-7): pass both values from
+        the oldest row of the previous page to fetch rows strictly older than
+        that ``(created_at, id)`` pair. The pair comparison — ``created_at``
+        with the TEXT primary key ``id`` as tie-break — matches the ``recent``
+        ordering exactly, so consecutive pages neither skip nor duplicate rows
+        that share a ``created_at``. Both cursor values must be provided
+        together.
         """
+        if (before_created_at is None) != (before_id is None):
+            raise ValueError(
+                "before_created_at and before_id must be provided together"
+            )
         conn = self._get_conn()
         predicates = ["agent_id = ?", "person_id = ?", "project_scope = ?"]
         params: list[Any] = [agent_id, person_id, project_scope]
@@ -5092,6 +5108,12 @@ class EngramStore:
         if rollout_tag is not None:
             predicates.append("rollout_tag = ?")
             params.append(rollout_tag)
+        if before_created_at is not None and before_id is not None:
+            # Strictly older than the (created_at, id) cursor pair, mirroring
+            # the DESC ordering below so paging is gap-free and duplicate-free
+            # across rows that share a created_at.
+            predicates.append("(created_at < ? OR (created_at = ? AND id < ?))")
+            params.extend([before_created_at, before_created_at, before_id])
         params.append(max(1, limit))
         where = " AND ".join(predicates)
         if recent:

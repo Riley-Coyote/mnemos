@@ -173,9 +173,10 @@ Use this checklist before publishing Mnemos or opening a release PR.
   snapshot is missing, or required provider/reviewer readiness is absent. It
   reports rollback and launchd surfaces for operator review.
 - `inner-life preflight` also blocks any schedule-enabled process with a known
-  activation residual. `affect` is blocked by
-  `known_open_issue:affect:emotional-driver-filter-after-limit` until RM-7; a
-  disabled `affect` schedule/activity switch is the expected safe state.
+  activation residual, and a disabled schedule/activity switch on such a
+  process is the expected safe state. The registry is currently empty:
+  `affect`'s `emotional-driver-filter-after-limit` entry closed with RM-7's
+  paging primitive.
 - `inner-life plist` and `soak plist` write plist files atomically, bake
   repo-local `python -m mnemos.cli ...` arguments, and never call `launchctl`.
 - `soak preflight` composes watcher doctor state, soak plist lint, launchd
@@ -183,7 +184,9 @@ Use this checklist before publishing Mnemos or opening a release PR.
   tick dry run. It may write the requested JSON artifact but must not mutate
   the supplied DB or construct a real LLM client during the dry run.
 - Recency-sensitive inner-life scans filter eligibility in SQL before `LIMIT`
-  for activity signals, cooldowns, and soak family cadence checks.
+  for activity signals, cooldowns, and soak family cadence checks; affect uses
+  RM-7's `(created_at, id)` cursor paging for its content-semantic influence
+  filter.
 - `inner-life status` and soak tick summaries expose generated-memory,
   belief-write, identity-patch, and shared-pool counters; U6.6/U7 validation
   should keep belief, identity, and shared-pool counters at zero.

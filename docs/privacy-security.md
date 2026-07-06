@@ -191,9 +191,11 @@ baseline background behavior.
   Preflight reports missing/disabled kill switches, provider readiness,
   observer reviewer configuration, pre-soak snapshot readiness, launchd paths,
   halt marker, rollback commands, and known per-process activation blockers
-  before activation. While the `emotional-driver-filter-after-limit` residual is
-  open, `affect` must remain unscheduled; its disabled schedule/activity switch
-  is the safe state rather than a readiness penalty.
+  before activation. The blocker registry is currently empty — `affect`'s
+  `emotional-driver-filter-after-limit` residual closed when RM-7 landed the
+  recency paging primitive; a process listed there in the future must remain
+  unscheduled, with its disabled schedule/activity switch treated as the safe
+  state rather than a readiness penalty.
 - `inner-life plist` and `soak plist` write launchd plist files but do not call
   `launchctl`. `soak preflight --dry-run-tick` runs the tick against a SQLite
   backup copy, disables real LLM-client construction, and does not mutate the

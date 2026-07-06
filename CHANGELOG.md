@@ -124,10 +124,10 @@
   preflight checks per-family kill switches, activity-gate switches, provider
   readiness, observer reviewer configuration, pre-soak snapshots, and known
   per-process activation blockers before U7 can load anything. It also reports
-  launchd plist paths, halt marker, and rollback commands. `affect` remains
-  blocked by the `emotional-driver-filter-after-limit` residual until RM-7;
-  keeping it disabled is treated as the safe state rather than a
-  disabled-switch penalty.
+  launchd plist paths, halt marker, and rollback commands. The blocker registry
+  is currently empty: `affect`'s `emotional-driver-filter-after-limit` residual
+  closed when RM-7 landed the recency paging primitive, and future listed
+  processes should stay disabled as their safe state until their fixes land.
 - New `mnemos soak` commands cover `tick`, `plist`, and `preflight`. The soak
   tick fans out enabled families, can run shallow consolidation without deep
   model work, wires an LLM client for enabled generative families only when the
@@ -137,8 +137,9 @@
   `--dry-run-tick` verifies the tick path without sending memory content to a
   real model or mutating the supplied DB.
 - Inner-life recency, cooldown, signal, and family-cadence scans now apply
-  eligibility filters in SQL before `LIMIT`; the remaining affect semantic
-  filter-after-limit residual is documented and activation-blocked.
+  eligibility filters in SQL before `LIMIT`; the emotional driver's semantic
+  affect filter pages beyond the newest slice with a `(created_at, id)` cursor
+  so bursts of newer non-influencing rows cannot evict an in-window signal.
 - `mnemos pai-import review-gate` now recognizes U6.6 inner-life and U7 soak
   diffs and requires the matching schema, finalizer, activity, narrative,
   scheduler, CLI, preflight, and soak regression proof surfaces.

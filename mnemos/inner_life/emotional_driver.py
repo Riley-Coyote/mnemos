@@ -14,6 +14,7 @@ DEFAULT_WINDOW_HOURS = 24
 DEFAULT_MAX_EVENTS = 80
 DEFAULT_MAGNITUDE = 0.05
 DEFAULT_MIN_MOVEMENT = 0.03
+DEFAULT_PAGE_SIZE = 200
 
 
 def update_event_grounded_affect(
@@ -157,34 +158,62 @@ def _recent_signal_events(
     since: datetime,
     now: datetime,
     limit: int,
+    page_size: int = DEFAULT_PAGE_SIZE,
 ) -> list[dict[str, Any]]:
-    # KNOWN RESIDUAL (ruling 004; see docs/gated-inner-life.md):
-    # `_event_influences` is a content-semantic filter applied AFTER the recency
-    # limit below, so a burst of newer non-influencing rows inside the window can
-    # evict an older in-window turn/test/error signal. Eviction precondition: more
-    # than `limit` newer non-influencing rows within [since, now]. Accepted for now
-    # because affect is U7-gated (not live) and non-influencing generators are
-    # weekly-throttled. The paging fix (option b) is roadmap RM-7 and is gated into
-    # inner-life preflight (KNOWN_ACTIVATION_BLOCKERS), so affect cannot activate
-    # while this is open.
-    rows = store.get_inner_life_events(
-        agent_id=agent_id,
-        person_id=person_id,
-        project_scope=project_scope,
-        exclude_process_name="emotional-driver",
-        limit=limit,
-        recent=True,  # recent-window scan; excludes own rows, [since, now] filtered below
-    )
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        if row.get("process_name") == "emotional-driver":
-            continue
-        created_at = _parse_datetime(row.get("created_at"))
-        if created_at is None or not since <= created_at <= now:
-            continue
-        if _event_influences(row):
-            out.append(row)
-    return out
+    # CLOSED RESIDUAL (`emotional-driver-filter-after-limit`, ruling 004 option
+    # (b) / roadmap RM-7; see docs/gated-inner-life.md): `_event_influences` is a
+    # content-semantic filter that deliberately cannot move into SQL — event-type
+    # narrowing was declined permanently (ruling 004). It used to run AFTER a
+    # single recency limit, so a burst of more than `limit` newer non-influencing
+    # rows inside [since, now] could evict an older in-window turn/test/error
+    # signal and make affect skip. The eviction is CLOSED by the paging primitive
+    # below: newest-first pages via the store's (created_at, id) cursor, the
+    # unchanged Python filter chain applied per page, accumulating until `limit`
+    # influencing rows are collected or the window is exhausted. Affect semantics
+    # are untouched — only the fetch strategy changed.
+    page_size = max(1, int(page_size))
+    limit = max(1, int(limit))
+    collected: list[dict[str, Any]] = []  # newest-first while accumulating
+    before_created_at: str | None = None
+    before_id: str | None = None
+    while len(collected) < limit:
+        rows = store.get_inner_life_events(
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope=project_scope,
+            exclude_process_name="emotional-driver",
+            limit=page_size,
+            recent=True,  # newest page (ascending); iterated newest-first below
+            before_created_at=before_created_at,
+            before_id=before_id,
+        )
+        if not rows:
+            break
+        window_exhausted = False
+        for row in reversed(rows):  # newest -> oldest within the page
+            created_at = _parse_datetime(row.get("created_at"))
+            if created_at is not None and created_at < since:
+                # Rows are ordered newest-first, so every remaining row in this
+                # page — and every later page — is also older than the window.
+                window_exhausted = True
+                break
+            # The filter chain below is the pre-RM-7 affect semantics, unchanged.
+            if row.get("process_name") == "emotional-driver":
+                continue
+            if created_at is None or not since <= created_at <= now:
+                continue
+            if _event_influences(row):
+                collected.append(row)
+                if len(collected) >= limit:
+                    break
+        if window_exhausted or len(collected) >= limit or len(rows) < page_size:
+            break
+        # Cursor = the oldest row of this page; the next page is strictly older
+        # than this (created_at, id) pair (no skip, no duplicate at boundaries).
+        before_created_at = str(rows[0]["created_at"])
+        before_id = str(rows[0]["id"])
+    collected.reverse()  # ascending, matching the pre-paging return contract
+    return collected
 
 
 def _event_influences(row: dict[str, Any]) -> list[str]:

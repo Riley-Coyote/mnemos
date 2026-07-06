@@ -15,14 +15,13 @@ SOAK_FAMILIES = ("shallow_consolidation",)
 # issue also becomes a global activation blocker (ready_for_full_scheduled_
 # activation goes False). Remove an entry only when its fix lands.
 #
-# affect: `_recent_signal_events` applies the `_event_influences` content filter
-# after the recency limit, so a burst of newer non-influencing rows can evict an
-# older in-window signal (ruling 004, option (c) now / (b) at activation). The
-# paging primitive that closes it is roadmap RM-7; docs/gated-inner-life.md and
-# tests/test_t2_5_safety_gate_repairs.py carry the operator/test contract.
-KNOWN_ACTIVATION_BLOCKERS: dict[str, tuple[str, ...]] = {
-    "affect": ("emotional-driver-filter-after-limit",),
-}
+# Currently empty. Precedent: affect carried
+# `emotional-driver-filter-after-limit` (ruling 004/004b) until roadmap RM-7's
+# paging primitive closed the eviction in `_recent_signal_events` — the entry
+# was deleted in the same change that landed the fix, per ruling 004b ("the
+# registry entry and the fix live and die together"). The mechanism stays so
+# the next residual has a home.
+KNOWN_ACTIVATION_BLOCKERS: dict[str, tuple[str, ...]] = {}
 
 
 def build_inner_life_preflight(

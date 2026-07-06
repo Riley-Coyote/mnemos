@@ -24,12 +24,12 @@ writes still require explicit David authorization.
   duplicate generated memory.
 - Recency, cooldown, and cadence gates push eligibility predicates into SQL
   before applying `LIMIT`, so unrelated newer ledger rows cannot evict the row
-  a gate needs.
-- `affect` is not fully schedulable while the
-  `emotional-driver-filter-after-limit` residual remains open. Preflight
-  reports this as `known_open_issue:affect:emotional-driver-filter-after-limit`
-  when `affect` is schedule-enabled, and a disabled `affect` schedule or
-  activity switch is not treated as a misconfiguration until RM-7 lands.
+  a gate needs. The one predicate that cannot move into SQL — the emotional
+  driver's content-semantic `_event_influences` — instead pages newest-first
+  with a `(created_at, id)` cursor until enough influencing rows are collected
+  or the window is exhausted (RM-7), so the same eviction cannot happen there
+  either. The former `emotional-driver-filter-after-limit` residual is closed
+  and `affect` carries no known activation blocker.
 - The layer never writes beliefs, identity patches, hypomnema promotions, or
   shared-pool publications.
 
@@ -41,7 +41,7 @@ writes still require explicit David authorization.
 | `activity_gate.py` | Zero-LLM process preflight with SQL-filtered cooldowns and signal counts. |
 | `hypomnema_challenge.py` | Revises or retires stale continuity without deleting audit history. |
 | `observer_panel.py` | Writes bounded observer-source findings with reviewer provenance. |
-| `emotional_driver.py` | Computes private affect weather from real events; does not journal affect prose. Full scheduling is blocked until RM-7 closes the post-limit semantic-filter residual. |
+| `emotional_driver.py` | Computes private affect weather from real events; does not journal affect prose. Its recency scan pages newest-first through the ledger (RM-7), so bursts of non-influencing rows cannot evict an in-window signal. |
 | `narrative_gate.py` | Drops null, ungrounded, manufactured, rejected, or metrics-only generated candidates. |
 | `low_stakes.py` | Writes private low-confidence audit-only generated engrams atomically with their idempotency ledger rows, rollout tags, and source IDs. |
 | `scheduler.py` | Runs one process behind the activity gate and writes launchd plists without loading them. |
@@ -195,9 +195,10 @@ When schedules are enabled, preflight also blocks on:
 - unavailable LLM provider when provider-backed processes are required;
 - missing observer reviewer count when observer review is required;
 - missing per-family kill switches;
-- enabled processes with known open activation blockers. Today that means
-  `affect` must stay unscheduled until RM-7 moves its semantic filter before,
-  or pages beyond, the recency limit.
+- enabled processes with known open activation blockers. The registry is
+  currently empty: `affect`'s `emotional-driver-filter-after-limit` entry was
+  removed when RM-7 landed the paging primitive that pages beyond the recency
+  limit (rulings 004/004b — the entry and the fix live and die together).
 
 It also reports the launchd artifact directory, plist directory, halt marker,
 per-process plist path, and rollback commands so U7 can review the exact
@@ -249,7 +250,9 @@ The focused U6.6/U7 suite covers:
 - activity gate run/skip/cooldown behavior;
 - SQL-filtered recency, cooldown, signal, and family-cadence scans;
 - challenge, observer, and affect safety boundaries;
-- `affect` activation blocking on the known emotional-driver recency residual;
+- the emotional-driver recency paging primitive (eviction regression, page
+  boundaries, termination) and the closed-residual preflight state for
+  `affect`;
 - narrative gate null, source, manufactured, introspection, and metrics-only
   drops;
 - scheduled runner activity-gate skip/run behavior and launchd plist static

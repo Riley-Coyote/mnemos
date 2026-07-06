@@ -200,12 +200,6 @@ def test_soak_activation_preflight_ready_after_watch_plist_launchd_and_copy_tick
     db = tmp_path / "soak-preflight-ready.db"
     EngramStore(db).close()
     config = _enable_full_soak_config(tmp_path)
-    # affect is excluded from the achievable U7-ready state: it carries a known
-    # activation blocker (emotional-driver-filter-after-limit) and cannot be
-    # enabled until roadmap RM-7 lands (rulings 004/004b). The blocked path is
-    # covered by test_preflight_blocks_affect_activation_while_recency_residual_open.
-    # RM-7 re-enables it here.
-    config["inner_life"]["schedules"]["processes"]["affect"]["enabled"] = False
     plist = tmp_path / "com.davidef.mnemos.soak.tick.plist"
     write_soak_tick_launchd_plist(
         plist_path=plist,

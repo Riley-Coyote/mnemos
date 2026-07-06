@@ -576,14 +576,17 @@ def test_family_cadence_survives_newer_other_family_rows(tmp_path):
         store.close()
 
 
-# ── Ruling 004 tooth 2: affect activation gated on the recency residual ──────
+# ── Ruling 004 tooth 2 → RM-7: affect recency residual closed ────────────────
 
 
-def test_preflight_blocks_affect_activation_while_recency_residual_open(tmp_path):
-    """Ruling 004 tooth 2: affect cannot reach full-scheduled activation while
-    `emotional-driver-filter-after-limit` is open — the inner-life preflight makes
-    it a blocker by mechanism (not memory) and surfaces it per-process. Deleting
-    the KNOWN_ACTIVATION_BLOCKERS entry when the paging fix lands re-opens affect."""
+def test_affect_recency_residual_closed(tmp_path):
+    """Ruling 004 tooth 2 held affect out of full-scheduled activation while
+    `emotional-driver-filter-after-limit` was open. RM-7's paging primitive
+    (`_recent_signal_events`) closed the eviction, and per ruling 004b the
+    KNOWN_ACTIVATION_BLOCKERS entry and the fix live and die together: a
+    schedule-enabled affect must now report no known open issues and no
+    known_open_issue blocker. The closure is self-verifying — re-adding an
+    affect entry without a fix turns this test red."""
     from mnemos.config.defaults import DEFAULT_CONFIG
     from mnemos.inner_life.preflight import build_inner_life_preflight
 
@@ -595,12 +598,7 @@ def test_preflight_blocks_affect_activation_while_recency_residual_open(tmp_path
 
     pf = build_inner_life_preflight(config=config, db_path=str(db))
 
-    assert (
-        "known_open_issue:affect:emotional-driver-filter-after-limit" in pf["blockers"]
+    assert pf["processes"]["affect"]["known_open_issues"] == []
+    assert not any(
+        blocker.startswith("known_open_issue:affect:") for blocker in pf["blockers"]
     )
-    assert pf["ready_for_full_scheduled_activation"] is False
-    assert pf["processes"]["affect"]["known_open_issues"] == [
-        "emotional-driver-filter-after-limit"
-    ]
-    # a process without a known residual is unaffected
-    assert pf["processes"]["reflect"]["known_open_issues"] == []

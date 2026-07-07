@@ -8,7 +8,9 @@ Replaces Anima's JSON file persistence. Key advantages:
 - Atomic transactions prevent corruption
 - Still local-first, single file, portable
 
-All tables are created on init. Migrations handle schema evolution.
+All base tables are created on init. Frozen Python migrations carry the store
+through schema v10; additive-only SQL-file migrations v11+ are then applied by
+MigrationRunner.
 """
 
 from __future__ import annotations
@@ -31,8 +33,10 @@ from .migrations import (
     apply_u3b_hardening_schema_migration,
     apply_u6_6_inner_life_schema_migration,
     get_current_version,
+    list_migrations,
     run_migrations,
 )
+from .migration_runner import MigrationRunner
 from .read_visibility import (
     HYPO_PROMOTION_MIN_CONFIDENCE,
     HYPO_PROMOTION_MIN_SALIENCE,
@@ -1136,6 +1140,11 @@ class EngramStore:
                 f"Database schema version {current_version} is newer than supported "
                 f"{SCHEMA_VERSION}"
             )
+        # Fail closed on a schema_migrations version ahead of this binary (v1
+        # §1). The Python-migration meta check above covers v1..SCHEMA_VERSION;
+        # this covers the SQL-file migrations the runner owns (>= 11). A newer
+        # schema than the code means stop, not guess — before any DDL runs.
+        self._schema_migrations_runner().check_not_ahead(conn)
         # NOTE (review 003b): executescript runs before migrations. Migration
         # self-repair guards must never key on objects SQL_CREATE_TABLES creates —
         # this boot path pre-creates them, so such a guard would never fire. See
@@ -1160,6 +1169,32 @@ class EngramStore:
             ("schema_version", str(SCHEMA_VERSION)),
         )
         conn.commit()
+        # Backfill schema_migrations (grandfathering v1..SCHEMA_VERSION) and
+        # apply any additive-only SQL-file migrations (>= 11) under the §3
+        # contract. Close this connection first: the runner opens its own so its
+        # BEGIN IMMEDIATE + snapshot backup do not fight this store's WAL
+        # connection. Reopened lazily on next _get_conn().
+        conn.commit()
+        self.close()
+        self._schema_migrations_runner().apply()
+
+    def _schema_migrations_runner(self) -> MigrationRunner:
+        """Build a runner bound to this store's canonical DB path.
+
+        The known-Python-versions list lets the runner grandfather exactly the
+        versions the frozen migrations own into schema_migrations with
+        ``checksum='grandfathered'``, and compute the binary's known-max version
+        for the fail-closed check.
+        """
+        python_versions = [int(m["version"]) for m in list_migrations()]
+        # v1 is the pre-migration baseline (SCHEMA_VERSION starts the registry
+        # at 2); grandfather it too so the table does not lie by omission.
+        if 1 not in python_versions:
+            python_versions.append(1)
+        return MigrationRunner(
+            self.db_path,
+            known_python_versions=python_versions,
+        )
 
     def _get_conn(self) -> sqlite3.Connection:
         """Get or create SQLite connection.

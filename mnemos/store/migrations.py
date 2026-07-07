@@ -1,15 +1,18 @@
 """
-Schema migration management for Mnemos SQLite store.
+Frozen Python migration history for the Mnemos SQLite store.
 
-Handles schema evolution by tracking the current schema version and
-applying migration functions in order. Each migration is a function
-that takes a SQLite connection and applies the schema changes.
+This module owns the pre-runner schema path through ``SCHEMA_VERSION == 10``.
+It keeps historical function migrations available so virgin stores and legacy
+databases can reach the frozen Python schema. New schema versions are
+additive-only SQL files under ``mnemos/store/migrations/NNNN_name.sql`` and are
+applied by ``migration_runner.MigrationRunner``.
 
-Migration strategy:
-- Schema version is tracked in the `meta` table
-- Migrations are ordered by version number
-- Each migration is applied in a transaction
-- Forward-only (no rollback support — backup before migrating)
+Migration strategy for this frozen layer:
+- Python schema version is tracked in the `meta` table.
+- Function migrations are ordered by version number.
+- Each migration is applied in a transaction.
+- Forward-only (no down-migrations).
+- SQL-file migrations are recorded separately in `schema_migrations`.
 """
 
 from __future__ import annotations

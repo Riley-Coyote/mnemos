@@ -17,7 +17,7 @@ With no dedicated provider configured, Mnemos:
 
 Simple mode tools have these local side effects:
 
-- `mnemos_context` can create the database and log maintenance
+- `mnemos_context` can create or migrate the database and log maintenance
 - `mnemos_context(include_graph=true)` can return a scoped SVG identity graph
   artifact and structured graph data
 - `mnemos_capture` writes continuity and, for operational captures, durable
@@ -28,7 +28,8 @@ Simple mode tools have these local side effects:
 - `mnemos_maintain` runs consolidation and bookkeeping
 - `mnemos_introduce` writes the agent's self-declared model/name for affinity
   checks
-- `mnemos_health` is read-only
+- `mnemos_health` reports only; opening an older store may still run schema
+  migrations before the health card is read
 
 Tool annotations describe these risks to MCP clients, but annotations are only
 hints. They are not a security boundary.
@@ -75,6 +76,26 @@ In advanced MCP mode, scope-taking tools inherit the server's configured
 agent/person/project scope when callers leave the scope args at their default
 sentinels. Pass non-default scope args only for an intentional per-call
 override.
+
+## Schema Migration Runner
+
+`mnemos migrate plan` and `mnemos migrate apply` are local operator surfaces for
+the canonical SQLite store. They resolve the database from `MNEMOS_DB_PATH` or
+`store.db_path` config (including `MNEMOS_STORE_DB_PATH`) and intentionally do
+not accept `--db-path`; this keeps the runner from mutating an accidental
+sibling store while operators are reviewing the live schema path.
+
+`plan` opens the database read-only and reports pending versions, statement
+classes, checksums, and snapshot paths without creating migration tables.
+`apply` refuses missing stores, schema versions newer than the current binary,
+edited shipped migration files, duplicate SQL version files, and non-additive
+statements. Before each applied version it creates an integrity-checked SQLite
+backup with the backup API under `<db-dir>/backups/migrations/`; rollback is
+restoring that snapshot, not a down-migration.
+
+SQL-file migrations are schema-only. They may add tables, additive columns,
+indexes, and views, but may not seed, backfill, delete, update, attach another
+database, change PRAGMA state, or write their own `schema_migrations` rows.
 
 ## Afferent Membrane Read Visibility
 

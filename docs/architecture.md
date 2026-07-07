@@ -30,6 +30,31 @@ Mnemos is a complete agent cognition system, not just a memory library. It opera
 
 The foundation. A living memory graph backed by SQLite.
 
+### Schema Evolution
+
+Python migrations in `mnemos/store/migrations.py` are frozen history through
+schema v10. New schema changes use additive-only SQL files under
+`mnemos/store/migrations/NNNN_name.sql`, applied by `MigrationRunner` during
+store bootstrap or explicitly through `mnemos migrate plan|apply`.
+
+The runner maintains `schema_migrations`: pre-runner Python versions are
+grandfathered with sentinel checksum metadata, SQL-file versions record their
+real checksum and pre-apply snapshot path, and a checksum mismatch on an
+already-applied file aborts as edited history. It fails closed when the store
+contains a `schema_migrations` version newer than the binary knows.
+
+Every SQL-file migration is linted as schema-only shadow DDL. Allowed statement
+classes are new tables, additive columns with nullable or constant defaults,
+indexes, and views. DML, destructive DDL, triggers, PRAGMA writes, `VACUUM`,
+`ATTACH`/`DETACH`, `CREATE TABLE AS SELECT`, and migration-file writes to
+`schema_migrations` are rejected before apply. Rollback is snapshot restore:
+before each applied version the runner uses the SQLite backup API to create an
+integrity-checked snapshot under the database directory, then commits the SQL
+and `schema_migrations` row in one transaction.
+
+Schema v11 creates `migration_receipts`, the applied-migration receipts journal.
+`schema_migrations` remains the canonical version/checksum record.
+
 ### Engrams
 
 The fundamental unit of memory. Each engram has:

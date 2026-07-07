@@ -31,6 +31,7 @@ model providers are optional for richer deep maintenance.
 | Hermes agent using Mnemos as its provider | Hermes Provider Mode | `mnemos hermes quickstart --provider` |
 | Background memory maintenance | Substrate tick | `mnemos substrate-tick` |
 | Gated inner-life / soak validation | Representative DB operator path | `mnemos inner-life preflight --db-path ./copy.db` |
+| Store schema migration review | Canonical store migration runner | `mnemos migrate plan` |
 
 Most users should start with **Simple MCP Mode**. Hermes users should start with
 **Hermes Sidecar Mode** unless they explicitly want Mnemos to occupy Hermes'
@@ -86,7 +87,7 @@ Simple mode exposes seven user-facing tools:
 
 | Tool | Purpose |
 |---|---|
-| `mnemos_context` | Startup continuity packet. Auto-creates local storage, runs lightweight maintenance, and can optionally include an identity graph artifact. |
+| `mnemos_context` | Startup continuity packet. Auto-creates or migrates local storage, runs lightweight maintenance, and can optionally include an identity graph artifact. |
 | `mnemos_capture` | Capture continuity; high-blast identity/foundational captures may be held for review instead of promoted. |
 | `mnemos_recall` | Search operational scoped continuity and durable memory with natural language. |
 | `mnemos_correct` | Update, supersede, or archive stale memory. |
@@ -493,6 +494,8 @@ mnemos snapshot                       # Inline operational Mermaid snapshot
 mnemos consolidate                    # Local deterministic maintenance
 mnemos consolidate --deep             # Deep maintenance when a provider exists
 mnemos substrate-tick                 # Run one substrate cycle
+mnemos migrate plan                   # Dry-run pending SQL-file migrations
+mnemos migrate apply                  # Apply pending SQL-file migrations
 ```
 
 Dashboard module:
@@ -513,6 +516,27 @@ mnemos setup-openclaw --agent main --dry-run
 mnemos identity diff --soul ./SOUL.md
 mnemos identity accept --divergence 1 --note "Accepted updated self-model"
 ```
+
+Schema migrations:
+
+```bash
+mnemos migrate plan
+mnemos migrate apply
+mnemos migrate apply --target-version 11
+```
+
+`migrate` operates on the canonical store only. It resolves the database from
+`MNEMOS_DB_PATH` or `store.db_path` config (including
+`MNEMOS_STORE_DB_PATH`) and deliberately refuses `--db-path` so an operator
+cannot migrate a shadow sibling store by accident. `plan` is read-only and
+reports pending versions, statement classes, checksums, and the snapshot path
+each migration would use. `apply` runs additive-only SQL files from
+`mnemos/store/migrations/NNNN_name.sql`; before each version it writes an
+integrity-checked SQLite backup under `<db-dir>/backups/migrations/`, records
+the applied checksum in `schema_migrations`, and aborts on edited shipped
+history or a database version newer than this binary understands. Pre-runner
+Python migrations remain frozen history through schema v10; SQL-file migrations
+start at v11.
 
 Hermes commands:
 

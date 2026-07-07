@@ -48,6 +48,30 @@
 
 - **`scripts/health_check.py`** — The invariant harness. Run it before every merge to main.
 - **`health_baseline.local.json`** — Your local baseline (agent names, DB paths). Gitignored; re-run the harness to generate it.
+- **`mnemos/store/migrations.py`** — Frozen Python migration history through schema v10.
+- **`mnemos/store/migration_runner.py`** — Additive-only SQL-file migration runner for schema v11+.
+- **`mnemos/store/migrations/NNNN_name.sql`** — New schema migrations. Use four-digit versions above the Python schema max, include `-- additive-only: yes`, and keep files schema-only.
+
+## Schema Migration Changes
+
+New schema work should use SQL-file migrations, not new Python migration
+functions. The runner lints each file against the additive-only contract: new
+tables, `ALTER TABLE ... ADD COLUMN` with nullable or constant-default columns,
+indexes, and views. It refuses DML, destructive DDL, triggers, PRAGMA writes,
+`VACUUM`, `ATTACH`/`DETACH`, `CREATE TABLE AS SELECT`, and direct writes to
+`schema_migrations`.
+
+Before applying a SQL-file migration, run:
+
+```bash
+mnemos migrate plan
+```
+
+The CLI resolves the canonical store from `MNEMOS_DB_PATH` or `store.db_path`
+config (including `MNEMOS_STORE_DB_PATH`) and refuses `--db-path`. Tests that
+need representative stores should use `MNEMOS_DB_PATH` or instantiate
+`MigrationRunner` directly with an isolated temporary database and migrations
+directory.
 
 ## Feature Archive
 

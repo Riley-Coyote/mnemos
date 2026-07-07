@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Store Migration Runner
+- New additive-only SQL-file migrations live under `mnemos/store/migrations/`
+  starting at version 0011. `EngramStore` grandfathers the frozen Python
+  migration history into `schema_migrations`, fails closed on schema versions
+  newer than the binary understands, and applies pending SQL-file migrations
+  automatically during store bootstrap.
+- `mnemos migrate plan` and `mnemos migrate apply [--target-version N]` expose
+  the migration runner for operators. The CLI resolves only the canonical store
+  through `MNEMOS_DB_PATH` or `store.db_path` config, refuses `--db-path`, plans
+  read-only, and snapshots with the SQLite backup API before each applied
+  version.
+- Schema v11 creates the `migration_receipts` journal for applied-migration
+  receipts. `schema_migrations` remains the canonical version/checksum record;
+  edited shipped migration history aborts instead of retrying.
+
 ### Afferent Membrane v1
 - Schema v6 adds first-class `read_visibility` to `engrams`, `beliefs`,
   `hypomnema_entries`, and `functional_memories`, plus a `proposal_ledger`

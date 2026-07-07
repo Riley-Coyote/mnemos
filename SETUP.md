@@ -34,9 +34,10 @@ Doctor will:
 
 1. Resolve agent/person/project scope.
 2. Create local SQLite storage if needed.
-3. Run local deterministic maintenance.
-4. Print the simple MCP tool list.
-5. Show whether a dedicated model provider is configured.
+3. Apply any pending additive-only SQL-file schema migrations.
+4. Run local deterministic maintenance.
+5. Print the simple MCP tool list.
+6. Show whether a dedicated model provider is configured.
 
 No OpenRouter key is required for baseline continuity.
 
@@ -195,6 +196,21 @@ counts/source IDs but withholds confirmation and promotion-candidate prose; pass
 `packet_mode="review"` only for an explicit review pass. Audit-only proposal
 ledger rows require the separate `mnemos_proposal_audit` admin/audit surface.
 
+### Store Schema Migrations
+
+For explicit schema review, use the canonical-store migration runner:
+
+```bash
+mnemos migrate plan
+mnemos migrate apply
+```
+
+`migrate` resolves the store through `MNEMOS_DB_PATH` or `store.db_path` config
+(including `MNEMOS_STORE_DB_PATH`) and does not accept `--db-path`. `plan` is
+read-only. `apply` runs pending additive-only SQL files from
+`mnemos/store/migrations/`, snapshots the database with the SQLite backup API
+before each version, and records checksums in `schema_migrations`.
+
 OpenClaw, crons, Forge, substrate ticks, gated inner-life/soak validation, and
 full agent workspaces are advanced integrations. They are no longer part of the
 baseline setup. The inner-life/soak path is documented in
@@ -236,11 +252,11 @@ Review generated commands before enabling them.
 
 ### The agent has no prior memory
 
-That is normal on first run. The first `mnemos_context` creates storage and
-returns an empty continuity packet. Use `mnemos_capture` to store preferences,
-decisions, project state, and corrections. If a capture is held for review,
-ordinary context and recall will show only review cues until an operator
-inspects it through a review surface.
+That is normal on first run. The first `mnemos_context` creates or migrates
+storage and returns an empty continuity packet. Use `mnemos_capture` to store
+preferences, decisions, project state, and corrections. If a capture is held
+for review, ordinary context and recall will show only review cues until an
+operator inspects it through a review surface.
 
 ### Deep maintenance says it used local maintenance
 

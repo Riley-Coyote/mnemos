@@ -254,6 +254,30 @@ def main(argv: list[str] | None = None) -> int:
         "--project-scope", default=None, help="Project/workspace scope"
     )
 
+    # ── migrate (SQL-file migration runner, v1 §14 step 0) ──
+    # Spec §6: the runner runs ONLY against the canonical DB resolved through
+    # the one-store config — it refuses a path argument. Deliberately NO
+    # --db-path on these subcommands (the shadow oliver.db incident is the
+    # case study); tests target representative stores via MNEMOS_DB_PATH or
+    # the MigrationRunner library API.
+    p_migrate = sub.add_parser(
+        "migrate", help="Additive-only SQL-file schema migration runner"
+    )
+    migrate_sub = p_migrate.add_subparsers(dest="migrate_command")
+    migrate_sub.add_parser(
+        "plan",
+        help="Dry-run: pending versions, statement classes, checksums, snapshots",
+    )
+    p_migrate_apply = migrate_sub.add_parser(
+        "apply", help="Apply pending additive-only migrations under the §3 contract"
+    )
+    p_migrate_apply.add_argument(
+        "--target-version",
+        type=int,
+        default=None,
+        help="Apply only up to this version (default: latest)",
+    )
+
     # ── hermes ──
     p_hermes = sub.add_parser(
         "hermes", help="Hermes Agent identity-continuity integration"
@@ -1016,6 +1040,7 @@ def main(argv: list[str] | None = None) -> int:
         "bridge": _cmd_bridge,
         "remember": _cmd_remember,
         "doctor": _cmd_doctor,
+        "migrate": _cmd_migrate,
         "hermes": _cmd_hermes,
         "identity": _cmd_identity,
         "mcp": _cmd_mcp,
@@ -1038,6 +1063,39 @@ def _resolve_db_path(args: argparse.Namespace) -> str:
         or os.environ.get("MNEMOS_DB_PATH")
         or "~/.mnemos/memory.db"
     )
+
+
+class MigrationConfigLoadError(RuntimeError):
+    pass
+
+
+def _resolve_migration_db_path() -> str:
+    env_db = os.environ.get("MNEMOS_DB_PATH")
+    if env_db:
+        return env_db
+    try:
+        config = load_config()
+    except (AttributeError, TypeError) as exc:
+        raise MigrationConfigLoadError("top-level config must be an object") from exc
+    if not isinstance(config, dict):
+        raise MigrationConfigLoadError(
+            f"top-level config must be an object, not {type(config).__name__}"
+        )
+    store_config = config.get("store", {})
+    if not isinstance(store_config, dict):
+        raise MigrationConfigLoadError(
+            "store section must be an object with db_path, not "
+            f"{type(store_config).__name__}"
+        )
+    if "db_path" not in store_config:
+        return "~/.mnemos/memory.db"
+    configured = store_config["db_path"]
+    if not isinstance(configured, str) or not configured.strip():
+        raise MigrationConfigLoadError(
+            "store.db_path must be a non-empty string path, not "
+            f"{type(configured).__name__}"
+        )
+    return configured
 
 
 def _resolve_agent_id(args: argparse.Namespace) -> str:
@@ -1441,6 +1499,81 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         return 0
     finally:
         runtime.close()
+
+
+def _build_migration_runner(args: argparse.Namespace):
+    """Resolve the canonical DB through the one-store config and build a runner.
+
+    §6 boundary: the runner migrates the ONE canonical store and refuses a path
+    argument — the `migrate` subcommands deliberately expose no --db-path (the
+    shadow oliver.db incident is the case study). Resolution is MNEMOS_DB_PATH
+    (the one-store config's env surface) falling back to the canonical default;
+    tests point at representative stores via the env or the MigrationRunner
+    library API, never a CLI path flag.
+    """
+    from .store.migration_runner import MigrationRunner
+    from .store.migrations import list_migrations
+
+    db_path = _resolve_migration_db_path()
+    python_versions = [int(m["version"]) for m in list_migrations()]
+    if 1 not in python_versions:
+        python_versions.append(1)
+    return MigrationRunner(db_path, known_python_versions=python_versions)
+
+
+def _cmd_migrate(args: argparse.Namespace) -> int:
+    """SQL-file schema migration runner (v1 §14 step 0)."""
+    from .store.migration_runner import MigrationError, MigrationLintError
+
+    command = getattr(args, "migrate_command", None)
+    if command not in {"plan", "apply"}:
+        print("Usage: mnemos migrate {plan|apply}", file=sys.stderr)
+        return 1
+    if getattr(args, "db_path", None):
+        print(
+            "mnemos migrate does not accept --db-path; resolve the canonical "
+            "store through MNEMOS_DB_PATH or the one-store config.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        runner = _build_migration_runner(args)
+    except (json.JSONDecodeError, OSError, MigrationConfigLoadError) as exc:
+        print(f"migration aborted: could not load one-store config: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        if command == "plan":
+            plan = runner.plan()
+            print(f"Current schema version: {plan.current_version}")
+            if not plan.pending:
+                print("No pending migrations.")
+                return 0
+            print(f"Pending migrations ({len(plan.pending)}):")
+            for p in plan.pending:
+                attest = "attested" if p.has_attestation else "NO-ATTESTATION"
+                print(f"  v{p.version:04d} {p.name} [{attest}]")
+                print(f"    checksum:  {p.checksum}")
+                print(f"    classes:   {', '.join(p.statement_classes)}")
+                print(f"    snapshot:  {p.snapshot_path}")
+            return 0
+
+        # apply
+        applied = runner.apply(target_version=getattr(args, "target_version", None))
+        if not applied:
+            print(
+                f"Already at version {runner.plan().current_version}; nothing "
+                "to apply."
+            )
+            return 0
+        print(f"Applied {len(applied)} migration(s):")
+        for a in applied:
+            print(f"  v{a.version:04d} {a.name} (snapshot: {a.snapshot_path})")
+        return 0
+    except (FileNotFoundError, MigrationError, MigrationLintError) as exc:
+        print(f"migration aborted: {exc}", file=sys.stderr)
+        return 1
 
 
 def _cmd_identity(args: argparse.Namespace) -> int:

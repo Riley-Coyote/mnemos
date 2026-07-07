@@ -266,7 +266,9 @@ work.
 
 ### Multiple agents share a machine
 
-Give each agent/person/project combination a scope:
+Give each agent/person/project combination a scope. By default those scopes
+share the canonical one-store path (`~/.mnemos/memory.db`) and are separated by
+row scope, not by implicit per-agent database files:
 
 ```bash
 MNEMOS_AGENT_ID=nova MNEMOS_PERSON_ID=alex \
@@ -275,7 +277,7 @@ MNEMOS_AGENT_ID=vektor MNEMOS_PERSON_ID=alex \
   MNEMOS_PROJECT_SCOPE=ops mnemos serve
 ```
 
-or separate DBs:
+Or, only when you intentionally want isolated stores, pass separate DB paths:
 
 ```bash
 mnemos serve --agent-id nova --person-id alex \

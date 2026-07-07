@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--db-path",
         default=None,
-        help="Path to the SQLite database (default: ~/.mnemos/memory.db)",
+        help="SQLite database path (default: one-store config or ~/.mnemos/memory.db)",
     )
     parser.add_argument(
         "--agent-id",
@@ -1057,12 +1057,15 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _resolve_db_path(args: argparse.Namespace) -> str:
-    """Resolve CLI DB path with backwards-compatible default."""
-    return (
-        getattr(args, "db_path", None)
-        or os.environ.get("MNEMOS_DB_PATH")
-        or "~/.mnemos/memory.db"
-    )
+    """Resolve CLI DB path through the one-store authority."""
+    from .simple_scope import resolve_scope
+
+    return resolve_scope(
+        db_path=getattr(args, "db_path", None),
+        agent_id=getattr(args, "agent_id", None),
+        person_id=getattr(args, "person_id", None),
+        project_scope=getattr(args, "project_scope", None),
+    ).db_path
 
 
 class MigrationConfigLoadError(RuntimeError):
@@ -1417,6 +1420,8 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
         agent_name=args.agent_name,
         workspace=args.workspace,
         user_name=args.user_name,
+        db_path=getattr(args, "db_path", None),
+        agent_id=getattr(args, "agent_id", None),
         timezone=args.timezone,
         api_key=args.api_key,
         llm_provider=args.llm_provider,
@@ -1494,6 +1499,26 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         )
         _print_affinity_status()
         print(f"Simple tools: {', '.join(SIMPLE_TOOL_NAMES)}")
+
+        # One-store invariant check: a per-agent sibling DB beside the
+        # canonical store means some writer is (or was) resolving its own
+        # path — identity writes landing where nothing reads them. Fail, do
+        # not warn: the 2026-07-06/07 shadow-oliver.db incidents were only
+        # caught by manual inspection.
+        from .simple_scope import detect_sibling_stores
+
+        siblings = detect_sibling_stores(runtime.scope)
+        if siblings:
+            print()
+            for path in siblings:
+                print(f"FAIL: sibling store detected: {path}")
+            print(
+                "A per-agent DB exists beside the resolved canonical store. "
+                "If it holds rows the canonical store lacks, reconcile them; "
+                "then archive the sibling (see ~/.mnemos/backups/)."
+            )
+            return 1
+        print("One store:    ok (no sibling per-agent DB)")
         print()
         print(packet)
         return 0

@@ -150,12 +150,14 @@ For generated MCP snippets, the helper supports the most common portable scope
 fields:
 
 ```bash
-mnemos mcp install generic --agent-id nova --db-path ~/.mnemos/nova.db
+mnemos mcp install generic --agent-id nova
 ```
 
 If the generated client config also needs person/project scope, add
 `MNEMOS_PERSON_ID` and `MNEMOS_PROJECT_SCOPE` to that client's environment, or
-add `--person-id` and `--project-scope` to the printed server args.
+add `--person-id` and `--project-scope` to the printed server args. Add
+`--db-path` only when you deliberately want that client to use a non-canonical
+store.
 
 ### Prompt For A Simple MCP Agent
 
@@ -407,7 +409,7 @@ mnemos substrate-tick
 With explicit storage and identity:
 
 ```bash
-MNEMOS_AGENT_ID=nova MNEMOS_DB_PATH=~/.mnemos/nova.db mnemos substrate-tick
+MNEMOS_AGENT_ID=nova MNEMOS_DB_PATH=~/.mnemos/memory.db mnemos substrate-tick
 ```
 
 The substrate can run local deterministic passes without a model provider.
@@ -657,7 +659,7 @@ SQLite copy and does not construct a real LLM client.
 Global options:
 
 ```bash
-mnemos --db-path ~/.mnemos/nova.db --agent-id nova stats
+mnemos --db-path ~/.mnemos/memory.db --agent-id nova stats
 ```
 
 For `serve`, options can also appear after the command:
@@ -665,7 +667,7 @@ For `serve`, options can also appear after the command:
 ```bash
 mnemos serve --mode simple \
   --agent-id nova --person-id alex --project-scope mnemos \
-  --db-path ~/.mnemos/nova.db
+  --db-path ~/.mnemos/memory.db
 ```
 
 ---
@@ -673,6 +675,12 @@ mnemos serve --mode simple \
 ## Configuration
 
 Mnemos works without a config file. It creates local storage on first use.
+Every default DB-using verb resolves the same one-store path: explicit
+`--db-path`/`MNEMOS_DB_PATH`, then `store.db_path` config (including
+`MNEMOS_STORE_DB_PATH`), then the canonical `~/.mnemos/memory.db`. Agent,
+person, and project scope label rows; they do not create `~/.mnemos/{agent}.db`
+unless that path is passed deliberately. `mnemos doctor` fails when it detects
+a sibling per-agent DB beside the resolved canonical store.
 
 Common environment variables:
 
@@ -680,7 +688,7 @@ Common environment variables:
 MNEMOS_AGENT_ID=nova
 MNEMOS_PERSON_ID=alex
 MNEMOS_PROJECT_SCOPE=mnemos
-MNEMOS_DB_PATH=~/.mnemos/nova.db
+MNEMOS_DB_PATH=~/.mnemos/memory.db
 ```
 
 Dedicated model variables:

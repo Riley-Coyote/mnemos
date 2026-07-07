@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
 from pathlib import Path
 
 from mnemos.core.types import DEFAULT_AGENT_ID
@@ -123,7 +122,8 @@ def index_session(
         transcript_path: Path to the .jsonl session file
         session_id: Session identifier (defaults to filename stem)
         agent_id: Mnemos agent ID (default: MNEMOS_AGENT_ID env, then "default")
-        db_path: Path to Mnemos database
+        db_path: Path to Mnemos database. Defaults through one-store scope
+            resolution when omitted.
         api_key: OpenRouter API key (falls back to env/openclaw config)
 
     Environment:
@@ -144,7 +144,11 @@ def index_session(
         return {"session_id": session_id, "memories_encoded": 0, "skipped_reason": "file_not_found"}
 
     session_key = session_id or path.stem
-    db = db_path or str(Path.home() / ".mnemos" / f"{agent_id}.db")
+    # One-store invariant: route the default through resolve_scope (env >
+    # config > canonical memory.db) instead of minting a per-agent sibling.
+    from mnemos.simple_scope import resolve_scope
+
+    db = db_path or resolve_scope(agent_id=agent_id).db_path
 
     # Resolve API key: explicit > env > openclaw agent config
     key = api_key or os.environ.get("OPENROUTER_API_KEY", "")

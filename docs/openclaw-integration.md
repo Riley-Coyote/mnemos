@@ -40,8 +40,6 @@ Add your agent to OpenClaw's configuration:
           "command": "mnemos",
           "args": [
             "serve",
-            "--db-path",
-            "~/.mnemos/nova.db",
             "--agent-id",
             "nova",
             "--person-id",
@@ -158,7 +156,7 @@ Set these in your agent's `.env` file or system environment:
 | `MNEMOS_AGENT_ID` | Agent identifier | Yes |
 | `MNEMOS_PERSON_ID` | Person/user scope | Recommended |
 | `MNEMOS_PROJECT_SCOPE` | Project/workspace scope | Recommended |
-| `MNEMOS_DB_PATH` | Path to Mnemos database | Yes |
+| `MNEMOS_DB_PATH` | Optional one-store override; defaults to `~/.mnemos/memory.db` | No |
 | `MNEMOS_LLM_PROVIDER` | LLM provider (openrouter/anthropic/openai) | For consolidation |
 | `OPENROUTER_API_KEY` | OpenRouter API key | If using OpenRouter |
 | `ANTHROPIC_API_KEY` | Anthropic API key | If using Anthropic |

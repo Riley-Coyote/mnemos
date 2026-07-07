@@ -74,16 +74,23 @@ def resolve_scope(
         "global",
     )
 
+    # One-store invariant: the configured store is canonical and every verb
+    # resolves to it. The previous resolution treated the canonical default
+    # ("~/.mnemos/memory.db") as a sentinel meaning "not configured" and fell
+    # through to a per-agent "~/.mnemos/{agent}.db" — which silently forked a
+    # shadow store for any agent whose config did not spell a different path
+    # (and could not be fixed by configuring the canonical path, because that
+    # exact string was the sentinel). The shadow-oliver.db incidents of
+    # 2026-07-06/07 are the case study: identity writes landed in a sibling
+    # DB that nothing reads. Config (including its default) is now honored
+    # verbatim; a per-agent store is a deliberate configuration, never an
+    # implicit fallback.
     explicit_db = db_path or os.environ.get("MNEMOS_DB_PATH")
     if explicit_db:
         resolved_db = explicit_db
     else:
         store_config = config.get("store", {}) if isinstance(config.get("store"), dict) else {}
-        configured = store_config.get("db_path")
-        if configured and configured != "~/.mnemos/memory.db":
-            resolved_db = str(configured)
-        else:
-            resolved_db = f"~/.mnemos/{resolved_agent}.db"
+        resolved_db = str(store_config.get("db_path") or "~/.mnemos/memory.db")
 
     return MnemosScope(
         agent_id=resolved_agent,
@@ -91,3 +98,21 @@ def resolve_scope(
         project_scope=resolved_project,
         db_path=resolved_db,
     )
+
+
+def detect_sibling_stores(scope: MnemosScope) -> list[str]:
+    """Detect shadow per-agent stores sitting beside the resolved canonical DB.
+
+    Returns paths of ``~/.mnemos/{agent_id}.db`` files that exist but are NOT
+    the store this scope resolves to. Historically the resolver itself minted
+    these (see resolve_scope); any that remain are either archived-in-place
+    strays or evidence that some writer still resolves paths on its own.
+    Doctor treats a non-empty result as a failure: a sibling store taking
+    writes is memory loss in progress.
+    """
+    resolved = Path(os.path.expanduser(scope.db_path)).resolve()
+    siblings: list[str] = []
+    candidate = Path.home() / ".mnemos" / f"{scope.agent_id}.db"
+    if candidate.exists() and candidate.resolve() != resolved:
+        siblings.append(str(candidate))
+    return siblings

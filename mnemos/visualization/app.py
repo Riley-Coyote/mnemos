@@ -1014,7 +1014,10 @@ def serve(
 def main():
     parser = argparse.ArgumentParser(description="Mnemos Dashboard")
     parser.add_argument("--agent-id", default="default", help="Agent ID")
-    parser.add_argument("--db-path", help="Database path (default: ~/.mnemos/{agent-id}.db)")
+    parser.add_argument(
+        "--db-path",
+        help="Database path (default: one-store config or ~/.mnemos/memory.db)",
+    )
     parser.add_argument("--port", type=int, default=8401, help="Server port")
     parser.add_argument("--build-only", action="store_true", help="Generate HTML without serving")
     parser.add_argument("--output", help="Output path (default: ./mnemos-ui.html)")
@@ -1025,7 +1028,13 @@ def main():
     )
     args = parser.parse_args()
 
-    db_path = args.db_path or str(Path.home() / ".mnemos" / f"{args.agent_id}.db")
+    # One-store invariant: default through resolve_scope (env > config >
+    # canonical memory.db), never an implicit per-agent sibling.
+    from mnemos.simple_scope import resolve_scope
+
+    db_path = args.db_path or str(
+        Path(resolve_scope(agent_id=args.agent_id).db_path).expanduser()
+    )
 
     if not Path(db_path).exists():
         print(f"Database not found: {db_path}")

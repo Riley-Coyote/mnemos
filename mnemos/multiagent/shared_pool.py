@@ -16,8 +16,8 @@ create memories about the same topic with different content.
 
 Architecture:
     SharedPool owns a dedicated EngramStore pointing at a shared SQLite
-    database (default: ~/.mnemos/shared.db). Each agent's private DB
-    remains for fast access; the shared DB is the "workspace memory"
+    database (default: ~/.mnemos/shared.db). Each agent's resolved store
+    remains for fast scoped access; the shared DB is the "workspace memory"
     that all agents can see.
 """
 
@@ -88,8 +88,8 @@ class SharedPool:
         """Publish a memory to the shared pool.
 
         Copies the engram into shared.db with the specified visibility.
-        The original engram in the agent's private DB is not modified here —
-        callers should update the private copy's visibility separately if needed.
+        The original engram in the agent's resolved store is not modified here -
+        callers should update that copy's visibility separately if needed.
 
         Args:
             engram: The engram to share.

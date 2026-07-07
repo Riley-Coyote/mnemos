@@ -286,7 +286,7 @@ class Encoder:
         # 9. Auto-publish to shared pool if applicable
         if self._shared_pool and should_auto_share(engram):
             engram.visibility = Visibility.SHARED
-            self._store.save_engram(engram)  # update visibility in private DB
+            self._store.save_engram(engram)  # update visibility in resolved store
             self._shared_pool.publish(engram)
 
         return engram

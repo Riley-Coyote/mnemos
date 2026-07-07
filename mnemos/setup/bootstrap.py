@@ -14,11 +14,12 @@ Or via the CLI:
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
 from datetime import datetime
 from datetime import timezone as _utc_tz
 from pathlib import Path
+
+from ..simple_scope import resolve_scope
 
 # Template files and their destination paths relative to workspace
 _TEMPLATE_MAP = {
@@ -119,7 +120,9 @@ def bootstrap(
         agent_name: Human-readable name for the agent.
         workspace: Path to the workspace directory.
         user_name: Name of the user who owns this agent.
-        db_path: Path to the Mnemos database. Defaults to ~/.mnemos/{agent_id}.db
+        db_path: Path to the Mnemos database. Defaults through one-store
+            resolution to config store.db_path or ~/.mnemos/memory.db; pass
+            explicitly for a deliberate non-canonical DB.
         agent_id: Machine-readable agent ID. Defaults to lowercase agent_name.
         timezone: Timezone for cron scheduling.
         api_key: Optional provider API key to place in the generated .env.
@@ -132,7 +135,7 @@ def bootstrap(
     workspace_path = Path(workspace).expanduser().resolve()
     agent_id = agent_id or agent_name.lower().replace(" ", "-")
     person_id = user_name.lower().replace(" ", "-") or "user"
-    db_path = db_path or f"~/.mnemos/{agent_id}.db"
+    db_path = db_path or resolve_scope(agent_id=agent_id, person_id=person_id).db_path
     now = datetime.now(tz=_utc_tz.utc).strftime("%Y-%m-%d")
 
     result = {
@@ -375,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--db-path",
         default=None,
-        help="Path to Mnemos database (default: ~/.mnemos/{agent_id}.db)",
+        help="Path to Mnemos database (default: one-store config or ~/.mnemos/memory.db)",
     )
     parser.add_argument(
         "--agent-id",

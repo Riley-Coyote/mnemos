@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Store Path Resolution
+- Default DB-using verbs now route through the one-store resolver: explicit
+  `--db-path`/`MNEMOS_DB_PATH`, then `store.db_path` config (including
+  `MNEMOS_STORE_DB_PATH`), then canonical `~/.mnemos/memory.db`. Agent scope no
+  longer mints an implicit `~/.mnemos/{agent}.db`; `mnemos doctor` fails if it
+  detects a sibling per-agent store beside the resolved canonical DB.
+
 ### Store Migration Runner
 - New additive-only SQL-file migrations live under `mnemos/store/migrations/`
   starting at version 0011. `EngramStore` grandfathers the frozen Python

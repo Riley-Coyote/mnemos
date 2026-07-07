@@ -6,7 +6,7 @@ and feeds them into Mnemos via the encoder. Tracks indexing state to avoid
 re-processing.
 
 Usage:
-    indexer = SessionIndexer(agent_id="myagent", db_path="~/.mnemos/myagent.db")
+    indexer = SessionIndexer(agent_id="myagent")  # uses one-store resolution
     indexer.run()       # Index recent sessions
     indexer.backfill()  # Index sessions from last 24h
     indexer.status()    # Show indexing state
@@ -71,8 +71,10 @@ class SessionIndexer:
     Args:
         agent_id: Unique agent identifier. Falls back to ``MNEMOS_AGENT_ID`` env var,
             then ``"default"``.
-        db_path: Path to the Mnemos SQLite database. Falls back to
-            ``MNEMOS_DB`` env var, then ``~/.mnemos/{agent_id}.db``.
+        db_path: Path to the Mnemos SQLite database. Falls back to indexer
+            config ``db_path``, then ``MNEMOS_DB`` env var, then scope
+            resolution (``MNEMOS_DB_PATH`` env > config ``store.db_path`` >
+            canonical ``~/.mnemos/memory.db``).
         sessions_dirs: List of directories to search for ``.jsonl`` session files.
             Falls back to ``MNEMOS_SESSIONS_DIRS`` (colon-separated) env var, then
             common OpenClaw session locations.
@@ -113,11 +115,16 @@ class SessionIndexer:
             or os.environ.get("MNEMOS_AGENT_ID")
             or "default"
         )
+        # One-store invariant: the final fallback routes through
+        # resolve_scope (env > config > canonical memory.db) rather than
+        # minting a per-agent sibling store.
+        from mnemos.simple_scope import resolve_scope
+
         self.db_path = (
             db_path
             or cfg.get("db_path")
             or os.environ.get("MNEMOS_DB")
-            or str(Path.home() / ".mnemos" / f"{self.agent_id}.db")
+            or resolve_scope(agent_id=self.agent_id).db_path
         )
         self.user_name = user_name or cfg.get("user_name", "User")
         self.agent_name = agent_name or cfg.get(

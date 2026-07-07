@@ -65,6 +65,7 @@ def _isolate_mnemos_env(monkeypatch, tmp_path):
         "MNEMOS_PERSON_ID",
         "MNEMOS_PROJECT_SCOPE",
         "MNEMOS_DB_PATH",
+        "MNEMOS_STORE_DB_PATH",
         "MNEMOS_ENV_PATHS",
         "MNEMOS_WORKSPACE",
         "MNEMOS_MODE",

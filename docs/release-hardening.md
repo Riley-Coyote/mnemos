@@ -16,6 +16,8 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Scope-taking advanced tools inherit configured agent/person/project scope
   when callers leave scope args at their default sentinels.
 - Injected FastMCP context parameters are not exposed in public tool schemas.
+- Advanced `mnemos_remember` and `mnemos_ingest` mark `kind` as required in
+  their public tool schemas, advertise no default, and reject unknown values.
 - No MCP tool exposes `source_authority` or an authority override parameter.
 - Sampling is optional and occurs only inside an active client request.
 - Sampling failures, denials, or unsupported clients fall back cleanly.
@@ -91,6 +93,10 @@ Use this checklist before publishing Mnemos or opening a release PR.
   `imported`, autonomous producers use `generated`, and legacy source records
   deserialize to the `observed` floor. Payload text must never mint
   `user_stated` or `imported`.
+- Advanced MCP capture tools (`mnemos_remember`, `mnemos_ingest`) require the
+  caller to declare canonical `kind` exactly (`episodic`, `semantic`,
+  `procedural`, or `prospective`) instead of inheriting any implicit memory
+  kind.
 - Direct-ID advanced tools (`mnemos_inspect`, `mnemos_forget`, hypomnema
   revise/supersede/promote) and substrate handlers
   (insight/reflection/surprise/wandering/dreaming/initiation) refuse to mutate

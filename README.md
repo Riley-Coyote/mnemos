@@ -214,8 +214,8 @@ Advanced tools include:
 | `mnemos_review_queue` | Inspect confirmation and promotion candidates through an explicit review surface. |
 | `mnemos_proposal_audit` | Inspect audit-only proposal ledger rows through an explicit admin/audit surface. |
 | `mnemos_visual_snapshot` | Render an inline Mermaid memory map with review prose withheld. |
-| `mnemos_remember` | Encode a memory with explicit fields; authority remains harness-stamped. |
-| `mnemos_ingest` | Ingest external knowledge with provenance; authority remains harness-stamped. |
+| `mnemos_remember` | Encode a memory with an explicit `kind`; authority remains harness-stamped. |
+| `mnemos_ingest` | Ingest external knowledge with explicit `kind` and provenance; authority remains harness-stamped. |
 | `mnemos_recall` | Retrieve memories. |
 | `mnemos_inspect` | View full memory details. |
 | `mnemos_introspect` | Audit text for metacognitive pattern markers. |
@@ -257,6 +257,11 @@ label content more cautiously, but cannot label identity/foundational content
 down to `topical` to bypass review. Underclaimed writes are stored at the
 effective domain, routed to review, and duplicate scoped content claims collapse
 to one pending review row.
+
+Advanced `mnemos_remember` and `mnemos_ingest` callers must also declare
+`kind` explicitly as exactly one of `episodic`, `semantic`, `procedural`, or
+`prospective`; the tools expose no default, and omitted or unknown values store
+nothing.
 
 Internal schema v10 DynamicModulation storage is not an MCP feature yet. It can
 persist and back out bounded, rollout-tagged modulation rows, but those rows are
@@ -308,6 +313,7 @@ You have Mnemos advanced MCP tools.
 
 Prefer the simple Mnemos tools for normal continuity: mnemos_context, mnemos_capture, mnemos_recall, mnemos_correct, mnemos_maintain, mnemos_introduce, and mnemos_health.
 Use hypomnema tools when we need precise scoped continuity before promotion.
+Use mnemos_remember or mnemos_ingest only when you can declare kind explicitly: episodic, semantic, procedural, or prospective.
 Use mnemos_inspect, mnemos_status, mnemos_beliefs, and mnemos_consolidate for debugging, migration, or explicit maintenance.
 Do not promote uncertain claims into durable memory without evidence or user confirmation.
 When you change memory, summarize the change in plain language.

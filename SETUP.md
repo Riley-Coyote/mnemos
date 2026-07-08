@@ -182,6 +182,10 @@ hypomnema management, functional-memory sessions, context packets, review
 queues, proposal audit, visual snapshots, beliefs, shared memory, inspect,
 forget, and explicit consolidation.
 
+Advanced `mnemos_remember` and `mnemos_ingest` calls must include an explicit
+`kind` value. Use exactly `episodic`, `semantic`, `procedural`, or
+`prospective`; omitted or unknown kinds are rejected before anything is stored.
+
 Advanced MCP callers still do not choose `source_authority`; Mnemos stamps it
 from the tool/import/producer channel. Hypomnema domains are checked against
 content classification, so a lower-risk caller label cannot bypass review for

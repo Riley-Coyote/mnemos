@@ -151,6 +151,10 @@ material:
   PAI import, and `generated` for autonomous producers. MCP callers cannot pass
   `source_authority`, and payload text claiming `user_stated` or `imported`
   authority does not elevate the row.
+- Advanced MCP callers also cannot rely on an implicit memory kind:
+  `mnemos_remember` and `mnemos_ingest` require an exact `kind` declaration
+  (`episodic`, `semantic`, `procedural`, or `prospective`) and reject omitted or
+  unknown values before storage.
 
 ## Identity Vault And Reconciliation
 

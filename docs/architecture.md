@@ -68,6 +68,9 @@ The fundamental unit of memory. Each engram has:
   `observed`, or `generated`) derived from the ingest channel, never from
   payload text. `Encoder.encode()` requires an explicit `source_authority`
   keyword from trusted code; MCP tools do not expose an authority parameter.
+  Advanced MCP capture tools (`mnemos_remember`, `mnemos_ingest`) also require
+  callers to declare `kind` explicitly as one of the canonical engram kinds; no
+  default kind is inferred at the capture surface.
 - **State lifecycle**: Active → consolidating → dormant → archived
 - **Resolution**: High → low (details fade through softening, like human memory)
 - **Full version history**: Every reconsolidation is tracked

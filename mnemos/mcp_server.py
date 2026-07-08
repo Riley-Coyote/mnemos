@@ -13,8 +13,8 @@ Tools:
     mnemos_review_queue — Show confirmations and promotion candidates
     mnemos_proposal_audit — Inspect audit-only proposal ledger rows
     mnemos_visual_snapshot — Generate an inline Mermaid memory map
-    mnemos_remember     — Encode a new memory
-    mnemos_ingest       — Ingest content from external sources
+    mnemos_remember     — Encode a new memory with an explicit kind
+    mnemos_ingest       — Ingest content from external sources with an explicit kind
     mnemos_recall       — Retrieve relevant memories
     mnemos_hypomnema_write   — Write scoped continuity before promotion
     mnemos_hypomnema_search  — Search operational scoped continuity
@@ -44,7 +44,7 @@ import sys
 
 from mcp.server.fastmcp import FastMCP
 
-from .core.types import SourceAuthority, SourceType
+from .core.types import EngramKind, SourceAuthority, SourceType
 from .simple_runtime import _classify_domain, escalate_domain
 from .store.sqlite_store import (
     EngramStore,
@@ -302,9 +302,7 @@ def _reconcile_vault_on_session_start() -> None:
     try:
         _store.apply_legacy_witness()
     except Exception as exc:
-        stamp_error.append(
-            ("Legacy-stamp error (apply_legacy_witness raised)", exc)
-        )
+        stamp_error.append(("Legacy-stamp error (apply_legacy_witness raised)", exc))
     initial_rollout_findings = []
     try:
         initial_rollout_findings = _initial_rollout_skip_findings(
@@ -397,10 +395,7 @@ def _stamp_error_header(findings, stamp_error) -> str:
                 "Vault: session-start initial-rollout stamp failed "
                 "(no critical reconcile findings)."
             )
-    return (
-        "Vault: session-start stamp failed "
-        "(no critical reconcile findings)."
-    )
+    return "Vault: session-start stamp failed (no critical reconcile findings)."
 
 
 def _alert_vault_findings(
@@ -451,7 +446,9 @@ def _alert_vault_findings(
         pass  # alerting must not crash
 
 
-def _alert_vault_error(journal_path, exc, stamp_error=None, extra_findings=None) -> None:
+def _alert_vault_error(
+    journal_path, exc, stamp_error=None, extra_findings=None
+) -> None:
     """Alert on a session-start reconcile exception without dropping pre-reconcile
     stamper errors or rollout skip findings."""
     try:
@@ -476,10 +473,7 @@ def _alert_vault_error(journal_path, exc, stamp_error=None, extra_findings=None)
         # RAISED and the legacy stamp ALSO failed, surface both — else the stamp
         # failure is hidden behind the reconcile exception.
         for heading, stamp_exc in _stamp_error_entries(stamp_error):
-            body += (
-                f"{heading}: "
-                f"{type(stamp_exc).__name__}: {stamp_exc}\n"
-            )
+            body += f"{heading}: {type(stamp_exc).__name__}: {stamp_exc}\n"
         # 013g #2: initial-rollout skip findings collected pre-reconcile must
         # survive the raise — same audit-the-class shape as stamp_error above.
         for finding in extra_findings or []:
@@ -917,11 +911,34 @@ def _config_invalidate():
     _config = None
 
 
+_ALLOWED_ENGRAM_KINDS = tuple(k.value for k in EngramKind)
+
+
+def _validate_kind(kind: str) -> str | None:
+    """Reject unknown memory kinds at the capture surface.
+
+    Returns an in-band error string (same convention as the setup gate)
+    when `kind` is not a declared EngramKind value, else None. The capture
+    tools deliberately have NO default kind — absence of a declaration must
+    not become a declaration (h7-bond-thickness §5.4) — so the only kinds
+    that reach the encoder are ones the caller explicitly chose.
+    """
+    if kind not in _ALLOWED_ENGRAM_KINDS:
+        return (
+            f"Error: invalid kind '{kind}'. Declare one of: "
+            f"{', '.join(_ALLOWED_ENGRAM_KINDS)}. "
+            "episodic = lived events/experiences; semantic = facts/knowledge; "
+            "procedural = how-to; prospective = wants/intentions. "
+            "Nothing was stored."
+        )
+    return None
+
+
 @mcp.tool()
 def mnemos_remember(
     content: str,
+    kind: str,
     impact: str = "",
-    kind: str = "semantic",
     tags: str = "",
     agent_id: str = "default",
     source_type: str = "session",
@@ -935,11 +952,18 @@ def mnemos_remember(
 
     Args:
         content: What happened — the event, information, or observation.
+        kind: REQUIRED — declare what type of memory this is. There is no
+            default in either direction; you must choose:
+            "episodic" = lived events and experiences (something happened —
+                a session, a conversation, a moment, something done or felt);
+            "semantic" = facts and knowledge (something true independent of
+                when it was learned);
+            "procedural" = how-to knowledge (steps, skills, methods);
+            "prospective" = wants and intentions (future-directed — things
+                to do, follow up on, or hope for).
         impact: What it meant — how it changed understanding. Optional but valuable.
             Example: "After this, I understand that patience with debugging is essential."
             When provided, this lasting insight survives even as details fade over time.
-        kind: Memory type — "episodic" (experiences), "semantic" (facts/knowledge),
-              "procedural" (how-to knowledge). Default: "semantic".
         tags: Comma-separated tags for categorization. Example: "python,debugging,preferences"
         agent_id: Which agent's memory to store in. Default: "default".
         source_type: How the memory was captured — "session", "browser_extraction", etc.
@@ -952,6 +976,9 @@ def mnemos_remember(
     gate = _setup_gate()
     if gate:
         return gate
+    kind_error = _validate_kind(kind)
+    if kind_error:
+        return kind_error
     _ensure_store()
     agent_id = _effective_agent_id(agent_id)
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
@@ -985,8 +1012,8 @@ def mnemos_remember(
 @mcp.tool()
 def mnemos_ingest(
     content: str,
+    kind: str,
     impact: str = "",
-    kind: str = "semantic",
     tags: str = "",
     agent_id: str = "default",
     source_url: str = "",
@@ -1003,9 +1030,13 @@ def mnemos_ingest(
 
     Args:
         content: The knowledge or information to ingest.
+        kind: REQUIRED — declare what type of memory this is. There is no
+            default in either direction; you must choose:
+            "episodic" = lived events and experiences;
+            "semantic" = facts and knowledge;
+            "procedural" = how-to knowledge;
+            "prospective" = wants and intentions (future-directed).
         impact: Lasting insight — what this means, not just what it says.
-        kind: Memory type — "semantic" (facts), "episodic" (events),
-              "procedural" (how-to). Default: "semantic".
         tags: Comma-separated tags. Example: "research,memory-systems"
         agent_id: Which agent's memory to store in. Default: "default".
         source_url: URL or path of the original source (for provenance).
@@ -1021,6 +1052,9 @@ def mnemos_ingest(
     gate = _setup_gate()
     if gate:
         return gate
+    kind_error = _validate_kind(kind)
+    if kind_error:
+        return kind_error
     _ensure_store()
     agent_id = _effective_agent_id(agent_id)
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []

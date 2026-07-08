@@ -171,6 +171,10 @@
   `person_id`, and `project_scope` when callers leave scope args at their
   default sentinels, so default-arg functional-memory and hypomnema operations
   reach the same scoped continuity as the simple MCP runtime.
+- Advanced `mnemos_remember` and `mnemos_ingest` now require callers to declare
+  `kind` explicitly (`episodic`, `semantic`, `procedural`, or `prospective`);
+  omitted or unknown kinds are rejected before storage and no default is
+  advertised in the MCP tool schema.
 
 ### PAI Importer (U3a / U3b / U3c)
 - Schema v4 (U3a) — adds `voice_exemplar_eligible`, `softening_protected`, `decay_protected`, `consolidation_authorized`, `original_substrate`, `original_timestamp` to `engrams`; `tier`, `needs_review`, `confidence_pending_review` to `beliefs`; `original_timestamp` to `hypomnema_entries`; new `pai_import_row_map` table for idempotent re-runs and repair

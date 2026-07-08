@@ -653,10 +653,10 @@ footer a:hover{color:var(--text-soft)}
 </div><div class="wide">
   <div class="tool-grid">
     <div class="tool-card"><div class="tn">mnemos_setup</div><div class="td">Guided onboarding wizard&mdash;10 steps to personalize your memory system</div></div>
-    <div class="tool-card"><div class="tn">mnemos_remember</div><div class="td">Encode a new memory with full dual-trace initialization</div></div>
+    <div class="tool-card"><div class="tn">mnemos_remember</div><div class="td">Encode a new memory with an explicit kind and full dual-trace initialization</div></div>
     <div class="tool-card"><div class="tn">mnemos_recall</div><div class="td">Retrieve via spreading activation through the connection graph</div></div>
     <div class="tool-card"><div class="tn">mnemos_inspect</div><div class="td">View full engram&mdash;traces, connections, versions, history</div></div>
-    <div class="tool-card"><div class="tn">mnemos_ingest</div><div class="td">Ingest content from external sources with configurable depth</div></div>
+    <div class="tool-card"><div class="tn">mnemos_ingest</div><div class="td">Ingest content from external sources with explicit kind and configurable depth</div></div>
     <div class="tool-card"><div class="tn">mnemos_shared</div><div class="td">Cross-agent shared memory pool&mdash;query memories from other agents</div></div>
     <div class="tool-card"><div class="tn">mnemos_status</div><div class="td">System health, engram counts, graph metrics, indexing state</div></div>
     <div class="tool-card"><div class="tn">mnemos_beliefs</div><div class="td">List beliefs with confidence levels and revision history</div></div>
@@ -733,7 +733,7 @@ footer a:hover{color:var(--text-soft)}
     </div>
   </div>
 
-  <p>After onboarding, everything is automatic. The agent calls <code>mnemos_remember</code> when something matters, <code>mnemos_recall</code> when context would help, and consolidation runs in the background. You don&rsquo;t manage the memory system&mdash;it manages itself.</p>
+  <p>After onboarding, everything is automatic. The agent calls <code>mnemos_remember</code> with a declared memory kind when something matters, <code>mnemos_recall</code> when context would help, and consolidation runs in the background. You don&rsquo;t manage the memory system&mdash;it manages itself.</p>
 </div></section>
 
 <section class="section fade" id="s-included"><div class="container">

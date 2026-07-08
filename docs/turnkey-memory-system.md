@@ -73,6 +73,13 @@ Step 1 instrumentation is internal and record-only. Context, prompt, and recall
 paths may write retrieval events, retrieval-why receipts, and citation rows in
 the local store, but those records do not change what gets retrieved or shown.
 
+Beliefs in ordinary operating context render with a launch-minimal challenge
+line: `under-challenge`, `revised-down (YYYY-MM-DD)`, or `never-challenged`.
+That line is state for orientation, not authority to rewrite the belief.
+Automatic encoder/classifier/reflection evidence can create surprise, edges,
+and bookkeeping, but belief confidence moves only through explicit pending
+review, correction, seeding, or restore authority.
+
 ## Onboarding Walkthrough
 
 The agent should walk the human through:
@@ -103,6 +110,9 @@ The onboarding ritual seeds:
 - Treat a simple-mode `Captured continuity for review` response as pending:
   ordinary context, recall, and cross-session verification must not quote its
   prose.
+- Treat belief `under-challenge` as pending review state. Do not treat it as a
+  settled contradiction unless an explicit review/correction surface resolves
+  the belief.
 - Do not treat a caller domain label as a downgrade. Mnemos can store the
   higher-risk effective domain, route underclaimed high-blast continuity to
   review, and collapse duplicate scoped claims.

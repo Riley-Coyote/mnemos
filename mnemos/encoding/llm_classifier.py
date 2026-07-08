@@ -11,11 +11,12 @@ Design decisions (validated in agent design review):
 - Batched calls: all candidates in one prompt, all beliefs in one prompt
 - 7 connection types + NONE: supports, contradicts, causes, extends,
   parallels, synthesizes, grounds
-- Asymmetric belief impact: supports at 0.07, contradicts at 0.04
-- Confidence bounds: clamp beliefs to [0.05, 0.95]
+- Belief comparison classifies relationship only; automatic classifier output
+  never mutates belief confidence
+- Confidence mutation is restricted to explicit review/correction authority
 - Temperature 0.0 for deterministic output
 - Start with Sonnet, downgrade only after validating quality
-- Log only meaningful changes (skip NO_BEARING)
+- Log suppressed SUPPORTS/CONTRADICTS confidence requests for auditability
 """
 
 from __future__ import annotations
@@ -36,8 +37,14 @@ log = logging.getLogger("mnemos.classifier")
 
 # The 7 core types the LLM is allowed to return
 VALID_RELATIONS = {
-    "SUPPORTS", "CONTRADICTS", "CAUSES", "EXTENDS",
-    "PARALLELS", "SYNTHESIZES", "GROUNDS", "NONE",
+    "SUPPORTS",
+    "CONTRADICTS",
+    "CAUSES",
+    "EXTENDS",
+    "PARALLELS",
+    "SYNTHESIZES",
+    "GROUNDS",
+    "NONE",
 }
 
 # Map LLM response strings to ConnectionRelation enum values
@@ -53,13 +60,6 @@ RELATION_MAP: dict[str, ConnectionRelation] = {
 
 # Minimum confidence threshold — below this, skip the connection
 MIN_CONFIDENCE = 0.5
-
-# Belief impact multipliers (asymmetric by design: support accrues
-# faster than contradiction erodes, so beliefs are stable but revisable)
-BELIEF_SUPPORT_MULTIPLIER = 0.07
-BELIEF_CONTRADICT_MULTIPLIER = 0.04
-BELIEF_CONFIDENCE_FLOOR = 0.05
-BELIEF_CONFIDENCE_CEILING = 0.95
 
 
 # ---------------------------------------------------------------------------
@@ -137,9 +137,11 @@ Respond with ONLY a JSON array. No markdown, no explanation, no code fences. For
 # Data classes for results
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ConnectionClassification:
     """Result of classifying a single connection."""
+
     candidate_id: str
     relation: ConnectionRelation
     direction: str  # "forward" or "reverse"
@@ -150,6 +152,7 @@ class ConnectionClassification:
 @dataclass
 class BeliefEvaluation:
     """Result of evaluating a new memory against a single belief."""
+
     belief_id: str
     relation: str  # "SUPPORTS", "CONTRADICTS", "NO_BEARING"
     impact: float
@@ -159,6 +162,7 @@ class BeliefEvaluation:
 # ---------------------------------------------------------------------------
 # Classification functions
 # ---------------------------------------------------------------------------
+
 
 def classify_connections(
     client: "LLMClient",
@@ -193,14 +197,16 @@ def classify_connections(
     ]
 
     for cand in candidates:
-        user_parts.extend([
-            f"### Candidate {cand.id}",
-            f"Content: {cand.content}",
-            f"Impact: {cand.impact or '(none)'}",
-            f"Kind: {cand.kind}",
-            f"Created: {cand.created_at}",
-            "",
-        ])
+        user_parts.extend(
+            [
+                f"### Candidate {cand.id}",
+                f"Content: {cand.content}",
+                f"Impact: {cand.impact or '(none)'}",
+                f"Kind: {cand.kind}",
+                f"Created: {cand.created_at}",
+                "",
+            ]
+        )
 
     user_parts.append(
         "Classify the relationship between the new memory and each candidate. "
@@ -260,11 +266,13 @@ def evaluate_beliefs(
     ]
 
     for belief in beliefs:
-        user_parts.extend([
-            f'### Belief {belief.id}: "{belief.content}"',
-            f"Current confidence: {belief.confidence}",
-            "",
-        ])
+        user_parts.extend(
+            [
+                f'### Belief {belief.id}: "{belief.content}"',
+                f"Current confidence: {belief.confidence}",
+                "",
+            ]
+        )
 
     user_parts.append(
         "For each belief, determine: does this new memory SUPPORT it, "
@@ -296,6 +304,7 @@ def evaluate_beliefs(
 # ---------------------------------------------------------------------------
 # Response parsing (defensive — LLMs can return malformed JSON)
 # ---------------------------------------------------------------------------
+
 
 def _extract_json(raw: str) -> list[dict]:
     """Extract a JSON array from LLM response, handling common formatting issues."""
@@ -355,7 +364,9 @@ def _parse_connection_response(
             if confidence < MIN_CONFIDENCE:
                 log.debug(
                     "Low confidence %.2f for %s (%s) -- skipping",
-                    confidence, candidate_id, relation_str,
+                    confidence,
+                    candidate_id,
+                    relation_str,
                 )
                 continue
 
@@ -364,13 +375,15 @@ def _parse_connection_response(
 
             relation_enum = RELATION_MAP[relation_str]
 
-            results.append(ConnectionClassification(
-                candidate_id=candidate_id,
-                relation=relation_enum,
-                direction=direction,
-                confidence=confidence,
-                reasoning=reasoning,
-            ))
+            results.append(
+                ConnectionClassification(
+                    candidate_id=candidate_id,
+                    relation=relation_enum,
+                    direction=direction,
+                    confidence=confidence,
+                    reasoning=reasoning,
+                )
+            )
 
         except (KeyError, ValueError, TypeError) as e:
             log.warning("Skipping malformed classification item: %s -- %s", item, e)
@@ -416,12 +429,14 @@ def _parse_belief_response(
             # Clamp impact to [0, 1]
             impact = max(0.0, min(1.0, impact))
 
-            results.append(BeliefEvaluation(
-                belief_id=belief_id,
-                relation=relation,
-                impact=impact,
-                reasoning=reasoning,
-            ))
+            results.append(
+                BeliefEvaluation(
+                    belief_id=belief_id,
+                    relation=relation,
+                    impact=impact,
+                    reasoning=reasoning,
+                )
+            )
 
         except (KeyError, ValueError, TypeError) as e:
             log.warning("Skipping malformed belief evaluation item: %s -- %s", item, e)
@@ -436,38 +451,26 @@ def apply_belief_update(
     engram_id: str,
     store,
 ) -> None:
-    """Apply a belief evaluation result to a belief with asymmetric impact.
+    """Suppress automatic belief-confidence mutation from LLM evaluations.
 
-    Supports strengthen faster (0.07), contradictions weaken slower (0.04).
-    Confidence is clamped to [0.05, 0.95] — beliefs never fully die or
-    become unquestionable.
+    Both SUPPORTS and CONTRADICTS are treated as automatic capture/consolidation
+    signals here. Belief confidence moves only through explicit verbs until the
+    receipted critic/review rail lands (render-with-dissent-beliefs section 3.3,
+    step-3 charter addendum).
 
     Args:
         belief: The belief to update.
         evaluation: The evaluation result.
         engram_id: ID of the engram that triggered this evaluation.
-        store: EngramStore for persisting the updated belief.
+        store: EngramStore accepted for API compatibility; this automatic path
+            intentionally does not persist confidence changes.
     """
-    if evaluation.relation == "SUPPORTS":
-        delta = evaluation.impact * BELIEF_SUPPORT_MULTIPLIER
-        new_confidence = belief.confidence + delta
-        reason = f"Supported by new evidence (impact {evaluation.impact:.2f}): {evaluation.reasoning}"
-    elif evaluation.relation == "CONTRADICTS":
-        delta = evaluation.impact * BELIEF_CONTRADICT_MULTIPLIER
-        new_confidence = belief.confidence - delta
-        reason = f"Contradicted by new evidence (impact {evaluation.impact:.2f}): {evaluation.reasoning}"
-    else:
-        return  # NO_BEARING — no change
-
-    # Clamp to bounds
-    new_confidence = max(BELIEF_CONFIDENCE_FLOOR, min(BELIEF_CONFIDENCE_CEILING, new_confidence))
-
-    # Only revise if there's an actual change
-    if abs(new_confidence - belief.confidence) > 0.001:
-        old_confidence = belief.confidence
-        belief.revise(new_confidence, reason, trigger_engram_id=engram_id)
-        store.save_belief(belief)
+    if evaluation.relation in {"SUPPORTS", "CONTRADICTS"}:
         log.info(
-            "Belief '%s' updated: %.3f -> %.3f (%s)",
-            belief.id, old_confidence, new_confidence, evaluation.relation,
+            "Suppressed automatic %s belief confidence revision for %s; "
+            "confidence changes require explicit receipted review/critic authority",
+            evaluation.relation,
+            belief.id,
         )
+        return
+    return  # NO_BEARING or unknown relation — no confidence change

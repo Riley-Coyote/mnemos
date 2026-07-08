@@ -5,7 +5,7 @@ that maintain, transform, and enrich the memory store:
 
 1. Decay — recalculate strength/stability/accessibility for all active engrams
 2. Softening — LLM-mediated lossy compression of low-resolution memories
-3. Belief Review — challenge stagnant beliefs that haven't been tested
+3. Belief Review — resolve explicit pending-review belief confidence queues
 4. Reflection — gate low-stakes thoughts and refresh graph-derived identity
 5. Connection Discovery — find and create new semantic connections
 

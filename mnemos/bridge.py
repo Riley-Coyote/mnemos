@@ -19,6 +19,8 @@ import logging
 import os
 from pathlib import Path
 
+from .interface.belief_render import format_belief_summary_line
+
 log = logging.getLogger("mnemos.bridge")
 
 _bridges: dict[str, "MnemosBridge"] = {}
@@ -172,10 +174,7 @@ class MnemosBridge:
 
         lines = []
         for b in belief_list:
-            pct = int(b.confidence * 100)
-            lines.append(
-                f"- {b.content} [{b.domain}, {pct}%, {len(b.revision_history)} revisions]"
-            )
+            lines.append(format_belief_summary_line(b, include_revision_count=True))
         return f"{len(belief_list)} active beliefs:\n\n" + "\n".join(lines)
 
     def consolidate(self, deep: bool = False) -> str:
@@ -198,4 +197,9 @@ class MnemosBridge:
         if "connection_discovery" in stats:
             cd = stats["connection_discovery"]
             lines.append(f"  Connections: {cd.get('connections_created', 0)} new")
+        if "belief_review" in stats:
+            from .consolidation.belief_review import format_belief_review_summary
+
+            br = stats["belief_review"]
+            lines.append(f"  Beliefs: {format_belief_review_summary(br)}")
         return "\n".join(lines)

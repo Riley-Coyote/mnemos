@@ -1096,6 +1096,7 @@ class EngramStore:
         db_path: str | Path,
         *,
         read_only: bool = False,
+        assume_initialized: bool = False,
         vault_active: bool | None = None,
     ):
         """Open a Mnemos store.
@@ -1109,6 +1110,10 @@ class EngramStore:
                 migrations, and a `meta` write on every instantiation, which
                 silently upgrades older-schema DBs and writes 2+ bytes even on
                 already-current DBs. Caller must guarantee the DB exists.
+            assume_initialized: When True in read-write mode, require an
+                existing DB and skip schema bootstrap/migrations. Maintenance
+                tools use this after their own read-only schema preflight when
+                creating or migrating the target would be the unsafe behavior.
             vault_active: Whether the T4 read-path validator enforces the
                 witnessed-decision requirement on identity-tier reads. When
                 ``None`` (default) it is inferred from the canonical vault
@@ -1129,6 +1134,12 @@ class EngramStore:
             if not self.db_path.exists():
                 raise FileNotFoundError(
                     f"read_only EngramStore requires existing db: {self.db_path}"
+                )
+            return
+        if assume_initialized:
+            if not self.db_path.exists():
+                raise FileNotFoundError(
+                    f"assume_initialized EngramStore requires existing db: {self.db_path}"
                 )
             return
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1405,13 +1416,17 @@ class EngramStore:
     def instrumentation_failure_counts(self) -> dict[str, int]:
         """Return durable instrumentation failure counts for this store."""
 
-        rows = self._get_conn().execute(
-            """
+        rows = (
+            self._get_conn()
+            .execute(
+                """
             SELECT producer, failure_count
             FROM instrumentation_failures
             ORDER BY producer
             """
-        ).fetchall()
+            )
+            .fetchall()
+        )
         return {row["producer"]: int(row["failure_count"]) for row in rows}
 
     def record_retrieval_event(
@@ -1479,10 +1494,14 @@ class EngramStore:
     def get_retrieval_events(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """Read recent retrieval events for tests/reports."""
 
-        rows = self._get_conn().execute(
-            "SELECT * FROM retrieval_events ORDER BY ts DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        rows = (
+            self._get_conn()
+            .execute(
+                "SELECT * FROM retrieval_events ORDER BY ts DESC LIMIT ?",
+                (limit,),
+            )
+            .fetchall()
+        )
         events: list[dict[str, Any]] = []
         for row in rows:
             record = dict(row)
@@ -1536,10 +1555,14 @@ class EngramStore:
     def get_retrieval_citations(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """Read recent retrieval citations for tests/reports."""
 
-        rows = self._get_conn().execute(
-            "SELECT * FROM retrieval_citations ORDER BY cited_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        rows = (
+            self._get_conn()
+            .execute(
+                "SELECT * FROM retrieval_citations ORDER BY cited_at DESC LIMIT ?",
+                (limit,),
+            )
+            .fetchall()
+        )
         citations: list[dict[str, Any]] = []
         for row in rows:
             record = dict(row)
@@ -1634,10 +1657,14 @@ class EngramStore:
     def get_drift_eval_runs(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """Read recent drift-eval run rows for tests/reports."""
 
-        rows = self._get_conn().execute(
-            "SELECT * FROM drift_eval_runs ORDER BY ts DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        rows = (
+            self._get_conn()
+            .execute(
+                "SELECT * FROM drift_eval_runs ORDER BY ts DESC LIMIT ?",
+                (limit,),
+            )
+            .fetchall()
+        )
         runs: list[dict[str, Any]] = []
         for row in rows:
             record = dict(row)
@@ -1647,15 +1674,17 @@ class EngramStore:
             runs.append(record)
         return runs
 
-    def get_drift_eval_observations(
-        self, *, limit: int = 100
-    ) -> list[dict[str, Any]]:
+    def get_drift_eval_observations(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """Read recent drift-eval observation rows for tests/reports."""
 
-        rows = self._get_conn().execute(
-            "SELECT * FROM drift_eval_observations ORDER BY observed_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        rows = (
+            self._get_conn()
+            .execute(
+                "SELECT * FROM drift_eval_observations ORDER BY observed_at DESC LIMIT ?",
+                (limit,),
+            )
+            .fetchall()
+        )
         observations: list[dict[str, Any]] = []
         for row in rows:
             record = dict(row)
@@ -2488,7 +2517,15 @@ class EngramStore:
 
         query += " ORDER BY confidence DESC"
         rows = conn.execute(query, params).fetchall()
-        return [Belief.from_dict(dict(r)) for r in rows]
+        beliefs = []
+        for row in rows:
+            data = dict(row)
+            belief = Belief.from_dict(data)
+            belief.read_visibility = data.get(
+                "read_visibility", READ_VISIBILITY_OPERATIONAL
+            )
+            beliefs.append(belief)
+        return beliefs
 
     # ── Proposal Ledger ──
 

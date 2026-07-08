@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from .belief_render import format_belief_summary_line
 from ..store.sqlite_store import READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW
 
 if TYPE_CHECKING:
@@ -22,7 +23,8 @@ def build_memory_visual_snapshot(
     """Return an operational Markdown/Mermaid snapshot for inline chat.
 
     Review queues are represented by counts/source IDs only; pending prose
-    stays behind explicit review packet surfaces.
+    stays behind explicit review packet surfaces. Visible beliefs include their
+    deterministic challenge state.
     """
     stats = store.get_stats(
         agent_id,
@@ -119,8 +121,7 @@ def build_memory_visual_snapshot(
     return (
         f"## Mnemos Visual Snapshot\n\n"
         f"Scope: {scope}\n\n"
-        f"{diagram}\n\n"
-        + "\n\n".join(section for section in lists if section)
+        f"{diagram}\n\n" + "\n\n".join(section for section in lists if section)
     )
 
 
@@ -179,8 +180,7 @@ def _format_beliefs(beliefs: list[Any]) -> str:
         return "### Identity Signals\n- No active beliefs yet."
     lines = ["### Identity Signals"]
     for belief in beliefs:
-        pct = int(float(belief.confidence) * 100)
-        lines.append(f"- {belief.content} [{belief.domain}, {pct}%]")
+        lines.append(format_belief_summary_line(belief))
     return "\n".join(lines)
 
 

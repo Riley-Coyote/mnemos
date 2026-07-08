@@ -33,6 +33,7 @@ model providers are optional for richer deep maintenance.
 | Gated inner-life / soak validation | Representative DB operator path | `mnemos inner-life preflight --db-path ./copy.db` |
 | Store schema migration review | Canonical store migration runner | `mnemos migrate plan` |
 | Step 1 instrumentation review | Representative DB operator path | `mnemos drift-eval --db-path ./copy.db` |
+| Belief false-contradiction restore | Representative DB operator path | `mnemos maintain --restore-false-contradictions --db-path ./copy.db` |
 
 Most users should start with **Simple MCP Mode**. Hermes users should start with
 **Hermes Sidecar Mode** unless they explicitly want Mnemos to occupy Hermes'
@@ -221,7 +222,7 @@ Advanced tools include:
 | `mnemos_inspect` | View full memory details. |
 | `mnemos_introspect` | Audit text for metacognitive pattern markers. |
 | `mnemos_status` | Show memory system statistics. |
-| `mnemos_beliefs` | List reviewed current beliefs. |
+| `mnemos_beliefs` | List reviewed current beliefs with launch-minimal challenge state. |
 | `mnemos_shared` | Read shared memory pool entries. |
 | `mnemos_hypomnema_write` | Write scoped continuity manually. |
 | `mnemos_hypomnema_search` | Search operational scoped continuity manually. |
@@ -230,7 +231,7 @@ Advanced tools include:
 | `mnemos_hypomnema_candidates` | List operational promotion-ready continuity; use `mnemos_review_queue` for review-only candidates. |
 | `mnemos_hypomnema_promote` | Promote continuity into a durable engram. |
 | `mnemos_forget` | Archive a memory. |
-| `mnemos_consolidate` | Trigger explicit consolidation. |
+| `mnemos_consolidate` | Trigger explicit consolidation and report belief-review effects. |
 
 Use simple mode for normal continuity. Use advanced mode when the agent or
 operator needs direct access to Mnemos internals.
@@ -323,7 +324,7 @@ You have Mnemos advanced MCP tools.
 Prefer the simple Mnemos tools for normal continuity: mnemos_context, mnemos_capture, mnemos_recall, mnemos_correct, mnemos_maintain, mnemos_introduce, and mnemos_health.
 Use hypomnema tools when we need precise scoped continuity before promotion.
 Use mnemos_remember or mnemos_ingest only when you can declare kind explicitly: episodic, semantic, procedural, or prospective.
-Use mnemos_inspect, mnemos_status, mnemos_beliefs, and mnemos_consolidate for debugging, migration, or explicit maintenance.
+Use mnemos_inspect, mnemos_status, mnemos_beliefs, mnemos_consolidate, and mnemos maintain for debugging, migration, or explicit maintenance.
 Do not promote uncertain claims into durable memory without evidence or user confirmation.
 When you change memory, summarize the change in plain language.
 ```
@@ -514,6 +515,8 @@ mnemos substrate-tick                 # Run one substrate cycle
 mnemos migrate plan                   # Dry-run pending SQL-file migrations
 mnemos migrate apply                  # Apply pending SQL-file migrations
 mnemos drift-eval --db-path ./copy.db # Register Step 1 drift-eval instruments
+mnemos maintain --restore-false-contradictions --db-path ./copy.db
+                                      # Dry-run false encoder contradiction restore
 ```
 
 Dashboard module:
@@ -569,6 +572,21 @@ These commands are record-only operator paths. They require an explicit
 representative DB path for writes, refuse live `~/.mnemos` databases unless
 `--allow-live-db` is supplied for an authorized live rollout, and do not change
 retrieval ranking, reconsolidation, or read visibility.
+
+Belief restoration:
+
+```bash
+mnemos maintain --restore-false-contradictions --db-path ./copy.db
+mnemos maintain --restore-false-contradictions --db-path ./copy.db --apply
+```
+
+The restore command is dry-run by default. It dynamically finds false encoder
+contradiction revision events, plans confidence restoration from the current
+confidence plus the reversible false-event deltas, refuses non-raising restores,
+and on apply appends annulling belief revision events plus
+`belief_confidence_restore` runtime receipts. It requires an explicit DB path
+and refuses live `~/.mnemos` databases unless `--allow-live-db` is supplied for
+an authorized live rollout.
 
 Hermes commands:
 
@@ -752,11 +770,17 @@ With no provider key and no extra setup, Mnemos can still run:
 - cross-session verification that quotes operational first captures but emits only an existence cue for review-only first captures
 - optional SVG identity graph snapshots
 - maintenance during normal tool calls
+- operational belief rendering with challenge state (`under-challenge`,
+  `revised-down`, or `never-challenged`)
 
 If a dedicated model provider is configured, `mnemos_maintain(deep=true)` and
 `mnemos consolidate --deep` can also run richer model-mediated passes such as
 softening, belief review, and reflection. Dedicated providers are optional and
 never required for baseline continuity.
+Automatic encoder/classifier/reflection evidence can still create surprise,
+edges, and bookkeeping, but it does not mutate belief confidence. Confidence
+changes require explicit pending review, correction, seeding, or restore
+authority.
 
 ### Optional Identity Graph
 

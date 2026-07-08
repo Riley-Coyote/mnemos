@@ -160,10 +160,22 @@ Typed edges between engrams that form the memory graph:
 
 Higher-order knowledge structures extracted from patterns across engrams:
 
-- Confidence tracking with tier-based change detection
+- Confidence tracking with tier-based change detection. Automatic encoder,
+  classifier, consolidation, and reflection paths can detect support or
+  contradiction for surprise, edges, and bookkeeping, but they do not mutate
+  belief confidence. Confidence changes require explicit pending-review,
+  correction, seeding, or restore authority.
 - Domain categorization (engineering, social, preferences, etc.)
-- Stagnant beliefs get stress-tested during deep consolidation
+- Beliefs can be evaluated during deep consolidation. Only beliefs already
+  queued through `needs_review` or `confidence_pending_review` can have
+  confidence changed by belief review; non-pending SUPPORTS/CONTRADICTS results
+  are logged without mutation, and NO_BEARING leaves pending beliefs pending.
 - Full revision history
+- Operational belief renders include launch-minimal challenge state:
+  `under-challenge` for pending review, `revised-down (YYYY-MM-DD)` for the
+  latest non-annulled downward revision, or `never-challenged` otherwise.
+  Restore events can annul false encoder contradiction revisions so they no
+  longer render as live challenge evidence.
 - PAI import metadata: `tier` (foundational | operational | tactical),
   `needs_review`, and `confidence_pending_review` mark beliefs whose
   upstream source has changed but has not been re-reviewed by the operator.
@@ -173,7 +185,11 @@ Higher-order knowledge structures extracted from patterns across engrams:
 
 ### Encoding Pipeline
 
-Content → LLM classification → engram creation → connection discovery → embedding (optional)
+Content → LLM classification → engram creation → connection discovery →
+embedding (optional). LLM belief comparisons classify relationships only:
+SUPPORTS/CONTRADICTS can contribute surprise and contradiction edges, but they
+do not directly revise belief confidence. The former keyword-negation fallback
+that inferred dissent from word overlap plus negation tokens has been removed.
 
 ### Retrieval
 
@@ -248,9 +264,12 @@ The "sleeping brain" — autonomous processing that runs between sessions.
 1. **Decay**: Recalculate strength/stability/accessibility. Unused memories fade.
 2. **Connection Discovery**: Find new semantic relationships between engrams.
 3. **Softening**: LLM-mediated lossy compression. Low-resolution memories get rewritten preserving essence.
-4. **Belief Review**: Challenge stagnant beliefs with new evidence.
+4. **Belief Review**: Evaluate beliefs against new evidence, resolving
+   explicit pending-review confidence queues only when evidence bears on the
+   belief.
 5. **Reflection**: Generate gated low-stakes thoughts and refresh the
-   graph-derived identity profile.
+   graph-derived identity profile; reflection does not revise belief confidence
+   automatically.
 
 ### Gated Inner Life
 
@@ -293,8 +312,8 @@ The substrate produces events based on what it discovers:
 |-------|---------|---------|
 | `MEMORY_SOFTENED` | Vividness below threshold | Dreaming |
 | `CONNECTION_DISCOVERED` | New semantic link | Insight |
-| `BELIEF_CONTRADICTED` | Confidence crosses tier down | Reflection |
-| `BELIEF_CONFIRMED` | Confidence crosses tier up | — |
+| `BELIEF_CONTRADICTED` | Explicit review/correction lowers confidence across a tier | Reflection |
+| `BELIEF_CONFIRMED` | Explicit review/correction raises confidence across a tier | — |
 | `SILENCE_EXTENDED` | No memories in 6+ hours | Wandering |
 | `SALIENCE_ACCUMULATED` | Multiple high-salience events | Initiation |
 

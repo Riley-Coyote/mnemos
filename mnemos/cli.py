@@ -10,6 +10,7 @@ Commands:
     mnemos inspect --admin ID    Inspect an engram regardless of read visibility
     mnemos stats                 Show memory statistics
     mnemos drift-eval            Register Step 1 drift-eval instruments
+    mnemos maintain              Run explicit operator maintenance jobs
     mnemos snapshot              Print an inline Mermaid memory snapshot
     mnemos search QUERY          Search memories
     mnemos consolidate [--deep]  Run a consolidation cycle
@@ -47,6 +48,7 @@ import argparse
 import json
 import os
 import shutil
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -162,6 +164,30 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_drift_eval.add_argument(
         "--json", action="store_true", help="Emit machine-readable rows"
+    )
+
+    # ── maintain ──
+    p_maintain = sub.add_parser("maintain", help="Explicit operator maintenance jobs")
+    p_maintain.add_argument(
+        "--restore-false-contradictions",
+        action="store_true",
+        help="Restore false encoder contradiction belief-confidence revisions",
+    )
+    p_maintain.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply the maintenance job; default is dry-run",
+    )
+    p_maintain.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path"
+    )
+    p_maintain.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos databases; requires explicit David authorization in live use",
+    )
+    p_maintain.add_argument(
+        "--json", action="store_true", help="Emit machine-readable results"
     )
 
     # ── snapshot ──
@@ -1047,6 +1073,7 @@ def main(argv: list[str] | None = None) -> int:
         "inspect": _cmd_inspect,
         "stats": _cmd_stats,
         "drift-eval": _cmd_drift_eval,
+        "maintain": _cmd_maintain,
         "snapshot": _cmd_snapshot,
         "search": _cmd_search,
         "consolidate": _cmd_consolidate,
@@ -1348,6 +1375,50 @@ def _cmd_drift_eval(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_maintain(args: argparse.Namespace) -> int:
+    """Run explicit operator maintenance jobs."""
+
+    if not getattr(args, "restore_false_contradictions", False):
+        print(
+            "Usage: mnemos maintain --restore-false-contradictions [--apply]",
+            file=sys.stderr,
+        )
+        return 1
+    db_path = getattr(args, "db_path", None)
+    if not db_path:
+        print(
+            "mnemos maintain requires --db-path; use a representative DB copy",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        from .maintenance import restore_false_contradictions
+
+        result = restore_false_contradictions(
+            db_path,
+            apply=bool(getattr(args, "apply", False)),
+            allow_live_db=bool(getattr(args, "allow_live_db", False)),
+        )
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    mode = "apply" if args.apply else "dry-run"
+    print(f"Belief false-contradiction restore {mode}")
+    print(f"DB:      {result['db_path']}")
+    print(f"Beliefs: {result['beliefs_to_restore']}")
+    print(f"Events:  {result['false_events_to_annul']}")
+    if not args.apply:
+        print(
+            "No changes written. Re-run with --apply after backup and David authorization."
+        )
+    return 0
+
+
 def _cmd_consolidate(args: argparse.Namespace) -> int:
     """Run a consolidation cycle."""
     store = _get_store(args)
@@ -1376,8 +1447,10 @@ def _cmd_consolidate(args: argparse.Namespace) -> int:
         s = stats["softening"]
         print(f"  Softening: {s.get('engrams_softened', 0)} softened")
     if "belief_review" in stats:
+        from .consolidation.belief_review import format_belief_review_summary
+
         br = stats["belief_review"]
-        print(f"  Beliefs: {br.get('beliefs_reviewed', 0)} reviewed")
+        print(f"  Beliefs: {format_belief_review_summary(br)}")
     if "reflection" in stats:
         ref = stats["reflection"]
         print(
@@ -1636,7 +1709,10 @@ def _cmd_migrate(args: argparse.Namespace) -> int:
     try:
         runner = _build_migration_runner(args)
     except (json.JSONDecodeError, OSError, MigrationConfigLoadError) as exc:
-        print(f"migration aborted: could not load one-store config: {exc}", file=sys.stderr)
+        print(
+            f"migration aborted: could not load one-store config: {exc}",
+            file=sys.stderr,
+        )
         return 1
 
     try:
@@ -1659,8 +1735,7 @@ def _cmd_migrate(args: argparse.Namespace) -> int:
         applied = runner.apply(target_version=getattr(args, "target_version", None))
         if not applied:
             print(
-                f"Already at version {runner.plan().current_version}; nothing "
-                "to apply."
+                f"Already at version {runner.plan().current_version}; nothing to apply."
             )
             return 0
         print(f"Applied {len(applied)} migration(s):")

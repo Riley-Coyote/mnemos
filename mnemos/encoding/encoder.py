@@ -331,10 +331,9 @@ class Encoder:
         stepping back and NOT controlling" correctly SUPPORTS a belief about
         that user facilitating emergence.
 
-        Belief updates use asymmetric impact:
-        - Supports: +impact * 0.07 (beliefs grow from genuine evidence)
-        - Contradicts: -impact * 0.04 (harder to erode through noise)
-        - Confidence clamped to [0.05, 0.95] — never fully dies, never unquestionable
+        Automatic encoding never moves belief confidence. LLM SUPPORTS and
+        CONTRADICTS may contribute surprise/connection signals, but confidence
+        changes require explicit queued review/correction authority.
 
         Returns surprise level 0.0-1.0. Higher = more surprising.
         Also creates CONTRADICTS connections and fires emotional events.
@@ -377,7 +376,7 @@ class Encoder:
                             formed_by="encoding",
                         )
 
-                # Apply belief update (with cooldown guard)
+                # Log/suppress automatic confidence requests after cooldown.
                 cooldown_ok = True
                 try:
                     last_rev = datetime.fromisoformat(belief.last_revised)
@@ -392,61 +391,11 @@ class Encoder:
                     apply_belief_update(belief, evaluation, engram.id, store)
 
         else:
-            # Fallback: old heuristic (kept for when no LLM is available)
-            content_lower = engram.content.lower()
-            for belief in beliefs:
-                belief_words = {w.lower() for w in belief.content.split() if len(w) > 3}
-                content_words = {
-                    w.lower() for w in engram.content.split() if len(w) > 3
-                }
-                overlap = belief_words & content_words
-                if not overlap:
-                    continue
-
-                negation_signals = [
-                    "not",
-                    "never",
-                    "wrong",
-                    "incorrect",
-                    "false",
-                    "failed",
-                    "doesn't",
-                    "didn't",
-                    "isn't",
-                    "wasn't",
-                    "no longer",
-                    "contrary",
-                    "opposite",
-                    "instead",
-                ]
-                has_negation = any(neg in content_lower for neg in negation_signals)
-
-                if has_negation and overlap:
-                    contradiction_surprise = belief.confidence * 0.8
-                    surprise = max(surprise, contradiction_surprise)
-                    for supporting_id in belief.supporting_engram_ids[:3]:
-                        engram.add_connection(
-                            target_id=supporting_id,
-                            relation=ConnectionRelation.CONTRADICTS,
-                            strength=0.7,
-                            formed_by="encoding",
-                        )
-                    cooldown_ok = True
-                    try:
-                        last_rev = datetime.fromisoformat(belief.last_revised)
-                        if last_rev.tzinfo is None:
-                            last_rev = last_rev.replace(tzinfo=timezone.utc)
-                        if (datetime.now(timezone.utc) - last_rev) < timedelta(hours=6):
-                            cooldown_ok = False
-                    except (ValueError, TypeError, AttributeError):
-                        pass
-                    if cooldown_ok:
-                        belief.revise(
-                            belief.confidence - 0.05,
-                            f"Contradicted by new evidence: {engram.content[:50]}...",
-                            trigger_engram_id=engram.id,
-                        )
-                        store.save_belief(belief)
+            # The keyword-negation fallback was the false-dissent writer: word
+            # overlap plus "not/never/instead" silently lowered belief confidence.
+            # Replaced by the receipted nightly classifier
+            # (render-with-dissent-beliefs section 3.3, step-3 charter addendum).
+            pass
 
         # 3. Fire emotional event if surprised
         if surprise > 0.1:

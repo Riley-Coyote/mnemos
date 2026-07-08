@@ -143,8 +143,14 @@ def test_review_context_packet_can_include_review_only_rows(store):
     review_prompt = review["prompt"]
     assert "Explicit review functional prose" in review_prompt
     assert "Explicit review hypomnema prose" in review_prompt
-    assert review["review_queue"]["functional_needs_confirmation"][0]["read_visibility"] == "review_only"
-    assert review["review_queue"]["hypomnema_promotion_candidates"][0]["read_visibility"] == "review_only"
+    assert (
+        review["review_queue"]["functional_needs_confirmation"][0]["read_visibility"]
+        == "review_only"
+    )
+    assert (
+        review["review_queue"]["hypomnema_promotion_candidates"][0]["read_visibility"]
+        == "review_only"
+    )
 
 
 def test_review_context_packet_includes_low_salience_identity_review_rows(store):
@@ -181,7 +187,9 @@ def test_review_context_packet_includes_low_salience_identity_review_rows(store)
     assert f"source_id={identity_id}" in operational["prompt"]
     assert operational["review_queue"]["hypomnema_promotion_candidate_count"] == 1
     assert "Low-salience identity continuity" in review["prompt"]
-    assert review["review_queue"]["hypomnema_promotion_candidates"][0]["id"] == identity_id
+    assert (
+        review["review_queue"]["hypomnema_promotion_candidates"][0]["id"] == identity_id
+    )
 
 
 def test_review_context_packet_excludes_audit_only_hypomnema_candidates(store):
@@ -215,7 +223,10 @@ def test_review_context_packet_excludes_audit_only_hypomnema_candidates(store):
         packet_mode="review",
     )
 
-    assert "Review packet may disclose review-only hypomnema candidate." in packet["prompt"]
+    assert (
+        "Review packet may disclose review-only hypomnema candidate."
+        in packet["prompt"]
+    )
     assert "Review packet must not disclose audit-only" not in packet["prompt"]
     assert packet["review_queue"]["hypomnema_promotion_candidate_count"] == 1
 
@@ -274,7 +285,9 @@ def test_proposal_rows_are_counts_only_operational_and_labeled_in_review(store):
         read_visibility="review_only",
         reason="Needs David review.",
         provenance_ids=["source-hypomnema"],
-        payload={"content": "Review proposal prose must stay out of operational packets."},
+        payload={
+            "content": "Review proposal prose must stay out of operational packets."
+        },
     )
 
     operational = build_context_packet(
@@ -375,7 +388,9 @@ def test_active_review_packets_exclude_terminal_proposals(store):
 
     assert operational["review_queue"]["proposal_candidate_count"] == 1
     assert review_packet["review_queue"]["proposal_candidate_count"] == 1
-    assert review_packet["review_queue"]["proposal_candidates"][0]["id"] == pending["id"]
+    assert (
+        review_packet["review_queue"]["proposal_candidates"][0]["id"] == pending["id"]
+    )
     assert pending["id"] in snapshot
     for terminal in (deferred, rejected):
         assert terminal["id"] not in str(operational)
@@ -437,9 +452,9 @@ def test_operational_stats_exclude_audit_only_memory_counts(store):
     assert packet["stats"]["engrams_active"] == 0
     assert packet["stats"]["functional_active"] == 0
     assert packet["stats"]["hypomnema_active"] == 0
-    assert 'Functional memory<br/>0 active' in snapshot
-    assert 'Hypomnema<br/>0 scoped entries' in snapshot
-    assert 'Mnemos graph<br/>0 engrams' in snapshot
+    assert "Functional memory<br/>0 active" in snapshot
+    assert "Hypomnema<br/>0 scoped entries" in snapshot
+    assert "Mnemos graph<br/>0 engrams" in snapshot
 
 
 def test_context_packet_stats_are_visibility_scoped(store):
@@ -696,6 +711,114 @@ def test_formatter_operational_override_redacts_existing_review_packet(store):
     assert hypomnema_id in prompt
 
 
+def test_formatter_operational_override_redacts_review_only_beliefs(store):
+    store.save_belief(
+        Belief(
+            id="formatter-operational-belief",
+            agent_id="vektor",
+            content="Operational belief should survive operational rendering.",
+            domain="memory",
+            confidence=0.74,
+        )
+    )
+    store.save_belief(
+        Belief(
+            id="formatter-review-belief",
+            agent_id="vektor",
+            content="Review-only belief prose must not survive operational rendering.",
+            domain="memory",
+            confidence=0.73,
+            read_visibility="review_only",
+        )
+    )
+    pending = Belief(
+        id="formatter-pending-operational-belief",
+        agent_id="vektor",
+        content="Pending operational belief should remain visible while challenged.",
+        domain="memory",
+        confidence=0.66,
+    )
+    store.save_belief(pending)
+    conn = store._get_conn()
+    conn.execute(
+        """
+        UPDATE beliefs
+        SET needs_review = 1,
+            confidence_pending_review = 1,
+            read_visibility = 'operational_context'
+        WHERE id = ?
+        """,
+        (pending.id,),
+    )
+    conn.commit()
+
+    packet = build_context_packet(
+        store,
+        "",
+        agent_id="vektor",
+        packet_mode="review",
+        include_prompt=False,
+    )
+
+    review_prompt = format_context_packet(packet)
+    assert "Review-only belief prose" in review_prompt
+    assert any(
+        belief["read_visibility"] == "review_only" for belief in packet["beliefs"]
+    )
+
+    prompt = format_context_packet(packet, packet_mode="operational")
+
+    assert "Operational belief should survive operational rendering." in prompt
+    assert (
+        "Pending operational belief should remain visible while challenged." in prompt
+    )
+    assert "challenge: under-challenge" in prompt
+    assert "[memory, 66%]" in prompt
+    assert "Review-only belief prose" not in prompt
+
+
+def test_formatter_accepts_legacy_beliefs_without_challenge_line():
+    packet = {
+        "packet_mode": "operational",
+        "scope": {
+            "agent_id": "vektor",
+            "person_id": "riley",
+            "project_scope": "mnemos",
+            "session_id": "",
+        },
+        "identity": {},
+        "beliefs": [
+            {
+                "content": "Legacy integrations only send core belief fields.",
+                "domain": "memory",
+                "confidence": 0.7,
+            },
+            {
+                "content": "Metadata-only challenge state can still render.",
+                "domain": "memory",
+                "confidence": 0.6,
+                "challenge_state": "revised-down",
+                "challenge_date": "2026-07-07",
+            },
+        ],
+        "functional_memory": [],
+        "hypomnema": [],
+        "mnemos_engrams": [],
+        "review_queue": {
+            "packet_mode": "operational",
+            "functional_needs_confirmation_count": 0,
+            "hypomnema_promotion_candidate_count": 0,
+            "proposal_candidate_count": 0,
+        },
+    }
+
+    prompt = format_context_packet(packet)
+
+    assert "Legacy integrations only send core belief fields." in prompt
+    assert "challenge: never-challenged" in prompt
+    assert "challenge: revised-down (2026-07-07)" in prompt
+
+
 def test_formatter_review_override_rejects_redacted_operational_packet(store):
     store.write_functional_memory(
         "Redacted functional prose cannot be recovered by formatter override.",
@@ -722,7 +845,9 @@ def test_formatter_review_override_rejects_redacted_operational_packet(store):
     except ValueError as exc:
         assert "redacted operational references" in str(exc)
     else:
-        raise AssertionError("redacted operational packet should not escalate to review")
+        raise AssertionError(
+            "redacted operational packet should not escalate to review"
+        )
 
 
 def test_formatter_review_override_rejects_redacted_operational_proposal_packet(store):
@@ -746,7 +871,9 @@ def test_formatter_review_override_rejects_redacted_operational_proposal_packet(
     except ValueError as exc:
         assert "redacted operational proposal references" in str(exc)
     else:
-        raise AssertionError("redacted operational proposal should not escalate to review")
+        raise AssertionError(
+            "redacted operational proposal should not escalate to review"
+        )
 
 
 def test_operational_review_cues_survive_low_token_budget(store):

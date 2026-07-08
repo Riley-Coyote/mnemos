@@ -25,7 +25,7 @@ Tools:
     mnemos_inspect      — View full details of a memory
     mnemos_introspect   — Audit text for metacognitive pattern markers
     mnemos_status       — Get memory system status
-    mnemos_beliefs      — List reviewed current beliefs
+    mnemos_beliefs      — List reviewed current beliefs with challenge state
     mnemos_forget       — Archive a specific memory
     mnemos_consolidate  — Trigger a consolidation cycle
 
@@ -55,6 +55,7 @@ from .store.embedding_index import EmbeddingIndex
 from .encoding.encoder import Encoder
 from .retrieval.reactive import ReactiveRetriever
 from .consolidation.daemon import ConsolidationDaemon
+from .interface.belief_render import format_belief_summary_line
 from .interface.context_packet import build_context_packet
 from .interface.visual_snapshot import build_memory_visual_snapshot
 from .config.loader import load_config, save_config
@@ -765,7 +766,7 @@ def mnemos_setup(response: str = "") -> str:
                     agent_id=agent_id,
                 )
                 _store.save_belief(b)
-                beliefs_created.append(f'"{belief1}" — confidence: 70%')
+                beliefs_created.append(format_belief_summary_line(b).removeprefix("- "))
             except Exception as e:
                 logger.warning(f"Failed to create belief: {e}")
 
@@ -779,7 +780,7 @@ def mnemos_setup(response: str = "") -> str:
                     agent_id=agent_id,
                 )
                 _store.save_belief(b)
-                beliefs_created.append(f'"{belief2}" — confidence: 65%')
+                beliefs_created.append(format_belief_summary_line(b).removeprefix("- "))
             except Exception as e:
                 logger.warning(f"Failed to create belief: {e}")
 
@@ -2064,11 +2065,11 @@ def mnemos_status(
 
 @mcp.tool()
 def mnemos_beliefs(agent_id: str = "default", domain: str = "") -> str:
-    """List reviewed current beliefs with confidence levels.
+    """List reviewed current beliefs with confidence and challenge state.
 
     Beliefs with ``confidence_pending_review`` or review-only visibility are
-    hidden until the belief review pass opts in, clears pending state, and
-    restores operational read visibility.
+    hidden until the belief review pass opts in and SUPPORTS/CONTRADICTS
+    evidence clears pending state and restores operational read visibility.
 
     Args:
         agent_id: Which agent's beliefs to show. Default: "default".
@@ -2090,9 +2091,7 @@ def mnemos_beliefs(agent_id: str = "default", domain: str = "") -> str:
 
     lines = []
     for b in beliefs:
-        pct = int(b.confidence * 100)
-        revisions = len(b.revision_history)
-        lines.append(f"- {b.content} [{b.domain}, {pct}%, {revisions} revisions]")
+        lines.append(format_belief_summary_line(b, include_revision_count=True))
 
     return f"{len(beliefs)} active beliefs:\n\n" + "\n".join(lines)
 
@@ -2212,6 +2211,11 @@ def mnemos_consolidate(deep: bool = False, agent_id: str = "default") -> str:
         lines.append(
             f"  Softened: {stats['softening'].get('engrams_softened', 0)} memories"
         )
+    if "belief_review" in stats:
+        from .consolidation.belief_review import format_belief_review_summary
+
+        br = stats["belief_review"]
+        lines.append(f"  Beliefs: {format_belief_review_summary(br)}")
     if "reflection" in stats:
         ref = stats["reflection"]
         lines.append(f"  Thoughts: {ref.get('thoughts_generated', 0)} generated")

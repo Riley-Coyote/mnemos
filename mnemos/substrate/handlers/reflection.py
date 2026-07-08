@@ -3,13 +3,12 @@ Reflection handler — the most dangerous handler.
 
 Triggered by: BELIEF_CONTRADICTED
 Effect: Re-examines a belief in light of contradicting evidence.
-         May revise confidence up or down.
+         Does not revise confidence automatically until the critic rail lands.
 
 Guardrails:
   - Cooldown: won't re-examine the same belief within cooldown_hours
-  - Max confidence change: capped at max_delta per reflection
   - skip_surprise_detection=True on all outputs to prevent feedback loops
-  - Full audit trail via belief.revise()
+  - Confidence changes require explicit receipted review/critic authority
 """
 
 import json
@@ -31,7 +30,7 @@ def handle(
     store,
     llm_client,
 ) -> list[SubstrateEvent]:
-    """Examine a contradicted belief and potentially revise confidence."""
+    """Examine a contradicted belief without automatic confidence mutation."""
     produced_events: list[SubstrateEvent] = []
 
     belief_id = event.payload.get("belief_id")
@@ -67,7 +66,9 @@ def handle(
     trigger_content = ""
     trigger_impact = ""
     if trigger_engram_id:
-        engram = store.get_engram(trigger_engram_id, read_visibility="operational_context")
+        engram = store.get_engram(
+            trigger_engram_id, read_visibility="operational_context"
+        )
         if (
             engram
             and engram.owner_agent_id == config.agent_id
@@ -82,7 +83,8 @@ def handle(
         prompt = prompt_template.format(
             belief_content=belief.content,
             belief_confidence=f"{belief.confidence:.2f}",
-            trigger_content=trigger_content or "(no specific trigger — consolidation review)",
+            trigger_content=trigger_content
+            or "(no specific trigger — consolidation review)",
             trigger_impact=trigger_impact or "(no impact recorded)",
         )
     else:
@@ -92,8 +94,8 @@ def handle(
 The Belief: {belief.content}
 Current confidence: {belief.confidence:.2f}
 
-Triggering Evidence: {trigger_content or '(no specific trigger — consolidation review)'}
-Impact: {trigger_impact or '(no impact recorded)'}
+Triggering Evidence: {trigger_content or "(no specific trigger — consolidation review)"}
+Impact: {trigger_impact or "(no impact recorded)"}
 
 Should this evidence change your confidence? Respond with JSON:
 {{"new_confidence": <float 0.0-0.99>, "reasoning": "<why>", "should_revise": <true/false>}}
@@ -122,33 +124,23 @@ Should this evidence change your confidence? Respond with JSON:
     # ── Apply guardrails ──
     should_revise = result.get("should_revise", False)
     if not should_revise:
-        log.info(f"Reflection on belief {belief_id}: no revision needed. Reason: {result.get('reasoning', '')}")
+        log.info(
+            f"Reflection on belief {belief_id}: no revision needed. Reason: {result.get('reasoning', '')}"
+        )
         return produced_events
 
     new_confidence = result.get("new_confidence", belief.confidence)
     delta = new_confidence - belief.confidence
+    if abs(delta) <= 0.001:
+        log.info(f"Reflection on belief {belief_id}: no confidence change requested")
+        return produced_events
 
-    # Cap the change
-    if abs(delta) > config.max_confidence_change:
-        capped_delta = config.max_confidence_change if delta > 0 else -config.max_confidence_change
-        new_confidence = belief.confidence + capped_delta
-        log.info(f"Capped confidence change from {delta:.3f} to {capped_delta:.3f}")
-
-    # Clamp
-    new_confidence = max(0.01, min(0.99, new_confidence))
-
-    # ── Revise ──
-    reasoning = result.get("reasoning", "reflection handler")
-    belief.revise(
-        new_confidence=new_confidence,
-        reason=reasoning,
-        trigger_engram_id=trigger_engram_id,
-    )
-    store.save_belief(belief)
-
+    direction = "upward" if delta > 0 else "downward"
     log.info(
-        f"Revised belief {belief_id}: {belief.confidence - delta:.2f} -> {new_confidence:.2f} "
-        f"({'+' if delta > 0 else ''}{delta:.3f}). Reason: {reasoning}"
+        "Suppressed automatic %s reflection confidence revision for belief %s; "
+        "confidence changes require explicit receipted review/critic authority",
+        direction,
+        belief_id,
     )
 
     return produced_events

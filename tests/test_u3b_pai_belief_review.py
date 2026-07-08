@@ -72,15 +72,19 @@ def _age_belief_for_review(store: EngramStore, belief_id: str) -> None:
 
 
 def _belief_row(store: EngramStore, belief_id: str):
-    return store._get_conn().execute(
-        """
+    return (
+        store._get_conn()
+        .execute(
+            """
         SELECT confidence, needs_review, confidence_pending_review,
                read_visibility, revision_history
         FROM beliefs
         WHERE id = ?
         """,
-        (belief_id,),
-    ).fetchone()
+            (belief_id,),
+        )
+        .fetchone()
+    )
 
 
 def test_u3b_pai_belief_review_clears_pending_flags_after_confidence_change(tmp_path):
@@ -117,13 +121,14 @@ def test_u3b_pai_belief_review_clears_pending_flags_after_confidence_change(tmp_
         store.close()
 
 
-def test_u3b_pai_belief_review_clears_pending_flags_after_noop_acceptance(tmp_path):
+def test_u3b_pai_belief_review_keeps_pending_flags_after_no_bearing(tmp_path):
     store = EngramStore(tmp_path / "u3b-review.db")
     try:
         source = _source("beliefs", "David grinds his own coffee.")
         first = preview_pai_import(store, [source])
         apply_pai_import(store, first)
         target_id = first.rows[0].target_id
+        _age_belief_for_review(store, target_id)
         _add_review_engram(store)
 
         stats = run_belief_review(
@@ -134,10 +139,14 @@ def test_u3b_pai_belief_review_clears_pending_flags_after_noop_acceptance(tmp_pa
         )
 
         row = _belief_row(store, target_id)
-        assert bool(row["needs_review"]) is False
-        assert bool(row["confidence_pending_review"]) is False
+        assert bool(row["needs_review"]) is True
+        assert bool(row["confidence_pending_review"]) is True
+        assert row["read_visibility"] == "review_only"
         assert row["confidence"] == pytest.approx(0.72)
         assert stats["beliefs_unchanged"] == 1
+        assert stats["beliefs_reviewed"] == 1
+        assert stats["beliefs_resolved"] == 0
+        assert stats["beliefs_left_pending"] == 1
     finally:
         store.close()
 
@@ -146,7 +155,9 @@ def test_u3b_pai_belief_review_excludes_quarantined_imported_engrams(tmp_path):
     store = EngramStore(tmp_path / "u3b-review.db")
     try:
         belief_source = _source("beliefs", "David trusts scoped review boundaries.")
-        quarantined_text = "# Quarantine\nQuarantined PAI evidence must not review beliefs."
+        quarantined_text = (
+            "# Quarantine\nQuarantined PAI evidence must not review beliefs."
+        )
         import_preview = preview_pai_import(
             store,
             [belief_source, _source("identity_kernel", quarantined_text)],
@@ -172,13 +183,14 @@ def test_u3b_pai_belief_review_excludes_quarantined_imported_engrams(tmp_path):
         assert authorized_text in llm.user_prompts[0]
         assert quarantined_text not in llm.user_prompts[0]
         row = _belief_row(store, target_id)
-        assert bool(row["needs_review"]) is False
-        assert bool(row["confidence_pending_review"]) is False
+        assert bool(row["needs_review"]) is True
+        assert bool(row["confidence_pending_review"]) is True
+        assert row["read_visibility"] == "review_only"
     finally:
         store.close()
 
 
-def test_belief_review_leaves_audit_only_pending_beliefs_quarantined(tmp_path):
+def test_belief_review_no_bearing_leaves_pending_beliefs_quarantined(tmp_path):
     store = EngramStore(tmp_path / "u3b-review.db")
     try:
         review_belief = Belief(
@@ -212,8 +224,8 @@ def test_belief_review_leaves_audit_only_pending_beliefs_quarantined(tmp_path):
 
         review_row = _belief_row(store, review_belief.id)
         audit_row = _belief_row(store, audit_belief.id)
-        assert bool(review_row["confidence_pending_review"]) is False
-        assert review_row["read_visibility"] == "operational_context"
+        assert bool(review_row["confidence_pending_review"]) is True
+        assert review_row["read_visibility"] == "review_only"
         assert bool(audit_row["confidence_pending_review"]) is True
         assert audit_row["read_visibility"] == "audit_only"
     finally:

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from ..retrieval.reactive import ReactiveRetriever, RetrievalResult
 from ..store.sqlite_store import READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW
 from ..store.read_visibility import is_hypomnema_promotion_candidate
+from .belief_render import belief_challenge_state, belief_render_metadata
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -51,13 +52,25 @@ def build_context_packet(
     functional memory, hypomnema continuity, then Mnemos engrams and beliefs.
     ``packet_mode="operational"`` withholds review prose and returns only
     review counts/source IDs; ``packet_mode="review"`` exposes review-only
-    candidate prose with labels for explicit review. Retrieved engrams included
-    in the packet are marked as rendered citations with
-    ``fitting_eligible=False``; citation logging is record-only.
+    candidate prose with labels for explicit review. Visible beliefs include a
+    deterministic challenge line and pending-confidence flags when they are
+    operational. Retrieved engrams included in the packet are marked as
+    rendered citations with ``fitting_eligible=False``; citation logging is
+    record-only.
     """
     mode = normalize_packet_mode(packet_mode)
     identity = store.get_identity(agent_id)
-    beliefs = store.get_beliefs(agent_id, active_only=True)
+    belief_read_visibility = (
+        (READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW)
+        if mode == PACKET_MODE_REVIEW
+        else READ_VISIBILITY_OPERATIONAL
+    )
+    beliefs = store.get_beliefs(
+        agent_id,
+        active_only=True,
+        include_pending_review=True,
+        read_visibility=belief_read_visibility,
+    )
     session = store.get_memory_session(session_id) if session_id else None
     functional = store.load_functional_memories(
         query,
@@ -239,7 +252,10 @@ def format_context_packet(
     max_chars = max(800, token_budget * _CHARS_PER_TOKEN)
     if len(text) <= max_chars:
         return text
-    return text[: max_chars - 80].rstrip() + "\n\n[context packet truncated to token budget]"
+    return (
+        text[: max_chars - 80].rstrip()
+        + "\n\n[context packet truncated to token budget]"
+    )
 
 
 def _join_sections(sections: list[str]) -> str:
@@ -282,12 +298,19 @@ def _normalize_packet_visibility(
         return packet
 
     packet["functional_memory"] = [
-        item for item in packet.get("functional_memory") or []
+        item
+        for item in packet.get("functional_memory") or []
         if not item.get("needs_confirmation")
     ]
     packet["hypomnema"] = [
-        entry for entry in packet.get("hypomnema") or []
+        entry
+        for entry in packet.get("hypomnema") or []
         if not _is_hypomnema_promotion_candidate(entry)
+    ]
+    packet["beliefs"] = [
+        belief
+        for belief in packet.get("beliefs") or []
+        if _is_operational_belief_payload(belief)
     ]
 
     review = packet.get("review_queue") or {}
@@ -314,6 +337,12 @@ def _normalize_packet_visibility(
         )
     packet["review_queue"] = review_queue
     return packet
+
+
+def _is_operational_belief_payload(belief: dict[str, Any]) -> bool:
+    return (
+        belief.get("read_visibility") or READ_VISIBILITY_OPERATIONAL
+    ) == READ_VISIBILITY_OPERATIONAL
 
 
 def _format_scope(packet: dict[str, Any]) -> str:
@@ -351,9 +380,28 @@ def _format_identity(packet: dict[str, Any]) -> str:
         for belief in beliefs[:6]:
             pct = int(float(belief["confidence"]) * 100)
             lines.append(f"- {belief['content']} [{belief['domain']}, {pct}%]")
+            lines.append(f"  {_packet_belief_challenge_line(belief)}")
     if len(lines) == 1:
         return ""
     return "\n".join(lines)
+
+
+def _packet_belief_challenge_line(belief: dict[str, Any]) -> str:
+    if belief.get("challenge_line"):
+        return str(belief["challenge_line"])
+
+    state = str(belief.get("challenge_state") or "").strip()
+    if not state and (
+        belief.get("needs_review") or belief.get("confidence_pending_review")
+    ):
+        state = "under-challenge"
+    if not state:
+        state = "never-challenged"
+
+    date = belief.get("challenge_date")
+    if state == "revised-down" and date:
+        return f"challenge: {state} ({date})"
+    return f"challenge: {state}"
 
 
 def _format_functional(packet: dict[str, Any]) -> str:
@@ -505,9 +553,7 @@ def _format_review(packet: dict[str, Any]) -> str:
     candidate_count = int(
         review.get("hypomnema_promotion_candidate_count", len(candidates)) or 0
     )
-    proposal_count = int(
-        review.get("proposal_candidate_count", len(proposals)) or 0
-    )
+    proposal_count = int(review.get("proposal_candidate_count", len(proposals)) or 0)
     if not functional_count and not candidate_count and not proposal_count:
         return "### Review Queue\n- Nothing needs review right now."
     lines = ["### Review Queue"]
@@ -547,9 +593,7 @@ def _format_review(packet: dict[str, Any]) -> str:
             "review packet cannot be formatted from redacted operational references; "
             "rebuild context packet with packet_mode='review'"
         )
-    if mode == PACKET_MODE_REVIEW and any(
-        "payload" not in item for item in proposals
-    ):
+    if mode == PACKET_MODE_REVIEW and any("payload" not in item for item in proposals):
         raise ValueError(
             "review packet cannot be formatted from redacted operational proposal references; "
             "rebuild context packet with packet_mode='review'"
@@ -596,11 +640,23 @@ def _serialize_identity(identity: Any | None) -> dict[str, Any]:
 
 
 def _serialize_belief(belief: Any) -> dict[str, Any]:
+    challenge = belief_challenge_state(belief)
     return {
         "id": belief.id,
         "content": belief.content,
         "confidence": belief.confidence,
         "domain": belief.domain,
+        "challenge_state": challenge.state,
+        "challenge_date": challenge.date,
+        "challenge_line": challenge.line,
+        "needs_review": bool(getattr(belief, "needs_review", False)),
+        "confidence_pending_review": bool(
+            getattr(belief, "confidence_pending_review", False)
+        ),
+        "read_visibility": getattr(
+            belief, "read_visibility", READ_VISIBILITY_OPERATIONAL
+        ),
+        "render_metadata": belief_render_metadata(),
     }
 
 

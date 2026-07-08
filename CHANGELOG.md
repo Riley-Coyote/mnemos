@@ -48,6 +48,29 @@
 - Instrumentation producer failures are durable and DB-scoped; `mnemos stats`
   includes their aggregate count.
 
+### Belief Confidence Authority
+- Automatic encoder, LLM-classifier, consolidation, and reflection paths no
+  longer mutate belief confidence. SUPPORTS/CONTRADICTS output can still drive
+  surprise, edges, logs, and bookkeeping, but confidence changes require
+  explicit pending-review, correction, seeding, or restore authority.
+- The removed keyword-negation fallback no longer writes false dissent from
+  word overlap plus tokens such as "not", "never", or "instead".
+- Operational belief surfaces now render launch-minimal challenge state:
+  `under-challenge`, `revised-down (YYYY-MM-DD)`, or `never-challenged`.
+  Annulled false encoder contradiction events are ignored when deriving that
+  state.
+- `mnemos consolidate` and MCP/bridge consolidation summaries now report belief
+  review effects as reviewed, strengthened, weakened, and left-pending counts.
+  Non-pending operational beliefs are not confidence-mutated by automatic
+  review; NO_BEARING results leave pending beliefs pending.
+- `mnemos maintain --restore-false-contradictions --db-path <copy.db>` plans or
+  applies false encoder contradiction repair. It is dry-run by default, refuses
+  non-raising restores, computes restoration from current confidence plus false
+  downward deltas, preflights apply DBs read-only, appends annulling restore
+  revision events and `belief_confidence_restore` receipts, and refuses live
+  `~/.mnemos` databases unless `--allow-live-db` is supplied for an authorized
+  live rollout.
+
 ### Afferent Membrane v1
 - Schema v6 adds first-class `read_visibility` to `engrams`, `beliefs`,
   `hypomnema_entries`, and `functional_memories`, plus a `proposal_ledger`
@@ -207,7 +230,7 @@
 - PAI splitting enforces the Strict-B coordinate-value boundary content-wise: eigenvalue, vivezza, coordinate-target, and persona-signature tuple lines are stripped from any source kind before row hashing/indexing; surrounding prose is preserved and pure coordinate sections/blocks are omitted without renumbering later block anchors.
 - `mnemos pai-import watch-preview` / `watch-apply` / `watch-once` / `watch-plist` / `watch-doctor` / `review-gate` (U3c) — dual-life watcher and launch gates that poll source SHA-256 fingerprints and manifest metadata, replay preview/apply only for changed sources, advance state only after a successful apply, lint launchd readiness, and review dangerous diffs against required proof surfaces. Missing source sections become lifecycle actions: tombstone imported engrams, deactivate imported hypomnema, and flag imported beliefs for review. Manifest source paths are constrained to the manifest directory; `EngramStore(read_only=True)` opens the SQLite DB via `file:…?mode=ro` so previews cannot mutate state.
 - Consolidation and substrate passes now honor the new flags precisely: decay and archival skip `decay_protected` or unauthorized rows, softening and voice exemplars skip `softening_protected` / `voice_exemplar_eligible` / unauthorized rows, connection discovery and substrate handlers stay within authorized same-agent rows, and the substrate tick decay/softening SQL is now agent-scoped.
-- Imported beliefs set `needs_review` and `confidence_pending_review`; default `get_beliefs()` consumers exclude pending-confidence rows until belief review explicitly opts in and clears the pending flags.
+- Imported beliefs set `needs_review` and `confidence_pending_review`; default `get_beliefs()` consumers exclude pending-confidence rows until belief review explicitly opts in and SUPPORTS/CONTRADICTS evidence clears the pending flags.
 - `IdentityProfile` reflection excludes PAI routing tags (`pai-import`, `identity-kernel`, `david-context`, `growth-substrate`, `belief`, `hypomnema`) from persistent-concern counts so an import does not surface as "Oliver's persistent concern is being imported."
 - Enforcement links: `mnemos/importer/watcher.py`, `mnemos/importer/review_gate.py`, `tests/test_u3c_pai_watch_doctor.py`, and `tests/test_u3c_pai_review_gate.py`.
 

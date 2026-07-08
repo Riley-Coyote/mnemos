@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from ..core.belief import Belief
 from ..core.identity import AgentIdentity
 from ..retrieval.reactive import ReactiveRetriever, RetrievalResult
+from .belief_render import format_belief_summary_line
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -33,9 +34,10 @@ class PromptBuilder:
 
     The prompt builder retrieves operational-context beliefs and engrams and
     formats them into a structured text block that can be injected into the
-    agent's system prompt. Review-only and audit-only rows require explicit
-    review/admin surfaces, not this operating prompt path. Rendered memories
-    are marked as non-fitting-eligible citations for Step 1 instrumentation.
+    agent's system prompt. Beliefs render with launch-minimal challenge state.
+    Review-only and audit-only rows require explicit review/admin surfaces,
+    not this operating prompt path. Rendered memories are marked as
+    non-fitting-eligible citations for Step 1 instrumentation.
 
     Usage:
         builder = PromptBuilder(store=store)
@@ -144,8 +146,7 @@ def _format_identity(
     if beliefs:
         belief_lines = []
         for b in beliefs[:5]:
-            pct = int(b.confidence * 100)
-            belief_lines.append(f"- {b.content} [{b.domain}, {pct}%]")
+            belief_lines.append(format_belief_summary_line(b))
         if belief_lines:
             parts.append("### Beliefs\n" + "\n".join(belief_lines))
 

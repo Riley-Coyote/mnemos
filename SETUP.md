@@ -227,6 +227,19 @@ This command refuses live `~/.mnemos` databases unless `--allow-live-db` is
 supplied for an authorized live rollout. It records registry rows only; it does
 not enforce policy or change retrieval behavior.
 
+For belief false-contradiction restoration, use the explicit maintenance
+surface against a representative DB copy first:
+
+```bash
+mnemos maintain --restore-false-contradictions --db-path ./copy.db
+mnemos maintain --restore-false-contradictions --db-path ./copy.db --apply
+```
+
+The restore job is dry-run by default, preflights apply targets read-only,
+appends annulling restore events and runtime receipts on apply, and refuses
+live `~/.mnemos` databases unless `--allow-live-db` is supplied for an
+authorized live rollout.
+
 OpenClaw, crons, Forge, substrate ticks, gated inner-life/soak validation, and
 full agent workspaces are advanced integrations. They are no longer part of the
 baseline setup. The inner-life/soak path is documented in

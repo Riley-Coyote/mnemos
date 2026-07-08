@@ -58,6 +58,9 @@ At the end of a work block:
 - Treat review-only items as pending decisions. Operational packets may show
   counts and source IDs, but the prose should only be inspected through an
   explicit review surface.
+- Treat belief challenge lines as review state. `under-challenge` means pending
+  review, not a settled contradiction; confidence changes require explicit
+  review/correction authority.
 
 ## Visual Checks
 
@@ -67,6 +70,7 @@ Use `mnemos_context(include_graph=true)` to show the current architecture:
 - hypomnema scope and promotion candidates
 - Mnemos graph size
 - identity signals and beliefs
+- belief challenge state, without review-only prose
 - review queue counts/source IDs, with prose withheld from operational views
 
 The graph is returned as an SVG artifact plus structured data for clients that

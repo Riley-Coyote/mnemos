@@ -51,6 +51,11 @@ RECEIPT_KINDS: dict[str, ReceiptKindSpec] = {
     "stamp-translation": ReceiptKindSpec(
         "stamp-translation", "future-stamps", "schemas/receipts/stamp-translation"
     ),
+    "belief_confidence_restore": ReceiptKindSpec(
+        "belief_confidence_restore",
+        "belief-maintenance",
+        "schemas/receipts/belief-confidence-restore",
+    ),
 }
 
 

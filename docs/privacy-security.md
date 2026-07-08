@@ -28,7 +28,8 @@ Simple mode tools have these local side effects:
 - `mnemos_recall` can reconsolidate access metadata and write record-only
   retrieval events / retrieval-why receipts
 - `mnemos_correct` can archive, revise, or supersede memory
-- `mnemos_maintain` runs consolidation and bookkeeping
+- `mnemos_maintain` runs consolidation and bookkeeping; automatic evidence
+  paths do not mutate belief confidence
 - `mnemos_introduce` writes the agent's self-declared model/name for affinity
   checks
 - `mnemos_health` reports only; opening an older store may still run schema
@@ -117,6 +118,35 @@ context packet / prompt / CLI search citations are marked
 `mnemos drift-eval --db-path <copy.db>` and
 `benchmarks/retrieval_benchmark.py --record-db <copy.db>` require explicit DB
 paths for writes and refuse live `~/.mnemos` databases unless
+`--allow-live-db` is supplied for an authorized live rollout.
+
+## Belief Confidence Authority
+
+Belief confidence is no longer a side effect of automatic interpretation.
+Encoder, LLM-classifier, consolidation, and substrate reflection paths can
+record surprise, contradiction edges, logs, citations, and receipts, but they do
+not raise or lower confidence for ordinary operational beliefs.
+
+Confidence mutation is confined to explicit authority paths:
+
+- pending belief review (`needs_review` or `confidence_pending_review`) when
+  the review evidence SUPPORTS or CONTRADICTS the belief
+- explicit correction or seeding flows
+- operator restoration of false encoder contradiction events
+
+Operational packets, prompt-builder output, bridge belief listings, MCP
+`mnemos_beliefs`, and visual snapshots render a challenge line for each visible
+belief: `under-challenge`, `revised-down (YYYY-MM-DD)`, or
+`never-challenged`. The line is derived from existing belief JSON. Restore
+events that annul false encoder contradiction revisions remove those revisions
+from challenge-state derivation without deleting history.
+
+`mnemos maintain --restore-false-contradictions --db-path <copy.db>` is the
+operator repair path for the removed keyword-negation false-dissent writer. It
+is dry-run by default, computes restoration from the current confidence and
+false downward deltas, refuses non-raising restores, and appends annulling
+revision events plus `belief_confidence_restore` runtime receipts on apply. It
+preflights apply targets read-only and refuses live `~/.mnemos` databases unless
 `--allow-live-db` is supplied for an authorized live rollout.
 
 ## Afferent Membrane Read Visibility
@@ -292,7 +322,8 @@ Safety boundaries enforced by the importer:
   cannot silently rewrite imported identity material.
 - Imported beliefs carry `confidence_pending_review` and `review_only`
   read visibility, so they are excluded from default belief consumers until
-  belief review clears the flag and restores `operational_context`.
+  explicit belief review with SUPPORTS/CONTRADICTS evidence clears the flag and
+  restores `operational_context`. NO_BEARING review output leaves them pending.
 - Enforcement links: `mnemos/importer/operator.py`, `mnemos/importer/watcher.py`,
   `mnemos/importer/review_gate.py`, `tests/test_u3b_pai_operator.py`,
   `tests/test_u3c_pai_watch_doctor.py`, and

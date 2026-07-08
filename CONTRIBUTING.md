@@ -44,9 +44,10 @@ Mnemos is organized into these layers:
 - `encoding/` — Memory formation pipeline
 - `retrieval/` — Spreading activation retrieval
 - `consolidation/` — Offline processing (decay, softening, belief review, reflection)
+- `maintenance/` — Explicit operator repair jobs and guarded restore tools
 - `substrate/` — Cognitive tick loop + handlers (dreaming, wandering, etc.)
 - `indexer/` — Session transcript → memory extraction
-- `interface/` — Prompt building, export, session tracking
+- `interface/` — Prompt building, belief rendering, export, session tracking
 - `multiagent/` — Shared pools, relationships, federation stubs
 - `advanced/` — Experimental cognitive modules (opt-in)
 

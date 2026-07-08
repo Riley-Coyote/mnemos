@@ -56,6 +56,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
   - `mnemos/instrumentation/drift_eval.py`
   - `mnemos/instrumentation/receipt_kinds.py`
   - `mnemos/instrumentation/receipts.py`
+  - `mnemos/interface/belief_render.py`
   - `mnemos/inner_life/__init__.py`
   - `mnemos/inner_life/activity_gate.py`
   - `mnemos/inner_life/emotional_driver.py`
@@ -69,6 +70,8 @@ Use this checklist before publishing Mnemos or opening a release PR.
   - `mnemos/inner_life/turn_finalizer.py`
   - `mnemos/modulation/__init__.py`
   - `mnemos/modulation/experience_tick.py`
+  - `mnemos/maintenance/__init__.py`
+  - `mnemos/maintenance/belief_restore.py`
   - `mnemos/soak/__init__.py`
   - `mnemos/soak/preflight.py`
   - `mnemos/soak/tick.py`
@@ -113,6 +116,19 @@ Use this checklist before publishing Mnemos or opening a release PR.
   `benchmarks/retrieval_benchmark.py --record-db <copy.db>` refuse live
   `~/.mnemos` databases unless `--allow-live-db` is supplied for an authorized
   live rollout.
+- Automatic encoder, LLM-classifier, consolidation, and reflection paths must
+  not mutate belief confidence. They may create surprise, contradiction edges,
+  logs, citations, and receipts only; confidence mutation is limited to
+  explicit pending review, correction, seeding, or restore authority.
+- Operational belief surfaces must render challenge state without exposing
+  review-only prose: `under-challenge` for pending review,
+  `revised-down (YYYY-MM-DD)` for the latest non-annulled downward revision,
+  and `never-challenged` otherwise.
+- `mnemos maintain --restore-false-contradictions --db-path <copy.db>` must be
+  dry-run by default, refuse non-raising restores, preflight apply targets
+  read-only, append annulling restore events plus `belief_confidence_restore`
+  receipts, and refuse live `~/.mnemos` databases unless `--allow-live-db` is
+  supplied for an authorized live rollout.
 - Direct-ID advanced tools (`mnemos_inspect`, `mnemos_forget`, hypomnema
   revise/supersede/promote) and substrate handlers
   (insight/reflection/surprise/wandering/dreaming/initiation) refuse to mutate
@@ -263,9 +279,9 @@ Use this checklist before publishing Mnemos or opening a release PR.
   generated `ProgramArguments`. Loading the plist with `launchctl` remains
   an explicit operator action; `watch-plist` only writes the file.
 - Default `get_beliefs()` consumers exclude `confidence_pending_review` rows;
-  belief review is the explicit opt-in path that can clear pending review,
-  including no-op acceptance, and promote approved rows back to
-  `operational_context` read visibility.
+  belief review is the explicit opt-in path that can clear pending review only
+  when SUPPORTS/CONTRADICTS evidence carries review authority. NO_BEARING
+  leaves the belief pending instead of silently accepting it.
 - Error messages that mention recovery actions are probed against actual
   behavior. Recovery steps that would destroy operator hand-edits or in-flight
   state must be removed from user-facing text, even when the underlying code
@@ -279,7 +295,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
 
 ```bash
 uv run --extra dev --extra mcp pytest -q
-uv run --extra mcp python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/importer/__init__.py mnemos/importer/pai.py mnemos/importer/operator.py mnemos/importer/review_gate.py mnemos/importer/watcher.py mnemos/inner_life/*.py mnemos/modulation/*.py mnemos/soak/*.py
+uv run --extra mcp python -m py_compile mnemos/simple_runtime.py mnemos/simple_mcp.py mnemos/mcp_server.py mnemos/cli.py mnemos/importer/__init__.py mnemos/importer/pai.py mnemos/importer/operator.py mnemos/importer/review_gate.py mnemos/importer/watcher.py mnemos/interface/belief_render.py mnemos/maintenance/*.py mnemos/inner_life/*.py mnemos/modulation/*.py mnemos/soak/*.py
 uv build
 uvx twine check dist/*
 git diff --check

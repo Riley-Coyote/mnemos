@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 from ..core.engram import Engram
 from ..core.emotional_state import EmotionalState
 from ..core.types import ConnectionRelation
+from ..instrumentation.receipts import IMMEDIACY_REMEMBERED
 from .reconsolidation import reconsolidate
 
 if TYPE_CHECKING:
@@ -33,12 +34,18 @@ if TYPE_CHECKING:
 
 @dataclass
 class RetrievalResult:
-    """A scored retrieval result wrapping an engram."""
+    """A scored retrieval result with record-only instrumentation metadata.
+
+    ``retrieval_event_id`` and ``retrieval_why`` explain why the engram
+    surfaced. They are evidence rows for later evaluation, not ranking inputs.
+    """
 
     engram: Engram
     score: float = 0.0
     score_breakdown: dict[str, float] = field(default_factory=dict)
     retrieval_path: str = "fts"
+    retrieval_event_id: str | None = None
+    retrieval_why: dict[str, Any] = field(default_factory=dict)
 
 
 # Activation weights by connection relation type
@@ -107,16 +114,30 @@ class ReactiveRetriever:
         2. Spreading activation through visible targets
         3. Emotional bias (multiplicative boost for congruent tags)
         4. Filter by threshold + confidence floor
-        5. Reconsolidate returned engrams
+        5. Record retrieval event/why receipts
+        6. Reconsolidate returned engrams
 
         ``read_visibility`` defaults to ``operational_context``. Pass
         ``review_only`` only for explicit review surfaces; pass ``None`` only
         for audit/admin scans that intentionally include all visibilities.
+        Step 1 instrumentation is record-only: event and receipt writes do not
+        feed ranking or visibility decisions.
 
         Returns:
             List of RetrievalResult sorted by activation level (descending).
         """
+        runtime = "mnemos.retrieval.reactive"
         if not cue or not cue.strip():
+            self._record_retrieval_event(
+                actor=agent_id,
+                runtime=runtime,
+                agent_id=agent_id,
+                cue=cue,
+                read_visibility=read_visibility,
+                max_results=max_results,
+                surfaced_engram_ids=[],
+                why={"status": "empty_cue"},
+            )
             return []
 
         # 1. SEED: Find entry points via FTS + embeddings
@@ -172,6 +193,20 @@ class ReactiveRetriever:
                 pass  # Embeddings are optional — FTS still works
 
         if not seeds:
+            self._record_retrieval_event(
+                actor=agent_id,
+                runtime=runtime,
+                agent_id=agent_id,
+                cue=cue,
+                read_visibility=read_visibility,
+                max_results=max_results,
+                surfaced_engram_ids=[],
+                why={
+                    "status": "no_seeds",
+                    "fts_query": fts_query,
+                    "confidence_floor": self._confidence_floor,
+                },
+            )
             return []
 
         # 2. PROPAGATE: Spreading activation through connection graph
@@ -278,6 +313,42 @@ class ReactiveRetriever:
         results.sort(key=lambda r: r.score, reverse=True)
         top_results = results[:max_results]
 
+        event = self._record_retrieval_event(
+            actor=agent_id,
+            runtime=runtime,
+            agent_id=agent_id,
+            cue=cue,
+            read_visibility=read_visibility,
+            max_results=max_results,
+            surfaced_engram_ids=[r.engram.id for r in top_results],
+            why={
+                "status": "surfaced" if top_results else "no_results_after_filter",
+                "fts_query": fts_query,
+                "seed_count": len(seeds),
+                "visible_candidate_count": len(visible_engrams),
+                "hidden_candidate_count": len(hidden_engram_ids),
+                "activation_threshold": self._threshold,
+                "confidence_floor": self._confidence_floor,
+            },
+        )
+        event_id = event["event_id"] if event else None
+        for result in top_results:
+            result.retrieval_event_id = event_id
+            result.retrieval_why = {
+                "event_id": event_id,
+                "path": result.retrieval_path,
+                "score": result.score,
+                "score_breakdown": result.score_breakdown,
+                "read_visibility": read_visibility,
+                "confidence": result.engram.source.confidence,
+                "is_seed": result.engram.id in seeds,
+            }
+            self._append_retrieval_why_receipt(
+                actor=agent_id,
+                runtime=runtime,
+                result=result,
+            )
+
         # 5. RECONSOLIDATE returned engrams
         if self._reconsolidation_enabled and top_results:
             co_retrieved_ids = [r.engram.id for r in top_results]
@@ -296,6 +367,66 @@ class ReactiveRetriever:
                 )
 
         return top_results
+
+    def _record_retrieval_event(
+        self,
+        *,
+        actor: str,
+        runtime: str,
+        agent_id: str,
+        cue: str,
+        read_visibility: str | None,
+        max_results: int,
+        surfaced_engram_ids: list[str],
+        why: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        try:
+            return self._store.record_retrieval_event(
+                actor=actor,
+                runtime=runtime,
+                session_id="",
+                agent_id=agent_id,
+                cue=cue,
+                read_visibility=read_visibility,
+                max_results=max_results,
+                surfaced_engram_ids=surfaced_engram_ids,
+                why=why,
+            )
+        except Exception:
+            self._record_instrumentation_failure("retrieval_events")
+            return None
+
+    def _append_retrieval_why_receipt(
+        self,
+        *,
+        actor: str,
+        runtime: str,
+        result: RetrievalResult,
+    ) -> None:
+        if not result.retrieval_event_id:
+            return
+        try:
+            self._store.append_receipt(
+                kind="retrieval-why",
+                actor=actor,
+                runtime=runtime,
+                session_id="",
+                engram_refs=[result.engram.id],
+                immediacy=IMMEDIACY_REMEMBERED,
+                payload={
+                    "event_id": result.retrieval_event_id,
+                    "engram_id": result.engram.id,
+                    "why": result.retrieval_why,
+                },
+            )
+        except Exception:
+            self._record_instrumentation_failure("runtime_receipts")
+
+    def _record_instrumentation_failure(self, producer: str) -> None:
+        try:
+            self._store.record_instrumentation_failure(producer)
+        except Exception:
+            pass
 
     def _load_visible_engram(
         self,

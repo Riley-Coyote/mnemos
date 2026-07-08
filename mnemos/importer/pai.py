@@ -47,6 +47,7 @@ from typing import Callable, Iterable
 from ..core.belief import Belief
 from ..core.engram import Engram, MemorySource
 from ..core.types import ConfidenceSource, EngramKind, SourceAuthority, SourceType
+from ..instrumentation.receipts import ORIGIN_IMPORT
 from ..store.migrations import insert_pai_import_event, upsert_pai_import_row
 from ..store.read_visibility import READ_VISIBILITY_AUDIT, READ_VISIBILITY_REVIEW
 from ..store.sqlite_store import EngramStore
@@ -692,6 +693,7 @@ def _row_to_engram(row: PaiImportRow) -> Engram:
             authority=SourceAuthority.IMPORTED,
         ),
         owner_agent_id=row.agent_id,
+        origin_stamp=ORIGIN_IMPORT,
     )
 
 

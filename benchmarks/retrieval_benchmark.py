@@ -27,6 +27,7 @@ checked-in run of exactly this script.
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import statistics
 import sys
@@ -37,6 +38,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mnemos.core.types import ConnectionRelation  # noqa: E402
 from mnemos.encoding.encoder import Encoder  # noqa: E402
+from mnemos.instrumentation.drift_eval import (  # noqa: E402
+    record_instrument_registry,
+    record_retrieval_benchmark_metrics,
+)
+from mnemos.importer.operator import _db_path_requires_live_override  # noqa: E402
 from mnemos.retrieval.reactive import ReactiveRetriever  # noqa: E402
 from mnemos.store.sqlite_store import EngramStore  # noqa: E402
 
@@ -322,6 +328,37 @@ def evaluate(store, agent, ground_truth, queries, *, depth, decay, threshold):
     return {m: statistics.mean(v) for m, v in metrics.items()}
 
 
+def default_grid_metrics() -> dict[str, float]:
+    """Compute the shipped default retrieval metrics for durable recording."""
+
+    rng = random.Random(SEED)
+    with tempfile.TemporaryDirectory() as tmp:
+        stores = {}
+        for agent, topics in LIVES.items():
+            store, gt, queries = build_life(
+                Path(tmp) / f"{agent}.db", agent, topics, rng
+            )
+            stores[agent] = (store, gt, queries)
+        agg = {f"{m}@{k}": [] for m in ("p", "r") for k in K_VALUES}
+        try:
+            for agent, (store, gt, queries) in stores.items():
+                res = evaluate(
+                    store,
+                    agent,
+                    gt,
+                    queries,
+                    depth=3,
+                    decay=0.5,
+                    threshold=0.1,
+                )
+                for key, val in res.items():
+                    agg[key].append(val)
+            return {key: statistics.mean(values) for key, values in agg.items()}
+        finally:
+            for store, _, _ in stores.values():
+                store.close()
+
+
 def run_grid() -> list[str]:
     lines = [
         "## Parameter grid (reconsolidation off, deterministic)",
@@ -469,7 +506,33 @@ def main() -> int:
     parser.add_argument(
         "--drift", action="store_true", help="run the drift simulation only"
     )
+    parser.add_argument(
+        "--record-db",
+        default=None,
+        help="Optional SQLite DB path to record Step 1 drift-eval rows",
+    )
+    parser.add_argument(
+        "--record-json",
+        action="store_true",
+        help="Print recorded drift-eval row as JSON when --record-db is used",
+    )
+    parser.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow --record-db to write ~/.mnemos databases with explicit authorization",
+    )
     args = parser.parse_args()
+    if (
+        args.record_db
+        and _db_path_requires_live_override(args.record_db)
+        and not args.allow_live_db
+    ):
+        print(
+            "retrieval_benchmark.py --record-db refuses live Mnemos databases "
+            "without --allow-live-db and explicit David authorization",
+            file=sys.stderr,
+        )
+        return 1
     run_both = not (args.grid or args.drift)
 
     print("# Mnemos retrieval benchmark\n")
@@ -479,6 +542,24 @@ def main() -> int:
     if args.drift or run_both:
         print("\n".join(run_drift()))
         print()
+    if args.record_db:
+        store = EngramStore(args.record_db)
+        try:
+            record_instrument_registry(store)
+            run = record_retrieval_benchmark_metrics(
+                store,
+                metrics=default_grid_metrics(),
+                metadata={
+                    "seed": SEED,
+                    "depth": 3,
+                    "decay": 0.5,
+                    "threshold": 0.1,
+                },
+            )
+            if args.record_json:
+                print(json.dumps(run, indent=2, sort_keys=True))
+        finally:
+            store.close()
     return 0
 
 

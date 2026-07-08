@@ -1848,8 +1848,8 @@ def mnemos_hypomnema_promote(
     Promotion is explicit and dry-run by default because hypomnema is scoped
     continuity. The promoted engram is lightly de-identified and tagged as
     hypomnema/promoted/continuity. Promotion stamps observed source authority;
-    hypomnema itself does not mint user_stated authority. Default scope args
-    inherit the server's configured scope.
+    hypomnema itself does not mint user_stated authority or a user-witnessed
+    origin stamp. Default scope args inherit the server's configured scope.
     """
     gate = _setup_gate()
     if gate:

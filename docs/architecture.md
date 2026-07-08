@@ -55,6 +55,15 @@ and `schema_migrations` row in one transaction.
 Schema v11 creates `migration_receipts`, the applied-migration receipts journal.
 `schema_migrations` remains the canonical version/checksum record.
 
+Schema v12 adds record-only Step 1 instrumentation journals. Runtime receipts
+(`runtime_receipts`) are separate from migration receipts and validate against a
+checked-in receipt-kind manifest before durable write. Retrieval calls append
+`retrieval_events`, rendered output surfaces append `retrieval_citations`, and
+drift-eval registry/metric rows live in `drift_eval_runs` and
+`drift_eval_observations`. `instrumentation_failures` stores durable
+per-producer failure counts. Existing engrams keep `origin_stamp=NULL`; NULL is
+pre-instrumentation absence of measurement, not a measured provenance value.
+
 ### Engrams
 
 The fundamental unit of memory. Each engram has:
@@ -71,6 +80,12 @@ The fundamental unit of memory. Each engram has:
   Advanced MCP capture tools (`mnemos_remember`, `mnemos_ingest`) also require
   callers to declare `kind` explicitly as one of the canonical engram kinds; no
   default kind is inferred at the capture surface.
+- **Origin stamp**: Step 1 provenance measurement for new engram writes when
+  the producer knows the origin. The closed vocabulary is `user-witnessed`,
+  `inference`, `retrieval`, and `import`; current write paths stamp
+  user-witnessed, inference, or import. It is separate from source authority.
+  Legacy or intentionally unstamped rows use `NULL`, meaning no measurement was
+  present.
 - **State lifecycle**: Active → consolidating → dormant → archived
 - **Resolution**: High → low (details fade through softening, like human memory)
 - **Full version history**: Every reconsolidation is tracked
@@ -176,9 +191,17 @@ versions with an `IN` filter rather than leaking ungated history. Explicit
 review callers can request `review_only`; audit-only rows stay out of normal
 review flows.
 
-Every retrieval updates the returned visible memory — access count, strength,
-new connections. Operational paths return operational rows. Memories are living
-traces.
+Step 1 instrumentation records the retrieval path without changing ranking:
+each `ReactiveRetriever.retrieve()` call writes one retrieval event, surfaced
+results receive stable `retrieval_why` metadata, and surfaced results also emit
+`retrieval-why` receipts with immediacy in the receipt envelope. Context packet,
+prompt-builder, and CLI search surfaces mark citations only when a surfaced
+memory is actually rendered or printed; those citation rows carry metadata tiers
+and are not fitting-eligible.
+
+With reconsolidation enabled, successful retrieval updates the returned visible
+memory: access count, strength, and new connections. Operational paths return
+operational rows. Memories are living traces.
 
 ### Operational Context And Review
 

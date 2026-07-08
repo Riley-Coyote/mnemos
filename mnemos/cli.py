@@ -9,6 +9,7 @@ Commands:
     mnemos inspect --audit ID    Inspect an audit-only engram explicitly
     mnemos inspect --admin ID    Inspect an engram regardless of read visibility
     mnemos stats                 Show memory statistics
+    mnemos drift-eval            Register Step 1 drift-eval instruments
     mnemos snapshot              Print an inline Mermaid memory snapshot
     mnemos search QUERY          Search memories
     mnemos consolidate [--deep]  Run a consolidation cycle
@@ -146,6 +147,22 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── stats ──
     sub.add_parser("stats", help="Show memory statistics")
+
+    # ── drift-eval ──
+    p_drift_eval = sub.add_parser(
+        "drift-eval", help="Register record-only drift-eval instruments"
+    )
+    p_drift_eval.add_argument(
+        "--db-path", default=argparse.SUPPRESS, help="Representative SQLite DB path"
+    )
+    p_drift_eval.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="Allow ~/.mnemos databases; requires explicit David authorization in live use",
+    )
+    p_drift_eval.add_argument(
+        "--json", action="store_true", help="Emit machine-readable rows"
+    )
 
     # ── snapshot ──
     p_snapshot = sub.add_parser(
@@ -1029,6 +1046,7 @@ def main(argv: list[str] | None = None) -> int:
         "serve": _cmd_serve,
         "inspect": _cmd_inspect,
         "stats": _cmd_stats,
+        "drift-eval": _cmd_drift_eval,
         "snapshot": _cmd_snapshot,
         "search": _cmd_search,
         "consolidate": _cmd_consolidate,
@@ -1219,6 +1237,7 @@ def _cmd_stats(args: argparse.Namespace) -> int:
     print(f"Active sessions:     {stats.get('functional_sessions_active', 0)}")
     print(f"Hypomnema active:    {stats.get('hypomnema_active', 0)}")
     print(f"Reconsolidations:    {stats.get('reconsolidation_events', 0)}")
+    print(f"Instrumentation failures: {stats.get('instrumentation_failures', 0)}")
     if "accessibility_avg" in stats:
         print(f"Avg accessibility:   {stats['accessibility_avg']:.3f}")
         print(f"Min accessibility:   {stats['accessibility_min']:.3f}")
@@ -1272,7 +1291,59 @@ def _cmd_search(args: argparse.Namespace) -> int:
         print(
             f"         id={r.engram.id[:25]}... kind={r.engram.kind} path={r.retrieval_path}"
         )
+        try:
+            store.mark_retrieval_citation(
+                event_id=r.retrieval_event_id,
+                engram_id=r.engram.id,
+                surface="cli_search",
+                metadata={
+                    "query": args.query,
+                    "agent_id": _resolve_agent_id(args),
+                    "tier": "operator-visible",
+                    "fitting_eligible": False,
+                },
+            )
+        except Exception:
+            try:
+                store.record_instrumentation_failure("retrieval_citations")
+            except Exception:
+                pass
 
+    store.close()
+    return 0
+
+
+def _cmd_drift_eval(args: argparse.Namespace) -> int:
+    """Register record-only drift-eval instruments."""
+
+    db_path = getattr(args, "db_path", None)
+    if not db_path:
+        print(
+            "mnemos drift-eval requires --db-path; use a representative DB copy",
+            file=sys.stderr,
+        )
+        return 1
+    from .importer.operator import _db_path_requires_live_override
+
+    if _db_path_requires_live_override(db_path) and not args.allow_live_db:
+        print(
+            "mnemos drift-eval refuses live Mnemos databases without "
+            "--allow-live-db and explicit David authorization",
+            file=sys.stderr,
+        )
+        return 1
+    store = _get_store(args)
+    from .instrumentation.drift_eval import record_instrument_registry
+
+    rows = record_instrument_registry(store)
+    if getattr(args, "json", False):
+        print(json.dumps(rows, indent=2, sort_keys=True))
+    else:
+        active = sum(1 for row in rows if row["active"])
+        inactive = len(rows) - active
+        print("Step 1 drift-eval instruments registered.")
+        print(f"Active:   {active}")
+        print(f"Inactive: {inactive}")
     store.close()
     return 0
 

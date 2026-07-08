@@ -52,6 +52,10 @@ Use this checklist before publishing Mnemos or opening a release PR.
   - `mnemos/importer/operator.py`
   - `mnemos/importer/review_gate.py`
   - `mnemos/importer/watcher.py`
+  - `mnemos/instrumentation/__init__.py`
+  - `mnemos/instrumentation/drift_eval.py`
+  - `mnemos/instrumentation/receipt_kinds.py`
+  - `mnemos/instrumentation/receipts.py`
   - `mnemos/inner_life/__init__.py`
   - `mnemos/inner_life/activity_gate.py`
   - `mnemos/inner_life/emotional_driver.py`
@@ -68,6 +72,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
   - `mnemos/soak/__init__.py`
   - `mnemos/soak/preflight.py`
   - `mnemos/soak/tick.py`
+  - `mnemos/store/migrations/0012_step1_instrumentation.sql`
   - `templates/SOUL.md`
   - `templates/IDENTITY.md`
 - Package metadata passes `twine check`.
@@ -97,6 +102,17 @@ Use this checklist before publishing Mnemos or opening a release PR.
   caller to declare canonical `kind` exactly (`episodic`, `semantic`,
   `procedural`, or `prospective`) instead of inheriting any implicit memory
   kind.
+- Step 1 `origin_stamp` remains a separate measurement axis: known new origins
+  are stamped, legacy `NULL` rows mean pre-instrumentation absence of
+  measurement, and source authority remains the operational trust boundary.
+- Step 1 instrumentation tables are record-only. Retrieval events,
+  retrieval-why receipts, citation rows, drift-eval rows, and producer failure
+  counts must not feed ranking, read visibility, reconsolidation policy, affect
+  computation, or identity decisions in this release.
+- `mnemos drift-eval --db-path <copy.db>` and
+  `benchmarks/retrieval_benchmark.py --record-db <copy.db>` refuse live
+  `~/.mnemos` databases unless `--allow-live-db` is supplied for an authorized
+  live rollout.
 - Direct-ID advanced tools (`mnemos_inspect`, `mnemos_forget`, hypomnema
   revise/supersede/promote) and substrate handlers
   (insight/reflection/surprise/wandering/dreaming/initiation) refuse to mutate

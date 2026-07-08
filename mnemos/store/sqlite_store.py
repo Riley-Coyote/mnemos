@@ -27,6 +27,10 @@ from ..core.engram import Connection, Engram, VersionRef
 from ..core.belief import Belief
 from ..core.emotional_state import EmotionalState
 from ..core.identity import AgentIdentity
+from ..instrumentation.receipts import (
+    validate_producer_name,
+    validate_receipt_envelope,
+)
 from .migrations import (
     apply_dynamic_modulation_storage_migration,
     apply_u3a_schema_migration,
@@ -210,6 +214,7 @@ _ENGRAM_COLUMNS = frozenset(
         "consolidation_authorized",
         "decay_protected",
         "read_visibility",
+        "origin_stamp",
     }
 )
 
@@ -1260,6 +1265,8 @@ class EngramStore:
             (
                 f"{k}={_strictest_read_visibility_sql('engrams')}"
                 if k == "read_visibility"
+                else f"{k}=COALESCE(excluded.{k}, engrams.{k})"
+                if k == "origin_stamp"
                 else f"{k}=excluded.{k}"
             )
             for k in safe_data
@@ -1286,6 +1293,375 @@ class EngramStore:
         # Save versions
         for version in engram.versions:
             self._save_version_no_commit(conn, engram.id, version)
+
+    # ── Step 1 instrumentation journals ──
+
+    def append_receipt(
+        self,
+        *,
+        kind: str,
+        actor: str,
+        runtime: str,
+        session_id: str = "",
+        engram_refs: list[str] | tuple[str, ...] | None = None,
+        immediacy: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Append one validated runtime receipt.
+
+        There is intentionally no update/delete companion API. Receipt mutation
+        would erase the evidence trail Step 1 exists to create.
+        """
+
+        envelope = validate_receipt_envelope(
+            kind=kind,
+            actor=actor,
+            runtime=runtime,
+            session_id=session_id,
+            engram_refs=engram_refs,
+            immediacy=immediacy,
+            payload=payload,
+        )
+        receipt_id = f"receipt_{_new_id()}"
+        ts = _utc_now()
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO runtime_receipts (
+                receipt_id, ts, actor, runtime, session_id, engram_refs_json,
+                immediacy, kind, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                receipt_id,
+                ts,
+                envelope["actor"],
+                envelope["runtime"],
+                envelope["session_id"],
+                _encode_json(envelope["engram_refs"]),
+                envelope["immediacy"],
+                envelope["kind"],
+                _encode_json(envelope["payload"]),
+            ),
+        )
+        conn.commit()
+        return {
+            "receipt_id": receipt_id,
+            "ts": ts,
+            **envelope,
+        }
+
+    def get_runtime_receipts(
+        self,
+        *,
+        kind: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Read recent runtime receipts for tests/reports."""
+
+        conn = self._get_conn()
+        params: list[Any] = []
+        query = "SELECT * FROM runtime_receipts"
+        if kind is not None:
+            query += " WHERE kind = ?"
+            params.append(kind)
+        query += " ORDER BY ts DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        receipts: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row)
+            record["engram_refs"] = _decode_json(
+                record.pop("engram_refs_json", "[]"), []
+            )
+            record["payload"] = _decode_json(record.pop("payload_json", "{}"), {})
+            receipts.append(record)
+        return receipts
+
+    def record_instrumentation_failure(self, producer: str) -> int:
+        """Record and return the durable failure count for this store."""
+
+        clean = validate_producer_name(producer)
+        ts = _utc_now()
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO instrumentation_failures (
+                producer, failure_count, first_seen_at, last_seen_at
+            ) VALUES (?, 1, ?, ?)
+            ON CONFLICT(producer) DO UPDATE SET
+                failure_count = instrumentation_failures.failure_count + 1,
+                last_seen_at = excluded.last_seen_at
+            """,
+            (clean, ts, ts),
+        )
+        row = conn.execute(
+            "SELECT failure_count FROM instrumentation_failures WHERE producer = ?",
+            (clean,),
+        ).fetchone()
+        conn.commit()
+        return int(row["failure_count"])
+
+    def instrumentation_failure_counts(self) -> dict[str, int]:
+        """Return durable instrumentation failure counts for this store."""
+
+        rows = self._get_conn().execute(
+            """
+            SELECT producer, failure_count
+            FROM instrumentation_failures
+            ORDER BY producer
+            """
+        ).fetchall()
+        return {row["producer"]: int(row["failure_count"]) for row in rows}
+
+    def record_retrieval_event(
+        self,
+        *,
+        actor: str,
+        runtime: str,
+        session_id: str = "",
+        agent_id: str,
+        cue: str,
+        read_visibility: str | None,
+        max_results: int,
+        surfaced_engram_ids: list[str] | tuple[str, ...],
+        why: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Append one retrieval event row."""
+
+        event_id = f"retrieval_{_new_id()}"
+        ts = _utc_now()
+        refs = [str(eid) for eid in surfaced_engram_ids]
+        failures = self.instrumentation_failure_counts()
+        failure_count = sum(failures.values())
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO retrieval_events (
+                event_id, ts, actor, runtime, session_id, agent_id, cue,
+                read_visibility, max_results, surfaced_engram_ids_json,
+                result_count, why_json, failure_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                ts,
+                actor,
+                runtime,
+                session_id,
+                agent_id,
+                cue,
+                read_visibility,
+                int(max_results),
+                _encode_json(refs),
+                len(refs),
+                _encode_json(why),
+                failure_count,
+            ),
+        )
+        conn.commit()
+        return {
+            "event_id": event_id,
+            "ts": ts,
+            "actor": actor,
+            "runtime": runtime,
+            "session_id": session_id,
+            "agent_id": agent_id,
+            "cue": cue,
+            "read_visibility": read_visibility,
+            "max_results": int(max_results),
+            "surfaced_engram_ids": refs,
+            "result_count": len(refs),
+            "why": why,
+            "failure_count": failure_count,
+        }
+
+    def get_retrieval_events(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Read recent retrieval events for tests/reports."""
+
+        rows = self._get_conn().execute(
+            "SELECT * FROM retrieval_events ORDER BY ts DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row)
+            record["surfaced_engram_ids"] = _decode_json(
+                record.pop("surfaced_engram_ids_json", "[]"), []
+            )
+            record["why"] = _decode_json(record.pop("why_json", "{}"), {})
+            events.append(record)
+        return events
+
+    def mark_retrieval_citation(
+        self,
+        *,
+        event_id: str | None,
+        engram_id: str,
+        surface: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Record that a retrieved memory was actually cited by a surface."""
+
+        if not event_id:
+            return None
+        citation_id = f"citation_{_new_id()}"
+        cited_at = _utc_now()
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO retrieval_citations (
+                citation_id, event_id, engram_id, surface, cited_at, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                citation_id,
+                str(event_id),
+                str(engram_id),
+                str(surface),
+                cited_at,
+                _encode_json(metadata or {}),
+            ),
+        )
+        conn.commit()
+        return {
+            "citation_id": citation_id,
+            "event_id": str(event_id),
+            "engram_id": str(engram_id),
+            "surface": str(surface),
+            "cited_at": cited_at,
+            "metadata": metadata or {},
+        }
+
+    def get_retrieval_citations(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Read recent retrieval citations for tests/reports."""
+
+        rows = self._get_conn().execute(
+            "SELECT * FROM retrieval_citations ORDER BY cited_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        citations: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row)
+            record["metadata"] = _decode_json(record.pop("metadata_json", "{}"), {})
+            citations.append(record)
+        return citations
+
+    def record_drift_eval_run(
+        self,
+        *,
+        instrument_name: str,
+        active: bool,
+        status: str,
+        metrics: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Append one drift-eval run/registration row."""
+
+        run_id = f"drift_{_new_id()}"
+        ts = _utc_now()
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO drift_eval_runs (
+                run_id, ts, instrument_name, active, status, metrics_json,
+                metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                ts,
+                str(instrument_name),
+                1 if active else 0,
+                str(status),
+                _encode_json(metrics or {}),
+                _encode_json(metadata or {}),
+            ),
+        )
+        conn.commit()
+        return {
+            "run_id": run_id,
+            "ts": ts,
+            "instrument_name": str(instrument_name),
+            "active": bool(active),
+            "status": str(status),
+            "metrics": metrics or {},
+            "metadata": metadata or {},
+        }
+
+    def record_drift_eval_observation(
+        self,
+        *,
+        run_id: str,
+        metric_name: str,
+        metric_value: float | None = None,
+        text_value: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Append one drift-eval observation row."""
+
+        observation_id = f"drift_obs_{_new_id()}"
+        observed_at = _utc_now()
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO drift_eval_observations (
+                observation_id, run_id, metric_name, metric_value, text_value,
+                metadata_json, observed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                observation_id,
+                str(run_id),
+                str(metric_name),
+                metric_value,
+                text_value,
+                _encode_json(metadata or {}),
+                observed_at,
+            ),
+        )
+        conn.commit()
+        return {
+            "observation_id": observation_id,
+            "run_id": str(run_id),
+            "metric_name": str(metric_name),
+            "metric_value": metric_value,
+            "text_value": text_value,
+            "metadata": metadata or {},
+            "observed_at": observed_at,
+        }
+
+    def get_drift_eval_runs(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Read recent drift-eval run rows for tests/reports."""
+
+        rows = self._get_conn().execute(
+            "SELECT * FROM drift_eval_runs ORDER BY ts DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        runs: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row)
+            record["active"] = bool(record["active"])
+            record["metrics"] = _decode_json(record.pop("metrics_json", "{}"), {})
+            record["metadata"] = _decode_json(record.pop("metadata_json", "{}"), {})
+            runs.append(record)
+        return runs
+
+    def get_drift_eval_observations(
+        self, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Read recent drift-eval observation rows for tests/reports."""
+
+        rows = self._get_conn().execute(
+            "SELECT * FROM drift_eval_observations ORDER BY observed_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        observations: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row)
+            record["metadata"] = _decode_json(record.pop("metadata_json", "{}"), {})
+            observations.append(record)
+        return observations
 
     def get_engram(
         self,
@@ -5355,5 +5731,9 @@ class EngramStore:
             stats["accessibility_avg"] = round(rows["avg_acc"], 3)
             stats["accessibility_min"] = round(rows["min_acc"], 3)
             stats["accessibility_max"] = round(rows["max_acc"], 3)
+
+        failures = self.instrumentation_failure_counts()
+        stats["instrumentation_failures"] = sum(failures.values())
+        stats["instrumentation_failure_counts"] = failures
 
         return stats

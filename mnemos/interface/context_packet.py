@@ -51,7 +51,9 @@ def build_context_packet(
     functional memory, hypomnema continuity, then Mnemos engrams and beliefs.
     ``packet_mode="operational"`` withholds review prose and returns only
     review counts/source IDs; ``packet_mode="review"`` exposes review-only
-    candidate prose with labels for explicit review.
+    candidate prose with labels for explicit review. Retrieved engrams included
+    in the packet are marked as rendered citations with
+    ``fitting_eligible=False``; citation logging is record-only.
     """
     mode = normalize_packet_mode(packet_mode)
     identity = store.get_identity(agent_id)
@@ -124,7 +126,23 @@ def build_context_packet(
             max_results=max_engrams,
             emotional_state=emotional_state,
         )
-        engrams = [_serialize_retrieval_result(result) for result in results]
+        for result in results:
+            serialized = _serialize_retrieval_result(result)
+            engrams.append(serialized)
+            _mark_retrieval_citation(
+                store,
+                result,
+                surface="context_packet",
+                metadata={
+                    "packet_mode": mode,
+                    "agent_id": agent_id,
+                    "person_id": person_id,
+                    "project_scope": project_scope,
+                    "session_id": session_id,
+                    "tier": "rendered",
+                    "fitting_eligible": False,
+                },
+            )
 
     stats_read_visibility = (
         (READ_VISIBILITY_OPERATIONAL, READ_VISIBILITY_REVIEW)
@@ -591,6 +609,8 @@ def _serialize_retrieval_result(result: RetrievalResult) -> dict[str, Any]:
     display = engram.impact or engram.content
     if len(display) > 240:
         display = display[:237] + "..."
+    retrieval_why = dict(result.retrieval_why)
+    retrieval_why.pop("event_id", None)
     return {
         "id": engram.id,
         "display": display,
@@ -600,4 +620,26 @@ def _serialize_retrieval_result(result: RetrievalResult) -> dict[str, Any]:
         "score": result.score,
         "confidence": engram.source.confidence,
         "retrieval_path": result.retrieval_path,
+        "retrieval_why": retrieval_why,
     }
+
+
+def _mark_retrieval_citation(
+    store: "EngramStore",
+    result: RetrievalResult,
+    *,
+    surface: str,
+    metadata: dict[str, Any],
+) -> None:
+    try:
+        store.mark_retrieval_citation(
+            event_id=result.retrieval_event_id,
+            engram_id=result.engram.id,
+            surface=surface,
+            metadata=metadata,
+        )
+    except Exception:
+        try:
+            store.record_instrumentation_failure("retrieval_citations")
+        except Exception:
+            pass

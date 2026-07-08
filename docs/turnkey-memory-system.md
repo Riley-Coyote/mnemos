@@ -53,6 +53,8 @@ promotion-ready material are held as review-only continuity rather than being
 promoted into operational engrams.
 The agent also does not stamp source authority; Mnemos derives authority from
 the tool/import/producer channel and treats payload authority claims as text.
+Step 1 origin stamps are internal provenance measurements, not caller-supplied
+authority; legacy `NULL` stamps mean no measurement existed yet.
 
 Gated inner-life and soak rows are outside the turnkey session loop. Their
 private provenance, gate decisions, skips/drops, and tick telemetry live in
@@ -66,6 +68,10 @@ are inert: ordinary context, recall, identity, substrate, and MCP tools do not
 read or apply them. U6b `ExperienceTick` is proposal-only; it can emit
 review-visible proposal rows targeting the modulation surface, but it does not
 write modulation rows or activate retrieval influence.
+
+Step 1 instrumentation is internal and record-only. Context, prompt, and recall
+paths may write retrieval events, retrieval-why receipts, and citation rows in
+the local store, but those records do not change what gets retrieved or shown.
 
 ## Onboarding Walkthrough
 

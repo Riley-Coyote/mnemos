@@ -51,6 +51,7 @@
 - **`mnemos/store/migrations.py`** — Frozen Python migration history through schema v10.
 - **`mnemos/store/migration_runner.py`** — Additive-only SQL-file migration runner for schema v11+.
 - **`mnemos/store/migrations/NNNN_name.sql`** — New schema migrations. Use four-digit versions above the Python schema max, include `-- additive-only: yes`, and keep files schema-only.
+- **`mnemos/instrumentation/`** — Record-only Step 1 receipts, drift-eval registry, origin-stamp validation, and producer failure accounting.
 
 ## Schema Migration Changes
 
@@ -72,6 +73,11 @@ config (including `MNEMOS_STORE_DB_PATH`) and refuses `--db-path`. Tests that
 need representative stores should use `MNEMOS_DB_PATH` or instantiate
 `MigrationRunner` directly with an isolated temporary database and migrations
 directory.
+
+Schema v12 is Step 1 instrumentation only: runtime receipts, retrieval events,
+retrieval citations, drift-eval rows, producer failure counts, and nullable
+`engrams.origin_stamp`. Keep these migrations schema-only and verify behavior
+against temporary or representative copy databases, not live `~/.mnemos`.
 
 ## Feature Archive
 

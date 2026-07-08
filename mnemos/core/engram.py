@@ -23,6 +23,8 @@ from typing import Any
 
 import ulid as _ulid_mod
 
+from ..instrumentation.receipts import validate_origin_stamp
+
 from .types import (
     ConfidenceSource,
     DEFAULT_ACCESSIBILITY,
@@ -38,8 +40,6 @@ from .types import (
 
 
 _VALID_SOURCE_AUTHORITIES = frozenset(a.value for a in SourceAuthority)
-
-
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -369,6 +369,8 @@ class Engram:
     visibility: str = Visibility.PRIVATE
     read_visibility: str = "operational_context"
     """Which read surfaces may consume this engram as context."""
+    origin_stamp: str | None = None
+    """Step 1 origin measurement; None means pre-instrumentation/unstamped."""
 
     # Lifecycle
     state: str = EngramState.ACTIVE
@@ -379,6 +381,7 @@ class Engram:
         if not self.content_at_encoding and self.content:
             self.content_at_encoding = self.content
         self.read_visibility = _validate_read_visibility(self.read_visibility)
+        self.origin_stamp = validate_origin_stamp(self.origin_stamp)
 
     def record_access(self) -> None:
         """Record an access event (called by retrieval pipeline)."""
@@ -459,6 +462,7 @@ class Engram:
             "owner_agent_id": self.owner_agent_id,
             "visibility": self.visibility,
             "read_visibility": self.read_visibility,
+            "origin_stamp": self.origin_stamp,
             "state": self.state,
         }
 
@@ -522,6 +526,7 @@ class Engram:
             owner_agent_id=d.get("owner_agent_id", "default"),
             visibility=d.get("visibility", Visibility.PRIVATE),
             read_visibility=d.get("read_visibility", "operational_context"),
+            origin_stamp=d.get("origin_stamp"),
             state=d.get("state", EngramState.ACTIVE),
             connections=[],  # Loaded separately from connections table
             versions=[],  # Loaded separately from versions table

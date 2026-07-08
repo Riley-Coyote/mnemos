@@ -26,6 +26,11 @@ from ..core.types import (
     SourceType,
     Visibility,
 )
+from ..instrumentation.receipts import (
+    ORIGIN_IMPORT,
+    ORIGIN_INFERENCE,
+    ORIGIN_USER_WITNESSED,
+)
 from .llm_classifier import (
     apply_belief_update,
     classify_connections,
@@ -252,6 +257,7 @@ class Encoder:
             encoding_context=encoding_context,
             source=memory_source,
             owner_agent_id=agent_id,
+            origin_stamp=_origin_stamp_for_source(source, source_authority),
         )
 
         # 5. Discover connections to existing memories
@@ -570,3 +576,25 @@ class Encoder:
         # 4. Sort by strength descending, cap at max_connections
         connections.sort(key=lambda c: c.strength, reverse=True)
         return connections[: self._max_connections]
+
+
+def _origin_stamp_for_source(source_type: str, source_authority: str) -> str:
+    """Map source axes onto the Step 1 origin-stamp axis.
+
+    The stamp is a measurement axis, not a replacement for source authority.
+    """
+
+    authority = (
+        source_authority.value
+        if isinstance(source_authority, SourceAuthority)
+        else source_authority
+    )
+    source = source_type.value if isinstance(source_type, SourceType) else source_type
+    if authority == SourceAuthority.IMPORTED.value:
+        return ORIGIN_IMPORT
+    if source == SourceType.SESSION.value and authority in {
+        SourceAuthority.OBSERVED.value,
+        SourceAuthority.USER_STATED.value,
+    }:
+        return ORIGIN_USER_WITNESSED
+    return ORIGIN_INFERENCE

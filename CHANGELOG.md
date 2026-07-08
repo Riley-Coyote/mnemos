@@ -24,6 +24,30 @@
   receipts. `schema_migrations` remains the canonical version/checksum record;
   edited shipped migration history aborts instead of retrying.
 
+### Step 1 Instrumentation
+- Schema v12 adds record-only runtime instrumentation tables:
+  `runtime_receipts`, `retrieval_events`, `retrieval_citations`,
+  `drift_eval_runs`, `drift_eval_observations`, and
+  `instrumentation_failures`, plus nullable `engrams.origin_stamp`.
+- Runtime receipts are separate from `migration_receipts` and validate against
+  the checked-in receipt-kind manifest before insertion. There is no public
+  update/delete receipt accessor.
+- Retrieval appends a retrieval event for every `ReactiveRetriever.retrieve()`
+  call and mirrors surfaced-result explanation as `retrieval-why` receipts.
+  Context packet, prompt-builder, and CLI search surfaces mark actual rendered
+  citations only, with metadata tiers and `fitting_eligible=false`.
+- New engram write paths stamp origin when known (`user-witnessed`,
+  `inference`, or `import` today); migrated legacy rows keep
+  `origin_stamp=NULL`, meaning pre-instrumentation absence of measurement, not
+  a measured provenance value.
+- `mnemos drift-eval --db-path <copy.db>` registers active and inactive Step 1
+  drift instruments against an explicit representative DB and refuses live
+  `~/.mnemos` databases unless `--allow-live-db` is supplied for an authorized
+  live rollout. `benchmarks/retrieval_benchmark.py --record-db <copy.db>` can
+  persist benchmark metric runs and observations.
+- Instrumentation producer failures are durable and DB-scoped; `mnemos stats`
+  includes their aggregate count.
+
 ### Afferent Membrane v1
 - Schema v6 adds first-class `read_visibility` to `engrams`, `beliefs`,
   `hypomnema_entries`, and `functional_memories`, plus a `proposal_ledger`

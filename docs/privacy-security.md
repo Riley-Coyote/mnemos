@@ -18,12 +18,15 @@ With no dedicated provider configured, Mnemos:
 Simple mode tools have these local side effects:
 
 - `mnemos_context` can create or migrate the database and log maintenance
+- `mnemos_context` and prompt/context assembly can record retrieval citation
+  rows for rendered memories
 - `mnemos_context(include_graph=true)` can return a scoped SVG identity graph
   artifact and structured graph data
 - `mnemos_capture` writes continuity and, for operational captures, durable
   memories; high-blast identity/foundational captures can stay review-only
   instead of being promoted
-- `mnemos_recall` can reconsolidate access metadata
+- `mnemos_recall` can reconsolidate access metadata and write record-only
+  retrieval events / retrieval-why receipts
 - `mnemos_correct` can archive, revise, or supersede memory
 - `mnemos_maintain` runs consolidation and bookkeeping
 - `mnemos_introduce` writes the agent's self-declared model/name for affinity
@@ -97,6 +100,25 @@ SQL-file migrations are schema-only. They may add tables, additive columns,
 indexes, and views, but may not seed, backfill, delete, update, attach another
 database, change PRAGMA state, or write their own `schema_migrations` rows.
 
+## Step 1 Instrumentation
+
+Schema v12 adds local, record-only instrumentation. Retrieval events,
+retrieval-why receipts, retrieval citations, drift-eval rows, and producer
+failure counts stay in the same SQLite store as memory data. They do not alter
+retrieval ranking, read visibility, reconsolidation policy, affect computation,
+or durable identity decisions.
+
+Runtime receipts are separate from `migration_receipts`; receipt kinds are
+validated against a checked-in manifest before insertion. Citation rows are
+written only when an output surface renders or prints a surfaced memory, and
+context packet / prompt / CLI search citations are marked
+`fitting_eligible=false`.
+
+`mnemos drift-eval --db-path <copy.db>` and
+`benchmarks/retrieval_benchmark.py --record-db <copy.db>` require explicit DB
+paths for writes and refuse live `~/.mnemos` databases unless
+`--allow-live-db` is supplied for an authorized live rollout.
+
 ## Afferent Membrane Read Visibility
 
 Schema v6/v7 separates ordinary operating context from review and audit
@@ -155,6 +177,10 @@ material:
   `mnemos_remember` and `mnemos_ingest` require an exact `kind` declaration
   (`episodic`, `semantic`, `procedural`, or `prospective`) and reject omitted or
   unknown values before storage.
+- Engram `origin_stamp` is a separate Step 1 measurement axis. New write paths
+  stamp known origins such as `user-witnessed`, `inference`, or `import`;
+  legacy `NULL` means pre-instrumentation absence of measurement, not proof of
+  provenance.
 
 ## Identity Vault And Reconciliation
 

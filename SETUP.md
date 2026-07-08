@@ -97,8 +97,8 @@ It exposes only:
 - `mnemos_health`
 
 The user does not need to set up a database, choose tags, pass agent IDs, stamp
-source authority, learn engram/hypomnema terminology, configure OpenClaw, or
-supply a model key.
+source authority or origin stamps, learn engram/hypomnema terminology,
+configure OpenClaw, or supply a model key.
 Most captures become operational continuity automatically. Captures that look
 like identity/foundational or otherwise promotion-ready material can return
 `Captured continuity for review`; those notes stay out of ordinary context and
@@ -186,8 +186,9 @@ Advanced `mnemos_remember` and `mnemos_ingest` calls must include an explicit
 `kind` value. Use exactly `episodic`, `semantic`, `procedural`, or
 `prospective`; omitted or unknown kinds are rejected before anything is stored.
 
-Advanced MCP callers still do not choose `source_authority`; Mnemos stamps it
-from the tool/import/producer channel. Hypomnema domains are checked against
+Advanced MCP callers still do not choose `source_authority` or `origin_stamp`;
+Mnemos stamps source authority from the tool/import/producer channel and origin
+from trusted write-path measurement. Hypomnema domains are checked against
 content classification, so a lower-risk caller label cannot bypass review for
 identity/foundational content.
 
@@ -214,6 +215,17 @@ mnemos migrate apply
 read-only. `apply` runs pending additive-only SQL files from
 `mnemos/store/migrations/`, snapshots the database with the SQLite backup API
 before each version, and records checksums in `schema_migrations`.
+
+For Step 1 instrumentation review, register drift-eval instruments only against
+an explicit representative DB copy:
+
+```bash
+mnemos drift-eval --db-path ./copy.db --json
+```
+
+This command refuses live `~/.mnemos` databases unless `--allow-live-db` is
+supplied for an authorized live rollout. It records registry rows only; it does
+not enforce policy or change retrieval behavior.
 
 OpenClaw, crons, Forge, substrate ticks, gated inner-life/soak validation, and
 full agent workspaces are advanced integrations. They are no longer part of the

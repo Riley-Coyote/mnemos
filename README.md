@@ -32,6 +32,7 @@ model providers are optional for richer deep maintenance.
 | Background memory maintenance | Substrate tick | `mnemos substrate-tick` |
 | Gated inner-life / soak validation | Representative DB operator path | `mnemos inner-life preflight --db-path ./copy.db` |
 | Store schema migration review | Canonical store migration runner | `mnemos migrate plan` |
+| Step 1 instrumentation review | Representative DB operator path | `mnemos drift-eval --db-path ./copy.db` |
 
 Most users should start with **Simple MCP Mode**. Hermes users should start with
 **Hermes Sidecar Mode** unless they explicitly want Mnemos to occupy Hermes'
@@ -96,7 +97,7 @@ Simple mode exposes seven user-facing tools:
 | `mnemos_health` | Human-relayable health card: store location and size, counts, last maintenance cycle, affinity verdict, onboarding state, and last dream entry. |
 
 Agents do not need to pass tags, memory kinds, confidence, source types, source
-authority, or agent IDs. Mnemos resolves scope once from CLI flags,
+authority, origin stamps, or agent IDs. Mnemos resolves scope once from CLI flags,
 environment, config, and reasonable defaults, and stamps source authority from
 the ingest channel rather than from model-supplied text.
 
@@ -250,7 +251,7 @@ review-only or audit-only ID returns a "not found" response, or is absent from
 ordinary search/candidate output, so review prose is never mutated or promoted
 through an operational tool call.
 
-MCP callers cannot stamp `source_authority`; `mnemos_remember`,
+MCP callers cannot stamp `source_authority` or `origin_stamp`; `mnemos_remember`,
 `mnemos_ingest`, setup seeding, and hypomnema promotion use the tool channel's
 fixed authority. Hypomnema write domains are also fail-closed: a caller can
 label content more cautiously, but cannot label identity/foundational content
@@ -269,6 +270,14 @@ inert: no retrieval, salience, context, identity, substrate, or MCP path reads
 or applies them. U6b `mnemos.modulation.ExperienceTick` is proposal-only: it
 emits review-visible proposal ledger rows targeting the modulation surface and
 never writes or reads `dynamic_modulations` rows.
+
+Schema v12 adds record-only Step 1 instrumentation. Retrieval now appends
+`retrieval_events` and `retrieval-why` receipts, while context packets, prompt
+building, and CLI search mark cited rendered results in `retrieval_citations`
+with `fitting_eligible=false`. Runtime receipts are separate from
+`migration_receipts`, receipt kinds are a code manifest, and `origin_stamp`
+records new engram provenance when the write path knows it; legacy rows keep
+`origin_stamp=NULL`, meaning pre-instrumentation absence of measurement.
 
 ### Identity Vault For Foundational Rows
 
@@ -492,7 +501,7 @@ mnemos mcp install claude --write     # Merge Claude Desktop config
 
 mnemos init                           # Initialize a database
 mnemos remember "Prefers tabs"        # Capture continuity from the CLI
-mnemos stats                          # Memory statistics
+mnemos stats                          # Memory statistics and instrumentation failures
 mnemos search "debugging strategies"  # Search memories
 mnemos inspect <engram-id>            # Inspect operational memory details
 mnemos inspect --review <engram-id>   # Explicit review-only inspection
@@ -504,6 +513,7 @@ mnemos consolidate --deep             # Deep maintenance when a provider exists
 mnemos substrate-tick                 # Run one substrate cycle
 mnemos migrate plan                   # Dry-run pending SQL-file migrations
 mnemos migrate apply                  # Apply pending SQL-file migrations
+mnemos drift-eval --db-path ./copy.db # Register Step 1 drift-eval instruments
 ```
 
 Dashboard module:
@@ -530,7 +540,7 @@ Schema migrations:
 ```bash
 mnemos migrate plan
 mnemos migrate apply
-mnemos migrate apply --target-version 11
+mnemos migrate apply --target-version 12
 ```
 
 `migrate` operates on the canonical store only. It resolves the database from
@@ -545,6 +555,20 @@ the applied checksum in `schema_migrations`, and aborts on edited shipped
 history or a database version newer than this binary understands. Pre-runner
 Python migrations remain frozen history through schema v10; SQL-file migrations
 start at v11.
+
+Step 1 instrumentation:
+
+```bash
+mnemos drift-eval --db-path ./copy.db
+mnemos drift-eval --db-path ./copy.db --json
+python benchmarks/retrieval_benchmark.py --grid \
+  --record-db ./copy.db --record-json
+```
+
+These commands are record-only operator paths. They require an explicit
+representative DB path for writes, refuse live `~/.mnemos` databases unless
+`--allow-live-db` is supplied for an authorized live rollout, and do not change
+retrieval ranking, reconsolidation, or read visibility.
 
 Hermes commands:
 

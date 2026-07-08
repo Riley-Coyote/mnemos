@@ -34,7 +34,8 @@ class PromptBuilder:
     The prompt builder retrieves operational-context beliefs and engrams and
     formats them into a structured text block that can be injected into the
     agent's system prompt. Review-only and audit-only rows require explicit
-    review/admin surfaces, not this operating prompt path.
+    review/admin surfaces, not this operating prompt path. Rendered memories
+    are marked as non-fitting-eligible citations for Step 1 instrumentation.
 
     Usage:
         builder = PromptBuilder(store=store)
@@ -100,6 +101,17 @@ class PromptBuilder:
                     if line_tokens <= remaining_tokens:
                         memory_lines.append(line)
                         remaining_tokens -= line_tokens
+                        _mark_retrieval_citation(
+                            self._store,
+                            result,
+                            surface="prompt_builder",
+                            metadata={
+                                "agent_id": agent_id,
+                                "cue": cue,
+                                "tier": "rendered",
+                                "fitting_eligible": False,
+                            },
+                        )
                     else:
                         break  # Budget exhausted
 
@@ -154,9 +166,31 @@ def _format_engram(result: RetrievalResult) -> str:
         display = display[:197] + "..."
 
     confidence_pct = int(engram.source.confidence * 100)
-    return f"- {display} [{engram.kind}, confidence: {confidence_pct}%]"
+    why = result.retrieval_why.get("path") or result.retrieval_path
+    return f"- {display} [{engram.kind}, confidence: {confidence_pct}%, why: {why}]"
 
 
 def _estimate_tokens(text: str) -> int:
     """Rough token count estimate (4 chars ≈ 1 token)."""
     return max(1, len(text) // _CHARS_PER_TOKEN)
+
+
+def _mark_retrieval_citation(
+    store: "EngramStore",
+    result: RetrievalResult,
+    *,
+    surface: str,
+    metadata: dict[str, Any],
+) -> None:
+    try:
+        store.mark_retrieval_citation(
+            event_id=result.retrieval_event_id,
+            engram_id=result.engram.id,
+            surface=surface,
+            metadata=metadata,
+        )
+    except Exception:
+        try:
+            store.record_instrumentation_failure("retrieval_citations")
+        except Exception:
+            pass

@@ -33,7 +33,15 @@ Reproduce:
 python benchmarks/retrieval_benchmark.py            # both phases (~1 min)
 python benchmarks/retrieval_benchmark.py --grid     # grid only
 python benchmarks/retrieval_benchmark.py --drift    # drift only
+python benchmarks/retrieval_benchmark.py --grid \
+  --record-db ./copy.db --record-json               # also persist Step 1 rows
 ```
+
+`--record-db` opens the given SQLite store, registers the Step 1 drift-eval
+instrument manifest, and records the shipped default retrieval metrics as
+`drift_eval_runs` / `drift_eval_observations`. It refuses live `~/.mnemos`
+databases unless `--allow-live-db` is passed for an explicitly authorized live
+rollout. `--record-json` prints the recorded benchmark run row.
 
 ## Results (seed 42, 2026-06-10, post co_activated fix)
 

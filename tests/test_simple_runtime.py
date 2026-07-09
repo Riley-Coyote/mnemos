@@ -648,6 +648,92 @@ def test_direct_note_correction_reports_review_and_archives_stale_memory(tmp_pat
     assert "hide security caveats" not in recall
 
 
+def test_direct_note_archive_routes_related_open_prospective_before_mutation(tmp_path):
+    runtime = MnemosRuntime(
+        db_path=str(tmp_path / "simple.db"),
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+
+    try:
+        captured = runtime.capture(
+            "Remember to send the red kite status update.",
+            importance=0.6,
+        )
+        memory_id = re.search(r"Memory ID: (\S+)", captured).group(1)
+        note_id = re.search(r"Continuity note ID: (\S+)", captured).group(1)
+
+        out = runtime.correct("", target_id=note_id, action="archive")
+        assert runtime._store is not None
+        note = runtime._store.get_hypomnema_entry(
+            note_id,
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility=None,
+        )
+        memory = runtime._store.get_engram(memory_id, read_visibility=None)
+    finally:
+        runtime.close()
+
+    assert "Prospective memory is still open" in out
+    assert "mnemos prospective status" in out
+    assert note is not None
+    assert note["active"]
+    assert "red kite" in note["content"]
+    assert memory is not None
+    assert memory.status == "open"
+    assert memory.state == "active"
+
+
+def test_query_note_correction_routes_related_open_prospective_before_mutation(
+    tmp_path,
+):
+    runtime = MnemosRuntime(
+        db_path=str(tmp_path / "simple.db"),
+        agent_id="nova",
+        person_id="riley",
+        project_scope="demo",
+        use_dedicated_model=False,
+    )
+
+    try:
+        captured = runtime.capture(
+            "Remember to send the blue comet status update.",
+            importance=0.6,
+        )
+        memory_id = re.search(r"Memory ID: (\S+)", captured).group(1)
+        note_id = re.search(r"Continuity note ID: (\S+)", captured).group(1)
+
+        out = runtime.correct(
+            "Remember to send the green comet status update.",
+            query="blue comet status update",
+            action="revise",
+        )
+        assert runtime._store is not None
+        note = runtime._store.get_hypomnema_entry(
+            note_id,
+            agent_id="nova",
+            person_id="riley",
+            project_scope="demo",
+            read_visibility=None,
+        )
+        memory = runtime._store.get_engram(memory_id, read_visibility=None)
+    finally:
+        runtime.close()
+
+    assert "Prospective memory is still open" in out
+    assert "mnemos prospective status" in out
+    assert note is not None
+    assert "blue comet" in note["content"]
+    assert "green comet" not in note["content"]
+    assert memory is not None
+    assert memory.status == "open"
+    assert memory.state == "active"
+
+
 def test_query_only_supersede_reclassifies_identity_replacement_for_review(tmp_path):
     runtime = MnemosRuntime(
         db_path=str(tmp_path / "simple.db"),

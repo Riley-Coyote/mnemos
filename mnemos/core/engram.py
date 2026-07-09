@@ -6,12 +6,13 @@ reflecting how it was encoded, what it connects to, and how it has changed
 over time through reconsolidation.
 
 Key innovation over existing systems:
-- Dual-trace model: strength (storage quality) is independent from
+- Dual-trace model: S0/strength (initial storage quality) is independent from
   stability (forgetting resistance) and accessibility (current retrievability)
 - Content at encoding preserved permanently (immutable original)
 - Full encoding context captured (what was in WM, emotional state, schemas)
 - Typed connections with semantic meaning
 - Reconsolidation history tracked via versions
+- Prospective engrams carry a guarded status lifecycle
 """
 
 from __future__ import annotations
@@ -40,6 +41,14 @@ from .types import (
 
 
 _VALID_SOURCE_AUTHORITIES = frozenset(a.value for a in SourceAuthority)
+
+PROSPECTIVE_STATUS_OPEN = "open"
+PROSPECTIVE_STATUS_TERMINAL = frozenset({"fulfilled", "closed_unfulfilled", "retired"})
+PROSPECTIVE_STATUS_VALUES = frozenset(
+    {PROSPECTIVE_STATUS_OPEN, *PROSPECTIVE_STATUS_TERMINAL}
+)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -72,6 +81,46 @@ def _bool_from_db(value: Any, field_name: str, default: bool) -> bool:
     if value in (False, 0):
         return False
     raise ValueError(f"{field_name} must be stored as 0 or 1")
+
+
+def _kind_value(kind: str) -> str:
+    return kind.value if hasattr(kind, "value") else str(kind)
+
+
+def validate_prospective_status(kind: str, status: str | None) -> str | None:
+    """Validate the prospective-only status field and default new wants open."""
+
+    clean_kind = _kind_value(kind)
+    if status is None:
+        return (
+            PROSPECTIVE_STATUS_OPEN
+            if clean_kind == EngramKind.PROSPECTIVE.value
+            else None
+        )
+
+    clean_status = str(status).strip()
+    if clean_kind != EngramKind.PROSPECTIVE.value:
+        raise ValueError("status is only valid for prospective engrams")
+    if clean_status not in PROSPECTIVE_STATUS_VALUES:
+        allowed = ", ".join(sorted(PROSPECTIVE_STATUS_VALUES))
+        raise ValueError(
+            f"invalid prospective status {clean_status!r}; expected {allowed}"
+        )
+    return clean_status
+
+
+def is_open_prospective_kind_status(kind: str, status: str | None) -> bool:
+    return (
+        _kind_value(kind) == EngramKind.PROSPECTIVE.value
+        and (status or PROSPECTIVE_STATUS_OPEN) == PROSPECTIVE_STATUS_OPEN
+    )
+
+
+def is_open_prospective_engram(engram: Any) -> bool:
+    return is_open_prospective_kind_status(
+        getattr(engram, "kind", ""),
+        getattr(engram, "status", None),
+    )
 
 
 _VALID_READ_VISIBILITIES = {"operational_context", "review_only", "audit_only"}
@@ -290,12 +339,13 @@ class Engram:
     encoded, what it connects to, and how it has changed over time.
 
     Key differences from Anima's Memory:
-    - Dual-trace: strength/stability/accessibility (vs single salience)
+    - Dual-trace: S0 strength/stability/accessibility (vs single salience)
     - Immutable content_at_encoding (vs only one level of softened_from)
     - Full encoding context (WM state, emotions, schemas at encoding)
     - Typed connections (vs untyped ID lists)
     - Reconsolidation version history
     - Confidence scoring with provenance
+    - Prospective status lifecycle with terminal states
     """
 
     # Identity
@@ -326,10 +376,18 @@ class Engram:
     kind: str = EngramKind.EPISODIC
     tags: list[str] = field(default_factory=list)
     schema_refs: list[str] = field(default_factory=list)
+    status: str | None = field(default=None, kw_only=True)
+    """Prospective-only lifecycle status.
+
+    Prospective engrams default to ``open``. Terminal states
+    (``fulfilled``, ``closed_unfulfilled``, ``retired``) are written through
+    EngramStore.transition_prospective_status so the status change is
+    receipted. Non-prospective engrams must keep this as ``None``.
+    """
 
     # Dual-trace dynamics
     strength: float = DEFAULT_STRENGTH
-    """How well this memory is stored (0-1). Increases with encoding depth and retrieval."""
+    """Initial storage strength S0 (0-1), frozen after encoding."""
 
     stability: float = DEFAULT_STABILITY
     """How resistant to interference and forgetting (0-1). Builds slowly with repeated access."""
@@ -382,6 +440,7 @@ class Engram:
             self.content_at_encoding = self.content
         self.read_visibility = _validate_read_visibility(self.read_visibility)
         self.origin_stamp = validate_origin_stamp(self.origin_stamp)
+        self.status = validate_prospective_status(self.kind, self.status)
 
     def record_access(self) -> None:
         """Record an access event (called by retrieval pipeline)."""
@@ -437,6 +496,7 @@ class Engram:
             "impact": self.impact,
             "encoding_context": json.dumps(self.encoding_context.to_dict()),
             "kind": self.kind,
+            "status": self.status,
             "tags": json.dumps(self.tags),
             "schema_refs": json.dumps(self.schema_refs),
             "strength": self.strength,
@@ -499,6 +559,7 @@ class Engram:
             impact=d.get("impact", ""),
             encoding_context=EncodingContext.from_dict(encoding_ctx),
             kind=d.get("kind", EngramKind.EPISODIC),
+            status=d.get("status"),
             tags=tags,
             schema_refs=schema_refs,
             strength=d.get("strength", DEFAULT_STRENGTH),

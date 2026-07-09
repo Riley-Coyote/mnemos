@@ -23,7 +23,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..core.engram import Connection, Engram, VersionRef
+from ..core.engram import (
+    PROSPECTIVE_STATUS_OPEN,
+    PROSPECTIVE_STATUS_TERMINAL,
+    Connection,
+    Engram,
+    VersionRef,
+)
 from ..core.belief import Belief
 from ..core.emotional_state import EmotionalState
 from ..core.identity import AgentIdentity
@@ -192,6 +198,7 @@ _ENGRAM_COLUMNS = frozenset(
         "impact",
         "resolution",
         "kind",
+        "status",
         "tags",
         "schema_refs",
         "strength",
@@ -1266,6 +1273,7 @@ class EngramStore:
             raise
 
     def _save_engram_no_commit(self, conn: sqlite3.Connection, engram: Engram) -> None:
+        self._validate_engram_status_write(conn, engram)
         data = engram.to_dict()
 
         # Validate column names to prevent SQL injection
@@ -1305,6 +1313,65 @@ class EngramStore:
         for version in engram.versions:
             self._save_version_no_commit(conn, engram.id, version)
 
+    def _validate_engram_status_write(
+        self, conn: sqlite3.Connection, engram: Engram
+    ) -> None:
+        kind = engram.kind.value if hasattr(engram.kind, "value") else str(engram.kind)
+        state = (
+            engram.state.value if hasattr(engram.state, "value") else str(engram.state)
+        )
+        row = conn.execute(
+            "SELECT kind, status, state FROM engrams WHERE id = ?",
+            (engram.id,),
+        ).fetchone()
+        if row is not None:
+            stored_kind = row["kind"]
+            if stored_kind != kind and "prospective" in {stored_kind, kind}:
+                raise ValueError("prospective engrams cannot change kind")
+
+        if kind != "prospective":
+            if engram.status is not None:
+                raise ValueError("status is only valid for prospective engrams")
+            return
+
+        if row is not None:
+            current = row["status"] or PROSPECTIVE_STATUS_OPEN
+            if current in PROSPECTIVE_STATUS_TERMINAL:
+                if engram.status == PROSPECTIVE_STATUS_OPEN:
+                    raise ValueError(
+                        "terminal prospective engrams do not reopen; record a new want"
+                    )
+                raise ValueError(
+                    "terminal prospective engrams cannot be mutated; "
+                    "record a new want instead"
+                )
+
+        if engram.status != PROSPECTIVE_STATUS_OPEN:
+            current = row["status"] if row is not None else None
+            if current != engram.status:
+                raise ValueError(
+                    "prospective status changes must use transition_prospective_status"
+                )
+            return
+
+        if row is None:
+            if state != "active":
+                raise ValueError(
+                    "open prospective lifecycle changes must use "
+                    "transition_prospective_status"
+                )
+            return
+        current = row["status"] or PROSPECTIVE_STATUS_OPEN
+        if current != PROSPECTIVE_STATUS_OPEN:
+            raise ValueError(
+                "terminal prospective engrams do not reopen; record a new want"
+            )
+        if row["state"] != "active" or state != "active":
+            raise ValueError(
+                "open prospective lifecycle changes must use "
+                "transition_prospective_status"
+            )
+
     # ── Step 1 instrumentation journals ──
 
     def append_receipt(
@@ -1333,9 +1400,16 @@ class EngramStore:
             immediacy=immediacy,
             payload=payload,
         )
+        conn = self._get_conn()
+        receipt = self._append_receipt_no_commit(conn, envelope)
+        conn.commit()
+        return receipt
+
+    def _append_receipt_no_commit(
+        self, conn: sqlite3.Connection, envelope: dict[str, Any]
+    ) -> dict[str, Any]:
         receipt_id = f"receipt_{_new_id()}"
         ts = _utc_now()
-        conn = self._get_conn()
         conn.execute(
             """
             INSERT INTO runtime_receipts (
@@ -1355,12 +1429,153 @@ class EngramStore:
                 _encode_json(envelope["payload"]),
             ),
         )
-        conn.commit()
         return {
             "receipt_id": receipt_id,
             "ts": ts,
             **envelope,
         }
+
+    def transition_prospective_status(
+        self,
+        engram_id: str,
+        status: str,
+        *,
+        actor: str,
+        runtime: str,
+        session_id: str = "",
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """Move an open prospective engram into one terminal status.
+
+        A terminal prospective is never reopened; a renewed want is a new
+        engram. The status update and its receipt commit atomically.
+        """
+
+        clean_status = str(status).strip()
+        if clean_status not in PROSPECTIVE_STATUS_TERMINAL:
+            allowed = ", ".join(sorted(PROSPECTIVE_STATUS_TERMINAL))
+            raise ValueError(f"prospective status transition must be one of: {allowed}")
+
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT id, kind, status, content, content_at_encoding, tags,
+                       accessibility
+                FROM engrams WHERE id = ?
+                """,
+                (engram_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"prospective engram not found: {engram_id}")
+            if row["kind"] != "prospective":
+                raise ValueError(
+                    "status transitions are only valid for prospective engrams"
+                )
+            current = row["status"] or PROSPECTIVE_STATUS_OPEN
+            if current != PROSPECTIVE_STATUS_OPEN:
+                raise ValueError(
+                    f"prospective engram is already terminal ({current}); "
+                    "record a new want instead of reopening it"
+                )
+
+            now = _utc_now()
+            conn.execute(
+                "UPDATE engrams SET status = ?, state = 'archived' WHERE id = ?",
+                (clean_status, engram_id),
+            )
+            conn.execute("DELETE FROM engrams_fts WHERE id = ?", (engram_id,))
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO archive (
+                    id, content, content_at_encoding, kind, tags,
+                    archived_at, archive_reason, final_accessibility
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"],
+                    row["content"],
+                    row["content_at_encoding"],
+                    row["kind"],
+                    row["tags"],
+                    now,
+                    f"prospective_status:{clean_status}",
+                    row["accessibility"],
+                ),
+            )
+            linked_hypomnema = conn.execute(
+                """
+                SELECT id, agent_id, person_id, project_scope, content,
+                       revisions_json, decision_ref, domain
+                FROM hypomnema_entries
+                WHERE active = 1
+                  AND (related_engram_id = ? OR graduated_to_engram_id = ?)
+                """,
+                (engram_id, engram_id),
+            ).fetchall()
+            linked_hypomnema_ids: list[str] = []
+            for entry in linked_hypomnema:
+                revisions = _decode_json(entry["revisions_json"], [])
+                if not isinstance(revisions, list):
+                    revisions = []
+                revisions.append(
+                    {
+                        "at": now,
+                        "prior_content": entry["content"],
+                        "reason": f"archived: prospective_status:{clean_status}",
+                    }
+                )
+                conn.execute(
+                    """
+                    UPDATE hypomnema_entries
+                    SET active = 0,
+                        revision_count = revision_count + 1,
+                        revisions_json = ?,
+                        last_revised_at = ?
+                    WHERE id = ? AND active = 1
+                    """,
+                    (_encode_json(revisions), now, entry["id"]),
+                )
+                linked_hypomnema_ids.append(entry["id"])
+                witness_ref = str(entry["decision_ref"] or "").strip()
+                if witness_ref:
+                    self._degrade_and_trace_lifecycle(
+                        conn,
+                        table="hypomnema_entries",
+                        row_id=entry["id"],
+                        prior_decision_ref=witness_ref,
+                        reason=f"archived: prospective_status:{clean_status}",
+                        agent_id=entry["agent_id"],
+                        person_id=entry["person_id"],
+                        project_scope=entry["project_scope"],
+                        domain=str(entry["domain"] or ""),
+                    )
+            envelope = validate_receipt_envelope(
+                kind="prospective-status-transition",
+                actor=actor,
+                runtime=runtime,
+                session_id=session_id,
+                engram_refs=[engram_id],
+                immediacy="live",
+                payload={
+                    "from_status": current,
+                    "to_status": clean_status,
+                    "reason": reason,
+                    "archived_hypomnema_ids": linked_hypomnema_ids,
+                },
+            )
+            receipt = self._append_receipt_no_commit(conn, envelope)
+            conn.commit()
+            return {
+                "engram_id": engram_id,
+                "from_status": current,
+                "to_status": clean_status,
+                "receipt": receipt,
+            }
+        except Exception:
+            conn.rollback()
+            raise
 
     def get_runtime_receipts(
         self,
@@ -1755,7 +1970,7 @@ class EngramStore:
                 agents' active engrams (useful for shared DB consolidation).
             load_connections: If True, load connections for each engram.
                 Set to False for bulk operations where connections aren't needed
-                (e.g., decay pass only needs accessibility/strength fields).
+                (e.g., decay pass only needs accessibility/state fields).
             include_decay_protected: If False, exclude engrams that the
                 decay pass must not mutate.
             require_consolidation_authorized: If True, exclude read-only
@@ -2166,7 +2381,20 @@ class EngramStore:
 
     def archive_engram(self, engram: Engram, reason: str = "low_accessibility") -> None:
         """Move engram to cold storage."""
+        kind = engram.kind.value if hasattr(engram.kind, "value") else str(engram.kind)
         conn = self._get_conn()
+        stored = conn.execute(
+            """
+            SELECT content, content_at_encoding, kind, tags, accessibility
+            FROM engrams WHERE id = ?
+            """,
+            (engram.id,),
+        ).fetchone()
+        stored_kind = stored["kind"] if stored is not None else kind
+        if kind == "prospective" or stored_kind == "prospective":
+            raise ValueError(
+                "prospective engrams must be closed with transition_prospective_status"
+            )
         from datetime import datetime, timezone
 
         conn.execute(
@@ -2176,13 +2404,17 @@ class EngramStore:
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 engram.id,
-                engram.content,
-                engram.content_at_encoding,
-                engram.kind,
-                json.dumps(engram.tags),
+                stored["content"] if stored is not None else engram.content,
+                (
+                    stored["content_at_encoding"]
+                    if stored is not None
+                    else engram.content_at_encoding
+                ),
+                stored_kind,
+                stored["tags"] if stored is not None else json.dumps(engram.tags),
                 datetime.now(timezone.utc).isoformat(),
                 reason,
-                engram.accessibility,
+                stored["accessibility"] if stored is not None else engram.accessibility,
             ),
         )
         # Remove from active tables

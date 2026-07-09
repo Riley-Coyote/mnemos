@@ -42,13 +42,13 @@ is time-based exponential forgetting, modulated by stability, connection count,
 tags, and recency; ordinary unretrieved engrams can decay toward archival
 thresholds. The substrate tick also performs a direct SQL time/tick decrement.
 `decay_protected` is therefore load-bearing, not merely defensive: both decay
-candidate paths must exclude protected engrams before mutating accessibility or
-strength.
+candidate paths must exclude protected engrams before mutating accessibility,
+state, or stability.
 """
 
 U3A_U3B_IMPORT_CONTRACT = """
 U3a/U3b contract:
-- decay_protected guards accessibility, strength, dormancy, and archival
+- decay_protected guards accessibility, stability, dormancy, and archival
   transitions from forgetting paths. It does not make a row immune to
   content softening when softening_protected is false.
 - softening_protected guards content, resolution, version snapshots, and voice

@@ -26,7 +26,7 @@ Tools:
     mnemos_introspect   — Audit text for metacognitive pattern markers
     mnemos_status       — Get memory system status
     mnemos_beliefs      — List reviewed current beliefs with challenge state
-    mnemos_forget       — Archive a specific memory
+    mnemos_forget       — Archive a non-prospective operational memory
     mnemos_consolidate  — Trigger a consolidation cycle
 
 Usage:
@@ -40,11 +40,13 @@ import logging
 import hashlib
 import os
 import signal
+import sqlite3
 import sys
 
 from mcp.server.fastmcp import FastMCP
 
 from .core.types import EngramKind, SourceAuthority, SourceType
+from .instrumentation.receipts import ORIGIN_INFERENCE
 from .simple_runtime import _classify_domain, escalate_domain
 from .store.sqlite_store import (
     EngramStore,
@@ -150,7 +152,7 @@ def _effective_agent_id(agent_id: str = "default") -> str:
     if agent_id and agent_id != "default":
         return agent_id
     config = _get_config()
-    configured = config.get("agent_id") or os.environ.get("MNEMOS_AGENT_ID")
+    configured = os.environ.get("MNEMOS_AGENT_ID") or config.get("agent_id")
     return str(configured or _default_agent_id or "default")
 
 
@@ -164,7 +166,7 @@ def _effective_person_id(person_id: str = "user") -> str:
     if person_id and person_id != "user":
         return person_id
     config = _get_config()
-    configured = config.get("person_id") or os.environ.get("MNEMOS_PERSON_ID")
+    configured = os.environ.get("MNEMOS_PERSON_ID") or config.get("person_id")
     return str(configured or _default_person_id or "user")
 
 
@@ -178,7 +180,7 @@ def _effective_project_scope(project_scope: str = "global") -> str:
     if project_scope and project_scope != "global":
         return project_scope
     config = _get_config()
-    configured = config.get("project_scope") or os.environ.get("MNEMOS_PROJECT_SCOPE")
+    configured = os.environ.get("MNEMOS_PROJECT_SCOPE") or config.get("project_scope")
     return str(configured or _default_project_scope or "global")
 
 
@@ -215,24 +217,31 @@ def _set_server_defaults(
     fell back to the user/global defaults.
     """
     global _default_agent_id, _default_person_id, _default_project_scope
+    config = _get_config()
     if agent_id:
         _default_agent_id = agent_id
         os.environ["MNEMOS_AGENT_ID"] = agent_id
+        config["agent_id"] = agent_id
     if person_id:
         _default_person_id = person_id
         os.environ["MNEMOS_PERSON_ID"] = person_id
+        config["person_id"] = person_id
     if project_scope:
         _default_project_scope = project_scope
         os.environ["MNEMOS_PROJECT_SCOPE"] = project_scope
+        config["project_scope"] = project_scope
 
 
-def _init_store(db_path: str = "~/.mnemos/memory.db") -> None:
+def _init_store(db_path: str | None = None) -> None:
     """Initialize the global store, helpers, and auto-detect LLM client."""
     global _store, _encoder, _retriever, _llm_client, _embedding_index, _shared_pool
     if _store is None:
-        _store = EngramStore(db_path)
+        from .simple_scope import resolve_scope
+
+        resolved_db_path = resolve_scope(db_path=db_path).db_path
+        _store = EngramStore(resolved_db_path)
         # Initialize embedding index (same DB path — gracefully degrades)
-        _embedding_index = EmbeddingIndex(db_path=db_path)
+        _embedding_index = EmbeddingIndex(db_path=resolved_db_path)
         # Auto-detect LLM client from env vars (before encoder, which uses it)
         from .llm import create_client
 
@@ -623,17 +632,27 @@ def mnemos_setup(response: str = "") -> str:
                     impact=f"Foundation memory from initial setup with {user_name}.",
                     kind="semantic",
                     tags=["identity", "setup"],
-                    source=SourceType.USER_EXPLICIT,
+                    source=SourceType.BOOTSTRAP,
                     agent_id=agent_id,
                     skip_surprise_detection=True,
                     # Setup-wizard seed is built from tool-call content, not a
                     # reviewed David assertion; observed keeps user_stated
                     # un-mintable outside U4 (F1 ruling).
                     source_authority=SourceAuthority.OBSERVED,
+                    allow_auto_share=False,
                 )
                 encoded += 1
-            except Exception as e:
-                logger.warning(f"Failed to encode seed engram: {e}")
+            except (
+                AttributeError,
+                TypeError,
+                ValueError,
+                RuntimeError,
+                sqlite3.Error,
+            ) as e:
+                count = _store.record_instrumentation_failure(  # type: ignore[union-attr]
+                    "setup_seed_encode"
+                )
+                logger.warning("Failed to encode seed engram (count=%s): %s", count, e)
 
         try:
             _store.write_hypomnema_entry(  # type: ignore
@@ -693,13 +712,25 @@ def mnemos_setup(response: str = "") -> str:
                     impact="Part of the current work context.",
                     kind="semantic",
                     tags=["project", "context"],
-                    source=SourceType.USER_EXPLICIT,
+                    source=SourceType.BOOTSTRAP,
                     agent_id=agent_id,
                     skip_surprise_detection=True,
                     source_authority=SourceAuthority.OBSERVED,  # setup-wizard seed (F1)
+                    allow_auto_share=False,
                 )
-            except Exception:
-                pass
+            except (
+                AttributeError,
+                TypeError,
+                ValueError,
+                RuntimeError,
+                sqlite3.Error,
+            ) as e:
+                count = _store.record_instrumentation_failure(  # type: ignore[union-attr]
+                    "setup_seed_encode"
+                )
+                logger.warning(
+                    "Failed to encode project seed engram (count=%s): %s", count, e
+                )
             try:
                 _store.write_hypomnema_entry(  # type: ignore
                     f"Active project for this relationship: {proj}",
@@ -1100,10 +1131,11 @@ def mnemos_recall(
 
     Searches across all stored memories using full-text search and
     connection graph traversal. Results are scored by relevance,
-    recency, strength, connections, and emotional congruence.
+    recency, S0/strength, connections, and emotional congruence.
 
-    Every recalled memory is reconsolidated — its connections and
-    strength are updated based on this retrieval context.
+    Every recalled memory is reconsolidated — its connections, stability, and
+    accessibility are updated based on this retrieval context. S0 strength is
+    not changed after encoding.
 
     Args:
         query: What to search for. Natural language works best.
@@ -1883,12 +1915,16 @@ def mnemos_hypomnema_promote(
         impact="Stable scoped continuity promoted from hypomnema.",
         kind="semantic",
         tags=["hypomnema", "promoted", "continuity", project_scope],
-        source=SourceType.USER_EXPLICIT,
+        source=SourceType.SESSION,
         agent_id=agent_id,
         skip_surprise_detection=True,
         # Promotion cannot mint authority; hypomnema carries none under
         # Reading B, so promotion stamps observed (F2 ruling).
         source_authority=SourceAuthority.OBSERVED,
+        # DAVID-29 still requires SourceType.SESSION, but promotion is
+        # record-only scoped continuity, not user-witnessed/shared memory.
+        origin_stamp_override=ORIGIN_INFERENCE,
+        allow_auto_share=False,
     )
     _store.mark_hypomnema_promoted(entry_id, engram.id)  # type: ignore
     return (
@@ -1959,7 +1995,7 @@ def mnemos_inspect(engram_id: str) -> str:
         f"Tags: {', '.join(engram.tags) or '(none)'}",
         f"State: {engram.state}",
         f"Resolution: {engram.resolution}",
-        f"Strength: {engram.strength:.4f}",
+        f"S0 (initial, frozen at encoding): {engram.strength:.4f}",
         f"Stability: {engram.stability:.4f}{' (long-term)' if engram.stability >= 0.8 else ' (consolidating)' if engram.stability >= 0.5 else ''}",
         f"Accessibility: {engram.accessibility:.4f}",
         f"Confidence: {engram.source.confidence} ({engram.source.confidence_source})",
@@ -1969,6 +2005,8 @@ def mnemos_inspect(engram_id: str) -> str:
         f"Reconsolidations: {engram.reconsolidation_count}",
         f"Connections: {len(engram.connections)}",
     ]
+    if engram.status is not None:
+        lines.append(f"Status: {engram.status}")
     for c in engram.connections:
         lines.append(f"  → {c.target_id[:30]}... ({c.relation}, str={c.strength:.2f})")
     lines.append(f"Versions: {len(engram.versions)}")
@@ -2145,10 +2183,12 @@ def mnemos_shared(
 
 @mcp.tool()
 def mnemos_forget(engram_id: str) -> str:
-    """Archive a specific memory (soft delete).
+    """Archive a non-prospective operational memory (soft delete).
 
     The memory moves to cold storage. It can be restored via resharpen
     if triggered by relevant context in the future.
+    Open prospective memories must be closed through the prospective status
+    transition CLI/API so the lifecycle change is receipted.
 
     Args:
         engram_id: The memory ID to archive.
@@ -2164,7 +2204,16 @@ def mnemos_forget(engram_id: str) -> str:
     if engram is None:
         return f"Memory not found: {engram_id}"
 
-    _store.archive_engram(engram, reason="user_requested")  # type: ignore
+    try:
+        _store.archive_engram(engram, reason="user_requested")  # type: ignore
+    except ValueError as exc:
+        if "transition_prospective_status" in str(exc):
+            return (
+                f"Prospective memory is still open: {engram_id}\n"
+                "Close it with mnemos prospective status "
+                "ENGRAM_ID fulfilled|closed_unfulfilled|retired."
+            )
+        raise
     return f"Archived: {engram_id}\n  Content was: {engram.content[:100]}..."
 
 
@@ -2228,7 +2277,7 @@ def mnemos_consolidate(deep: bool = False, agent_id: str = "default") -> str:
 
 
 def run_server(
-    db_path: str = "~/.mnemos/memory.db",
+    db_path: str | None = None,
     *,
     agent_id: str | None = None,
     person_id: str | None = None,
@@ -2239,12 +2288,42 @@ def run_server(
     Persist the configured scope so advanced tools can inherit it when callers
     leave their scope args at defaults.
     """
-    _set_server_defaults(agent_id, person_id, project_scope)
-    configure_runtime(
+    from .simple_scope import resolve_scope
+
+    config = _get_config()
+    resolved_agent = (
+        agent_id
+        or os.environ.get("MNEMOS_AGENT_ID")
+        or config.get("agent_id")
+        or _default_agent_id
+        or "default"
+    )
+    resolved_person = (
+        person_id
+        or os.environ.get("MNEMOS_PERSON_ID")
+        or config.get("person_id")
+        or _default_person_id
+        or "user"
+    )
+    resolved_project = (
+        project_scope
+        or os.environ.get("MNEMOS_PROJECT_SCOPE")
+        or config.get("project_scope")
+        or _default_project_scope
+        or "global"
+    )
+    scope = resolve_scope(
         db_path=db_path,
-        agent_id=agent_id,
-        person_id=person_id,
-        project_scope=project_scope,
+        agent_id=str(resolved_agent),
+        person_id=str(resolved_person),
+        project_scope=str(resolved_project),
+    )
+    _set_server_defaults(scope.agent_id, scope.person_id, scope.project_scope)
+    configure_runtime(
+        db_path=scope.db_path,
+        agent_id=scope.agent_id,
+        person_id=scope.person_id,
+        project_scope=scope.project_scope,
     )
 
     def _shutdown(signum, frame):
@@ -2259,6 +2338,6 @@ def run_server(
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    _init_store(db_path)
+    _init_store(scope.db_path)
     logger.info("Mnemos MCP server starting (stdio mode)")
     mcp.run()

@@ -42,6 +42,10 @@ tools inherit the server's configured agent/person/project scope when their
 scope args are left at defaults. Advanced direct capture tools
 (`mnemos_remember`, `mnemos_ingest`) require an explicit `kind`: `episodic`,
 `semantic`, `procedural`, or `prospective`.
+Prospective engram status is an operator lifecycle path, not a simple-mode
+tool: use `mnemos prospective status ENGRAM_ID STATUS` with `fulfilled`,
+`closed_unfulfilled`, or `retired` to close an open prospective row with a
+runtime receipt.
 
 Simple mode handles functional memory, hypomnema, and long-term promotion
 internally so the agent does not have to choose storage layers during normal

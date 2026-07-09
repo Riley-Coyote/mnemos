@@ -34,10 +34,12 @@ Doctor will:
 
 1. Resolve agent/person/project scope.
 2. Create local SQLite storage if needed.
-3. Apply any pending additive-only SQL-file schema migrations.
-4. Run local deterministic maintenance.
-5. Print the simple MCP tool list.
-6. Show whether a dedicated model provider is configured.
+3. Report the current schema version and pending SQL-file migrations.
+4. Apply pending additive-only SQL-file schema migrations as part of context
+   initialization.
+5. Run local deterministic maintenance.
+6. Print the simple MCP tool list.
+7. Show whether a dedicated model provider is configured.
 
 No OpenRouter key is required for baseline continuity.
 
@@ -185,11 +187,17 @@ forget, and explicit consolidation.
 Advanced `mnemos_remember` and `mnemos_ingest` calls must include an explicit
 `kind` value. Use exactly `episodic`, `semantic`, `procedural`, or
 `prospective`; omitted or unknown kinds are rejected before anything is stored.
+Open prospective engrams can be closed from the CLI with
+`mnemos prospective status ENGRAM_ID STATUS`, where `STATUS` is `fulfilled`,
+`closed_unfulfilled`, or `retired`; the transition writes a runtime receipt and
+terminal rows do not reopen.
 
 Advanced MCP callers still do not choose `source_authority` or `origin_stamp`;
 Mnemos stamps source authority from the tool/import/producer channel and origin
-from trusted write-path measurement. Hypomnema domains are checked against
-content classification, so a lower-risk caller label cannot bypass review for
+from trusted write-path measurement. Setup seeding is bootstrap-sourced,
+whereas hypomnema promotion stays observed-authority with inference origin, not
+user-witnessed origin. Hypomnema domains are checked against content
+classification, so a lower-risk caller label cannot bypass review for
 identity/foundational content.
 
 Scope-taking advanced tools inherit the server scope when their `agent_id`,

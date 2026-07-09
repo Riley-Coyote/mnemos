@@ -17,9 +17,8 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
-
 from .interface.belief_render import format_belief_summary_line
+from .simple_scope import resolve_scope
 
 log = logging.getLogger("mnemos.bridge")
 
@@ -34,11 +33,12 @@ class MnemosBridge:
         agent_id: str | None = None,
         db_path: str | None = None,
     ) -> None:
-        self.agent_id = agent_id or os.environ.get("MNEMOS_AGENT_ID", "default")
-        self.db_path = db_path or os.environ.get(
-            "MNEMOS_DB_PATH",
-            str(Path.home() / ".mnemos" / "memory.db"),
+        scope = resolve_scope(
+            db_path=db_path,
+            agent_id=agent_id or os.environ.get("MNEMOS_AGENT_ID") or "default",
         )
+        self.agent_id = scope.agent_id
+        self.db_path = scope.db_path
 
         self._store = None
         self._encoder = None

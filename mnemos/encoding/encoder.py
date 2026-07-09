@@ -176,6 +176,8 @@ class Encoder:
         skip_surprise_detection: bool = False,
         *,
         source_authority: str,
+        origin_stamp_override: str | None = None,
+        allow_auto_share: bool = True,
     ) -> Engram:
         """Create a new engram from raw content.
 
@@ -198,6 +200,13 @@ class Encoder:
                 default, so an unstamped caller is a loud ``TypeError`` rather
                 than a silent ``observed``. Trusted callers only; the MCP tool
                 surface exposes no authority parameter.
+            origin_stamp_override: Trusted internal override for provenance
+                axes that are not representable by SourceType/SourceAuthority
+                alone. Used only when a record-only promotion must not mint a
+                user-witnessed stamp.
+            allow_auto_share: Whether this encode may publish high-confidence
+                knowledge to the shared pool. Record-only internal promotions
+                set this false explicitly.
 
         Returns:
             The fully-formed, persisted Engram with connections attached.
@@ -257,7 +266,8 @@ class Encoder:
             encoding_context=encoding_context,
             source=memory_source,
             owner_agent_id=agent_id,
-            origin_stamp=_origin_stamp_for_source(source, source_authority),
+            origin_stamp=origin_stamp_override
+            or _origin_stamp_for_source(source, source_authority),
         )
 
         # 5. Discover connections to existing memories
@@ -275,8 +285,8 @@ class Encoder:
             surprise = self._detect_surprise(engram, self._store)
         if surprise > 0:
             engram.encoding_context.surprise_level = surprise
-            # Deep encoding: boost strength and stability proportional to surprise
-            engram.strength = min(1.0, engram.strength + 0.15 * surprise)
+            # Deep encoding: boost stability proportional to surprise.
+            # S0 strength is frozen at initial classification.
             engram.stability = min(1.0, engram.stability + 0.10 * surprise)
 
         # 7. Persist
@@ -290,7 +300,7 @@ class Encoder:
                 pass  # Don't fail encoding if embedding fails
 
         # 9. Auto-publish to shared pool if applicable
-        if self._shared_pool and should_auto_share(engram):
+        if allow_auto_share and self._shared_pool and should_auto_share(engram):
             engram.visibility = Visibility.SHARED
             self._store.save_engram(engram)  # update visibility in resolved store
             self._shared_pool.publish(engram)

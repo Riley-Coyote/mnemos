@@ -44,6 +44,7 @@ except ImportError:
             return BeliefChangeKind.CONFIRMED
         return BeliefChangeKind.STABLE
 
+
 try:
     from mnemos.llm import create_client
 except ImportError:
@@ -80,7 +81,9 @@ class Substrate:
         # Snapshot belief states for tier crossing detection
         self._belief_snapshot: dict[str, float] = {}
 
-        log.info(f"Substrate initialized (agent={self.config.agent_id}, db={self.db_path})")
+        log.info(
+            f"Substrate initialized (agent={self.config.agent_id}, db={self.db_path})"
+        )
 
     def tick(self) -> dict:
         """Run one complete substrate cycle.
@@ -130,14 +133,18 @@ class Substrate:
         engrams_produced = 0
         for event in events:
             if engrams_produced >= self.config.max_engrams_per_tick:
-                log.info(f"Hit max engrams per tick ({self.config.max_engrams_per_tick}), stopping cascade")
+                log.info(
+                    f"Hit max engrams per tick ({self.config.max_engrams_per_tick}), stopping cascade"
+                )
                 break
 
             handler = HANDLER_MAP.get(event.event_type)
             if handler is None:
                 # BELIEF_CONFIRMED events are logged but not handled
                 if event.event_type == EventType.BELIEF_CONFIRMED:
-                    log.info(f"Belief confirmed: {event.payload.get('belief_id', 'unknown')}")
+                    log.info(
+                        f"Belief confirmed: {event.payload.get('belief_id', 'unknown')}"
+                    )
                 continue
 
             try:
@@ -149,19 +156,24 @@ class Substrate:
                     llm_client=self.llm_client,
                 )
                 summary["events_handled"] += 1
-                summary["handler_outputs"].append({
-                    "handler": handler.__name__.split(".")[-1],
-                    "event": event.event_type.value,
-                    "produced": len(new_events),
-                })
+                summary["handler_outputs"].append(
+                    {
+                        "handler": handler.__name__.split(".")[-1],
+                        "event": event.event_type.value,
+                        "produced": len(new_events),
+                    }
+                )
                 # Don't cascade further — depth 1 is enough for now
             except Exception as e:
-                log.error(f"Handler {handler.__name__} failed on {event}: {e}", exc_info=True)
+                log.error(
+                    f"Handler {handler.__name__} failed on {event}: {e}", exc_info=True
+                )
 
         # ── Phase 6.5: Introspection self-audit (opt-in, off by default) ──
         if self.config.introspection_enabled:
             try:
                 from .introspection_pass import run_introspection_pass
+
                 summary["introspection"] = run_introspection_pass(
                     self.config, self.store, self.llm_client
                 )
@@ -194,48 +206,58 @@ class Substrate:
 
         # ── Decay ──
         conn = sqlite3.connect(self.db_path)
-        decayed = conn.execute("""
+        decayed = conn.execute(
+            """
             UPDATE engrams
-            SET accessibility = MAX(0.05, accessibility - ?),
-                strength = MAX(0.05, strength - ? * 0.5)
+            SET accessibility = MAX(0.05, accessibility - ?)
             WHERE state = 'active'
               AND owner_agent_id = ?
               AND accessibility > 0.1
               AND decay_protected = 0
               AND consolidation_authorized = 1
               AND read_visibility = 'operational_context'
-        """, (self.config.decay_rate, self.config.decay_rate, self.config.agent_id))
+              AND NOT (kind = 'prospective' AND COALESCE(status, 'open') = 'open')
+        """,
+            (self.config.decay_rate, self.config.agent_id),
+        )
         decay_count = decayed.rowcount
         conn.commit()
 
         # Find memories that dropped below vividness threshold (softened)
-        softened = conn.execute("""
+        softened = conn.execute(
+            """
             SELECT id FROM engrams
             WHERE state = 'active'
               AND owner_agent_id = ?
-              AND (accessibility * strength) < 0.15
-              AND (accessibility * strength) > 0.01
+              AND accessibility < 0.15
+              AND accessibility > 0.01
               AND softening_protected = 0
               AND consolidation_authorized = 1
               AND read_visibility = 'operational_context'
+              AND NOT (kind = 'prospective' AND COALESCE(status, 'open') = 'open')
             ORDER BY RANDOM()
             LIMIT 3
-        """, (self.config.agent_id,)).fetchall()
+        """,
+            (self.config.agent_id,),
+        ).fetchall()
         conn.close()
 
         for row in softened:
-            events.append(SubstrateEvent(
-                event_type=EventType.MEMORY_SOFTENED,
-                payload={"engram_id": row[0]},
-                source="decay",
-            ))
+            events.append(
+                SubstrateEvent(
+                    event_type=EventType.MEMORY_SOFTENED,
+                    payload={"engram_id": row[0]},
+                    source="decay",
+                )
+            )
 
         summary["engrams_decayed"] = decay_count
         log.info(f"Decay pass: {decay_count} engrams decayed, {len(softened)} softened")
 
         # ── Connection Discovery ──
         conn = sqlite3.connect(self.db_path)
-        recent = conn.execute("""
+        recent = conn.execute(
+            """
             SELECT id FROM engrams
             WHERE state = 'active'
               AND owner_agent_id = ?
@@ -243,7 +265,9 @@ class Substrate:
               AND read_visibility = 'operational_context'
             ORDER BY created_at DESC
             LIMIT ?
-        """, (self.config.agent_id, self.config.connection_discovery_limit)).fetchall()
+        """,
+            (self.config.agent_id, self.config.connection_discovery_limit),
+        ).fetchall()
         conn.close()
 
         new_connections = 0
@@ -271,21 +295,23 @@ class Substrate:
                         existing = sqlite3.connect(self.db_path)
                         exists = existing.execute(
                             "SELECT COUNT(*) FROM connections WHERE (from_id=? AND to_id=?) OR (from_id=? AND to_id=?)",
-                            (row[0], match["id"], match["id"], row[0])
+                            (row[0], match["id"], match["id"], row[0]),
                         ).fetchone()[0]
                         existing.close()
 
                         if exists == 0 and match.get("score", 0) > 0.7:
-                            events.append(SubstrateEvent(
-                                event_type=EventType.CONNECTION_DISCOVERED,
-                                payload={
-                                    "from_engram_id": row[0],
-                                    "to_engram_id": match["id"],
-                                    "connection_type": "parallels",
-                                    "similarity": match.get("score", 0),
-                                },
-                                source="connection_discovery",
-                            ))
+                            events.append(
+                                SubstrateEvent(
+                                    event_type=EventType.CONNECTION_DISCOVERED,
+                                    payload={
+                                        "from_engram_id": row[0],
+                                        "to_engram_id": match["id"],
+                                        "connection_type": "parallels",
+                                        "similarity": match.get("score", 0),
+                                    },
+                                    source="connection_discovery",
+                                )
+                            )
                             new_connections += 1
             except Exception as e:
                 log.debug(f"Connection discovery failed for {row[0]}: {e}")
@@ -296,7 +322,7 @@ class Substrate:
         # ── Belief Review ──
         beliefs = self.store.get_beliefs(agent_id=self.config.agent_id)
         reviewed = 0
-        for belief in beliefs[:self.config.belief_review_limit]:
+        for belief in beliefs[: self.config.belief_review_limit]:
             try:
                 results = self.embedding_index.search(belief.content, limit=3)
                 for match in results:
@@ -319,7 +345,8 @@ class Substrate:
         events: list[SubstrateEvent] = []
 
         conn = sqlite3.connect(self.db_path)
-        last_memory = conn.execute("""
+        last_memory = conn.execute(
+            """
             SELECT created_at FROM engrams
             WHERE state = 'active'
               AND owner_agent_id = ?
@@ -327,7 +354,9 @@ class Substrate:
               AND read_visibility = 'operational_context'
             ORDER BY created_at DESC
             LIMIT 1
-        """, (self.config.agent_id,)).fetchone()
+        """,
+            (self.config.agent_id,),
+        ).fetchone()
         conn.close()
 
         if last_memory:
@@ -338,12 +367,16 @@ class Substrate:
             silence_hours = (now - last_time).total_seconds() / 3600
 
             if silence_hours > self.config.silence_threshold_hours:
-                events.append(SubstrateEvent(
-                    event_type=EventType.SILENCE_EXTENDED,
-                    payload={"silence_hours": silence_hours},
-                    source="temporal",
-                ))
-                log.info(f"Extended silence detected: {silence_hours:.1f}h since last memory")
+                events.append(
+                    SubstrateEvent(
+                        event_type=EventType.SILENCE_EXTENDED,
+                        payload={"silence_hours": silence_hours},
+                        source="temporal",
+                    )
+                )
+                log.info(
+                    f"Extended silence detected: {silence_hours:.1f}h since last memory"
+                )
 
         return events
 
@@ -360,29 +393,33 @@ class Substrate:
             kind = classify_belief_change(prev, belief.confidence)
 
             if kind == BeliefChangeKind.CONTRADICTED:
-                events.append(SubstrateEvent(
-                    event_type=EventType.BELIEF_CONTRADICTED,
-                    payload={
-                        "belief_id": belief.id,
-                        "previous_confidence": prev,
-                        "current_confidence": belief.confidence,
-                    },
-                    source="tier_crossing",
-                ))
+                events.append(
+                    SubstrateEvent(
+                        event_type=EventType.BELIEF_CONTRADICTED,
+                        payload={
+                            "belief_id": belief.id,
+                            "previous_confidence": prev,
+                            "current_confidence": belief.confidence,
+                        },
+                        source="tier_crossing",
+                    )
+                )
                 log.info(
                     f"Belief CONTRADICTED: {belief.content[:50]}... "
                     f"({prev:.2f} -> {belief.confidence:.2f})"
                 )
             elif kind == BeliefChangeKind.CONFIRMED:
-                events.append(SubstrateEvent(
-                    event_type=EventType.BELIEF_CONFIRMED,
-                    payload={
-                        "belief_id": belief.id,
-                        "previous_confidence": prev,
-                        "current_confidence": belief.confidence,
-                    },
-                    source="tier_crossing",
-                ))
+                events.append(
+                    SubstrateEvent(
+                        event_type=EventType.BELIEF_CONFIRMED,
+                        payload={
+                            "belief_id": belief.id,
+                            "previous_confidence": prev,
+                            "current_confidence": belief.confidence,
+                        },
+                        source="tier_crossing",
+                    )
+                )
                 log.info(
                     f"Belief CONFIRMED: {belief.content[:50]}... "
                     f"({prev:.2f} -> {belief.confidence:.2f})"
@@ -418,7 +455,9 @@ if __name__ == "__main__":
 
     if "--dry-run" in sys.argv:
         print("Dry run — initializing without tick")
-        print(f"Store: {substrate.store.count_engrams(agent_id=config.agent_id)} engrams")
+        print(
+            f"Store: {substrate.store.count_engrams(agent_id=config.agent_id)} engrams"
+        )
         beliefs = substrate.store.get_beliefs(agent_id=config.agent_id)
         print(f"Beliefs: {len(beliefs)}")
         mods = compute_modulators(
@@ -426,7 +465,9 @@ if __name__ == "__main__":
             agent_id=config.agent_id,
             require_consolidation_authorized=True,
         )
-        print(f"Modulators: arousal={mods.arousal} openness={mods.openness} resolution={mods.resolution}")
+        print(
+            f"Modulators: arousal={mods.arousal} openness={mods.openness} resolution={mods.resolution}"
+        )
     else:
         summary = substrate.tick()
         print(json.dumps(summary, indent=2))

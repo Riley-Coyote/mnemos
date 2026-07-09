@@ -93,6 +93,26 @@ def _classify_kind(content: str) -> str:
     return "semantic"
 
 
+def _engram_kind_value(engram: Any) -> str:
+    kind = engram.kind
+    return kind.value if hasattr(kind, "value") else str(kind)
+
+
+def _is_open_prospective_engram(engram: Any) -> bool:
+    return (
+        _engram_kind_value(engram) == "prospective"
+        and (getattr(engram, "status", None) or "open") == "open"
+    )
+
+
+def _prospective_status_instruction(engram: Any) -> str:
+    return (
+        f"Prospective memory is still open: {engram.id}.\n"
+        "Close it with `mnemos prospective status "
+        "ENGRAM_ID fulfilled|closed_unfulfilled|retired`."
+    )
+
+
 def _classify_domain(content: str) -> str:
     text = content.lower()
     if any(
@@ -922,6 +942,13 @@ class MnemosRuntime:
                 read_visibility=READ_VISIBILITY_OPERATIONAL,
             )
             if hypo is not None:
+                related_engram_id = self._related_hypomnema_engram_id(hypo)
+                prospective_instruction = self._prospective_status_instruction_for(
+                    related_engram_id
+                )
+                if prospective_instruction is not None:
+                    return prospective_instruction
+
                 if action in {"forget", "archive", "remove", "delete"}:
                     self._store.archive_hypomnema_entry(
                         target,
@@ -931,18 +958,9 @@ class MnemosRuntime:
                         project_scope=self.scope.project_scope,
                         read_visibility=READ_VISIBILITY_OPERATIONAL,
                     )
-                    related_engram_id = hypo.get("related_engram_id") or hypo.get(
-                        "graduated_to_engram_id"
+                    self._archive_related_hypomnema_engram(
+                        related_engram_id, reason=f"simple_correction_{action}"
                     )
-                    if related_engram_id:
-                        related = self._store.get_engram(
-                            related_engram_id,
-                            read_visibility=READ_VISIBILITY_OPERATIONAL,
-                        )
-                        if related is not None:
-                            self._store.archive_engram(
-                                related, reason=f"simple_correction_{action}"
-                            )
                     return f"Archived continuity note {target}."
 
                 self._store.revise_hypomnema_entry(
@@ -958,7 +976,7 @@ class MnemosRuntime:
                 )
                 return self._finish_hypomnema_correction(
                     target,
-                    hypo.get("related_engram_id") or hypo.get("graduated_to_engram_id"),
+                    related_engram_id,
                     correction,
                     action,
                     label="continuity note",
@@ -969,7 +987,14 @@ class MnemosRuntime:
                 read_visibility=READ_VISIBILITY_OPERATIONAL,
             )
             if engram is not None:
-                self._store.archive_engram(engram, reason=f"simple_correction_{action}")
+                try:
+                    self._store.archive_engram(
+                        engram, reason=f"simple_correction_{action}"
+                    )
+                except ValueError as exc:
+                    if "transition_prospective_status" in str(exc):
+                        return _prospective_status_instruction(engram)
+                    raise
                 if (
                     action in {"forget", "archive", "remove", "delete"}
                     and not correction.strip()
@@ -1005,6 +1030,13 @@ class MnemosRuntime:
             )
             if matches:
                 match = matches[0]
+                related_engram_id = self._related_hypomnema_engram_id(match)
+                prospective_instruction = self._prospective_status_instruction_for(
+                    related_engram_id
+                )
+                if prospective_instruction is not None:
+                    return prospective_instruction
+
                 if action in {"forget", "archive", "remove", "delete"}:
                     self._store.archive_hypomnema_entry(
                         match["id"],
@@ -1014,18 +1046,9 @@ class MnemosRuntime:
                         project_scope=self.scope.project_scope,
                         read_visibility=READ_VISIBILITY_OPERATIONAL,
                     )
-                    related_engram_id = match.get("related_engram_id") or match.get(
-                        "graduated_to_engram_id"
+                    self._archive_related_hypomnema_engram(
+                        related_engram_id, reason=f"simple_correction_{action}"
                     )
-                    if related_engram_id:
-                        related = self._store.get_engram(
-                            related_engram_id,
-                            read_visibility=READ_VISIBILITY_OPERATIONAL,
-                        )
-                        if related is not None:
-                            self._store.archive_engram(
-                                related, reason=f"simple_correction_{action}"
-                            )
                     maintenance = self.maintain(auto=True)
                     return (
                         f"Archived closest continuity note {match['id']}.\n"
@@ -1059,8 +1082,7 @@ class MnemosRuntime:
 
                 return self._finish_hypomnema_correction(
                     note_id,
-                    match.get("related_engram_id")
-                    or match.get("graduated_to_engram_id"),
+                    related_engram_id,
                     correction,
                     action,
                     label="closest continuity note",
@@ -1070,7 +1092,14 @@ class MnemosRuntime:
             matches = self._retrieve(search_text, max_results=1)
             if matches:
                 engram = matches[0].engram
-                self._store.archive_engram(engram, reason=f"simple_correction_{action}")
+                try:
+                    self._store.archive_engram(
+                        engram, reason=f"simple_correction_{action}"
+                    )
+                except ValueError as exc:
+                    if "transition_prospective_status" in str(exc):
+                        return _prospective_status_instruction(engram)
+                    raise
                 return f"Archived closest matching memory {engram.id}."
 
         return self.capture(
@@ -1078,6 +1107,37 @@ class MnemosRuntime:
             context=f"Correction supplied through mnemos_correct. Prior query: {query.strip()}",
             importance="high",
         )
+
+    def _related_hypomnema_engram_id(self, entry: dict[str, Any]) -> str | None:
+        return entry.get("related_engram_id") or entry.get("graduated_to_engram_id")
+
+    def _prospective_status_instruction_for(
+        self, related_engram_id: str | None
+    ) -> str | None:
+        assert self._store is not None
+        if not related_engram_id:
+            return None
+        related = self._store.get_engram(
+            related_engram_id,
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
+        )
+        if related is not None and _is_open_prospective_engram(related):
+            return _prospective_status_instruction(related)
+        return None
+
+    def _archive_related_hypomnema_engram(
+        self, related_engram_id: str | None, *, reason: str
+    ) -> None:
+        assert self._store is not None
+        if not related_engram_id:
+            return
+        related = self._store.get_engram(
+            related_engram_id,
+            read_visibility=READ_VISIBILITY_OPERATIONAL,
+        )
+        if related is None or _engram_kind_value(related) == "prospective":
+            return
+        self._store.archive_engram(related, reason=reason)
 
     def _finish_hypomnema_correction(
         self,
@@ -1091,15 +1151,15 @@ class MnemosRuntime:
         assert self._store is not None
         assert self._encoder is not None
 
-        if related_engram_id:
-            related = self._store.get_engram(
-                related_engram_id,
-                read_visibility=READ_VISIBILITY_OPERATIONAL,
-            )
-            if related is not None:
-                self._store.archive_engram(
-                    related, reason=f"simple_correction_{action}"
-                )
+        prospective_instruction = self._prospective_status_instruction_for(
+            related_engram_id
+        )
+        if prospective_instruction is not None:
+            return prospective_instruction
+
+        self._archive_related_hypomnema_engram(
+            related_engram_id, reason=f"simple_correction_{action}"
+        )
 
         updated_note = self._store.get_hypomnema_entry(
             note_id,

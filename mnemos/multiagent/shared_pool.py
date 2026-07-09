@@ -128,7 +128,8 @@ class SharedPool:
             # Safety filter — shared.db should only contain shared/public
             # engrams, but guard against any private ones that slipped in
             results = [
-                e for e in results
+                e
+                for e in results
                 if e.visibility in (Visibility.SHARED, Visibility.PUBLIC)
             ]
             if kind:
@@ -187,7 +188,7 @@ class SharedPool:
     ) -> dict[str, Any]:
         """Resolve a conflict between two shared memories.
 
-        Compares confidence, strength, and recency to determine a winner.
+        Compares confidence, S0/strength, and recency to determine a winner.
         Creates a CONTRADICTS connection between the two engrams.
 
         Args:
@@ -206,9 +207,11 @@ class SharedPool:
             missing = engram_a_id if a is None else engram_b_id
             return {"error": "not_found", "missing_id": missing}
 
-        # Determine winner: confidence > strength > recency
+        # Determine winner: confidence > S0/strength > recency
         if a.source.confidence != b.source.confidence:
-            winner, loser = (a, b) if a.source.confidence > b.source.confidence else (b, a)
+            winner, loser = (
+                (a, b) if a.source.confidence > b.source.confidence else (b, a)
+            )
             method = "higher_confidence"
         elif a.strength != b.strength:
             winner, loser = (a, b) if a.strength > b.strength else (b, a)

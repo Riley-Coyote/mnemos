@@ -12,6 +12,8 @@ Mutation proofs (each assertion class has a mutation that turns it red):
 - Change any of the four ruled-defensible hardcoded kind="semantic" sites
   (setup seeds, setup project context, domain-claim proposal, hypomnema
   promotion) -> the corresponding regression pin goes red.
+- Reintroduce SourceType.USER_EXPLICIT at any ruled site -> the source mapping
+  assertions or enum-resolution guard go red.
 """
 
 from __future__ import annotations
@@ -173,26 +175,6 @@ class _RecordingEncoder:
         )
 
 
-def _patch_source_type(monkeypatch):
-    """Work around a pre-existing latent bug on main so the kind pins can
-    exercise their code paths: mcp_server references SourceType.USER_EXPLICIT
-    (setup seeds, project context, hypomnema promotion), but core/types.py
-    defines no such member — USER_EXPLICIT exists only on ConfidenceSource.
-    On main this makes the setup seed writes silently encode nothing (the
-    AttributeError is swallowed by try/except) and makes a non-dry-run
-    hypomnema promotion raise. Fixing that enum reference is a separate,
-    review-worthy change (it selects a confidence mapping); these pins only
-    assert the ruled-defensible kind="semantic" at each call site, so the
-    stub supplies the missing member without touching the sites.
-    """
-    from mnemos import mcp_server
-    from mnemos.core.types import SourceType
-
-    members = {m.name: m.value for m in SourceType}
-    members["USER_EXPLICIT"] = "session"
-    monkeypatch.setattr(mcp_server, "SourceType", SimpleNamespace(**members))
-
-
 def _patch_setup(monkeypatch, store, encoder, config):
     from mnemos import mcp_server
 
@@ -202,7 +184,6 @@ def _patch_setup(monkeypatch, store, encoder, config):
     monkeypatch.setattr(mcp_server, "_ensure_store", lambda: store)
     monkeypatch.setattr(mcp_server, "save_config", lambda updated: None)
     monkeypatch.setattr(mcp_server, "_config_invalidate", lambda: None)
-    _patch_source_type(monkeypatch)
     return mcp_server
 
 
@@ -222,6 +203,8 @@ def test_setup_seed_engrams_stay_semantic(monkeypatch, store):
 
     assert encoder.calls, "setup step 3 should encode seed engrams"
     assert all(call["kind"] == "semantic" for call in encoder.calls)
+    assert all(call["source"] == "bootstrap" for call in encoder.calls)
+    assert all(call["allow_auto_share"] is False for call in encoder.calls)
 
 
 def test_setup_project_context_stays_semantic(monkeypatch, store):
@@ -242,6 +225,8 @@ def test_setup_project_context_stays_semantic(monkeypatch, store):
 
     assert encoder.calls, "setup step 4 should encode project context"
     assert all(call["kind"] == "semantic" for call in encoder.calls)
+    assert all(call["source"] == "bootstrap" for call in encoder.calls)
+    assert all(call["allow_auto_share"] is False for call in encoder.calls)
 
 
 def test_domain_claim_proposal_row_stays_semantic(monkeypatch, store):
@@ -272,8 +257,7 @@ def test_domain_claim_proposal_row_stays_semantic(monkeypatch, store):
 def test_hypomnema_promotion_stays_semantic(monkeypatch, store):
     """Pin: hypomnema promotion encodes stable distilled continuity — a
     deliberate semantic write. A real encoder runs (the promoted-engram FK
-    needs a real row), wrapped to record kwargs at the ruled call site;
-    _patch_source_type explains why the site cannot run unpatched on main."""
+    needs a real row), wrapped to record kwargs at the ruled call site."""
     from mnemos.encoding.encoder import Encoder
 
     inner = Encoder(store)
@@ -284,7 +268,6 @@ def test_hypomnema_promotion_stays_semantic(monkeypatch, store):
     )[1]
     mcp_server = _patch_mcp(monkeypatch, store)
     monkeypatch.setattr(mcp_server, "_encoder", encoder)
-    _patch_source_type(monkeypatch)
     entry_id = store.write_hypomnema_entry(
         "Riley prefers evidence-first reviews.",
         agent_id="oliver",
@@ -303,8 +286,13 @@ def test_hypomnema_promotion_stays_semantic(monkeypatch, store):
     assert "Hypomnema promoted" in out, out
     assert len(encoder.calls) == 1
     assert encoder.calls[0]["kind"] == "semantic"
+    assert encoder.calls[0]["source"] == "session"
+    assert encoder.calls[0]["origin_stamp_override"] == "inference"
+    assert encoder.calls[0]["allow_auto_share"] is False
     # And the stored row carries the ruled kind.
     engram_id = out.split("Engram: ", 1)[1].splitlines()[0].strip()
     engram = store.get_engram(engram_id, read_visibility=None)
     assert engram is not None
     assert engram.kind == "semantic"
+    assert engram.origin_stamp == "inference"
+    assert engram.visibility == "private"

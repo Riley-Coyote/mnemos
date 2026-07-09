@@ -42,6 +42,16 @@ RECEIPT_KINDS: dict[str, ReceiptKindSpec] = {
     "goal-status": ReceiptKindSpec(
         "goal-status", "future-goals", "schemas/receipts/goal-status"
     ),
+    "prospective-status-transition": ReceiptKindSpec(
+        "prospective-status-transition",
+        "future-goals",
+        "schemas/receipts/prospective-status-transition",
+    ),
+    "pai-tombstone-refusal": ReceiptKindSpec(
+        "pai-tombstone-refusal",
+        "pai-importer",
+        "schemas/receipts/pai-tombstone-refusal",
+    ),
     "play-episode": ReceiptKindSpec(
         "play-episode", "future-play", "schemas/receipts/play-episode"
     ),

@@ -17,6 +17,7 @@ Commands:
     mnemos export [--workspace]  Export workspace files (MEMORY.md, etc.)
     mnemos setup-openclaw        Register cron jobs for OpenClaw
     mnemos bootstrap             Bootstrap a complete agent stack
+    mnemos prospective status    Close an open prospective engram
     mnemos identity diff         Diff graph-derived identity against SOUL.md
     mnemos identity accept       Accept a divergence, open a new epoch
     mnemos pai-import preview        Preview a PAI source manifest import
@@ -284,6 +285,28 @@ def main(argv: list[str] | None = None) -> int:
     p_remember.add_argument("--person-id", default=None, help="Person/user scope")
     p_remember.add_argument(
         "--project-scope", default=None, help="Project/workspace scope"
+    )
+
+    # ── prospective ──
+    p_prospective = sub.add_parser(
+        "prospective", help="Manage future-directed prospective engrams"
+    )
+    prospective_sub = p_prospective.add_subparsers(dest="prospective_command")
+    p_prospective_status = prospective_sub.add_parser(
+        "status", help="Transition an open prospective engram to a terminal status"
+    )
+    p_prospective_status.add_argument("engram_id", help="Prospective engram ID")
+    p_prospective_status.add_argument(
+        "status",
+        choices=("fulfilled", "closed_unfulfilled", "retired"),
+        help="Terminal prospective status",
+    )
+    p_prospective_status.add_argument("--reason", default="", help="Operator note")
+    p_prospective_status.add_argument(
+        "--runtime", default="cli", help="Receipt runtime label"
+    )
+    p_prospective_status.add_argument(
+        "--session-id", default="", help="Receipt session identifier"
     )
 
     # ── doctor ──
@@ -1092,6 +1115,7 @@ def main(argv: list[str] | None = None) -> int:
         "pai-import": _cmd_pai_import,
         "soak": _cmd_soak,
         "inner-life": _cmd_inner_life,
+        "prospective": _cmd_prospective,
     }
 
     handler = handlers.get(args.command)
@@ -1120,7 +1144,9 @@ class MigrationConfigLoadError(RuntimeError):
 def _resolve_migration_db_path() -> str:
     env_db = os.environ.get("MNEMOS_DB_PATH")
     if env_db:
-        return env_db
+        from .simple_scope import resolve_scope
+
+        return resolve_scope(db_path=env_db).db_path
     try:
         config = load_config()
     except (AttributeError, TypeError) as exc:
@@ -1135,15 +1161,17 @@ def _resolve_migration_db_path() -> str:
             "store section must be an object with db_path, not "
             f"{type(store_config).__name__}"
         )
+    from .simple_scope import resolve_scope
+
     if "db_path" not in store_config:
-        return "~/.mnemos/memory.db"
+        return resolve_scope().db_path
     configured = store_config["db_path"]
     if not isinstance(configured, str) or not configured.strip():
         raise MigrationConfigLoadError(
             "store.db_path must be a non-empty string path, not "
             f"{type(configured).__name__}"
         )
-    return configured
+    return resolve_scope().db_path
 
 
 def _resolve_agent_id(args: argparse.Namespace) -> str:
@@ -1153,6 +1181,20 @@ def _resolve_agent_id(args: argparse.Namespace) -> str:
         or os.environ.get("MNEMOS_AGENT_ID")
         or "default"
     )
+
+
+def _resolve_scope_agent_for_cli(args: argparse.Namespace) -> str | None:
+    """Preserve config-scoped agents without falling into simple-scope's new default."""
+
+    if getattr(args, "agent_id", None) or os.environ.get("MNEMOS_AGENT_ID"):
+        return getattr(args, "agent_id", None)
+    try:
+        config = load_config()
+    except Exception:
+        config = {}
+    if isinstance(config, dict) and str(config.get("agent_id", "")).strip():
+        return None
+    return "default"
 
 
 def _get_store(args: argparse.Namespace):
@@ -1185,7 +1227,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
             run_server(
                 db_path=_resolve_db_path(args),
-                agent_id=_resolve_agent_id(args),
+                agent_id=_resolve_scope_agent_for_cli(args),
                 person_id=getattr(args, "person_id", None),
                 project_scope=getattr(args, "project_scope", None),
             )
@@ -1222,9 +1264,11 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     print(f"Tags:          {', '.join(engram.tags) or '(none)'}")
     print(f"State:         {engram.state}")
     print(f"Resolution:    {engram.resolution}")
-    print(f"Strength:      {engram.strength:.4f}")
+    print(f"S0 (initial, frozen at encoding): {engram.strength:.4f}")
     print(f"Stability:     {engram.stability:.4f}")
     print(f"Accessibility: {engram.accessibility:.4f}")
+    if engram.status is not None:
+        print(f"Status:        {engram.status}")
     print(
         f"Confidence:    {engram.source.confidence} ({engram.source.confidence_source})"
     )
@@ -1618,6 +1662,65 @@ def _cmd_remember(args: argparse.Namespace) -> int:
         runtime.close()
 
 
+def _cmd_prospective(args: argparse.Namespace) -> int:
+    """Manage prospective engram status."""
+    command = getattr(args, "prospective_command", None)
+    if command != "status":
+        print("Usage: mnemos prospective status ENGRAM_ID STATUS", file=sys.stderr)
+        return 1
+
+    from .simple_scope import resolve_scope
+    from .store.sqlite_store import EngramStore
+
+    scope = resolve_scope(
+        db_path=getattr(args, "db_path", None),
+        agent_id=_resolve_scope_agent_for_cli(args),
+    )
+    store = EngramStore(scope.db_path)
+    try:
+        result = store.transition_prospective_status(
+            args.engram_id,
+            args.status,
+            actor=scope.agent_id,
+            runtime=args.runtime,
+            session_id=args.session_id,
+            reason=args.reason,
+        )
+    except ValueError as exc:
+        print(f"prospective status failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        store.close()
+
+    receipt = result["receipt"]
+    print("Prospective status updated")
+    print(f"Engram:       {result['engram_id']}")
+    print(f"From:         {result['from_status']}")
+    print(f"To:           {result['to_status']}")
+    print(f"Receipt:      {receipt['receipt_id']}")
+    return 0
+
+
+def _migration_doctor_status(db_path: Path) -> tuple[str, str]:
+    """Read migration status without applying migrations."""
+    if not db_path.exists():
+        return ("missing", "unknown")
+    try:
+        from .store.migration_runner import MigrationRunner
+        from .store.migrations import list_migrations
+
+        python_versions = [int(m["version"]) for m in list_migrations()]
+        if 1 not in python_versions:
+            python_versions.append(1)
+        plan = MigrationRunner(
+            db_path,
+            known_python_versions=python_versions,
+        ).plan()
+        return (str(plan.current_version), str(len(plan.pending)))
+    except Exception as exc:
+        return (f"unavailable ({type(exc).__name__})", "unknown")
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     """Check simple-mode readiness."""
     from .simple_runtime import MnemosRuntime, SIMPLE_TOOL_NAMES
@@ -1629,6 +1732,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         project_scope=getattr(args, "project_scope", None),
     )
     try:
+        schema_version, pending_migrations = _migration_doctor_status(runtime.db_path)
         packet = runtime.context()
         print("Mnemos Doctor")
         print("-" * 40)
@@ -1637,6 +1741,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print(f"Project:     {runtime.scope.project_scope}")
         print(f"Database:    {runtime.db_path}")
         print(f"DB exists:    {'yes' if runtime.db_path.exists() else 'no'}")
+        print(f"Schema version: {schema_version}")
+        print(f"Pending migrations: {pending_migrations}")
         print(f"MCP SDK:      {'yes' if _mcp_available() else 'no'}")
         print(
             f"Model:        {'dedicated provider configured' if runtime.has_dedicated_model else 'local baseline only'}"
@@ -1663,6 +1769,16 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             )
             return 1
         print("One store:    ok (no sibling per-agent DB)")
+        archived_open = _archived_open_prospective_rows(runtime.db_path)
+        if archived_open:
+            print()
+            for engram_id in archived_open:
+                print(f"FAIL: archived open prospective engram: {engram_id}")
+            print(
+                "Archived prospective rows must carry a terminal status; use "
+                "the prospective status transition API to close open wants."
+            )
+            return 1
         print()
         print(packet)
         return 0
@@ -1670,15 +1786,46 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         runtime.close()
 
 
+def _archived_open_prospective_rows(db_path: Path) -> list[str]:
+    if not db_path.exists():
+        return []
+    uri = f"file:{db_path}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'engrams'"
+        ).fetchone()
+        if table is None:
+            return []
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(engrams)").fetchall()
+        }
+        if not {"id", "kind", "status", "state"}.issubset(columns):
+            return []
+        rows = conn.execute(
+            """
+            SELECT id FROM engrams
+            WHERE kind = 'prospective'
+              AND COALESCE(status, 'open') = 'open'
+              AND state = 'archived'
+            ORDER BY id
+            """
+        ).fetchall()
+        return [str(row[0]) for row in rows]
+    finally:
+        conn.close()
+
+
 def _build_migration_runner(args: argparse.Namespace):
     """Resolve the canonical DB through the one-store config and build a runner.
 
     §6 boundary: the runner migrates the ONE canonical store and refuses a path
     argument — the `migrate` subcommands deliberately expose no --db-path (the
-    shadow oliver.db incident is the case study). Resolution is MNEMOS_DB_PATH
-    (the one-store config's env surface) falling back to the canonical default;
-    tests point at representative stores via the env or the MigrationRunner
-    library API, never a CLI path flag.
+    shadow oliver.db incident is the case study). Resolution uses the same
+    one-store path order as other default DB verbs: explicit env, config
+    ``store.db_path`` (including ``MNEMOS_STORE_DB_PATH``), then the canonical
+    default. Tests point at representative stores via the env or the
+    MigrationRunner library API, never a CLI path flag.
     """
     from .store.migration_runner import MigrationRunner
     from .store.migrations import list_migrations

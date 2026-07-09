@@ -64,14 +64,27 @@ drift-eval registry/metric rows live in `drift_eval_runs` and
 per-producer failure counts. Existing engrams keep `origin_stamp=NULL`; NULL is
 pre-instrumentation absence of measurement, not a measured provenance value.
 
+Schema v13 adds `engrams.status` for prospective memory lifecycle tracking.
+Only prospective engrams may carry status. New prospective rows default to
+`open`, and the only terminal states are `fulfilled`, `closed_unfulfilled`, and
+`retired`. Terminal transitions go through `transition_prospective_status()` or
+`mnemos prospective status`, which update the row and append a
+`prospective-status-transition` receipt in one transaction; direct upserts
+cannot reopen or retarget terminal prospective rows.
+
 ### Engrams
 
 The fundamental unit of memory. Each engram has:
 
 - **Content**: What happened (mutable through reconsolidation)
 - **Impact**: Why it matters (the lasting insight)
-- **Dual-trace model**: Strength, stability, accessibility — three independent dimensions
+- **Dual-trace model**: S0/strength, stability, accessibility — three
+  independent dimensions. The stored column is still `strength`; inspect and
+  dashboard surfaces label it as S0.
 - **Kind**: Episodic (experiences), semantic (facts), procedural (how-to), prospective (future-directed)
+- **Prospective status**: Prospective engrams start `open` and may transition
+  once to `fulfilled`, `closed_unfulfilled`, or `retired`; non-prospective
+  engrams cannot carry a status.
 - **Confidence**: Scored by source reliability (user-explicit → speculative)
 - **Source authority**: Harness-stamped provenance (`user_stated`, `imported`,
   `observed`, or `generated`) derived from the ingest channel, never from
@@ -79,7 +92,9 @@ The fundamental unit of memory. Each engram has:
   keyword from trusted code; MCP tools do not expose an authority parameter.
   Advanced MCP capture tools (`mnemos_remember`, `mnemos_ingest`) also require
   callers to declare `kind` explicitly as one of the canonical engram kinds; no
-  default kind is inferred at the capture surface.
+  default kind is inferred at the capture surface. Setup seeding uses bootstrap
+  source with observed authority. Hypomnema promotion uses observed authority,
+  stamps inference origin, and does not auto-publish to the shared pool.
 - **Origin stamp**: Step 1 provenance measurement for new engram writes when
   the producer knows the origin. The closed vocabulary is `user-witnessed`,
   `inference`, `retrieval`, and `import`; current write paths stamp
@@ -216,8 +231,9 @@ memory is actually rendered or printed; those citation rows carry metadata tiers
 and are not fitting-eligible.
 
 With reconsolidation enabled, successful retrieval updates the returned visible
-memory: access count, strength, and new connections. Operational paths return
-operational rows. Memories are living traces.
+memory: access count, stability, accessibility, and new connections. The stored
+strength column is S0 and remains fixed after encoding.
+Operational paths return operational rows. Memories are living traces.
 
 ### Operational Context And Review
 
@@ -261,7 +277,8 @@ The "sleeping brain" — autonomous processing that runs between sessions.
 
 ### Consolidation Cycle
 
-1. **Decay**: Recalculate strength/stability/accessibility. Unused memories fade.
+1. **Decay**: Recalculate stability and accessibility while preserving S0.
+   Unused memories fade.
 2. **Connection Discovery**: Find new semantic relationships between engrams.
 3. **Softening**: LLM-mediated lossy compression. Low-resolution memories get rewritten preserving essence.
 4. **Belief Review**: Evaluate beliefs against new evidence, resolving
@@ -403,7 +420,7 @@ Enables multiple agents to work together without direct communication.
 
 - Dedicated database (`~/.mnemos/shared.db`) accessible to all agents
 - Agents publish memories with visibility controls (private/shared/public)
-- Conflict resolution when agents disagree (confidence > strength > recency)
+- Conflict resolution when agents disagree (confidence > S0/strength > recency)
 - Relationship and trust tracking between agents
 
 ### Cross-Agent Bridge

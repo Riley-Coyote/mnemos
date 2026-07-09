@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 import ulid as _ulid_mod
 
+from ..core.engram import is_open_prospective_engram
 from ..core.types import ConnectionRelation, EngramKind, SourceAuthority, SourceType
 
 if TYPE_CHECKING:
@@ -131,6 +132,9 @@ def run_softening_pass(
     dry_run_pairs: list[dict[str, Any]] = []
 
     for engram in all_engrams:
+        if is_open_prospective_engram(engram):
+            continue
+
         if engram.softening_protected or not engram.consolidation_authorized:
             continue
 
@@ -444,9 +448,10 @@ def _create_or_reinforce_lesson(
             continue
         if candidate.state != "active" or not candidate.consolidation_authorized:
             continue
+        if is_open_prospective_engram(candidate):
+            continue
         if "lesson" in candidate.tags or "distilled" in candidate.tags:
             # Reinforce existing lesson
-            candidate.strength = min(1.0, candidate.strength + 0.1)
             candidate.stability = min(1.0, candidate.stability + 0.05)
             candidate.record_access()
             store.save_engram(candidate)

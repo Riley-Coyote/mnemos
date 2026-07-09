@@ -48,6 +48,25 @@
 - Instrumentation producer failures are durable and DB-scoped; `mnemos stats`
   includes their aggregate count.
 
+### Step 2 Store Hygiene
+- Schema v13 adds prospective-only `engrams.status`. New prospective engrams
+  default to `open`; `fulfilled`, `closed_unfulfilled`, and `retired` are
+  terminal and cannot be reopened by direct upsert.
+- `EngramStore.transition_prospective_status()` and `mnemos prospective status`
+  move an open prospective engram to a terminal status atomically with a
+  `prospective-status-transition` runtime receipt.
+- `mnemos inspect`, `mnemos_inspect`, and the HTML dashboard label the stored
+  strength metric as S0 on user-facing surfaces, and inspect includes
+  prospective status when present.
+- `mnemos doctor` now reports schema version and pending SQL-file migrations
+  before the context bootstrap initializes the store.
+- Setup seeding uses the bootstrap source type and records seed-encode failures
+  durably; hypomnema promotion remains observed authority, stamps inference
+  origin, and does not auto-publish promoted continuity to the shared pool.
+- PAI import and watcher paths surface open prospective targets as review or
+  refusal receipts instead of tombstoning or rewriting them; terminal
+  prospectives may be repaired/reactivated only when source content returns.
+
 ### Belief Confidence Authority
 - Automatic encoder, LLM-classifier, consolidation, and reflection paths no
   longer mutate belief confidence. SUPPORTS/CONTRADICTS output can still drive
@@ -228,7 +247,7 @@
 - Schema v5 (U3b hardening) — extends `pai_import_row_map` with `content_at_last_import`, `tombstone_at`, source metadata; adds `original_substrate` / `original_timestamp` to beliefs; adds `pai_import_events` audit table and AFTER DELETE tombstone triggers
 - `mnemos pai-import preview` / `apply` — operator workflow that loads a JSON source manifest, splits each source into deterministic target rows (identity-kernel, david-context, growth-substrate, beliefs, hypomnema), previews against `pai_import_row_map`, and on apply takes an integrity-checked SQLite backup before writing. DB-using commands refuse the default live `~/.mnemos/memory.db` and other databases under `~/.mnemos` unless `--allow-live-db` is passed.
 - PAI splitting enforces the Strict-B coordinate-value boundary content-wise: eigenvalue, vivezza, coordinate-target, and persona-signature tuple lines are stripped from any source kind before row hashing/indexing; surrounding prose is preserved and pure coordinate sections/blocks are omitted without renumbering later block anchors.
-- `mnemos pai-import watch-preview` / `watch-apply` / `watch-once` / `watch-plist` / `watch-doctor` / `review-gate` (U3c) — dual-life watcher and launch gates that poll source SHA-256 fingerprints and manifest metadata, replay preview/apply only for changed sources, advance state only after a successful apply, lint launchd readiness, and review dangerous diffs against required proof surfaces. Missing source sections become lifecycle actions: tombstone imported engrams, deactivate imported hypomnema, and flag imported beliefs for review. Manifest source paths are constrained to the manifest directory; `EngramStore(read_only=True)` opens the SQLite DB via `file:…?mode=ro` so previews cannot mutate state.
+- `mnemos pai-import watch-preview` / `watch-apply` / `watch-once` / `watch-plist` / `watch-doctor` / `review-gate` (U3c) — dual-life watcher and launch gates that poll source SHA-256 fingerprints and manifest metadata, replay preview/apply only for changed sources, advance state only after a successful apply, lint launchd readiness, and review dangerous diffs against required proof surfaces. Missing source sections become lifecycle actions: tombstone imported non-prospective engrams, surface open prospective engrams for review, deactivate imported hypomnema, and flag imported beliefs for review. Manifest source paths are constrained to the manifest directory; `EngramStore(read_only=True)` opens the SQLite DB via `file:…?mode=ro` so previews cannot mutate state.
 - Consolidation and substrate passes now honor the new flags precisely: decay and archival skip `decay_protected` or unauthorized rows, softening and voice exemplars skip `softening_protected` / `voice_exemplar_eligible` / unauthorized rows, connection discovery and substrate handlers stay within authorized same-agent rows, and the substrate tick decay/softening SQL is now agent-scoped.
 - Imported beliefs set `needs_review` and `confidence_pending_review`; default `get_beliefs()` consumers exclude pending-confidence rows until belief review explicitly opts in and SUPPORTS/CONTRADICTS evidence clears the pending flags.
 - `IdentityProfile` reflection excludes PAI routing tags (`pai-import`, `identity-kernel`, `david-context`, `growth-substrate`, `belief`, `hypomnema`) from persistent-concern counts so an import does not surface as "Oliver's persistent concern is being imported."
@@ -246,7 +265,7 @@
 Initial release.
 
 ### Core Memory Engine
-- Engram model with dual-trace (strength/stability/accessibility)
+- Engram model with dual-trace (S0 strength/stability/accessibility)
 - 7 typed connections (supports, contradicts, causes, extends, parallels, synthesizes, grounds)
 - Beliefs with confidence tracking, revision history, epistemic bounds [0.05, 0.95]
 - 6-dimensional emotional state (curiosity, clarity, warmth, tension, surprise, focus)

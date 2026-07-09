@@ -120,6 +120,13 @@ context packet / prompt / CLI search citations are marked
 paths for writes and refuse live `~/.mnemos` databases unless
 `--allow-live-db` is supplied for an authorized live rollout.
 
+Schema v13 adds prospective-memory status without adding a new operational read
+surface. Only `kind="prospective"` engrams may carry status. New prospective
+rows default to `open`; terminal statuses (`fulfilled`, `closed_unfulfilled`,
+`retired`) must be written through the store transition API or
+`mnemos prospective status`, which appends a `prospective-status-transition`
+runtime receipt in the same transaction and refuses reopening.
+
 ## Belief Confidence Authority
 
 Belief confidence is no longer a side effect of automatic interpretation.
@@ -200,9 +207,12 @@ material:
   `dynamic_modulations` row and adds no read path.
 - Engram source authority is harness-stamped from the channel:
   `observed` for MCP/runtime/session-indexer surfaces, `imported` for curated
-  PAI import, and `generated` for autonomous producers. MCP callers cannot pass
+  PAI import, `generated` for autonomous producers, and observed-authority
+  bootstrap source for setup seeding. MCP callers cannot pass
   `source_authority`, and payload text claiming `user_stated` or `imported`
-  authority does not elevate the row.
+  authority does not elevate the row. Hypomnema promotion does not mint
+  user-witnessed origin; it stamps inference origin and stays out of shared-pool
+  auto-publish.
 - Advanced MCP callers also cannot rely on an implicit memory kind:
   `mnemos_remember` and `mnemos_ingest` require an exact `kind` declaration
   (`episodic`, `semantic`, `procedural`, or `prospective`) and reject omitted or
@@ -317,6 +327,9 @@ Safety boundaries enforced by the importer:
   after a successful apply. Preview mode leaves state untouched. Missing source
   files are treated as an empty current snapshot so removed sections become
   explicit tombstone, deactivate, or review actions instead of silent drift.
+  Open prospective engram targets are not tombstoned or rewritten by import
+  paths; they surface review/refusal receipts until an explicit prospective
+  status transition closes the want.
 - Imported rows carry `decay_protected`, `softening_protected`, and
   `consolidation_authorized` flags so the consolidation and substrate passes
   cannot silently rewrite imported identity material.

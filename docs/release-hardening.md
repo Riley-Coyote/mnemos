@@ -38,6 +38,8 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - `mnemos mcp install codex` prints a usable `codex mcp add` command.
 - `mnemos serve` defaults to simple mode.
 - `mnemos serve --mode advanced` exposes the admin surface.
+- `mnemos prospective status` closes open prospective engrams and writes a
+  runtime receipt.
 
 ## Package Readiness
 
@@ -76,6 +78,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
   - `mnemos/soak/preflight.py`
   - `mnemos/soak/tick.py`
   - `mnemos/store/migrations/0012_step1_instrumentation.sql`
+  - `mnemos/store/migrations/0013_prospective_status.sql`
   - `templates/SOUL.md`
   - `templates/IDENTITY.md`
 - Package metadata passes `twine check`.
@@ -98,9 +101,11 @@ Use this checklist before publishing Mnemos or opening a release PR.
   gate versions with an `IN` filter.
 - Every durable engram write stamps source authority from the trusted channel:
   MCP/runtime/session-indexer surfaces use `observed`, curated PAI import uses
-  `imported`, autonomous producers use `generated`, and legacy source records
+  `imported`, autonomous producers use `generated`, setup seeding uses
+  bootstrap source with observed authority, and legacy source records
   deserialize to the `observed` floor. Payload text must never mint
-  `user_stated` or `imported`.
+  `user_stated` or `imported`; hypomnema promotion stamps inference origin and
+  does not auto-publish to the shared pool.
 - Advanced MCP capture tools (`mnemos_remember`, `mnemos_ingest`) require the
   caller to declare canonical `kind` exactly (`episodic`, `semantic`,
   `procedural`, or `prospective`) instead of inheriting any implicit memory
@@ -108,6 +113,12 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Step 1 `origin_stamp` remains a separate measurement axis: known new origins
   are stamped, legacy `NULL` rows mean pre-instrumentation absence of
   measurement, and source authority remains the operational trust boundary.
+- Prospective `status` is valid only on `kind="prospective"` engrams; terminal
+  status changes go through the transition API/CLI, append
+  `prospective-status-transition` receipts, and cannot reopen rows by direct
+  upsert.
+- PAI import/apply/watch paths must refuse open prospective engram targets with
+  review/refusal receipts instead of tombstoning, hiding, or rewriting them.
 - Step 1 instrumentation tables are record-only. Retrieval events,
   retrieval-why receipts, citation rows, drift-eval rows, and producer failure
   counts must not feed ranking, read visibility, reconsolidation policy, affect

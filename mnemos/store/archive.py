@@ -8,7 +8,7 @@ Most archive operations are already handled by sqlite_store.py.
 This module adds:
 - Bulk archive operations
 - Archive statistics
-- Resharpen (restore archived memory to active with boosted strength)
+- Resharpen (restore archived memory to active with boosted accessibility)
 """
 
 from __future__ import annotations

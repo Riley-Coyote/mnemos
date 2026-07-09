@@ -82,7 +82,7 @@ def build_html(data: dict, agent_id: str) -> str:
   <div class="health-dot"></div>
   <h1>MNEMOS</h1>
   <span class="agent-id">{agent_id}</span>
-  <span class="topbar-stats">{stats['total_active']} engrams &middot; {stats['total_connections']} connections</span>
+  <span class="topbar-stats">{stats["total_active"]} engrams &middot; {stats["total_connections"]} connections</span>
   <nav class="tabs">
     <button class="tab active" data-tab="overview">overview</button>
     <button class="tab" data-tab="graph">graph</button>
@@ -685,7 +685,7 @@ function showGraphPanel(node) {
 
   body.innerHTML=`<span class="panel-kind">${node.kind}</span><div class="panel-timestamp">${dateStr}</div>
     <div class="panel-content">${(node.content||'').substring(0,400)}</div>
-    <div class="panel-section-wrap"><div class="panel-section">metrics</div>${kv('strength',node.strength.toFixed(2))}${kv('stability',node.stability.toFixed(2))}${kv('accessibility',node.accessibility.toFixed(2))}</div>
+    <div class="panel-section-wrap"><div class="panel-section">metrics</div>${kv('S0 (initial, frozen)',node.strength.toFixed(2))}${kv('stability',node.stability.toFixed(2))}${kv('accessibility',node.accessibility.toFixed(2))}</div>
     <div class="panel-section-wrap"><div class="panel-section">encoding</div>${kv('depth',node.encoding_depth||'unknown')}${kv('surprise',(node.surprise_level||0).toFixed(2))}${kv('attention',(node.attention_level||0.5).toFixed(2))}</div>
     <div class="panel-section-wrap"><div class="panel-section">source</div>${kv('type',node.source_type)}${kv('confidence',node.confidence.toFixed(2))}</div>
     <div class="panel-section-wrap"><div class="panel-section">connections (${nodeConns.length})</div>${connHtml||kv('none','')}</div>
@@ -701,7 +701,7 @@ function showGraphPanel(node) {
     const mm=(l,v)=>{const p=((v||0)*100).toFixed(0);return`<div class="panel-sec-metric"><span class="panel-sec-metric-label">${l}</span><div class="panel-sec-metric-track"><div class="panel-sec-metric-fill" style="width:${p}%"></div></div><span class="panel-sec-metric-val">${p}%</span></div>`;};
     const tc=graphEdges.filter(e=>e.source===tid||e.target===tid);
     const sec=document.createElement('div');sec.className='panel-secondary';
-    sec.innerHTML=`<div class="panel-secondary-impact">${(tgt.impact||tgt.content).substring(0,150)}</div><div class="panel-secondary-metrics">${mm('str',tgt.strength)}${mm('stb',tgt.stability)}${mm('acc',tgt.accessibility)}</div><div class="panel-secondary-conncount">${tc.length} connections</div>`;
+    sec.innerHTML=`<div class="panel-secondary-impact">${(tgt.impact||tgt.content).substring(0,150)}</div><div class="panel-secondary-metrics">${mm('S0',tgt.strength)}${mm('stb',tgt.stability)}${mm('acc',tgt.accessibility)}</div><div class="panel-secondary-conncount">${tc.length} connections</div>`;
     card.appendChild(sec);sec.addEventListener('dblclick',()=>{graphSelectedId=tid;showGraphPanel(tgt);gCamX=-tgt.x;gCamY=-tgt.y;});
   });});
   panel.classList.add('open');
@@ -810,7 +810,7 @@ function showProjectDetail(projectName) {
       const date = (m.created_at || '').slice(5, 10);
       return `<div class="project-memory" data-engram-id="${m.id}">
         ${preview}
-        <div class="project-memory-meta">str ${m.strength.toFixed(2)} · ${date}</div>
+        <div class="project-memory-meta">S0 ${m.strength.toFixed(2)} · ${date}</div>
       </div>`;
     }).join('');
     groupsHtml += `<div class="project-group"><div class="project-group-label">${label} (${items.length})</div>${itemsHtml}</div>`;
@@ -844,6 +844,7 @@ function showProjectDetail(projectName) {
 # HTML Builders
 # ══════════════════════════════════════════════════════════════
 
+
 def _build_stats_cards(stats: dict) -> str:
     cards = [
         (stats["total_active"], "active engrams"),
@@ -876,18 +877,26 @@ def _build_distributions(stats: dict) -> str:
             )
         return f'<div class="dist-section"><div class="section-label">{title}</div>{rows}</div>'
 
-    kind_colors = {"semantic": "fill-semantic", "episodic": "fill-episodic", "procedural": "fill-procedural"}
+    kind_colors = {
+        "semantic": "fill-semantic",
+        "episodic": "fill-episodic",
+        "procedural": "fill-procedural",
+    }
 
     html = '<div class="two-col">'
-    html += dist_section("memory types", stats["kind_counts"], lambda k: kind_colors.get(k, "fill-default"))
+    html += dist_section(
+        "memory types",
+        stats["kind_counts"],
+        lambda k: kind_colors.get(k, "fill-default"),
+    )
     html += dist_section("connection types", stats["conn_type_counts"])
     html += '</div><div class="two-col">'
-    html += dist_section("strength distribution", stats["str_buckets"])
+    html += dist_section("S0 distribution", stats["str_buckets"])
     html += dist_section("accessibility distribution", stats["acc_buckets"])
     html += '</div><div class="two-col">'
     html += dist_section("top tags", stats["tag_counts"])
     html += dist_section("source types", stats["source_counts"])
-    html += '</div>'
+    html += "</div>"
     return html
 
 
@@ -902,7 +911,7 @@ def _build_recent_engrams(engrams: list) -> str:
             f'<span class="recent-kind">{kind}</span>'
             f'<span class="recent-content">{content}</span>'
             f'<span class="recent-date">{date}</span>'
-            f'</div>'
+            f"</div>"
         )
     return html
 
@@ -918,7 +927,7 @@ def _build_session_list(sessions: dict) -> str:
         short_key = key[:16] + "..." if len(key) > 16 else key
         count = info.get("memories_encoded", 0)
         indexed_at = (info.get("indexed_at") or "")[:10]
-        size_kb = (info.get("size", 0) / 1024)
+        size_kb = info.get("size", 0) / 1024
         dot_class = "ok" if count > 0 else "skip"
 
         html += (
@@ -927,9 +936,9 @@ def _build_session_list(sessions: dict) -> str:
             f'<div class="session-info">'
             f'<div class="session-id">{escape_html(short_key)}</div>'
             f'<div class="session-meta">{indexed_at} · {size_kb:.0f}kb</div>'
-            f'</div>'
+            f"</div>"
             f'<span class="session-count">{count}</span>'
-            f'</div>'
+            f"</div>"
         )
     return html
 
@@ -937,6 +946,7 @@ def _build_session_list(sessions: dict) -> str:
 # ══════════════════════════════════════════════════════════════
 # Server
 # ══════════════════════════════════════════════════════════════
+
 
 def serve(
     html: str,
@@ -1011,6 +1021,7 @@ def serve(
 # CLI
 # ══════════════════════════════════════════════════════════════
 
+
 def main():
     parser = argparse.ArgumentParser(description="Mnemos Dashboard")
     parser.add_argument("--agent-id", default="default", help="Agent ID")
@@ -1019,7 +1030,9 @@ def main():
         help="Database path (default: one-store config or ~/.mnemos/memory.db)",
     )
     parser.add_argument("--port", type=int, default=8401, help="Server port")
-    parser.add_argument("--build-only", action="store_true", help="Generate HTML without serving")
+    parser.add_argument(
+        "--build-only", action="store_true", help="Generate HTML without serving"
+    )
     parser.add_argument("--output", help="Output path (default: ./mnemos-ui.html)")
     parser.add_argument(
         "--audit",
@@ -1048,7 +1061,9 @@ def main():
         include_non_operational=args.audit,
     )
     html = build_html(data, args.agent_id)
-    print(f"  {data['stats']['total_active']} engrams, {data['stats']['total_connections']} connections")
+    print(
+        f"  {data['stats']['total_active']} engrams, {data['stats']['total_connections']} connections"
+    )
 
     if args.build_only:
         out = args.output or "mnemos-ui.html"

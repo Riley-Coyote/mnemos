@@ -45,9 +45,19 @@ import re
 from typing import Callable, Iterable
 
 from ..core.belief import Belief
-from ..core.engram import Engram, MemorySource
+from ..core.engram import (
+    Engram,
+    MemorySource,
+    PROSPECTIVE_STATUS_OPEN,
+    PROSPECTIVE_STATUS_TERMINAL,
+    is_open_prospective_kind_status,
+)
 from ..core.types import ConfidenceSource, EngramKind, SourceAuthority, SourceType
-from ..instrumentation.receipts import ORIGIN_IMPORT
+from ..instrumentation.receipts import (
+    IMMEDIACY_OPERATIONAL,
+    ORIGIN_IMPORT,
+    validate_receipt_envelope,
+)
 from ..store.migrations import insert_pai_import_event, upsert_pai_import_row
 from ..store.read_visibility import READ_VISIBILITY_AUDIT, READ_VISIBILITY_REVIEW
 from ..store.sqlite_store import EngramStore
@@ -89,6 +99,8 @@ _SUPPORTED_SOURCE_KINDS = {
 _PAI_AGENT_ID = "oliver"
 _PAI_PERSON_ID = "david"
 _PAI_PROJECT_SCOPE = "pai"
+_PAI_TOMBSTONE_REFUSAL_RECEIPT_KIND = "pai-tombstone-refusal"
+_PAI_TOMBSTONE_REFUSAL_RUNTIME = "pai-importer"
 
 
 @dataclass(frozen=True)
@@ -156,6 +168,15 @@ class PaiImportResult:
     @property
     def counts(self) -> dict[str, int]:
         return dict(Counter(row.action for row in self.rows))
+
+
+def _is_open_prospective_refusal_action(row: PaiImportRow) -> bool:
+    return (
+        row.action == ACTION_REVIEW
+        and row.target_table == TARGET_ENGRAMS
+        and row.mapped_source_hash is not None
+        and row.target_projection_hash is not None
+    )
 
 
 @dataclass(frozen=True)
@@ -272,7 +293,9 @@ def preview_pai_import(
 
     preview_rows: list[PaiImportRow] = []
     for row in rows:
-        preview_rows.append(_classify_row(conn, row))
+        preview_rows.append(
+            _classify_row(conn, row, refuse_open_prospective_targets=True)
+        )
     preview_rows.extend(_stale_mapped_rows(conn, job_id, rows))
 
     return PaiImportPreview(job_id=job_id, rows=tuple(preview_rows))
@@ -297,7 +320,12 @@ def preview_pai_watch_update(
     preview_rows: list[PaiImportRow] = []
     for row in rows:
         preview_rows.append(
-            _classify_row(conn, row, allow_pai_tombstone_reactivation=True)
+            _classify_row(
+                conn,
+                row,
+                allow_pai_tombstone_reactivation=True,
+                refuse_open_prospective_targets=True,
+            )
         )
     preview_rows.extend(
         _stale_mapped_rows(conn, job_id, rows, missing_source_policy="u3c")
@@ -312,13 +340,14 @@ def apply_pai_import(
 ) -> PaiImportResult:
     if not isinstance(preview, PaiImportPreview):
         raise TypeError("apply_pai_import requires a PaiImportPreview")
-    # U3c-reserved actions must not reach U3b apply. Raising NotImplementedError
-    # locks the surface and gives U3c implementers a clear failure mode if they
-    # accidentally route through U3b before wiring their semantics.
     reserved = [
         row
         for row in preview.rows
-        if isinstance(row, PaiImportRow) and row.action in _U3C_RESERVED_ACTIONS
+        if (
+            isinstance(row, PaiImportRow)
+            and row.action in _U3C_RESERVED_ACTIONS
+            and not _is_open_prospective_refusal_action(row)
+        )
     ]
     if reserved:
         raise NotImplementedError(
@@ -329,7 +358,13 @@ def apply_pai_import(
     errors = [row for row in preview.rows if row.action == ACTION_ERROR]
     if errors:
         raise ValueError(errors[0].reason)
-    allowed_actions = {ACTION_INSERT, ACTION_REPAIR, ACTION_UPDATE, ACTION_NOOP}
+    allowed_actions = {
+        ACTION_INSERT,
+        ACTION_REPAIR,
+        ACTION_UPDATE,
+        ACTION_NOOP,
+        ACTION_REVIEW,
+    }
     invalid = [row for row in preview.rows if row.action not in allowed_actions]
     if invalid:
         raise ValueError(
@@ -359,6 +394,23 @@ def apply_pai_import(
                     change_reason=row.reason,
                 )
                 applied.append(row)
+                continue
+            if _is_open_prospective_refusal_action(row):
+                changed = _refuse_open_prospective_tombstone_no_commit(store, conn, row)
+                if changed:
+                    insert_pai_import_event(
+                        conn,
+                        job_id=row.job_id,
+                        source_path=row.source_path,
+                        source_anchor=row.source_anchor,
+                        target_table=row.target_table,
+                        target_id=row.target_id,
+                        action=row.action,
+                        source_hash_before=row.mapped_source_hash,
+                        source_hash_after=row.source_hash,
+                        change_reason=row.reason,
+                    )
+                    applied.append(row)
                 continue
             _write_target_row(store, conn, row)
             _upsert_pai_import_row_for_preview(conn, row)
@@ -729,19 +781,34 @@ def _write_pai_engram_no_commit(
         store._save_engram_no_commit(conn, engram)
         return
 
+    if _is_open_prospective_engram_record(existing):
+        raise ValueError(
+            "open prospective PAI targets require transition_prospective_status"
+        )
+
     reactivating = existing["state"] == "archived"
     if reactivating:
-        if not allow_pai_tombstone_reactivation or not _is_pai_tombstoned_engram(
+        if _is_terminal_prospective_engram_record(existing):
+            conn.execute(
+                "DELETE FROM archive WHERE id = ? AND archive_reason = ?",
+                (
+                    row.target_id,
+                    f"prospective_status:{_row_value(existing, 'status')}",
+                ),
+            )
+            _clear_row_map_tombstone_no_commit(conn, row)
+        elif not allow_pai_tombstone_reactivation or not _is_pai_tombstoned_engram(
             conn, row
         ):
             raise ValueError(
                 "mapped target is archived; refusing implicit PAI reactivation"
             )
-        conn.execute(
-            "DELETE FROM archive WHERE id = ? AND archive_reason = ?",
-            (row.target_id, _pai_tombstone_reason(row)),
-        )
-        _clear_row_map_tombstone_no_commit(conn, row)
+        else:
+            conn.execute(
+                "DELETE FROM archive WHERE id = ? AND archive_reason = ?",
+                (row.target_id, _pai_tombstone_reason(row)),
+            )
+            _clear_row_map_tombstone_no_commit(conn, row)
 
     if existing["content"] != row.content:
         next_version = conn.execute(
@@ -787,6 +854,7 @@ def _write_pai_engram_no_commit(
             original_timestamp = ?,
             consolidation_authorized = ?,
             decay_protected = ?,
+            status = NULL,
             state = 'active'
         WHERE id = ?
         """,
@@ -921,23 +989,33 @@ def _apply_u3c_lifecycle_row_no_commit(store, conn, row: PaiImportRow) -> bool:
     if row.action == ACTION_TOMBSTONE:
         if row.target_table != TARGET_ENGRAMS:
             raise ValueError("ACTION_TOMBSTONE requires an engrams target")
-        return _tombstone_pai_engram_no_commit(conn, row)
+        return _tombstone_pai_engram_no_commit(store, conn, row)
     if row.action == ACTION_DEACTIVATE:
         if row.target_table != TARGET_HYPOMNEMA:
             raise ValueError("ACTION_DEACTIVATE requires a hypomnema target")
         return _deactivate_pai_hypomnema_no_commit(store, conn, row)
     if row.action == ACTION_REVIEW:
+        if row.target_table == TARGET_ENGRAMS:
+            return _refuse_open_prospective_tombstone_no_commit(store, conn, row)
         if row.target_table != TARGET_BELIEFS:
             raise ValueError("ACTION_REVIEW requires a beliefs target")
         return _review_pai_belief_no_commit(conn, row)
     raise ValueError(f"Unsupported U3c lifecycle action: {row.action}")
 
 
-def _tombstone_pai_engram_no_commit(conn, row: PaiImportRow) -> bool:
+def _tombstone_pai_engram_no_commit(
+    store: EngramStore, conn, row: PaiImportRow
+) -> bool:
     existing = _target_record(conn, row)
     if existing is None:
         raise ValueError(f"Cannot tombstone missing engram target {row.target_id!r}")
+    if _is_open_prospective_engram_record(existing):
+        return _refuse_open_prospective_tombstone_no_commit(store, conn, row)
     if existing["state"] == "archived":
+        if _is_terminal_prospective_engram_record(existing):
+            already_tombstoned = _is_row_map_tombstoned(conn, row)
+            _mark_row_map_tombstone_no_commit(conn, row)
+            return not already_tombstoned
         if _is_pai_tombstoned_engram(conn, row):
             _mark_row_map_tombstone_no_commit(conn, row)
         return False
@@ -985,6 +1063,177 @@ def _tombstone_pai_engram_no_commit(conn, row: PaiImportRow) -> bool:
     conn.execute("DELETE FROM engrams_fts WHERE id = ?", (row.target_id,))
     _mark_row_map_tombstone_no_commit(conn, row)
     return True
+
+
+def _refuse_open_prospective_tombstone_no_commit(
+    store: EngramStore, conn, row: PaiImportRow
+) -> bool:
+    existing = _target_record(conn, row)
+    if existing is None:
+        raise ValueError(f"Cannot review missing engram target {row.target_id!r}")
+    if not _is_open_prospective_engram_record(existing):
+        raise ValueError(
+            "PAI watch preview is stale for "
+            f"{row.source_path}#{row.source_anchor}; target is no longer open prospective"
+        )
+
+    proposal_id = _pai_tombstone_refusal_proposal_id(row)
+    prompt = (
+        row.reason
+        or f"source vanished for open want {row.target_id} -- retire or keep?"
+    )
+    payload = {
+        "refusal": "open_prospective_requires_transition",
+        "source_path": row.source_path,
+        "source_anchor": row.source_anchor,
+        "source_kind": row.source_kind,
+        "target_table": row.target_table,
+        "target_id": row.target_id,
+        "source_hash": row.source_hash,
+        "mapped_source_hash": row.mapped_source_hash,
+        "operator_prompt": prompt,
+    }
+    changed = False
+    if (
+        conn.execute(
+            "SELECT 1 FROM proposal_ledger WHERE id = ?", (proposal_id,)
+        ).fetchone()
+        is None
+    ):
+        store.write_proposal(
+            source_authority="imported",
+            kind="prospective",
+            target_surface="engrams",
+            transition=prompt,
+            agent_id=row.agent_id,
+            person_id=row.person_id,
+            project_scope=row.project_scope,
+            domain="general",
+            blast_radius="medium",
+            read_visibility=READ_VISIBILITY_REVIEW,
+            status="pending_review",
+            reason="PAI refused direct mutation of an open prospective engram",
+            gate_version="pai-watch-v1",
+            target_id=row.target_id,
+            provenance_ids=[f"{row.source_path}#{row.source_anchor}"],
+            payload=payload,
+            proposal_id=proposal_id,
+            commit=False,
+        )
+        changed = True
+    if not _pai_tombstone_refusal_receipt_exists(conn, proposal_id):
+        receipt_payload = {**payload, "proposal_id": proposal_id}
+        envelope = validate_receipt_envelope(
+            kind=_PAI_TOMBSTONE_REFUSAL_RECEIPT_KIND,
+            actor=row.agent_id,
+            runtime=_PAI_TOMBSTONE_REFUSAL_RUNTIME,
+            session_id=row.job_id,
+            engram_refs=[row.target_id],
+            immediacy=IMMEDIACY_OPERATIONAL,
+            payload=receipt_payload,
+        )
+        store._append_receipt_no_commit(conn, envelope)
+        changed = True
+    return changed
+
+
+def _pai_tombstone_refusal_proposal_id(row: PaiImportRow) -> str:
+    digest = hashlib.sha256(
+        "\n".join(
+            (
+                row.job_id,
+                row.source_path,
+                row.source_anchor,
+                row.target_table,
+                row.target_id,
+                "open-prospective-tombstone-refusal",
+            )
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"pai-open-prospective-tombstone-{digest}"
+
+
+def _open_prospective_present_source_refusal_reason(row: PaiImportRow) -> str:
+    return (
+        f"PAI source targets open want {row.target_id} -- "
+        "transition required before import can mutate it"
+    )
+
+
+def _pai_tombstone_refusal_receipt_exists(conn, proposal_id: str) -> bool:
+    rows = conn.execute(
+        "SELECT payload_json FROM runtime_receipts WHERE kind = ?",
+        (_PAI_TOMBSTONE_REFUSAL_RECEIPT_KIND,),
+    ).fetchall()
+    for receipt in rows:
+        payload = _safe_json_loads(receipt["payload_json"], {})
+        if isinstance(payload, dict) and payload.get("proposal_id") == proposal_id:
+            return True
+    return False
+
+
+def _is_open_prospective_engram_record(record) -> bool:
+    if record is None:
+        return False
+    return is_open_prospective_kind_status(record["kind"], _row_value(record, "status"))
+
+
+def _is_terminal_prospective_engram_record(record) -> bool:
+    if record is None or record["kind"] != "prospective":
+        return False
+    return (
+        _row_value(record, "status") or PROSPECTIVE_STATUS_OPEN
+    ) in PROSPECTIVE_STATUS_TERMINAL
+
+
+def _terminal_prospective_reactivation_row(
+    conn,
+    row: PaiImportRow,
+    target_record,
+    *,
+    mapped_source_hash: str | None,
+    mapped_content: str | None,
+    target_projection_hash: str | None,
+) -> PaiImportRow | None:
+    if (
+        row.target_table != TARGET_ENGRAMS
+        or target_record is None
+        or not _is_terminal_prospective_engram_record(target_record)
+        or target_record["state"] != "archived"
+    ):
+        return None
+    current_target_content = _target_content(conn, row.target_table, row.target_id)
+    if (
+        mapped_content is not None
+        and current_target_content is not None
+        and current_target_content != mapped_content
+    ):
+        return replace(
+            row,
+            action=ACTION_ERROR,
+            reason=(
+                "terminal prospective target content diverged from importer "
+                "baseline (operator hand-edit detected); refusing silent clobber"
+            ),
+            mapped_source_hash=mapped_source_hash,
+            target_projection_hash=target_projection_hash,
+        )
+    action = ACTION_REPAIR if mapped_source_hash == row.source_hash else ACTION_UPDATE
+    reason = (
+        "source returned after terminal prospective closure; reactivating mapped engram"
+    )
+    if action == ACTION_UPDATE:
+        reason = (
+            "source changed after terminal prospective closure; "
+            "reactivating mapped engram"
+        )
+    return replace(
+        row,
+        action=action,
+        reason=reason,
+        mapped_source_hash=mapped_source_hash,
+        target_projection_hash=target_projection_hash,
+    )
 
 
 def _deactivate_pai_hypomnema_no_commit(store, conn, row: PaiImportRow) -> bool:
@@ -1047,6 +1296,11 @@ def _deactivate_pai_hypomnema_no_commit(store, conn, row: PaiImportRow) -> bool:
 
 def _pai_tombstone_reason(row: PaiImportRow) -> str:
     return f"pai_import_tombstone:{row.job_id}"
+
+
+def _is_row_map_tombstoned(conn, row: PaiImportRow) -> bool:
+    record = _pai_row_map_record(conn, row)
+    return record is not None and record["tombstone_at"] is not None
 
 
 def _is_pai_tombstoned_engram(conn, row: PaiImportRow) -> bool:
@@ -1322,6 +1576,7 @@ def _classify_row(
     row: PaiImportRow,
     *,
     allow_pai_tombstone_reactivation: bool = False,
+    refuse_open_prospective_targets: bool = False,
 ) -> PaiImportRow:
     target_projection_hash = _target_projection_hash(conn, row)
     existing = conn.execute(
@@ -1369,6 +1624,20 @@ def _classify_row(
             target_projection_hash=target_projection_hash,
         )
 
+    target_record = _target_record(conn, row)
+    if (
+        refuse_open_prospective_targets
+        and row.target_table == TARGET_ENGRAMS
+        and _is_open_prospective_engram_record(target_record)
+    ):
+        return replace(
+            row,
+            action=ACTION_REVIEW,
+            reason=_open_prospective_present_source_refusal_reason(row),
+            mapped_source_hash=mapped_source_hash,
+            target_projection_hash=target_projection_hash,
+        )
+
     # U3b hardening B1-state-3: AFTER DELETE triggers populate tombstone_at on
     # the row-map when external code DELETEs an imported target. Without this
     # check, the next preview classifies as REPAIR ("target missing") and
@@ -1377,6 +1646,16 @@ def _classify_row(
         allow_pai_tombstone_reactivation and _is_pai_tombstoned_engram(conn, row)
     )
     if tombstone_at is not None or is_pai_tombstoned_engram:
+        terminal_prospective = _terminal_prospective_reactivation_row(
+            conn,
+            row,
+            target_record,
+            mapped_source_hash=mapped_source_hash,
+            mapped_content=mapped_content,
+            target_projection_hash=target_projection_hash,
+        )
+        if terminal_prospective is not None:
+            return terminal_prospective
         if is_pai_tombstoned_engram:
             current_target_content = _target_content(
                 conn, row.target_table, row.target_id
@@ -1450,8 +1729,8 @@ def _classify_row(
 
     target_status = _target_lifecycle_status(conn, row)
     # U3b hardening CB8: per-table reactivation policy.
-    # - engrams: archived state means decay or operator archival decided this
-    #   row should not be active; refuse implicit PAI reactivation.
+    # - engrams: archived state normally refuses implicit reactivation; terminal
+    #   prospectives can return through PAI repair/update.
     # - beliefs: superseded means a newer belief replaced this one; refuse.
     # - hypomnema: inactive (active=False AND superseded_by IS NULL) is a
     #   retire-without-successor signal that PAI re-import IS the canonical
@@ -1468,6 +1747,16 @@ def _classify_row(
             target_projection_hash=target_projection_hash,
         )
     if target_status != "active":
+        terminal_prospective = _terminal_prospective_reactivation_row(
+            conn,
+            row,
+            target_record,
+            mapped_source_hash=mapped_source_hash,
+            mapped_content=mapped_content,
+            target_projection_hash=target_projection_hash,
+        )
+        if terminal_prospective is not None:
+            return terminal_prospective
         if row.target_table != TARGET_HYPOMNEMA:
             return replace(
                 row,
@@ -1541,7 +1830,7 @@ def _classify_row(
 
 
 def _assert_preview_current(conn, row: PaiImportRow) -> None:
-    current = _classify_row(conn, row)
+    current = _classify_row(conn, row, refuse_open_prospective_targets=True)
     if current.action == ACTION_ERROR:
         raise ValueError(current.reason)
     # U3b hardening B1-state-5: compare reason field too. The prior check
@@ -1566,6 +1855,7 @@ def _assert_preview_current_for_watch(conn, row: PaiImportRow) -> None:
             conn,
             row,
             allow_pai_tombstone_reactivation=True,
+            refuse_open_prospective_targets=True,
         )
         if current.action == ACTION_ERROR:
             raise ValueError(current.reason)
@@ -1580,6 +1870,23 @@ def _assert_preview_current_for_watch(conn, row: PaiImportRow) -> None:
                 f"{row.source_path}#{row.source_anchor}; re-preview before apply"
             )
         return
+
+    if row.action == ACTION_REVIEW and row.target_table == TARGET_ENGRAMS:
+        current = _classify_row(
+            conn,
+            row,
+            allow_pai_tombstone_reactivation=True,
+            refuse_open_prospective_targets=True,
+        )
+        if current.action == ACTION_ERROR:
+            raise ValueError(current.reason)
+        if (
+            current.action == row.action
+            and current.mapped_source_hash == row.mapped_source_hash
+            and current.target_projection_hash == row.target_projection_hash
+            and current.reason == row.reason
+        ):
+            return
 
     record = _pai_row_map_record(conn, row)
     if record is None:
@@ -1838,11 +2145,16 @@ def _stale_mapped_row_from_record(
     target_lifecycle_status = _target_lifecycle_status_for_record(
         conn, target_table, target_id
     )
+    target_record = _target_record_by_id(conn, target_table, target_id)
     mapped_content = _row_value(record, "content_at_last_import")
     action, reason = _stale_missing_source_action(
         record,
         target_projection_hash=target_projection_hash,
         target_lifecycle_status=target_lifecycle_status,
+        target_is_open_prospective=(
+            target_table == TARGET_ENGRAMS
+            and _is_open_prospective_engram_record(target_record)
+        ),
         current_content=current_content,
         mapped_content=mapped_content,
         missing_source_policy=missing_source_policy,
@@ -1879,6 +2191,7 @@ def _stale_missing_source_action(
     *,
     target_projection_hash: str | None,
     target_lifecycle_status: str,
+    target_is_open_prospective: bool,
     current_content: str | None,
     mapped_content: str | None,
     missing_source_policy: str,
@@ -1888,6 +2201,11 @@ def _stale_missing_source_action(
             ACTION_ERROR,
             "source key is absent from current PAI import batch; "
             "refusing to leave a stale mapped target implicit",
+        )
+    if target_is_open_prospective:
+        return (
+            ACTION_REVIEW,
+            f"source vanished for open want {record['target_id']} -- retire or keep?",
         )
 
     tombstone_at = _row_value(record, "tombstone_at")

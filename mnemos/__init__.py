@@ -9,10 +9,10 @@ that encodes at varying depths, forgets naturally, predicts what it'll need,
 and changes its memories every time it touches them.
 
 Core features (always active):
-- Engrams with dual-trace model (strength/stability/accessibility)
+- Engrams with dual-trace model (S0 strength/stability/accessibility)
 - Typed connections (supports, contradicts, causes, elaborates, etc.)
 - Confidence scoring on every memory
-- Reconsolidation (every retrieval updates the memory)
+- Reconsolidation (retrieval updates access metadata, stability, and links)
 - Decay + softening (LLM-mediated lossy compression)
 - Emotional state (6 dimensions influencing retrieval)
 - Beliefs with confidence tracking and revision history

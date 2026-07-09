@@ -252,18 +252,25 @@ review-only or audit-only ID returns a "not found" response, or is absent from
 ordinary search/candidate output, so review prose is never mutated or promoted
 through an operational tool call.
 
-MCP callers cannot stamp `source_authority` or `origin_stamp`; `mnemos_remember`,
-`mnemos_ingest`, setup seeding, and hypomnema promotion use the tool channel's
-fixed authority. Hypomnema write domains are also fail-closed: a caller can
-label content more cautiously, but cannot label identity/foundational content
-down to `topical` to bypass review. Underclaimed writes are stored at the
-effective domain, routed to review, and duplicate scoped content claims collapse
-to one pending review row.
+MCP callers cannot stamp `source_authority` or `origin_stamp`; `mnemos_remember`
+and `mnemos_ingest` use the tool channel's fixed authority, setup seeding uses
+the bootstrap source with observed authority, and hypomnema promotion uses
+observed authority with an inference origin instead of a user-witnessed stamp.
+Hypomnema write domains are also fail-closed: a caller can label content more
+cautiously, but cannot label identity/foundational content down to `topical` to
+bypass review. Underclaimed writes are stored at the effective domain, routed
+to review, and duplicate scoped content claims collapse to one pending review
+row.
 
 Advanced `mnemos_remember` and `mnemos_ingest` callers must also declare
 `kind` explicitly as exactly one of `episodic`, `semantic`, `procedural`, or
 `prospective`; the tools expose no default, and omitted or unknown values store
 nothing.
+
+Prospective engrams carry a prospective-only status. New prospective rows start
+`open`; close them from the CLI with `mnemos prospective status ENGRAM_ID STATUS`,
+where `STATUS` is `fulfilled`, `closed_unfulfilled`, or `retired`. Terminal rows
+do not reopen; renewed wants should be recorded as new engrams.
 
 Internal schema v10 DynamicModulation storage is not an MCP feature yet. It can
 persist and back out bounded, rollout-tagged modulation rows, but those rows are
@@ -279,6 +286,11 @@ with `fitting_eligible=false`. Runtime receipts are separate from
 `migration_receipts`, receipt kinds are a code manifest, and `origin_stamp`
 records new engram provenance when the write path knows it; legacy rows keep
 `origin_stamp=NULL`, meaning pre-instrumentation absence of measurement.
+
+Schema v13 adds `engrams.status` for prospective memory lifecycle tracking.
+Only `kind="prospective"` rows can carry status; terminal transitions are
+atomic, write a `prospective-status-transition` runtime receipt, and refuse
+reopening.
 
 ### Identity Vault For Foundational Rows
 
@@ -508,6 +520,8 @@ mnemos inspect <engram-id>            # Inspect operational memory details
 mnemos inspect --review <engram-id>   # Explicit review-only inspection
 mnemos inspect --audit <engram-id>    # Explicit audit-only inspection
 mnemos inspect --admin <engram-id>    # Ignore read visibility for admin inspection
+mnemos prospective status <engram-id> fulfilled --reason "done"
+                                      # Close an open prospective engram
 mnemos snapshot                       # Inline operational Mermaid snapshot
 mnemos consolidate                    # Local deterministic maintenance
 mnemos consolidate --deep             # Deep maintenance when a provider exists
@@ -543,7 +557,7 @@ Schema migrations:
 ```bash
 mnemos migrate plan
 mnemos migrate apply
-mnemos migrate apply --target-version 12
+mnemos migrate apply --target-version 13
 ```
 
 `migrate` operates on the canonical store only. It resolves the database from
@@ -761,7 +775,7 @@ With no provider key and no extra setup, Mnemos can still run:
 - scoped continuity notes
 - durable engram capture for operational rows, with review-only continuity for high-blast captures
 - recall with reconsolidation and operational read-visibility filtering before ranking
-- strength, stability, and accessibility updates
+- S0-labeled strength with stability and accessibility updates
 - local decay
 - lightweight connection discovery
 - promotion bookkeeping

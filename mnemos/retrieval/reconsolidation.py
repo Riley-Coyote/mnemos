@@ -1,8 +1,9 @@
 """
 Post-retrieval memory reconsolidation.
 
-Every time a memory is retrieved, it is reconsolidated — its strength,
-stability, and connections are updated based on the current context.
+Every time a memory is retrieved, it is reconsolidated — its access metadata,
+stability, accessibility, and connections are updated based on the current
+context. The stored strength column is S0 and remains fixed after encoding.
 This models the neuroscience finding that memories become labile (modifiable)
 upon retrieval and are then re-stored in an updated form.
 
@@ -37,23 +38,22 @@ def reconsolidate(
 
     Models the reconsolidation window: when a memory is retrieved, it
     becomes temporarily labile and is re-stored with updates based on
-    the current retrieval context.
+    the current retrieval context. S0 strength is not changed.
 
     Effects:
     1. Access metadata updated (count, timestamp)
-    2. Strength increased (retrieval strengthens storage)
-    3. Stability increased slowly (spaced repetition effect)
-    4. Accessibility boosted (just accessed = highly retrievable)
-    5. Connections to co-retrieved engrams created/strengthened
-    6. Version snapshot saved for audit trail
-    7. Persisted to store
+    2. Stability increased slowly (spaced repetition effect)
+    3. Accessibility boosted (just accessed = highly retrievable)
+    4. Connections to co-retrieved engrams created/strengthened
+    5. Version snapshot saved for audit trail
+    6. Persisted to store
 
     Args:
         engram: The engram being reconsolidated.
         current_context: The retrieval cue / context (for audit trail).
         co_retrieved_ids: IDs of other engrams retrieved alongside this one.
         store: The storage backend for persisting updates.
-        strength_delta: How much to increase strength per retrieval.
+        strength_delta: Deprecated; engram strength is frozen S0 after encoding.
         stability_delta: How much to increase stability per retrieval.
         accessibility_floor: Minimum accessibility after retrieval.
 
@@ -64,16 +64,14 @@ def reconsolidate(
     engram.record_access()
     engram.reconsolidation_count += 1
 
-    # 2. Strength increases — retrieval is rehearsal
-    engram.strength = min(1.0, engram.strength + strength_delta)
-
-    # 3. Stability increases — scaled by retrieval history (spaced repetition)
+    # 2. Stability increases — scaled by retrieval history (spaced repetition)
     cfg = config or {}
     spacing_factor = cfg.get("reconsolidation_spacing_factor", 0.5)
     max_delta = cfg.get("reconsolidation_max_stability_delta", 0.03)
     scaled_delta = min(
         max_delta,
-        stability_delta * (1 + math.log1p(engram.reconsolidation_count) * spacing_factor),
+        stability_delta
+        * (1 + math.log1p(engram.reconsolidation_count) * spacing_factor),
     )
 
     # Connection bonus: well-connected memories stabilize faster on retrieval

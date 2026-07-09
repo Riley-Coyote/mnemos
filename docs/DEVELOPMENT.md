@@ -79,6 +79,11 @@ retrieval citations, drift-eval rows, producer failure counts, and nullable
 `engrams.origin_stamp`. Keep these migrations schema-only and verify behavior
 against temporary or representative copy databases, not live `~/.mnemos`.
 
+Schema v13 adds the prospective-only `engrams.status` column. Its migration is
+schema-only; lifecycle behavior lives in `Engram` validation,
+`EngramStore.transition_prospective_status()`, and the
+`mnemos prospective status` CLI path.
+
 ## Feature Archive
 
 - **`wip-continuity`** branch — A snapshot of the full workshop layer. Mine it for features; don't push it wholesale.

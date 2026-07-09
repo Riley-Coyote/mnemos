@@ -10,6 +10,7 @@ from mnemos.importer import (
     ACTION_REPAIR,
     ACTION_REVIEW,
     ACTION_TOMBSTONE,
+    ACTION_UPDATE,
     PaiImportPreview,
     PaiImportSource,
     apply_pai_import,
@@ -33,6 +34,76 @@ def _source(kind: str, text: str) -> PaiImportSource:
 
 def _row_with_action(preview, action: str):
     return next(row for row in preview.rows if row.action == action)
+
+
+TERMINAL_PROSPECTIVE_STATUSES = (
+    "fulfilled",
+    "closed_unfulfilled",
+    "retired",
+)
+
+
+def _transition_imported_source_to_terminal_prospective(
+    store: EngramStore,
+    source: PaiImportSource,
+    status: str,
+) -> str:
+    first = preview_pai_import(store, [source])
+    apply_pai_import(store, first)
+    target_id = first.rows[0].target_id
+    conn = store._get_conn()
+    conn.execute(
+        "UPDATE engrams SET kind = 'prospective', status = 'open' WHERE id = ?",
+        (target_id,),
+    )
+    conn.commit()
+    store.transition_prospective_status(
+        target_id,
+        status,
+        actor="oliver",
+        runtime="pytest",
+        session_id="u3c",
+        reason=f"operator marked {status}",
+    )
+    return target_id
+
+
+def _assert_reimported_as_active_semantic(
+    store: EngramStore,
+    target_id: str,
+    expected_content: str,
+) -> None:
+    conn = store._get_conn()
+    row = conn.execute(
+        "SELECT content, kind, status, state FROM engrams WHERE id = ?",
+        (target_id,),
+    ).fetchone()
+    assert dict(row) == {
+        "content": expected_content,
+        "kind": "semantic",
+        "status": None,
+        "state": "active",
+    }
+    assert (
+        conn.execute("SELECT 1 FROM archive WHERE id = ?", (target_id,)).fetchone()
+        is None
+    )
+    assert (
+        conn.execute(
+            "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
+            (target_id,),
+        ).fetchone()["tombstone_at"]
+        is None
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM engrams_fts WHERE id = ?",
+            (target_id,),
+        ).fetchone()[0]
+        == 1
+    )
+    assert len(store.get_runtime_receipts(kind="prospective-status-transition")) == 1
+    assert store.get_runtime_receipts(kind="pai-tombstone-refusal") == []
 
 
 def test_u3c_watch_noop_apply_backfills_v5_row_map_baseline(tmp_path):
@@ -174,6 +245,703 @@ def test_u3c_removed_engram_section_tombstones_target_idempotently(tmp_path):
             .fetchone()[0]
         )
         assert replayed_tombstone_events == 1
+    finally:
+        store.close()
+
+
+def test_u3c_removed_open_prospective_engram_refuses_and_surfaces_review(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+        conn = store._get_conn()
+        conn.execute(
+            "UPDATE engrams SET kind = 'prospective', status = 'open' WHERE id = ?",
+            (target_id,),
+        )
+        conn.commit()
+
+        removed = replace(source, source_text="")
+        preview = preview_pai_watch_update(store, [removed])
+        assert preview.counts == {ACTION_REVIEW: 1}
+        review = _row_with_action(preview, ACTION_REVIEW)
+        assert review.target_id == target_id
+        assert "source vanished for open want" in review.reason
+
+        result = apply_pai_watch_update(store, preview)
+        assert result.counts == {ACTION_REVIEW: 1}
+        row = conn.execute(
+            "SELECT kind, status, state FROM engrams WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        assert row["kind"] == "prospective"
+        assert row["status"] == "open"
+        assert row["state"] == "active"
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM engrams_fts WHERE id = ?",
+                (target_id,),
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            conn.execute("SELECT 1 FROM archive WHERE id = ?", (target_id,)).fetchone()
+            is None
+        )
+        assert (
+            conn.execute(
+                "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
+                (target_id,),
+            ).fetchone()["tombstone_at"]
+            is None
+        )
+        proposals = store.list_proposals(
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            status="pending_review",
+            read_visibility="review_only",
+            limit=10,
+        )
+        assert len(proposals) == 1
+        assert proposals[0]["target_id"] == target_id
+        assert proposals[0]["transition"] == (
+            f"source vanished for open want {target_id} -- retire or keep?"
+        )
+        receipts = store.get_runtime_receipts(kind="pai-tombstone-refusal")
+        assert len(receipts) == 1
+        assert receipts[0]["engram_refs"] == [target_id]
+        assert receipts[0]["payload"]["proposal_id"] == proposals[0]["id"]
+        assert (
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM pai_import_events
+                WHERE target_id = ? AND action = ?
+                """,
+                (target_id, ACTION_REVIEW),
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        store.close()
+
+
+def test_u3c_open_prospective_tombstone_refusal_is_idempotent(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+        conn = store._get_conn()
+        conn.execute(
+            "UPDATE engrams SET kind = 'prospective', status = 'open' WHERE id = ?",
+            (target_id,),
+        )
+        conn.commit()
+
+        removed = replace(source, source_text="")
+        apply_pai_watch_update(store, preview_pai_watch_update(store, [removed]))
+        replay = preview_pai_watch_update(store, [removed])
+        assert replay.counts == {ACTION_REVIEW: 1}
+        result = apply_pai_watch_update(store, replay)
+
+        assert result.counts == {}
+        assert len(store.get_runtime_receipts(kind="pai-tombstone-refusal")) == 1
+        proposals = store.list_proposals(
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            status="pending_review",
+            read_visibility="review_only",
+            limit=10,
+        )
+        assert len(proposals) == 1
+        assert (
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM pai_import_events
+                WHERE target_id = ? AND action = ?
+                """,
+                (target_id, ACTION_REVIEW),
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        store.close()
+
+
+def test_u3c_present_open_prospective_source_refuses_repair_idempotently(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+        conn = store._get_conn()
+        conn.execute(
+            "UPDATE engrams SET kind = 'prospective', status = 'open' WHERE id = ?",
+            (target_id,),
+        )
+        conn.commit()
+
+        preview = preview_pai_watch_update(store, [source])
+        assert preview.counts == {ACTION_REVIEW: 1}
+        review = _row_with_action(preview, ACTION_REVIEW)
+        assert review.target_id == target_id
+        assert "transition required before import can mutate it" in review.reason
+
+        result = apply_pai_watch_update(store, preview)
+        assert result.counts == {ACTION_REVIEW: 1}
+
+        row = conn.execute(
+            "SELECT content, kind, status, state FROM engrams WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        assert dict(row) == {
+            "content": "# A\nalpha",
+            "kind": "prospective",
+            "status": "open",
+            "state": "active",
+        }
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM engrams_fts WHERE id = ?",
+                (target_id,),
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            conn.execute("SELECT 1 FROM archive WHERE id = ?", (target_id,)).fetchone()
+            is None
+        )
+        assert (
+            conn.execute(
+                "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
+                (target_id,),
+            ).fetchone()["tombstone_at"]
+            is None
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM versions WHERE engram_id = ?",
+                (target_id,),
+            ).fetchone()[0]
+            == 0
+        )
+        assert len(store.get_runtime_receipts(kind="pai-tombstone-refusal")) == 1
+        assert (
+            len(
+                store.list_proposals(
+                    agent_id="oliver",
+                    person_id="david",
+                    project_scope="pai",
+                    status="pending_review",
+                    read_visibility="review_only",
+                    limit=10,
+                )
+            )
+            == 1
+        )
+
+        replay = preview_pai_watch_update(store, [source])
+        assert replay.counts == {ACTION_REVIEW: 1}
+        replay_result = apply_pai_watch_update(store, replay)
+
+        assert replay_result.counts == {}
+        assert len(store.get_runtime_receipts(kind="pai-tombstone-refusal")) == 1
+        assert (
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM pai_import_events
+                WHERE target_id = ? AND action = ?
+                """,
+                (target_id, ACTION_REVIEW),
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        store.close()
+
+
+def test_u3c_changed_open_prospective_source_refuses_update(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+        conn = store._get_conn()
+        conn.execute(
+            "UPDATE engrams SET kind = 'prospective', status = 'open' WHERE id = ?",
+            (target_id,),
+        )
+        conn.commit()
+
+        changed = replace(source, source_text="# A\nbeta")
+        preview = preview_pai_watch_update(store, [changed])
+        assert preview.counts == {ACTION_REVIEW: 1}
+        review = _row_with_action(preview, ACTION_REVIEW)
+        assert review.source_hash != review.mapped_source_hash
+
+        apply_pai_watch_update(store, preview)
+
+        row = conn.execute(
+            "SELECT content, kind, status, state FROM engrams WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        assert dict(row) == {
+            "content": "# A\nalpha",
+            "kind": "prospective",
+            "status": "open",
+            "state": "active",
+        }
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM engrams_fts WHERE id = ?",
+                (target_id,),
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            conn.execute("SELECT 1 FROM archive WHERE id = ?", (target_id,)).fetchone()
+            is None
+        )
+        assert len(store.get_runtime_receipts(kind="pai-tombstone-refusal")) == 1
+    finally:
+        store.close()
+
+
+def test_one_shot_present_open_prospective_source_refuses_repair_idempotently(
+    tmp_path,
+):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+        conn = store._get_conn()
+        conn.execute(
+            "UPDATE engrams SET kind = 'prospective', status = 'open' WHERE id = ?",
+            (target_id,),
+        )
+        conn.commit()
+
+        preview = preview_pai_import(store, [source])
+        assert preview.counts == {ACTION_REVIEW: 1}
+        review = _row_with_action(preview, ACTION_REVIEW)
+        assert review.target_id == target_id
+        assert review.source_hash == review.mapped_source_hash
+        assert "transition required before import can mutate it" in review.reason
+
+        result = apply_pai_import(store, preview)
+        assert result.counts == {ACTION_REVIEW: 1}
+        row = conn.execute(
+            "SELECT content, kind, status, state FROM engrams WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        assert dict(row) == {
+            "content": "# A\nalpha",
+            "kind": "prospective",
+            "status": "open",
+            "state": "active",
+        }
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM engrams_fts WHERE id = ?",
+                (target_id,),
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            conn.execute("SELECT 1 FROM archive WHERE id = ?", (target_id,)).fetchone()
+            is None
+        )
+        assert (
+            conn.execute(
+                "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
+                (target_id,),
+            ).fetchone()["tombstone_at"]
+            is None
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM versions WHERE engram_id = ?",
+                (target_id,),
+            ).fetchone()[0]
+            == 0
+        )
+        proposals = store.list_proposals(
+            agent_id="oliver",
+            person_id="david",
+            project_scope="pai",
+            status="pending_review",
+            read_visibility="review_only",
+            limit=10,
+        )
+        assert len(proposals) == 1
+        assert proposals[0]["target_id"] == target_id
+        assert proposals[0]["transition"] == (
+            f"PAI source targets open want {target_id} -- "
+            "transition required before import can mutate it"
+        )
+        receipts = store.get_runtime_receipts(kind="pai-tombstone-refusal")
+        assert len(receipts) == 1
+        assert receipts[0]["payload"]["proposal_id"] == proposals[0]["id"]
+
+        replay = preview_pai_import(store, [source])
+        assert replay.counts == {ACTION_REVIEW: 1}
+        replay_result = apply_pai_import(store, replay)
+
+        assert replay_result.counts == {}
+        assert len(store.get_runtime_receipts(kind="pai-tombstone-refusal")) == 1
+        assert (
+            len(
+                store.list_proposals(
+                    agent_id="oliver",
+                    person_id="david",
+                    project_scope="pai",
+                    status="pending_review",
+                    read_visibility="review_only",
+                    limit=10,
+                )
+            )
+            == 1
+        )
+        assert (
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM pai_import_events
+                WHERE target_id = ? AND action = ?
+                """,
+                (target_id, ACTION_REVIEW),
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        store.close()
+
+
+def test_one_shot_changed_open_prospective_source_refuses_update(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+        conn = store._get_conn()
+        conn.execute(
+            "UPDATE engrams SET kind = 'prospective', status = 'open' WHERE id = ?",
+            (target_id,),
+        )
+        conn.commit()
+
+        changed = replace(source, source_text="# A\nbeta")
+        preview = preview_pai_import(store, [changed])
+        assert preview.counts == {ACTION_REVIEW: 1}
+        review = _row_with_action(preview, ACTION_REVIEW)
+        assert review.target_id == target_id
+        assert review.source_hash != review.mapped_source_hash
+
+        apply_pai_import(store, preview)
+
+        row = conn.execute(
+            "SELECT content, kind, status, state FROM engrams WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        assert dict(row) == {
+            "content": "# A\nalpha",
+            "kind": "prospective",
+            "status": "open",
+            "state": "active",
+        }
+        row_map = conn.execute(
+            """
+            SELECT source_hash, content_at_last_import, tombstone_at
+            FROM pai_import_row_map
+            WHERE target_id = ?
+            """,
+            (target_id,),
+        ).fetchone()
+        assert row_map["source_hash"] == first.rows[0].source_hash
+        assert row_map["content_at_last_import"] == "# A\nalpha"
+        assert row_map["tombstone_at"] is None
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM engrams_fts WHERE id = ?",
+                (target_id,),
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            conn.execute("SELECT 1 FROM archive WHERE id = ?", (target_id,)).fetchone()
+            is None
+        )
+        assert len(store.get_runtime_receipts(kind="pai-tombstone-refusal")) == 1
+    finally:
+        store.close()
+
+
+def test_one_shot_present_semantic_repair_and_update_still_work(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+        conn = store._get_conn()
+        conn.execute(
+            "UPDATE engrams SET tags = ? WHERE id = ?", ("not-json", target_id)
+        )
+        conn.commit()
+
+        repair = preview_pai_import(store, [source])
+        assert repair.counts == {ACTION_REPAIR: 1}
+        apply_pai_import(store, repair)
+        repaired = store.get_engram(target_id)
+        assert repaired is not None
+        assert repaired.tags == ["pai-import", "identity-kernel"]
+
+        changed = replace(source, source_text="# A\nbeta")
+        update = preview_pai_import(store, [changed])
+        assert update.counts == {ACTION_UPDATE: 1}
+        apply_pai_import(store, update)
+        updated = store.get_engram(target_id)
+        assert updated is not None
+        assert updated.content == "# A\nbeta"
+        assert store.get_runtime_receipts(kind="pai-tombstone-refusal") == []
+    finally:
+        store.close()
+
+
+def test_u3c_present_semantic_repair_and_update_still_work(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+        conn = store._get_conn()
+        conn.execute(
+            "UPDATE engrams SET tags = ? WHERE id = ?", ("not-json", target_id)
+        )
+        conn.commit()
+
+        repair = preview_pai_watch_update(store, [source])
+        assert repair.counts == {ACTION_REPAIR: 1}
+        apply_pai_watch_update(store, repair)
+        repaired = store.get_engram(target_id)
+        assert repaired is not None
+        assert repaired.tags == ["pai-import", "identity-kernel"]
+
+        changed = replace(source, source_text="# A\nbeta")
+        update = preview_pai_watch_update(store, [changed])
+        assert update.counts == {ACTION_UPDATE: 1}
+        apply_pai_watch_update(store, update)
+        updated = store.get_engram(target_id)
+        assert updated is not None
+        assert updated.content == "# A\nbeta"
+    finally:
+        store.close()
+
+
+def test_u3c_removed_terminal_prospective_engram_completes_tombstone(tmp_path):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        first = preview_pai_import(store, [source])
+        apply_pai_import(store, first)
+        target_id = first.rows[0].target_id
+        conn = store._get_conn()
+        conn.execute(
+            "UPDATE engrams SET kind = 'prospective', status = 'open' WHERE id = ?",
+            (target_id,),
+        )
+        conn.commit()
+        store.transition_prospective_status(
+            target_id,
+            "retired",
+            actor="oliver",
+            runtime="pytest",
+            session_id="u3c",
+            reason="operator retired",
+        )
+
+        removed = replace(source, source_text="")
+        preview = preview_pai_watch_update(store, [removed])
+        assert preview.counts == {ACTION_TOMBSTONE: 1}
+        result = apply_pai_watch_update(store, preview)
+
+        assert result.counts == {ACTION_TOMBSTONE: 1}
+        row = conn.execute(
+            "SELECT status, state FROM engrams WHERE id = ?",
+            (target_id,),
+        ).fetchone()
+        assert row["status"] == "retired"
+        assert row["state"] == "archived"
+        assert (
+            conn.execute(
+                "SELECT archive_reason FROM archive WHERE id = ?",
+                (target_id,),
+            ).fetchone()["archive_reason"]
+            == "prospective_status:retired"
+        )
+        assert (
+            conn.execute(
+                "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
+                (target_id,),
+            ).fetchone()["tombstone_at"]
+            is not None
+        )
+        assert (
+            len(store.get_runtime_receipts(kind="prospective-status-transition")) == 1
+        )
+        assert store.get_runtime_receipts(kind="pai-tombstone-refusal") == []
+
+        replay = preview_pai_watch_update(store, [removed])
+        apply_pai_watch_update(store, replay)
+        assert (
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM pai_import_events
+                WHERE target_id = ? AND action = ?
+                """,
+                (target_id, ACTION_TOMBSTONE),
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("status", TERMINAL_PROSPECTIVE_STATUSES)
+def test_u3c_terminal_prospective_present_source_updates_then_noops(tmp_path, status):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        target_id = _transition_imported_source_to_terminal_prospective(
+            store, source, status
+        )
+        changed = replace(source, source_text="# A\nbeta")
+
+        preview = preview_pai_watch_update(store, [changed])
+        assert preview.counts == {ACTION_UPDATE: 1}
+        update = _row_with_action(preview, ACTION_UPDATE)
+        assert update.target_id == target_id
+        assert "terminal prospective" in update.reason
+
+        result = apply_pai_watch_update(store, preview)
+        assert result.counts == {ACTION_UPDATE: 1}
+        _assert_reimported_as_active_semantic(store, target_id, "# A\nbeta")
+
+        replay = preview_pai_watch_update(store, [changed])
+        assert replay.counts == {ACTION_NOOP: 1}
+        assert apply_pai_watch_update(store, replay).counts == {ACTION_NOOP: 1}
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("status", TERMINAL_PROSPECTIVE_STATUSES)
+def test_one_shot_terminal_prospective_present_source_updates_then_noops(
+    tmp_path, status
+):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        target_id = _transition_imported_source_to_terminal_prospective(
+            store, source, status
+        )
+        changed = replace(source, source_text="# A\nbeta")
+
+        preview = preview_pai_import(store, [changed])
+        assert preview.counts == {ACTION_UPDATE: 1}
+        update = _row_with_action(preview, ACTION_UPDATE)
+        assert update.target_id == target_id
+        assert "terminal prospective" in update.reason
+
+        result = apply_pai_import(store, preview)
+        assert result.counts == {ACTION_UPDATE: 1}
+        _assert_reimported_as_active_semantic(store, target_id, "# A\nbeta")
+
+        replay = preview_pai_import(store, [changed])
+        assert replay.counts == {ACTION_NOOP: 1}
+        assert apply_pai_import(store, replay).counts == {ACTION_NOOP: 1}
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("status", TERMINAL_PROSPECTIVE_STATUSES)
+def test_u3c_terminal_prospective_source_return_repairs_after_tombstone(
+    tmp_path, status
+):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        target_id = _transition_imported_source_to_terminal_prospective(
+            store, source, status
+        )
+        removed = replace(source, source_text="")
+        apply_pai_watch_update(store, preview_pai_watch_update(store, [removed]))
+        assert (
+            store._get_conn()
+            .execute(
+                "SELECT tombstone_at FROM pai_import_row_map WHERE target_id = ?",
+                (target_id,),
+            )
+            .fetchone()["tombstone_at"]
+            is not None
+        )
+
+        returned = preview_pai_watch_update(store, [source])
+        assert returned.counts == {ACTION_REPAIR: 1}
+        repair = _row_with_action(returned, ACTION_REPAIR)
+        assert repair.target_id == target_id
+        assert "terminal prospective" in repair.reason
+
+        result = apply_pai_watch_update(store, returned)
+        assert result.counts == {ACTION_REPAIR: 1}
+        _assert_reimported_as_active_semantic(store, target_id, "# A\nalpha")
+        assert (
+            store._get_conn()
+            .execute(
+                """
+                SELECT COUNT(*) FROM pai_import_events
+                WHERE target_id = ? AND action = ?
+                """,
+                (target_id, ACTION_TOMBSTONE),
+            )
+            .fetchone()[0]
+            == 1
+        )
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("status", TERMINAL_PROSPECTIVE_STATUSES)
+def test_one_shot_terminal_prospective_source_return_repairs_after_tombstone(
+    tmp_path, status
+):
+    store = EngramStore(tmp_path / "u3c.db")
+    try:
+        source = _source("identity_kernel", "# A\nalpha")
+        target_id = _transition_imported_source_to_terminal_prospective(
+            store, source, status
+        )
+        removed = replace(source, source_text="")
+        apply_pai_watch_update(store, preview_pai_watch_update(store, [removed]))
+
+        returned = preview_pai_import(store, [source])
+        assert returned.counts == {ACTION_REPAIR: 1}
+        repair = _row_with_action(returned, ACTION_REPAIR)
+        assert repair.target_id == target_id
+        assert "terminal prospective" in repair.reason
+
+        result = apply_pai_import(store, returned)
+        assert result.counts == {ACTION_REPAIR: 1}
+        _assert_reimported_as_active_semantic(store, target_id, "# A\nalpha")
     finally:
         store.close()
 

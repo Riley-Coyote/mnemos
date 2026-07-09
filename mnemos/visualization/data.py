@@ -145,30 +145,36 @@ def _extract_engrams(
         enc_ctx = _parse_json(r["encoding_context"], {})
 
         # Clean tags
-        clean_tags = [t for t in tags if not t.startswith("trace-type:") and t != "session-indexed"]
+        clean_tags = [
+            t
+            for t in tags
+            if not t.startswith("trace-type:") and t != "session-indexed"
+        ]
 
-        engrams.append({
-            "id": r["id"],
-            "content": r["content"] or "",
-            "impact": r["impact"] or "",
-            "kind": r["kind"] or "semantic",
-            "tags": clean_tags,
-            "all_tags": tags,  # Keep originals for project detection
-            "strength": r["strength"] or 0.5,
-            "stability": r["stability"] or 0.1,
-            "accessibility": r["accessibility"] or 0.5,
-            "created_at": (r["created_at"] or "")[:19],
-            "last_accessed": (r["last_accessed"] or "")[:19],
-            "access_count": r["access_count"] or 0,
-            "reconsolidation_count": r["reconsolidation_count"] or 0,
-            "state": r["state"] or "active",
-            "source_type": source.get("type", source.get("source_type", "unknown")),
-            "confidence": source.get("confidence", 0.5),
-            "session_id": source.get("session_id") or enc_ctx.get("session_id", ""),
-            "encoding_depth": enc_ctx.get("encoding_depth", ""),
-            "surprise_level": enc_ctx.get("surprise_level", 0),
-            "attention_level": enc_ctx.get("attention_level", 0.5),
-        })
+        engrams.append(
+            {
+                "id": r["id"],
+                "content": r["content"] or "",
+                "impact": r["impact"] or "",
+                "kind": r["kind"] or "semantic",
+                "tags": clean_tags,
+                "all_tags": tags,  # Keep originals for project detection
+                "strength": r["strength"] or 0.5,
+                "stability": r["stability"] or 0.1,
+                "accessibility": r["accessibility"] or 0.5,
+                "created_at": (r["created_at"] or "")[:19],
+                "last_accessed": (r["last_accessed"] or "")[:19],
+                "access_count": r["access_count"] or 0,
+                "reconsolidation_count": r["reconsolidation_count"] or 0,
+                "state": r["state"] or "active",
+                "source_type": source.get("type", source.get("source_type", "unknown")),
+                "confidence": source.get("confidence", 0.5),
+                "session_id": source.get("session_id") or enc_ctx.get("session_id", ""),
+                "encoding_depth": enc_ctx.get("encoding_depth", ""),
+                "surprise_level": enc_ctx.get("surprise_level", 0),
+                "attention_level": enc_ctx.get("attention_level", 0.5),
+            }
+        )
 
     return engrams
 
@@ -179,14 +185,16 @@ def _extract_connections(db: sqlite3.Connection, engram_ids: set[str]) -> list[d
         "SELECT source_id, target_id, relation, strength, formed_at, formed_by FROM connections"
     ).fetchall():
         if r["source_id"] in engram_ids and r["target_id"] in engram_ids:
-            connections.append({
-                "source": r["source_id"],
-                "target": r["target_id"],
-                "relation": r["relation"] or "supports",
-                "strength": r["strength"] or 0.5,
-                "formed_at": (r["formed_at"] or "")[:19],
-                "formed_by": r["formed_by"] or "",
-            })
+            connections.append(
+                {
+                    "source": r["source_id"],
+                    "target": r["target_id"],
+                    "relation": r["relation"] or "supports",
+                    "strength": r["strength"] or 0.5,
+                    "formed_at": (r["formed_at"] or "")[:19],
+                    "formed_by": r["formed_by"] or "",
+                }
+            )
     return connections
 
 
@@ -215,10 +223,13 @@ def _extract_beliefs(
             _resolve_vault_active,
             identity_decision_gate_sql,
         )
+
         gate = (
             ""
             if include_non_operational
-            else identity_decision_gate_sql("beliefs", active=_resolve_vault_active(None))
+            else identity_decision_gate_sql(
+                "beliefs", active=_resolve_vault_active(None)
+            )
         )
         sql = (
             "SELECT id, content, confidence, domain, created_at, last_revised, "
@@ -228,14 +239,16 @@ def _extract_beliefs(
             + " ORDER BY confidence DESC"
         )
         for r in db.execute(sql, params).fetchall():
-            beliefs.append({
-                "id": r["id"],
-                "content": r["content"] or "",
-                "confidence": r["confidence"] or 0.5,
-                "domain": r["domain"] or "",
-                "created_at": (r["created_at"] or "")[:19],
-                "last_revised": (r["last_revised"] or "")[:19],
-            })
+            beliefs.append(
+                {
+                    "id": r["id"],
+                    "content": r["content"] or "",
+                    "confidence": r["confidence"] or 0.5,
+                    "domain": r["domain"] or "",
+                    "created_at": (r["created_at"] or "")[:19],
+                    "last_revised": (r["last_revised"] or "")[:19],
+                }
+            )
     except sqlite3.OperationalError:
         pass  # Table might not exist
     return beliefs
@@ -248,12 +261,14 @@ def _extract_consolidation_log(db: sqlite3.Connection) -> list[dict]:
             "SELECT pass_name, started_at, completed_at, stats FROM consolidation_log "
             "ORDER BY started_at DESC LIMIT 20"
         ).fetchall():
-            logs.append({
-                "pass_name": r["pass_name"] or "",
-                "started_at": (r["started_at"] or "")[:19],
-                "completed_at": (r["completed_at"] or "")[:19],
-                "stats": _parse_json(r["stats"], {}),
-            })
+            logs.append(
+                {
+                    "pass_name": r["pass_name"] or "",
+                    "started_at": (r["started_at"] or "")[:19],
+                    "completed_at": (r["completed_at"] or "")[:19],
+                    "stats": _parse_json(r["stats"], {}),
+                }
+            )
     except sqlite3.OperationalError:
         pass
     return logs
@@ -294,15 +309,24 @@ def _compute_projects(engrams: list[dict]) -> dict[str, list[str]]:
                 tag_counts[t] += 1
 
     # Project tags: appear on 3+ engrams, not generic type tags
-    generic_tags = {"decision", "lesson", "pattern", "relationship", "context",
-                    "foundational", "active_project"}
-    project_tags = {t for t, c in tag_counts.items()
-                    if c >= 3 and t not in generic_tags}
+    generic_tags = {
+        "decision",
+        "lesson",
+        "pattern",
+        "relationship",
+        "context",
+        "foundational",
+        "active_project",
+    }
+    project_tags = {
+        t for t, c in tag_counts.items() if c >= 3 and t not in generic_tags
+    }
 
     projects: dict[str, list[str]] = {}
     for tag in sorted(project_tags):
-        ids = [e["id"] for e in engrams
-               if e["state"] == "active" and tag in e["all_tags"]]
+        ids = [
+            e["id"] for e in engrams if e["state"] == "active" and tag in e["all_tags"]
+        ]
         if ids:
             projects[tag] = ids
 
@@ -337,7 +361,9 @@ def _compute_sessions(engrams: list[dict], state: dict) -> dict[str, dict]:
     return sessions
 
 
-def _compute_stats(engrams: list, connections: list, beliefs: list, state: dict) -> dict:
+def _compute_stats(
+    engrams: list, connections: list, beliefs: list, state: dict
+) -> dict:
     active = [e for e in engrams if e["state"] == "active"]
     dormant = [e for e in engrams if e["state"] == "dormant"]
 
@@ -362,16 +388,16 @@ def _compute_stats(engrams: list, connections: list, beliefs: list, state: dict)
         else:
             acc_buckets["low (<0.3)"] += 1
 
-    # Strength distribution
-    str_buckets = {"strong (>0.7)": 0, "moderate (0.4-0.7)": 0, "weak (<0.4)": 0}
+    # S0 distribution
+    str_buckets = {"S0 > 0.70": 0, "S0 0.40-0.70": 0, "S0 < 0.40": 0}
     for e in active:
         s = e["strength"]
         if s > 0.7:
-            str_buckets["strong (>0.7)"] += 1
+            str_buckets["S0 > 0.70"] += 1
         elif s >= 0.4:
-            str_buckets["moderate (0.4-0.7)"] += 1
+            str_buckets["S0 0.40-0.70"] += 1
         else:
-            str_buckets["weak (<0.4)"] += 1
+            str_buckets["S0 < 0.40"] += 1
 
     # Avg connections
     conn_per: Counter = Counter()

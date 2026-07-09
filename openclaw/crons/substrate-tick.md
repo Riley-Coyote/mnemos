@@ -14,7 +14,7 @@ Runs the cognitive substrate consolidation cycle — the agent's "subconscious p
 ## Purpose
 
 Runs the substrate consolidation cycle which includes:
-- **Decay**: Unused memories lose strength and accessibility over time
+- **Decay**: Unused memories lose accessibility over time while S0 stays fixed
 - **Connection Discovery**: Find new semantic relationships between memories
 - **Belief Review**: Challenge stagnant beliefs with new evidence
 - **Event Cascade**: Handlers fire for significant events (dreaming, reflection, insight, etc.)

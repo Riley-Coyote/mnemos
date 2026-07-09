@@ -42,7 +42,7 @@ class MemoryInspector:
         """Get full details of an engram including version history and connections.
 
         Returns a comprehensive view of a single engram:
-        - All fields (content, resolution, strength, stability, accessibility, etc.)
+        - All fields (content, resolution, S0/strength, stability, accessibility, etc.)
         - Full encoding context
         - Source and confidence information
         - Version history (reconsolidation snapshots)
@@ -69,7 +69,7 @@ class MemoryInspector:
             "active_beliefs": N,
             "reconsolidation_events": N,
             "accessibility_distribution": {"avg": F, "min": F, "max": F},
-            "strength_distribution": {"avg": F, "min": F, "max": F},
+            "s0_distribution": {"avg": F, "min": F, "max": F},
             "kind_distribution": {"episodic": N, "semantic": N, ...},
             "oldest_memory": ISO timestamp,
             "newest_memory": ISO timestamp,
@@ -96,7 +96,7 @@ class MemoryInspector:
         {
             "root": engram_id,
             "nodes": [
-                {"id": str, "content_preview": str, "kind": str, "strength": float},
+                {"id": str, "content_preview": str, "kind": str, "s0": float},
                 ...
             ],
             "edges": [

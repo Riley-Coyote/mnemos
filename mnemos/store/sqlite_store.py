@@ -1260,8 +1260,8 @@ class EngramStore:
     def save_engram(self, engram: Engram) -> None:
         """Insert or update an engram.
 
-        All operations (engram table, FTS index, connections, versions) are
-        wrapped in a single transaction for atomicity.
+        Engram, FTS, and version operations are wrapped in one transaction.
+        Generic save is structurally incapable of mutating connections.
         """
         conn = self._get_conn()
         try:
@@ -1305,13 +1305,40 @@ class EngramStore:
             (engram.id, engram.content),
         )
 
-        # Save connections
-        for conn_obj in engram.connections:
-            self._save_connection_no_commit(conn, engram.id, conn_obj)
-
         # Save versions
         for version in engram.versions:
             self._save_version_no_commit(conn, engram.id, version)
+
+    def save_engram_with_connection_updates(
+        self,
+        engram: Engram,
+        connection_updates: Sequence[Connection],
+        *,
+        receipt_context: object | None = None,
+    ) -> None:
+        """Atomically save an engram and separately declared connection deltas.
+
+        ``receipt_context`` is a reserved Step-3 extension seam. S2 accepts only
+        ``None`` and defines no receipt payload or emission behavior.
+        """
+        self._reject_connection_receipt_context(receipt_context)
+        updates = self._deduplicate_connection_updates(connection_updates)
+        conn = self._get_conn()
+        self._require_idle_transaction(conn)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._save_engram_no_commit(conn, engram)
+            for conn_obj in updates:
+                self._save_connection_no_commit(
+                    conn,
+                    engram.id,
+                    conn_obj,
+                    receipt_context=receipt_context,
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
     def _validate_engram_status_write(
         self, conn: sqlite3.Connection, engram: Engram
@@ -2101,16 +2128,82 @@ class EngramStore:
 
     # ── Connections ──
 
-    def save_connection(self, source_id: str, conn_obj: Connection) -> None:
-        """Save a typed connection (with auto-commit)."""
+    @staticmethod
+    def _reject_connection_receipt_context(receipt_context: object | None) -> None:
+        if receipt_context is not None:
+            raise ValueError("connection receipt context is not active in Step 3 S2")
+
+    @staticmethod
+    def _require_idle_transaction(conn: sqlite3.Connection) -> None:
+        if conn.in_transaction:
+            raise RuntimeError(
+                "explicit connection saves require an idle store transaction"
+            )
+
+    @staticmethod
+    def _deduplicate_connection_updates(
+        connection_updates: Sequence[Connection],
+    ) -> list[Connection]:
+        updates: dict[tuple[str, str], Connection] = {}
+        for conn_obj in connection_updates:
+            relation = (
+                conn_obj.relation.value
+                if hasattr(conn_obj.relation, "value")
+                else str(conn_obj.relation)
+            )
+            updates[(conn_obj.target_id, relation)] = conn_obj
+        return list(updates.values())
+
+    def save_connection(
+        self,
+        source_id: str,
+        conn_obj: Connection,
+        *,
+        receipt_context: object | None = None,
+    ) -> None:
+        """Save one explicitly declared typed connection."""
+        self.save_connections(
+            source_id,
+            [conn_obj],
+            receipt_context=receipt_context,
+        )
+
+    def save_connections(
+        self,
+        source_id: str,
+        connection_updates: Sequence[Connection],
+        *,
+        receipt_context: object | None = None,
+    ) -> None:
+        """Atomically save an explicit edge-only batch for one source."""
+        self._reject_connection_receipt_context(receipt_context)
+        updates = self._deduplicate_connection_updates(connection_updates)
         conn = self._get_conn()
-        self._save_connection_no_commit(conn, source_id, conn_obj)
-        conn.commit()
+        self._require_idle_transaction(conn)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            for conn_obj in updates:
+                self._save_connection_no_commit(
+                    conn,
+                    source_id,
+                    conn_obj,
+                    receipt_context=receipt_context,
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
     def _save_connection_no_commit(
-        self, conn: sqlite3.Connection, source_id: str, conn_obj: Connection
+        self,
+        conn: sqlite3.Connection,
+        source_id: str,
+        conn_obj: Connection,
+        *,
+        receipt_context: object | None = None,
     ) -> None:
         """Save a typed connection without committing (for use in transactions)."""
+        self._reject_connection_receipt_context(receipt_context)
         conn.execute(
             "INSERT OR REPLACE INTO connections "
             "(source_id, target_id, relation, strength, formed_at, formed_by) "

@@ -115,17 +115,22 @@ def seeded_store(tmp_path):
         "Solo deep work produced the strongest outcomes repeatedly", ["solo-work"]
     )
     store.save_engram(solo)
-    pairing.add_connection(
+    contradiction = pairing.add_connection(
         target_id=solo.id, relation="contradicts", strength=0.6, formed_by="seed"
     )
     store.save_engram(pairing)
+    store.save_connection(pairing.id, contradiction)
     # Filler so the graph is not "too young" (>= 10 engrams).
     store.save_engram(_engram("Read about activation spreading", ["retrieval"]))
 
     # Beliefs: a confident value that aligns, a confident value that
     # emerged undeclared, and an uncertain belief the soul declares settled.
     store.save_belief(
-        Belief(agent_id=AGENT, content="typography reveals how systems think", confidence=0.9)
+        Belief(
+            agent_id=AGENT,
+            content="typography reveals how systems think",
+            confidence=0.9,
+        )
     )
     store.save_belief(
         Belief(
@@ -135,7 +140,11 @@ def seeded_store(tmp_path):
         )
     )
     store.save_belief(
-        Belief(agent_id=AGENT, content="writing tests before code pays off", confidence=0.35)
+        Belief(
+            agent_id=AGENT,
+            content="writing tests before code pays off",
+            confidence=0.35,
+        )
     )
 
     yield store
@@ -222,7 +231,9 @@ def test_diff_detects_alignment(seeded_store, soul_path):
     report = _diff(seeded_store, soul_path)
     aligned_claims = {f.soul_claim for f in report.alignments}
     assert "typography is how I think" in aligned_claims
-    typo = next(f for f in report.alignments if f.soul_claim == "typography is how I think")
+    typo = next(
+        f for f in report.alignments if f.soul_claim == "typography is how I think"
+    )
     assert typo.confidence_label in ("strong", "moderate")
     assert typo.soul_section == "What Makes Me Me"
 
@@ -395,7 +406,9 @@ def test_accept_transitions_epoch_and_persists(seeded_store, soul_path, scope):
 def test_accept_without_diff_errors(tmp_path):
     store = EngramStore(tmp_path / "fresh.db")
     scope = MnemosScope(
-        agent_id=AGENT, person_id=PERSON, project_scope=PROJECT,
+        agent_id=AGENT,
+        person_id=PERSON,
+        project_scope=PROJECT,
         db_path=str(tmp_path / "fresh.db"),
     )
     try:
@@ -417,11 +430,16 @@ def test_accept_out_of_range_errors(seeded_store, soul_path, scope):
 
 def _cli_args(soul_path, db_path):
     return [
-        "--soul", str(soul_path),
-        "--db-path", str(db_path),
-        "--agent-id", AGENT,
-        "--person-id", PERSON,
-        "--project-scope", PROJECT,
+        "--soul",
+        str(soul_path),
+        "--db-path",
+        str(db_path),
+        "--agent-id",
+        AGENT,
+        "--person-id",
+        PERSON,
+        "--project-scope",
+        PROJECT,
         "--no-enrich",
     ]
 
@@ -453,11 +471,18 @@ def test_cli_identity_accept_smoke(seeded_store, soul_path, capsys):
 
     rc = main(
         [
-            "identity", "accept", "--divergence", "1",
-            "--db-path", str(seeded_store.db_path),
-            "--agent-id", AGENT,
-            "--person-id", PERSON,
-            "--project-scope", PROJECT,
+            "identity",
+            "accept",
+            "--divergence",
+            "1",
+            "--db-path",
+            str(seeded_store.db_path),
+            "--agent-id",
+            AGENT,
+            "--person-id",
+            PERSON,
+            "--project-scope",
+            PROJECT,
         ]
     )
     assert rc == 0
@@ -472,10 +497,14 @@ def test_cli_identity_diff_missing_soul(tmp_path, capsys):
 
     rc = main(
         [
-            "identity", "diff",
-            "--soul", str(tmp_path / "nope" / "SOUL.md"),
-            "--db-path", str(tmp_path / "x.db"),
-            "--agent-id", AGENT,
+            "identity",
+            "diff",
+            "--soul",
+            str(tmp_path / "nope" / "SOUL.md"),
+            "--db-path",
+            str(tmp_path / "x.db"),
+            "--agent-id",
+            AGENT,
             "--no-enrich",
         ]
     )

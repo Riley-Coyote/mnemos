@@ -463,27 +463,28 @@ class Engram:
         relation: str,
         strength: float = 0.5,
         formed_by: str = "encoding",
-    ) -> None:
+    ) -> Connection:
         """Add a typed connection to another engram.
 
         If a connection with the same target_id and relation already exists,
         its strength is incremented by 0.1 (capped at 1.0) and formed_by
-        is updated to reflect the most recent formation context.
+        is updated to reflect the most recent formation context. Returns the
+        exact created or reinforced connection so callers can persist one delta.
         """
         # Reinforce existing connection if duplicate
         for conn in self.connections:
             if conn.target_id == target_id and conn.relation == relation:
                 conn.strength = min(1.0, conn.strength + 0.1)
                 conn.formed_by = formed_by
-                return
-        self.connections.append(
-            Connection(
-                target_id=target_id,
-                relation=relation,
-                strength=strength,
-                formed_by=formed_by,
-            )
+                return conn
+        connection = Connection(
+            target_id=target_id,
+            relation=relation,
+            strength=strength,
+            formed_by=formed_by,
         )
+        self.connections.append(connection)
+        return connection
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for SQLite storage."""

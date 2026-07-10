@@ -85,11 +85,14 @@ def run_connection_discovery(
         stats["engrams_processed"] += 1
         existing_target_ids = {c.target_id for c in existing_connections}
         candidates = []
+        connection_updates = []
 
         # 1. Embedding-based candidates (if available)
         if embedding_index and embedding_index.available:
             emb_results = embedding_index.search(
-                engram.content, k=10, exclude_ids={engram.id},
+                engram.content,
+                k=10,
+                exclude_ids={engram.id},
             )
             for eid, score in emb_results:
                 if eid not in existing_target_ids and score > 0.3:
@@ -132,17 +135,21 @@ def run_connection_discovery(
             classifications = classify_connections(llm_client, engram, candidates)
             for cls in classifications:
                 tag_overlap = 0
-                candidate = next((c for c in candidates if c.id == cls.candidate_id), None)
+                candidate = next(
+                    (c for c in candidates if c.id == cls.candidate_id), None
+                )
                 if candidate:
                     tag_overlap = len(set(engram.tags) & set(candidate.tags))
 
                 strength = min(0.95, cls.confidence + 0.05 * tag_overlap)
 
-                engram.add_connection(
-                    target_id=cls.candidate_id,
-                    relation=cls.relation,
-                    strength=round(strength, 3),
-                    formed_by="consolidation",
+                connection_updates.append(
+                    engram.add_connection(
+                        target_id=cls.candidate_id,
+                        relation=cls.relation,
+                        strength=round(strength, 3),
+                        formed_by="consolidation",
+                    )
                 )
                 stats["connections_created"] += 1
         else:
@@ -153,21 +160,27 @@ def run_connection_discovery(
             for match in candidates[:5]:
                 tag_overlap = len(set(engram.tags) & set(match.tags))
                 strength = min(0.8, 0.3 + 0.1 * tag_overlap)
-                engram.add_connection(
-                    target_id=match.id,
-                    relation=ConnectionRelation.CO_ACTIVATED,
-                    strength=strength,
-                    formed_by="consolidation_no_llm",
+                connection_updates.append(
+                    engram.add_connection(
+                        target_id=match.id,
+                        relation=ConnectionRelation.CO_ACTIVATED,
+                        strength=strength,
+                        formed_by="consolidation_no_llm",
+                    )
                 )
                 stats["connections_created"] += 1
 
-        store.save_engram(engram)
+        if connection_updates:
+            store.save_connections(engram.id, connection_updates)
 
     # ── Phase B: Reclassify unclassified connections ──
     if llm_client:
         _reclassify_old_connections(
-            store, llm_client, all_active,
-            batch_size=reclassify_batch, stats=stats,
+            store,
+            llm_client,
+            all_active,
+            batch_size=reclassify_batch,
+            stats=stats,
         )
 
     return stats
@@ -209,8 +222,7 @@ def _reclassify_old_connections(
             read_visibility=READ_VISIBILITY_OPERATIONAL,
         )
         raw_connections = [
-            c for c in connections
-            if c.relation in _RECLASSIFIABLE_RELATIONS
+            c for c in connections if c.relation in _RECLASSIFIABLE_RELATIONS
         ]
 
         if not raw_connections:
@@ -260,8 +272,10 @@ def _same_mutable_scope(source: Any, candidate: Any | None) -> bool:
     if candidate is None:
         return False
     return (
-        getattr(source, "read_visibility", "operational_context") == "operational_context"
-        and getattr(candidate, "read_visibility", "operational_context") == "operational_context"
+        getattr(source, "read_visibility", "operational_context")
+        == "operational_context"
+        and getattr(candidate, "read_visibility", "operational_context")
+        == "operational_context"
         and bool(candidate.consolidation_authorized)
         and candidate.owner_agent_id == source.owner_agent_id
     )

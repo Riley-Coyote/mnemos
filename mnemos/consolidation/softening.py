@@ -230,15 +230,21 @@ def run_softening_pass(
         engram.resolution = round(target, 2)
 
         # Connect source to its lesson via DISTILLED_INTO
+        connection_updates = []
         if lesson_id:
-            engram.add_connection(
-                target_id=lesson_id,
-                relation=ConnectionRelation.DISTILLED_INTO,
-                strength=0.8,
-                formed_by="consolidation",
+            connection_updates.append(
+                engram.add_connection(
+                    target_id=lesson_id,
+                    relation=ConnectionRelation.DISTILLED_INTO,
+                    strength=0.8,
+                    formed_by="consolidation",
+                )
             )
 
-        store.save_engram(engram)
+        if connection_updates:
+            store.save_engram_with_connection_updates(engram, connection_updates)
+        else:
+            store.save_engram(engram)
 
         total_res_after += engram.resolution
         softened_count += 1

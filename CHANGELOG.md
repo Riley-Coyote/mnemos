@@ -70,9 +70,15 @@
 ### Step 3 Connections
 - Schema v14 adds nullable, default-free `valid_at`, `invalid_at`, `confidence`,
   `runner_up_label`, `runner_up_confidence`, and `classifier_version` columns to
-  `connections`. This slice is schema-only: existing rows receive `NULL`, and no
-  reader, writer, lifecycle, classifier, index, constraint, or backfill behavior
-  is added.
+  `connections`. That schema slice was additive-only: existing rows receive
+  `NULL`, with no reader, lifecycle, classifier, index, constraint, or backfill.
+- Generic engram persistence no longer writes attached connections. Deliberate
+  encoder, discovery, reconsolidation, softening, and shared-conflict producers
+  now submit declared connection deltas through explicit atomic store methods;
+  ordinary, inner-life, importer, and shared-publish saves cannot alter the graph.
+- The explicit connection seam reserves a keyword-only receipt context for its
+  owning later slice. S2 emits no connection receipt and rejects non-empty
+  context before mutation.
 
 ### Belief Confidence Authority
 - Automatic encoder, LLM-classifier, consolidation, and reflection paths no

@@ -88,19 +88,25 @@ def reconsolidate(
     # linked. Co-activation is correlation, not evidence: the edge is
     # CO_ACTIVATED (structural), not SUPPORTS, so the discovery pass can
     # classify it semantically later instead of inheriting a monoculture.
+    connection_updates = []
     for co_id in co_retrieved_ids:
         if co_id != engram.id:
-            engram.add_connection(
-                target_id=co_id,
-                relation=ConnectionRelation.CO_ACTIVATED,
-                strength=0.3,
-                formed_by="retrieval",
+            connection_updates.append(
+                engram.add_connection(
+                    target_id=co_id,
+                    relation=ConnectionRelation.CO_ACTIVATED,
+                    strength=0.3,
+                    formed_by="retrieval",
+                )
             )
 
     # 6. Version snapshot for audit trail
     engram.add_version(reason="reconsolidation")
 
     # 7. Persist
-    store.save_engram(engram)
+    if connection_updates:
+        store.save_engram_with_connection_updates(engram, connection_updates)
+    else:
+        store.save_engram(engram)
 
     return engram

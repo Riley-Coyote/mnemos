@@ -272,9 +272,15 @@ class Encoder:
 
         # 5. Discover connections to existing memories
         connections = self._discover_connections(engram, self._store)
+        connection_updates: list[Connection] = []
         for conn in connections:
-            engram.add_connection(
-                conn.target_id, conn.relation, conn.strength, conn.formed_by
+            connection_updates.append(
+                engram.add_connection(
+                    conn.target_id,
+                    conn.relation,
+                    conn.strength,
+                    conn.formed_by,
+                )
             )
 
         # 6. SHIFT 3: Surprise detection — check for contradictions
@@ -282,7 +288,11 @@ class Encoder:
         if skip_surprise_detection:
             surprise = 0.0
         else:
-            surprise = self._detect_surprise(engram, self._store)
+            surprise = self._detect_surprise(
+                engram,
+                self._store,
+                connection_updates=connection_updates,
+            )
         if surprise > 0:
             engram.encoding_context.surprise_level = surprise
             # Deep encoding: boost stability proportional to surprise.
@@ -290,7 +300,13 @@ class Encoder:
             engram.stability = min(1.0, engram.stability + 0.10 * surprise)
 
         # 7. Persist
-        self._store.save_engram(engram)
+        if connection_updates:
+            self._store.save_engram_with_connection_updates(
+                engram,
+                connection_updates,
+            )
+        else:
+            self._store.save_engram(engram)
 
         # 8. Auto-index embedding (if embedding index available)
         if self._embedding_index:
@@ -330,6 +346,8 @@ class Encoder:
         self,
         engram: Engram,
         store: EngramStore,
+        *,
+        connection_updates: list[Connection],
     ) -> float:
         """Detect if new content contradicts existing beliefs or memories.
 
@@ -379,12 +397,13 @@ class Encoder:
 
                     # Create CONTRADICTS connections to supporting engrams
                     for supporting_id in belief.supporting_engram_ids[:3]:
-                        engram.add_connection(
+                        connection = engram.add_connection(
                             target_id=supporting_id,
                             relation=ConnectionRelation.CONTRADICTS,
                             strength=0.7,
                             formed_by="encoding",
                         )
+                        connection_updates.append(connection)
 
                 # Log/suppress automatic confidence requests after cooldown.
                 cooldown_ok = True

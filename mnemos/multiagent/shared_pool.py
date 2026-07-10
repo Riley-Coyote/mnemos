@@ -228,13 +228,13 @@ class SharedPool:
             formed_at=_now_iso(),
             formed_by="conflict_resolution",
         )
-        loser.add_connection(
+        connection_update = loser.add_connection(
             contradiction.target_id,
             contradiction.relation,
             contradiction.strength,
             contradiction.formed_by,
         )
-        self._store.save_engram(loser)
+        self._store.save_connection(loser.id, connection_update)
 
         return {
             "winner_id": winner.id,

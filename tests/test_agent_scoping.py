@@ -29,7 +29,10 @@ AGENT_B = "vektor"
 @pytest.fixture()
 def two_agent_store(tmp_path):
     store = EngramStore(tmp_path / "scoping.db")
-    for agent, topics in ((AGENT_A, ["graphs", "topology"]), (AGENT_B, ["lenses", "exposure"])):
+    for agent, topics in (
+        (AGENT_A, ["graphs", "topology"]),
+        (AGENT_B, ["lenses", "exposure"]),
+    ):
         for t in topics:
             e = Engram(
                 content=f"{agent} learned something durable about {t} today",
@@ -73,7 +76,11 @@ def test_belief_review_default_scope_is_default():
 def test_connection_discovery_scoped_leaves_other_agent_untouched(two_agent_store):
     before_b = _snapshot(two_agent_store, AGENT_B)
     stats = run_connection_discovery(
-        two_agent_store, embedding_index=None, config={}, llm_client=None, agent_id=AGENT_A
+        two_agent_store,
+        embedding_index=None,
+        config={},
+        llm_client=None,
+        agent_id=AGENT_A,
     )
     after_b = _snapshot(two_agent_store, AGENT_B)
     assert after_b == before_b, "agent B's engrams changed during agent A's discovery"
@@ -129,13 +136,17 @@ def test_decay_ignores_unauthorized_and_other_agent_connection_targets(tmp_path)
             engram.last_accessed = "2026-01-01T00:00:00+00:00"
             store.save_engram(engram)
 
+        connection_updates = []
         for target in (unauthorized, other_agent, archived):
-            connected.add_connection(
-                target.id,
-                ConnectionRelation.SUPPORTS,
-                formed_by="test",
+            connection_updates.append(
+                connected.add_connection(
+                    target.id,
+                    ConnectionRelation.SUPPORTS,
+                    formed_by="test",
+                )
             )
         store.save_engram(connected)
+        store.save_connections(connected.id, connection_updates)
 
         run_decay_pass(
             store,
@@ -152,7 +163,9 @@ def test_decay_ignores_unauthorized_and_other_agent_connection_targets(tmp_path)
 
         after_connected = store.get_engram(connected.id)
         after_control = store.get_engram(control.id)
-        assert after_connected.accessibility == pytest.approx(after_control.accessibility)
+        assert after_connected.accessibility == pytest.approx(
+            after_control.accessibility
+        )
         assert after_connected.strength == pytest.approx(after_control.strength)
         assert after_connected.stability == pytest.approx(after_control.stability)
         assert after_connected.stability == pytest.approx(0.1)
@@ -170,7 +183,9 @@ def test_softening_scoped_leaves_other_agent_untouched(two_agent_store):
             two_agent_store.save_engram(e)
 
     before_b = _snapshot(two_agent_store, AGENT_B)
-    stats = run_softening_pass(two_agent_store, {"softening_threshold": 0.9}, None, agent_id=AGENT_A)
+    stats = run_softening_pass(
+        two_agent_store, {"softening_threshold": 0.9}, None, agent_id=AGENT_A
+    )
     after_b = _snapshot(two_agent_store, AGENT_B)
 
     b_content_before = {k: v[0] for k, v in before_b.items()}
@@ -181,7 +196,11 @@ def test_softening_scoped_leaves_other_agent_untouched(two_agent_store):
 
 def test_belief_review_scoped_reviews_correct_agent(two_agent_store):
     for agent in (AGENT_A, AGENT_B):
-        b = Belief(agent_id=agent, content=f"{agent} believes in scoped maintenance", confidence=0.5)
+        b = Belief(
+            agent_id=agent,
+            content=f"{agent} believes in scoped maintenance",
+            confidence=0.5,
+        )
         two_agent_store.save_belief(b)
 
     beliefs_b_before = {
@@ -193,7 +212,9 @@ def test_belief_review_scoped_reviews_correct_agent(two_agent_store):
         b.id: (b.confidence, len(b.revision_history))
         for b in two_agent_store.get_beliefs(AGENT_B, active_only=True)
     }
-    assert beliefs_b_after == beliefs_b_before, "agent B's beliefs were revised during agent A's review"
+    assert beliefs_b_after == beliefs_b_before, (
+        "agent B's beliefs were revised during agent A's review"
+    )
 
 
 def test_blank_identity_fallback_carries_agent_scope():

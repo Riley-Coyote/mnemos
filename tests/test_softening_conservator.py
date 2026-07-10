@@ -36,8 +36,14 @@ class StubLLM:
         return self.response
 
 
-def _engram(agent: str, content: str, *, accessibility: float = 0.5,
-            resolution: float = 1.0, impact: str = "set") -> Engram:
+def _engram(
+    agent: str,
+    content: str,
+    *,
+    accessibility: float = 0.5,
+    resolution: float = 1.0,
+    impact: str = "set",
+) -> Engram:
     e = Engram(
         content=content,
         content_at_encoding=content,
@@ -85,7 +91,12 @@ def seeded(store):
     )
     for e in (vivid_1, vivid_2, fading, other_agent):
         store.save_engram(e)
-    return {"vivid_1": vivid_1, "vivid_2": vivid_2, "fading": fading, "other": other_agent}
+    return {
+        "vivid_1": vivid_1,
+        "vivid_2": vivid_2,
+        "fading": fading,
+        "other": other_agent,
+    }
 
 
 def test_prompt_carries_invariants_and_same_agent_exemplars(store, seeded):
@@ -227,3 +238,22 @@ def test_lesson_reinforcement_skips_unauthorized_and_other_agent(store):
     assert unchanged_other_agent.strength == pytest.approx(0.3)
     assert unchanged_other_agent.stability == pytest.approx(0.3)
     assert unchanged_other_agent.access_count == 0
+
+
+def test_softening_persists_only_its_declared_distilled_edge(store):
+    fading = _engram(
+        AGENT_A,
+        "A long calibration memory that will soften into a durable lesson",
+        accessibility=0.45,
+        impact="Durable calibration requires explicit boundary checks",
+    )
+    store.save_engram(fading)
+
+    run_softening_pass(store, {}, None, agent_id=AGENT_A)
+
+    [edge] = store.get_connections(fading.id)
+    lesson = store.get_engram(edge.target_id)
+    assert edge.relation == "distilled_into"
+    assert edge.formed_by == "consolidation"
+    assert lesson is not None
+    assert "lesson" in lesson.tags

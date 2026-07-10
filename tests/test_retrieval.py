@@ -78,7 +78,7 @@ class TestReactiveRetriever:
             owner_agent_id="default",
             read_visibility="review_only",
         )
-        operational.add_connection(
+        edge = operational.add_connection(
             review_target.id,
             ConnectionRelation.SUPPORTS,
             strength=1.0,
@@ -87,6 +87,7 @@ class TestReactiveRetriever:
         store.save_engram(review_target)
         store.save_engram(review_seed)
         store.save_engram(operational)
+        store.save_connection(operational.id, edge)
 
         results = retriever.retrieve(
             "afferent membrane seed",
@@ -130,7 +131,7 @@ class TestReactiveRetriever:
             owner_agent_id="default",
             read_visibility="audit_only",
         )
-        operational.add_connection(
+        edge = operational.add_connection(
             audit_target.id,
             ConnectionRelation.SUPPORTS,
             strength=1.0,
@@ -140,6 +141,7 @@ class TestReactiveRetriever:
         store.save_engram(audit_seed)
         store.save_engram(audit_target)
         store.save_engram(operational)
+        store.save_connection(operational.id, edge)
 
         results = retriever.retrieve(
             "retrieval seed afferent proof",
@@ -173,13 +175,13 @@ class TestReactiveRetriever:
             owner_agent_id="default",
             read_visibility="operational_context",
         )
-        operational_seed.add_connection(
+        seed_edge = operational_seed.add_connection(
             review_bridge.id,
             ConnectionRelation.SUPPORTS,
             strength=1.0,
             formed_by="test",
         )
-        review_bridge.add_connection(
+        bridge_edge = review_bridge.add_connection(
             operational_downstream.id,
             ConnectionRelation.SUPPORTS,
             strength=1.0,
@@ -188,6 +190,8 @@ class TestReactiveRetriever:
         store.save_engram(operational_downstream)
         store.save_engram(review_bridge)
         store.save_engram(operational_seed)
+        store.save_connection(review_bridge.id, bridge_edge)
+        store.save_connection(operational_seed.id, seed_edge)
 
         results = retriever.retrieve(
             "membrane bridge seed",

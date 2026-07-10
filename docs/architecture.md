@@ -179,6 +179,15 @@ Typed edges between engrams that form the memory graph:
 - Schema v14 reserves nullable connection-rights fields, but they are inert
   storage until a later slice defines and implements their runtime contract
 
+Generic engram persistence owns only the engram row, FTS row, and version rows;
+it never derives connection writes from `Engram.connections`. Graph mutation is
+an explicit capability: deliberate producers submit only their created or
+reinforced deltas through an edge-only batch transaction or a combined
+engram-plus-delta transaction when both must commit together. Both routes
+deduplicate by connection key and share the low-level connection seam. Its
+keyword-only receipt context is reserved and fail-closed in S2; receipt payloads
+and emission remain owned by a later Step 3 slice.
+
 ### Beliefs
 
 Higher-order knowledge structures extracted from patterns across engrams:

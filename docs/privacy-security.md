@@ -120,12 +120,23 @@ context packet / prompt / CLI search citations are marked
 paths for writes and refuse live `~/.mnemos` databases unless
 `--allow-live-db` is supplied for an authorized live rollout.
 
+## Step 2 Store Hygiene
+
 Schema v13 adds prospective-memory status without adding a new operational read
 surface. Only `kind="prospective"` engrams may carry status. New prospective
 rows default to `open`; terminal statuses (`fulfilled`, `closed_unfulfilled`,
 `retired`) must be written through the store transition API or
 `mnemos prospective status`, which appends a `prospective-status-transition`
 runtime receipt in the same transaction and refuses reopening.
+
+## Step 3 Connection Rights
+
+Schema v14 adds six nullable, default-free fields to `connections`: `valid_at`,
+`invalid_at`, `confidence`, `runner_up_label`, `runner_up_confidence`, and
+`classifier_version`. Existing rows receive `NULL`, and no runtime reader,
+writer, classifier, lifecycle rule, index, constraint, or backfill is added.
+In particular, the new connection `confidence` field does not grant authority
+to mutate belief confidence or affect any operational read surface.
 
 ## Belief Confidence Authority
 

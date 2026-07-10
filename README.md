@@ -292,6 +292,12 @@ Only `kind="prospective"` rows can carry status; terminal transitions are
 atomic, write a `prospective-status-transition` runtime receipt, and refuse
 reopening.
 
+Schema v14 reserves six nullable, default-free connection-rights fields:
+`valid_at`, `invalid_at`, `confidence`, `runner_up_label`,
+`runner_up_confidence`, and `classifier_version`. Existing connections keep
+their legacy values and receive `NULL` in every new field. No runtime path reads
+or writes these fields yet, so v14 adds no lifecycle or classifier behavior.
+
 ### Identity Vault For Foundational Rows
 
 When the canonical vault is installed, identity/foundational rows in beliefs and
@@ -557,7 +563,7 @@ Schema migrations:
 ```bash
 mnemos migrate plan
 mnemos migrate apply
-mnemos migrate apply --target-version 13
+mnemos migrate apply --target-version 14
 ```
 
 `migrate` operates on the canonical store only. It resolves the database from

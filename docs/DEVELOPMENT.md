@@ -84,6 +84,12 @@ schema-only; lifecycle behavior lives in `Engram` validation,
 `EngramStore.transition_prospective_status()`, and the
 `mnemos prospective status` CLI path.
 
+Schema v14 adds only six nullable, default-free columns to `connections`:
+`valid_at`, `invalid_at`, `confidence`, `runner_up_label`,
+`runner_up_confidence`, and `classifier_version`. Keep this slice inert: no
+reader, writer, lifecycle, classifier, index, constraint, or backfill belongs in
+the migration.
+
 ## Feature Archive
 
 - **`wip-continuity`** branch — A snapshot of the full workshop layer. Mine it for features; don't push it wholesale.

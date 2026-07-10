@@ -67,6 +67,13 @@
   refusal receipts instead of tombstoning or rewriting them; terminal
   prospectives may be repaired/reactivated only when source content returns.
 
+### Step 3 Connections
+- Schema v14 adds nullable, default-free `valid_at`, `invalid_at`, `confidence`,
+  `runner_up_label`, `runner_up_confidence`, and `classifier_version` columns to
+  `connections`. This slice is schema-only: existing rows receive `NULL`, and no
+  reader, writer, lifecycle, classifier, index, constraint, or backfill behavior
+  is added.
+
 ### Belief Confidence Authority
 - Automatic encoder, LLM-classifier, consolidation, and reflection paths no
   longer mutate belief confidence. SUPPORTS/CONTRADICTS output can still drive

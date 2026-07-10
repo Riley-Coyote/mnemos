@@ -72,6 +72,12 @@ Only prospective engrams may carry status. New prospective rows default to
 `prospective-status-transition` receipt in one transaction; direct upserts
 cannot reopen or retarget terminal prospective rows.
 
+Schema v14 adds nullable, default-free connection-rights storage: `valid_at`,
+`invalid_at`, `confidence`, `runner_up_label`, `runner_up_confidence`, and
+`classifier_version`. The migration preserves existing connection values and
+leaves every new field `NULL`; no runtime reader, writer, lifecycle rule,
+classifier behavior, index, constraint, or backfill is part of this slice.
+
 ### Engrams
 
 The fundamental unit of memory. Each engram has:
@@ -170,6 +176,8 @@ Typed edges between engrams that form the memory graph:
 - `supports`, `contradicts`, `causes`, `extends`, `parallels`, `synthesizes`, `grounds`
 - Connections have strength that evolves through co-retrieval and consolidation
 - Connection discovery runs automatically during consolidation
+- Schema v14 reserves nullable connection-rights fields, but they are inert
+  storage until a later slice defines and implements their runtime contract
 
 ### Beliefs
 

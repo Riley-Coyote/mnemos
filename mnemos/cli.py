@@ -378,8 +378,15 @@ def _cmd_serve(args: argparse.Namespace) -> int:
                 project_scope=getattr(args, "project_scope", None),
             )
         return 0
-    except ImportError:
-        print("MCP server requires the 'mcp' package: pip install mcp", file=sys.stderr)
+    except ImportError as exc:
+        # Surface the real import that failed instead of assuming it is `mcp`
+        # (mcp is now a core dependency). A deep ImportError in the runtime
+        # should not be misreported as a missing MCP package.
+        print(
+            f"Failed to start the MCP server: {exc}\n"
+            "If the 'mcp' package is missing, reinstall: pip install mnemos-continuity",
+            file=sys.stderr,
+        )
         return 1
 
 

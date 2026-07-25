@@ -44,10 +44,14 @@ def test_simple_tools_have_protocol_risk_annotations():
 
     assert tools["mnemos_context"].annotations.openWorldHint is False
     assert tools["mnemos_context"].annotations.readOnlyHint is False
+    # context() and maintain() both run a consolidation cycle, and decay
+    # archives engrams that fall below threshold. Archival is not reversible
+    # through the tool surface, so both must declare themselves destructive.
+    assert tools["mnemos_context"].annotations.destructiveHint is True
+    assert tools["mnemos_maintain"].annotations.destructiveHint is True
     assert tools["mnemos_recall"].annotations.readOnlyHint is False
     assert tools["mnemos_capture"].annotations.destructiveHint is False
     assert tools["mnemos_correct"].annotations.destructiveHint is True
-    assert tools["mnemos_maintain"].annotations.destructiveHint is False
     assert tools["mnemos_introduce"].annotations.readOnlyHint is False
     assert tools["mnemos_introduce"].annotations.destructiveHint is False
     assert tools["mnemos_introduce"].annotations.idempotentHint is True

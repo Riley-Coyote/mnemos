@@ -26,6 +26,7 @@ def run_decay_pass(
     store: EngramStore,
     config: dict[str, Any],
     agent_id: str | None = "default",
+    max_elapsed_hours: float | None = None,
 ) -> dict[str, Any]:
     """Recalculate strength, stability, and accessibility for all active engrams.
 
@@ -34,6 +35,12 @@ def run_decay_pass(
         config: Configuration dict with decay parameters.
         agent_id: Which agent's engrams to decay. None = all agents
             (used for shared DB consolidation).
+        max_elapsed_hours: Ceiling on how many hours of decay a single pass
+            may apply, normally the time since the previous cycle. Each engram
+            ages from its own ``last_accessed``, which this pass never writes,
+            so without a ceiling every pass re-applies the full age-since-access
+            decay and repeated passes compound. None means no ceiling — correct
+            only for the first pass, which is genuine catch-up.
 
     Returns:
         Statistics dict with counts and accessibility changes.
@@ -64,7 +71,15 @@ def run_decay_pass(
         stats["engrams_processed"] += 1
         total_before += engram.accessibility
 
-        hours = _hours_since(engram.last_accessed)
+        # age_hours is how long since this memory was last touched; it drives
+        # the recency floor below. decay_hours is how much decay this pass is
+        # entitled to apply — capped at the elapsed window since the previous
+        # cycle, because accessibility is already the decayed value and would
+        # otherwise be re-decayed by its full age on every single pass.
+        age_hours = _hours_since(engram.last_accessed)
+        decay_hours = age_hours
+        if max_elapsed_hours is not None:
+            decay_hours = min(age_hours, max_elapsed_hours)
 
         # 1. ACCESSIBILITY DECAY
         # Stability resists decay exponentially: high stability → near-zero decay
@@ -89,12 +104,12 @@ def run_decay_pass(
             engram.stability = min(1.0, round(engram.stability + growth, 4))
 
         # Exponential decay
-        new_accessibility = engram.accessibility * math.exp(-effective_decay * hours)
+        new_accessibility = engram.accessibility * math.exp(-effective_decay * decay_hours)
         new_accessibility = min(1.0, max(0.0, new_accessibility))
 
         # 2. STRENGTH DECAY (10x slower than accessibility decay)
         # Uses same effective_decay but reduced by factor of 10
-        strength_loss = engram.strength * (1.0 - math.exp(-effective_decay * 0.1 * hours))
+        strength_loss = engram.strength * (1.0 - math.exp(-effective_decay * 0.1 * decay_hours))
         new_strength = max(0.0, engram.strength - strength_loss)
 
         # 3. ANTI-DECAY FLOORS
@@ -105,7 +120,7 @@ def run_decay_pass(
         if "active_project" in engram.tags:
             new_accessibility = max(0.6, new_accessibility)
 
-        if hours < 72:
+        if age_hours < 72:
             new_accessibility = max(0.4, new_accessibility)
 
         # Track if anything changed

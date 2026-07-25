@@ -84,6 +84,7 @@ class ConsolidationDaemon:
         self,
         deep: bool = False,
         agent_id: str = "default",
+        respect_gate: bool = False,
     ) -> dict[str, Any]:
         """Run a consolidation cycle with all enabled passes.
 
@@ -91,10 +92,26 @@ class ConsolidationDaemon:
             deep: If True, run all passes including LLM-mediated ones.
                 If False, run only connection_discovery and decay.
             agent_id: Which agent's memories to consolidate.
+            respect_gate: If True, honour the activity gate and skip the
+                cycle when one ran too recently. Automatic maintenance
+                (triggered by a read or a write) sets this; an explicit
+                maintain/consolidate request does not.
 
         Returns:
-            Dict with per-pass statistics and cycle metadata.
+            Dict with per-pass statistics and cycle metadata. A gated cycle
+            returns ``skipped: True`` and runs no passes.
         """
+        if respect_gate and not self._should_run():
+            return {
+                "cycle_id": None,
+                "cycle_type": "skipped",
+                "skipped": True,
+                "skipped_reason": "activity_gate",
+                "passes_run": [],
+                "started_at": _now_iso(),
+                "completed_at": _now_iso(),
+            }
+
         cycle_id = f"cycle_{_new_ulid()}"
         started_at = _now_iso()
 
@@ -130,6 +147,7 @@ class ConsolidationDaemon:
                 store=self._store,
                 config=consolidation_config,
                 agent_id=agent_id,
+                max_elapsed_hours=self._hours_since_last_cycle(),
             )
             stats["decay"] = decay_stats
             stats["passes_run"].append("decay")
@@ -241,6 +259,41 @@ class ConsolidationDaemon:
                 "provider": type(self._llm_client).__name__,
                 "affinity_error": str(e),
             }
+
+    def _hours_since_last_cycle(self) -> float | None:
+        """Hours elapsed since the last logged consolidation cycle.
+
+        Decay is applied for *elapsed time*, but each engram measures its own
+        age from ``last_accessed`` — which the decay pass never writes. Without
+        a ceiling, every cycle re-applies the whole age-since-access decay from
+        scratch, so N cycles compound to exp(-rate * hours * N) instead of
+        exp(-rate * hours). This returns the real elapsed window so decay can
+        clamp to it.
+
+        Returns None when no cycle has ever run, which lets the first pass
+        apply full catch-up decay from each engram's own last access.
+        """
+        try:
+            conn = self._store._get_conn()
+            row = conn.execute(
+                "SELECT completed_at FROM consolidation_log "
+                "ORDER BY completed_at DESC LIMIT 1"
+            ).fetchone()
+        except Exception:
+            return None
+
+        if row is None or not row["completed_at"]:
+            return None
+
+        try:
+            last = datetime.fromisoformat(row["completed_at"])
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            return None
+
+        elapsed = (datetime.now(timezone.utc) - last).total_seconds() / 3600.0
+        return max(0.0, elapsed)
 
     def _should_run(self) -> bool:
         """Check whether consolidation should run now.

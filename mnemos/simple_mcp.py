@@ -114,6 +114,9 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         annotations=_annotations(
             title="Get continuity context",
             read_only=False,
+            # Runs an automatic maintenance cycle, which decays engrams and
+            # can move them to dormant or archived. Gated, but still a write.
+            destructive=True,
             idempotent=False,
         )
     )
@@ -247,7 +250,9 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         annotations=_annotations(
             title="Maintain continuity",
             read_only=False,
-            destructive=False,
+            # Decay archives engrams that fall below threshold; archival is
+            # not reversible through the tool surface.
+            destructive=True,
             idempotent=False,
         )
     )

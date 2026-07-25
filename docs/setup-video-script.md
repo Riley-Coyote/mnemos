@@ -97,8 +97,8 @@ cd mnemos
 python -m pip install -e ".[mcp]"
 mnemos doctor          # prints readiness checks — should be all green
 ```
-Published-package alternative (when available): `pipx install "mnemos-memory[mcp]"`.
-(The PyPI distribution is named `mnemos-memory`; the command and import stay `mnemos`.)
+Published-package alternative (when available): `pipx install "mnemos-continuity[mcp]"`.
+(The PyPI distribution is named `mnemos-continuity`; the command and import stay `mnemos`.)
 
 **Step 1 — Connect Mnemos to your client.** Pick your client:
 
@@ -190,7 +190,7 @@ More detail: `HERMES_INSTALL.md` and `docs/hermes-integration.md` in the repo.
 ```bash
 # install
 git clone https://github.com/Riley-Coyote/mnemos.git && cd mnemos
-python -m pip install -e ".[mcp]"      # or: pipx install "mnemos-memory[mcp]"
+python -m pip install -e ".[mcp]"      # or: pipx install "mnemos-continuity[mcp]"
 mnemos doctor
 
 # MCP into a client (simple mode = default)

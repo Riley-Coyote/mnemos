@@ -64,11 +64,11 @@ you plan to keep.
 When the package is published:
 
 ```bash
-pipx install "mnemos-memory[mcp]"
+pipx install "mnemos-continuity[mcp]"
 mnemos doctor
 ```
 
-The package distribution name is `mnemos-memory` because `mnemos` is already
+The package distribution name is `mnemos-continuity` because `mnemos` is already
 occupied on PyPI. The import package and CLI command remain `mnemos`.
 
 ---

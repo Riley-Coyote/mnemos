@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mnemos-memory"
+name = "mnemos-continuity"
 version = "0.1.0"
 description = "Local-first continuity memory for AI agents"
 readme = "README.md"

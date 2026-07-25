@@ -16,10 +16,10 @@ pip install -e ".[mcp]"
 When published:
 
 ```bash
-pipx install "mnemos-memory[mcp]"
+pipx install "mnemos-continuity[mcp]"
 ```
 
-The distribution package is `mnemos-memory`. The Python import package and CLI
+The distribution package is `mnemos-continuity`. The Python import package and CLI
 command are still `mnemos`.
 
 ---

@@ -77,7 +77,31 @@ Paste the printed JSON into the client's MCP config.
 
 ---
 
-## 4. Simple Mode
+## 4. Make Continuity Automatic
+
+Connecting the MCP gives the agent memory tools. Two mechanisms make sure it
+actually uses them, so nothing has to be triggered by hand.
+
+**Server instructions** ship with the MCP server and need no setup. Every MCP
+client passes them to its agent: load context at session start, capture durable
+things as they come up, correct rather than contradict.
+
+**Session-start injection** is stronger, because it removes the tool call
+entirely. On Claude Code:
+
+```bash
+mnemos hooks install --write
+```
+
+Memory is then injected before the agent's first turn. Preview it first with
+`mnemos hooks install` (no `--write`).
+
+The hook fails silent by design: empty, unreadable, or missing memory
+contributes nothing and the session starts normally.
+
+---
+
+## 5. Simple Mode
 
 Simple mode is the default:
 
@@ -124,7 +148,7 @@ MNEMOS_AGENT_ID=nova MNEMOS_PERSON_ID=alex MNEMOS_PROJECT_SCOPE=mnemos mnemos se
 
 ---
 
-## 5. Maintenance and Models
+## 6. Maintenance and Models
 
 Mnemos maintenance has three levels:
 
@@ -158,7 +182,7 @@ mnemos consolidate --deep
 
 ---
 
-## 6. Advanced Mode
+## 7. Advanced Mode
 
 Use advanced mode for debugging, migration, research, or direct control:
 
@@ -189,14 +213,14 @@ Review generated commands before enabling them.
 
 ---
 
-## 7. Safety and Release Notes
+## 8. Safety and Release Notes
 
 - Privacy boundaries: [docs/privacy-security.md](docs/privacy-security.md)
 - Release checklist: [docs/release-hardening.md](docs/release-hardening.md)
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 ### The MCP client does not show Mnemos tools
 

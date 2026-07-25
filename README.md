@@ -128,6 +128,46 @@ mnemos mcp install generic
 
 These print MCP JSON snippets you can paste into the client config.
 
+### Automatic Continuity
+
+Connecting the MCP gives an agent memory tools. It does not, by itself,
+guarantee the agent *uses* them — and memory an agent has to be reminded to
+load is not continuity. Two mechanisms close that gap.
+
+**Server instructions (every client, nothing to install).** Mnemos ships
+instructions with the MCP server itself. Any MCP client surfaces them to its
+agent: load context at session start, capture durable things as they appear,
+correct rather than contradict, and never narrate the machinery at you. This
+is automatic once the server is connected.
+
+**Session-start injection (Claude Code).** Stronger still is putting memory in
+front of the agent before its first turn, so there is no tool call to forget:
+
+```bash
+mnemos hooks install --write
+```
+
+Preview what it would write, without writing:
+
+```bash
+mnemos hooks install
+```
+
+This registers a `SessionStart` hook that runs `mnemos hook session-start` and
+injects the continuity packet into the session. It preserves any hooks and
+settings you already have, replaces its own entry rather than stacking on
+reinstall, and refuses to overwrite a settings file it cannot parse.
+
+The hook is written to fail silent: if memory is empty, unreadable, or absent,
+it contributes nothing and the session starts normally. It never creates a
+database just because something read from it.
+
+Scope flags pass straight through when one machine hosts several agents:
+
+```bash
+mnemos hooks install --write --agent-id nova --db-path ~/.mnemos/nova.db
+```
+
 ### Simple Mode With Explicit Scope
 
 Use scope when one machine hosts multiple agents, users, or projects.
@@ -152,7 +192,9 @@ mnemos mcp install generic --agent-id nova --db-path ~/.mnemos/nova.db
 
 ### Prompt For A Simple MCP Agent
 
-Paste this into an agent after Mnemos MCP is connected:
+Usually unnecessary — the server ships these instructions itself, and every
+MCP client passes them to its agent. Keep this for clients that ignore server
+instructions, or when you want the behaviour stated in the agent's own prompt:
 
 ```text
 You have access to Mnemos MCP memory tools.
@@ -382,6 +424,9 @@ mnemos serve                          # Start simple MCP server
 mnemos serve --mode advanced          # Start advanced MCP server
 mnemos mcp install generic            # Print MCP config
 mnemos mcp install claude --write     # Merge Claude Desktop config
+mnemos hooks install                  # Preview the SessionStart memory hook
+mnemos hooks install --write          # Install it (Claude Code)
+mnemos hook session-start             # Emit the packet the hook injects
 
 mnemos init                           # Initialize a database
 mnemos remember "Prefers tabs"        # Capture continuity from the CLI

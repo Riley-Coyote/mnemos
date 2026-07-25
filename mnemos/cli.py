@@ -317,22 +317,34 @@ def main(argv: list[str] | None = None) -> int:
     return 1
 
 
-def _resolve_db_path(args: argparse.Namespace) -> str:
-    """Resolve CLI DB path with backwards-compatible default."""
-    return (
-        getattr(args, "db_path", None)
-        or os.environ.get("MNEMOS_DB_PATH")
-        or "~/.mnemos/memory.db"
+def _cli_scope(args: argparse.Namespace):
+    """Resolve CLI identity and storage through the one shared resolver.
+
+    The CLI used to answer "which agent, which database" on its own
+    (``default`` / ``~/.mnemos/memory.db``) while simple mode answered
+    through ``resolve_scope`` (``mnemos-agent`` / ``~/.mnemos/<agent>.db``).
+    So ``mnemos stats`` and ``mnemos serve`` reported on different stores,
+    and ``mnemos serve --mode advanced`` used a third combination again.
+    One resolver, one answer, every entry point.
+    """
+    from .simple_scope import resolve_scope
+
+    return resolve_scope(
+        db_path=getattr(args, "db_path", None),
+        agent_id=getattr(args, "agent_id", None),
+        person_id=getattr(args, "person_id", None),
+        project_scope=getattr(args, "project_scope", None),
     )
+
+
+def _resolve_db_path(args: argparse.Namespace) -> str:
+    """Resolve the CLI's database path."""
+    return _cli_scope(args).db_path
 
 
 def _resolve_agent_id(args: argparse.Namespace) -> str:
-    """Resolve CLI agent identity with backwards-compatible default."""
-    return (
-        getattr(args, "agent_id", None)
-        or os.environ.get("MNEMOS_AGENT_ID")
-        or "default"
-    )
+    """Resolve the CLI's agent identity."""
+    return _cli_scope(args).agent_id
 
 
 def _get_store(args: argparse.Namespace):
@@ -508,7 +520,11 @@ def _cmd_consolidate(args: argparse.Namespace) -> int:
     from .llm import create_client
 
     llm_client = create_client()
-    daemon = ConsolidationDaemon(store=store, config={}, llm_client=llm_client)
+    try:
+        daemon_config = load_config()
+    except Exception:
+        daemon_config = {}
+    daemon = ConsolidationDaemon(store=store, config=daemon_config, llm_client=llm_client)
     label = "deep" if args.deep else "shallow"
     print(f"Running {label} consolidation...")
 

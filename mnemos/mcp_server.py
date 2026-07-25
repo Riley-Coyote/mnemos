@@ -38,6 +38,7 @@ import logging
 import os
 import signal
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -53,6 +54,7 @@ from .interface.context_packet import build_context_packet
 from .interface.visual_snapshot import build_memory_visual_snapshot
 from .config.loader import load_config, save_config
 from .simple_mcp import configure_runtime, register_simple_tools
+from .simple_scope import MnemosScope, resolve_tool_scope
 
 logger = logging.getLogger("mnemos.mcp")
 
@@ -138,11 +140,40 @@ def _setup_gate() -> str | None:
 
 def _effective_agent_id(agent_id: str = "default") -> str:
     """Resolve advanced tools to the configured server identity by default."""
-    if agent_id and agent_id != "default":
-        return agent_id
-    config = _get_config()
-    configured = config.get("agent_id") or os.environ.get("MNEMOS_AGENT_ID")
-    return str(configured or _default_agent_id or "default")
+    return _scope(agent_id=agent_id).agent_id
+
+
+def _scope(
+    agent_id: str = "",
+    person_id: str = "",
+    project_scope: str = "",
+) -> MnemosScope:
+    """Resolve a tool call's full scope through the one shared resolver.
+
+    Every advanced tool that reads or writes scoped memory goes through
+    here, so it lands in the same partition the simple tools use. Passing
+    an explicit value still wins; the legacy literals mean "unspecified".
+    """
+    scope = resolve_tool_scope(
+        agent_id=agent_id or "",
+        person_id=person_id or "",
+        project_scope=project_scope or "",
+    )
+    # run_server(--agent-id) sets the server's identity. It outranks the
+    # config file but not an argument the caller deliberately supplied.
+    if agent_id in ("", "default") and _default_agent_id not in ("", "default"):
+        scope = replace(scope, agent_id=_default_agent_id)
+    return scope
+
+
+def _scoped(
+    agent_id: str = "",
+    person_id: str = "",
+    project_scope: str = "",
+) -> tuple[str, str, str]:
+    """Resolve a scope triple for rebinding a tool's own parameters."""
+    scope = _scope(agent_id, person_id, project_scope)
+    return scope.agent_id, scope.person_id, scope.project_scope
 
 
 def _init_store(db_path: str = "~/.mnemos/memory.db") -> None:
@@ -412,6 +443,12 @@ def mnemos_setup(response: str = "") -> str:
         user_desc = config.get("user_description", "")
         projects = config.get("indexer", {}).get("known_projects", [])
 
+        # Imported at step scope: the second belief below is created even
+        # when user_desc is empty, and a function-local import inside the
+        # first branch left it undefined there — a NameError swallowed by
+        # the except, silently dropping the belief.
+        from .core.belief import Belief
+
         beliefs_created = []
         if user_desc:
             # Extract key themes for beliefs
@@ -419,7 +456,6 @@ def mnemos_setup(response: str = "") -> str:
             if projects:
                 belief1 = f"{user_name} is deeply invested in {projects[0]}"
             try:
-                from .core.belief import Belief
                 b = Belief(
                     content=belief1,
                     domain="identity",
@@ -742,6 +778,7 @@ def mnemos_session_start(
     if gate:
         return gate
     _ensure_store()
+    agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
     session = _store.start_memory_session(  # type: ignore
         session_id=session_id or None,
         title=title,
@@ -784,6 +821,7 @@ def mnemos_functional_update(
     if gate:
         return gate
     _ensure_store()
+    agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
     try:
         entry = _store.write_functional_memory(  # type: ignore
@@ -823,6 +861,7 @@ def mnemos_functional_list(
     if gate:
         return gate
     _ensure_store()
+    agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
     try:
         entries = _store.load_functional_memories(  # type: ignore
             query,
@@ -863,6 +902,7 @@ def mnemos_session_close(
     if gate:
         return gate
     _ensure_store()
+    agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
     try:
         if promote_to_hypomnema:
             result = _store.close_session_to_hypomnema(  # type: ignore
@@ -908,6 +948,7 @@ def mnemos_context_packet(
     if gate:
         return gate
     _ensure_store()
+    agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
     packet = build_context_packet(
         _store,  # type: ignore
         query,
@@ -935,6 +976,7 @@ def mnemos_review_queue(
     if gate:
         return gate
     _ensure_store()
+    agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
     functional = _store.load_functional_memories(  # type: ignore
         "",
         agent_id=agent_id,
@@ -977,6 +1019,7 @@ def mnemos_visual_snapshot(
     if gate:
         return gate
     _ensure_store()
+    agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
     return build_memory_visual_snapshot(
         _store,  # type: ignore
         agent_id=agent_id,
@@ -1030,7 +1073,7 @@ def mnemos_hypomnema_write(
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
+    agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
     try:
         entry_id = _store.write_hypomnema_entry(  # type: ignore
             content,
@@ -1083,7 +1126,7 @@ def mnemos_hypomnema_search(
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
+    agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
     entries = _store.search_hypomnema(  # type: ignore
         query,
         agent_id=agent_id,
@@ -1121,7 +1164,7 @@ def mnemos_hypomnema_revise(
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
+    agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
     try:
         _store.revise_hypomnema_entry(  # type: ignore
             entry_id,
@@ -1157,7 +1200,7 @@ def mnemos_hypomnema_supersede(
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
+    agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
     try:
         new_id = _store.supersede_hypomnema_entry(  # type: ignore
             entry_id,
@@ -1191,7 +1234,7 @@ def mnemos_hypomnema_promote(
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
+    agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
     entry = _store.get_hypomnema_entry(  # type: ignore
         entry_id,
         agent_id=agent_id,
@@ -1239,7 +1282,7 @@ def mnemos_hypomnema_candidates(
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
+    agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
     entries = _store.get_hypomnema_promotion_candidates(  # type: ignore
         agent_id=agent_id,
         person_id=person_id,
@@ -1488,7 +1531,15 @@ def mnemos_consolidate(deep: bool = False, agent_id: str = "default") -> str:
         return gate
     _ensure_store()
     agent_id = _effective_agent_id(agent_id)
-    daemon = ConsolidationDaemon(store=_store, config={}, llm_client=_llm_client, embedding_index=_embedding_index)  # type: ignore
+    # config={} silently dropped the whole consolidation block in
+    # ~/.mnemos/config.json — decay_rate, thresholds and min_idle_minutes
+    # all fell back to hardcoded defaults while the tool reported success.
+    daemon = ConsolidationDaemon(
+        store=_store,  # type: ignore
+        config=_get_config(),
+        llm_client=_llm_client,
+        embedding_index=_embedding_index,
+    )
     stats = daemon.run_cycle(deep=deep, agent_id=agent_id)
 
     lines = [

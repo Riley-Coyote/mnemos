@@ -177,8 +177,14 @@ class MnemosBridge:
         self._ensure_init()
         from .consolidation.daemon import ConsolidationDaemon
 
+        from .config.loader import load_config
+
+        try:
+            daemon_config = load_config()
+        except Exception:
+            daemon_config = {}
         daemon = ConsolidationDaemon(
-            store=self._store, config={},
+            store=self._store, config=daemon_config,
             llm_client=self._llm_client, embedding_index=self._embedding_index,
         )
         stats = daemon.run_cycle(deep=deep, agent_id=self.agent_id)

@@ -1050,6 +1050,26 @@ def _mcp_available() -> bool:
 
 
 def _mnemos_command() -> str:
+    """Absolute path to *this* Mnemos installation's CLI.
+
+    A bare PATH lookup can resolve to a different installation than the one
+    the user just ran — a Homebrew copy shadowing a pipx or venv one. The
+    generated hook and client configs would then invoke the wrong Mnemos,
+    against a different environment and a different store, or none at all.
+    Prefer the running script, then this interpreter's own bin directory.
+    """
+    argv0 = sys.argv[0] if sys.argv and sys.argv[0] else ""
+    if argv0:
+        candidate = Path(argv0).resolve()
+        if candidate.is_file() and candidate.stem == "mnemos":
+            return str(candidate)
+
+    # Running as `python -m mnemos.cli`: the console script installed
+    # alongside this interpreter is still the right installation.
+    sibling = Path(sys.executable).parent / "mnemos"
+    if sibling.is_file():
+        return str(sibling)
+
     return shutil.which("mnemos") or "mnemos"
 
 

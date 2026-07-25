@@ -149,6 +149,35 @@ class TestHookInstaller:
         assert main(["hooks", "install", "--write", "--settings", str(settings)]) == 1
         assert settings.read_text() == "{ this is not json"
 
+    def test_hook_points_at_the_running_installation(self, tmp_path, monkeypatch):
+        """Not whatever `mnemos` a PATH lookup happens to find first.
+
+        A Homebrew copy shadowing a pipx or venv install would otherwise be
+        baked into the hook, pointing every future session at a different
+        installation and a different store than the one just set up.
+        """
+        monkeypatch.setenv("HOME", str(_seed_home(tmp_path)))
+        from mnemos.cli import main
+
+        wrong = tmp_path / "elsewhere" / "mnemos"
+        wrong.parent.mkdir(parents=True)
+        wrong.write_text("#!/bin/sh\nexit 0\n")
+        wrong.chmod(0o755)
+        monkeypatch.setattr("shutil.which", lambda _name: str(wrong))
+
+        running = tmp_path / "bin" / "mnemos"
+        running.parent.mkdir(parents=True)
+        running.write_text("#!/bin/sh\nexit 0\n")
+        running.chmod(0o755)
+        monkeypatch.setattr("sys.argv", [str(running), "hooks", "install"])
+
+        settings = tmp_path / "settings.json"
+        assert main(["hooks", "install", "--write", "--settings", str(settings)]) == 0
+
+        command = json.loads(settings.read_text())["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        assert command.startswith(str(running)), command
+        assert str(wrong) not in command
+
     def test_dry_run_writes_nothing(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("HOME", str(_seed_home(tmp_path)))
         from mnemos.cli import main

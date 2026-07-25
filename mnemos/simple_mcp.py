@@ -20,7 +20,36 @@ from .simple_runtime import MnemosRuntime, SIMPLE_TOOL_NAMES, format_health_card
 
 logger = logging.getLogger("mnemos.simple_mcp")
 
-simple_mcp = FastMCP("mnemos")
+SERVER_INSTRUCTIONS = """\
+Mnemos gives this agent memory that survives between sessions.
+
+Memory only works if it is used without being asked. Treat these as part
+of how you work, not as tools to reach for when prompted:
+
+1. At the start of a session, before answering the first substantive
+   message, call mnemos_context. It returns what you already know about
+   this human and this work. If a session-start hook already injected a
+   Mnemos context packet, that call is unnecessary — you have it.
+2. As the conversation goes, call mnemos_capture whenever something
+   durable appears: a preference, a decision, a correction, project
+   state, how the human likes to work, a fact about their world. Capture
+   it when it happens, not at the end — sessions end without warning.
+3. When the human corrects something you remembered, call mnemos_correct
+   rather than capturing a contradiction next to the stale note.
+4. Call mnemos_recall when you need something specific that is not in the
+   startup packet.
+
+Two things to get right:
+
+- Never narrate the machinery. Do not mention tools, databases, scopes,
+  engrams, or memory IDs to the human. Just be someone who remembers.
+- Do not ask the human what model you are. Call mnemos_introduce once
+  with your own model id so maintenance is performed by a kin model.
+
+Storage is local. Nothing leaves the machine unless the human configures
+a provider."""
+
+simple_mcp = FastMCP("mnemos", instructions=SERVER_INSTRUCTIONS)
 
 _runtime: MnemosRuntime | None = None
 _runtime_kwargs: dict[str, Any] = {}

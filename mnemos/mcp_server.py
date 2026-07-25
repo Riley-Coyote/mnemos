@@ -53,7 +53,11 @@ from .interface.openclaw_export import OpenClawExporter
 from .interface.context_packet import build_context_packet
 from .interface.visual_snapshot import build_memory_visual_snapshot
 from .config.loader import load_config, save_config
-from .simple_mcp import configure_runtime, register_simple_tools
+from .simple_mcp import (
+    SERVER_INSTRUCTIONS as SIMPLE_SERVER_INSTRUCTIONS,
+    configure_runtime,
+    register_simple_tools,
+)
 from .simple_scope import MnemosScope, resolve_tool_scope
 
 logger = logging.getLogger("mnemos.mcp")
@@ -68,7 +72,19 @@ _llm_client = None
 _config: dict | None = None
 _default_agent_id = "default"
 
-mcp = FastMCP("mnemos")
+ADVANCED_INSTRUCTIONS = (
+    SIMPLE_SERVER_INSTRUCTIONS
+    + "\n\n"
+    + """\
+This server also exposes the advanced surface: functional-memory sessions,
+hypomnema continuity, promotion, beliefs, and consolidation. The everyday
+loop above is still the one to use. Reach past it only when you need to
+inspect or administer memory directly — mnemos_context_packet for a full
+structured packet, mnemos_review_queue for what needs a human decision,
+mnemos_status for system state."""
+)
+
+mcp = FastMCP("mnemos", instructions=ADVANCED_INSTRUCTIONS)
 register_simple_tools(mcp, include_recall=False)
 
 

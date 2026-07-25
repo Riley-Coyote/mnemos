@@ -188,7 +188,12 @@ def _format_hypomnema(packet: dict[str, Any]) -> str:
         return "### Hypomnema\n- No scoped continuity entries matched."
     lines = ["### Hypomnema"]
     for entry in entries:
-        marker = "foundational, " if entry.get("foundational") else ""
+        # The domain is itself sometimes "foundational" — don't say it twice.
+        marker = (
+            "foundational, "
+            if entry.get("foundational") and entry.get("domain") != "foundational"
+            else ""
+        )
         lines.append(
             f"- {entry['content']} "
             f"[{marker}{entry['domain']}, confidence {float(entry['confidence']):.2f}, "

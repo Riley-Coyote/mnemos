@@ -283,6 +283,49 @@ def main(argv: list[str] | None = None) -> int:
         help="Write config where safely supported instead of printing a snippet",
     )
 
+    # ── hook ──
+    p_hook = sub.add_parser(
+        "hook", help="Emit agent-harness hook payloads (used by installed hooks)"
+    )
+    hook_sub = p_hook.add_subparsers(dest="hook_command")
+    p_hook_start = hook_sub.add_parser(
+        "session-start", help="Print the SessionStart continuity payload as JSON"
+    )
+    p_hook_start.add_argument("--agent-id", default=None, help="Agent identity")
+    p_hook_start.add_argument("--person-id", default=None, help="Person/relationship scope")
+    p_hook_start.add_argument("--project-scope", default=None, help="Project scope")
+    p_hook_start.add_argument("--db-path", default=None, help="Database path")
+    p_hook_start.add_argument(
+        "--query",
+        default="what should I know to continue our work?",
+        help="Retrieval cue used to select long-term memories",
+    )
+    p_hook_start.add_argument(
+        "--token-budget", type=int, default=2600, help="Approximate packet size"
+    )
+
+    # ── hooks ──
+    p_hooks = sub.add_parser("hooks", help="Install session-start memory injection")
+    hooks_sub = p_hooks.add_subparsers(dest="hooks_command")
+    p_hooks_install = hooks_sub.add_parser(
+        "install", help="Print or write the SessionStart hook config"
+    )
+    p_hooks_install.add_argument(
+        "client", nargs="?", default="claude-code", choices=("claude-code",),
+        help="Agent harness to install the hook for",
+    )
+    p_hooks_install.add_argument("--agent-id", default=None, help="Agent identity")
+    p_hooks_install.add_argument("--person-id", default=None, help="Person/relationship scope")
+    p_hooks_install.add_argument("--project-scope", default=None, help="Project scope")
+    p_hooks_install.add_argument("--db-path", default=None, help="Database path")
+    p_hooks_install.add_argument("--timeout", type=int, default=15, help="Hook timeout seconds")
+    p_hooks_install.add_argument(
+        "--settings", default=None, help="Settings file to write (default ~/.claude/settings.json)"
+    )
+    p_hooks_install.add_argument(
+        "--write", action="store_true", help="Write the settings file instead of printing it"
+    )
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -308,6 +351,8 @@ def main(argv: list[str] | None = None) -> int:
         "hermes": _cmd_hermes,
         "identity": _cmd_identity,
         "mcp": _cmd_mcp,
+        "hook": _cmd_hook,
+        "hooks": _cmd_hooks,
     }
 
     handler = handlers.get(args.command)
@@ -315,6 +360,136 @@ def main(argv: list[str] | None = None) -> int:
         return handler(args)
     parser.print_help()
     return 1
+
+
+def _cmd_hook(args: argparse.Namespace) -> int:
+    """Emit an agent-harness hook payload.
+
+    This is what an installed SessionStart hook actually runs. Keeping it a
+    CLI subcommand rather than a generated script means the injection logic
+    ships with the package and upgrades with it, instead of going stale in
+    a copy someone's harness wrote out months ago.
+    """
+    if getattr(args, "hook_command", None) != "session-start":
+        print("Usage: mnemos hook session-start", file=sys.stderr)
+        return 1
+
+    # A memory hiccup must never cost someone their session. Every failure
+    # path here exits 0 with no stdout, which the harness reads as "this
+    # hook contributed nothing" rather than as an error.
+    try:
+        sys.stdin.read()
+    except Exception:
+        pass
+
+    try:
+        from .interface.context_packet import build_context_packet
+        from .store.sqlite_store import EngramStore
+
+        scope = _cli_scope(args)
+        # Opening a store builds the schema, so a hook that ran against a
+        # mistyped --db-path would silently create a fresh empty database
+        # at every session start. Reading memory must never bring one into
+        # existence: with no store yet, contribute nothing.
+        if not Path(scope.db_path).expanduser().exists():
+            return 0
+        store = EngramStore(scope.db_path)
+        try:
+            packet = build_context_packet(
+                store,
+                args.query,
+                agent_id=scope.agent_id,
+                person_id=scope.person_id,
+                project_scope=scope.project_scope,
+                token_budget=args.token_budget,
+                include_prompt=True,
+            )
+        finally:
+            store.close()
+        text = (packet.get("prompt") or "").strip()
+    except Exception as exc:
+        print(f"[mnemos hook] {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 0
+
+    if not text:
+        return 0
+
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": text,
+        }
+    }))
+    return 0
+
+
+def _claude_code_settings_path() -> Path:
+    return Path.home() / ".claude" / "settings.json"
+
+
+def _cmd_hooks(args: argparse.Namespace) -> int:
+    """Install the SessionStart hook that injects memory before turn one."""
+    if getattr(args, "hooks_command", None) != "install":
+        print("Usage: mnemos hooks install [claude-code] [--write]", file=sys.stderr)
+        return 1
+
+    command_parts = [_mnemos_command(), "hook", "session-start"]
+    for flag, value in (
+        ("--agent-id", args.agent_id),
+        ("--person-id", args.person_id),
+        ("--project-scope", args.project_scope),
+        ("--db-path", args.db_path),
+    ):
+        if value:
+            command_parts.extend([flag, value])
+
+    entry = {
+        "matcher": "*",
+        "hooks": [{
+            "type": "command",
+            "command": " ".join(command_parts),
+            "timeout": args.timeout,
+        }],
+    }
+
+    path = Path(args.settings).expanduser() if args.settings else _claude_code_settings_path()
+
+    if not args.write:
+        print(json.dumps({"hooks": {"SessionStart": [entry]}}, indent=2))
+        print()
+        print(f"Merge this into {path}, or re-run with --write to do it automatically.")
+        return 0
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        try:
+            with open(path) as f:
+                settings = json.load(f)
+        except json.JSONDecodeError as exc:
+            # Never clobber a settings file we cannot parse — that file is
+            # the user's whole harness configuration, not just ours.
+            print(f"Refusing to overwrite unparseable {path}: {exc}", file=sys.stderr)
+            return 1
+    else:
+        settings = {}
+
+    session_start = settings.setdefault("hooks", {}).setdefault("SessionStart", [])
+    existing = [
+        e for e in session_start
+        if any("mnemos" in h.get("command", "") for h in e.get("hooks", []))
+    ]
+    for stale in existing:
+        session_start.remove(stale)
+    session_start.append(entry)
+
+    with open(path, "w") as f:
+        json.dump(settings, f, indent=2)
+
+    action = "Replaced" if existing else "Installed"
+    print(f"{action} the Mnemos SessionStart hook in {path}")
+    print(f"  Command: {entry['hooks'][0]['command']}")
+    print("Start a new session — memory is injected before the first turn.")
+    return 0
 
 
 def _cli_scope(args: argparse.Namespace):

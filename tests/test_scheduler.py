@@ -74,6 +74,55 @@ class TestCommandGeneration:
         assert argv.index("--deep") > argv.index("consolidate")
 
 
+class TestPathExpansion:
+    """Schedulers are not shells.
+
+    resolve_scope returns the default store as the literal string
+    "~/.mnemos/<agent>.db". launchd and systemd pass argv through verbatim,
+    so an unexpanded tilde makes every scheduled run operate on a phantom
+    store relative to its own working directory — and report a perfectly
+    healthy cycle over an empty database while real memory is never
+    maintained. Found by installing for real and checking whether the run
+    actually landed in the store.
+    """
+
+    def test_scheduled_commands_carry_an_absolute_database_path(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("HOME", str(_seed_home(tmp_path)))
+        import argparse
+
+        from mnemos.cli import _scope_args
+
+        args = argparse.Namespace(
+            agent_id="nova", person_id=None, project_scope=None, db_path=None
+        )
+        emitted = _scope_args(args)
+
+        db_index = emitted.index("--db-path") + 1
+        db_path = emitted[db_index]
+        assert "~" not in db_path, f"unexpanded path would break a scheduled job: {db_path}"
+        assert db_path.startswith("/"), db_path
+
+    def test_the_expanded_path_still_points_at_the_resolved_store(
+        self, tmp_path, monkeypatch
+    ):
+        """Expansion must not quietly change which store is maintained."""
+        monkeypatch.setenv("HOME", str(_seed_home(tmp_path)))
+        import argparse
+        from pathlib import Path
+
+        from mnemos.cli import _cli_scope, _scope_args
+
+        args = argparse.Namespace(
+            agent_id="nova", person_id=None, project_scope=None, db_path=None
+        )
+        emitted = _scope_args(args)
+        db_path = emitted[emitted.index("--db-path") + 1]
+
+        assert Path(db_path) == Path(_cli_scope(args).db_path).expanduser()
+
+
 class TestLaunchd:
     def test_interval_job_uses_start_interval(self):
         job = next(j for j in scheduler.JOBS if j.name == "maintain")

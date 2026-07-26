@@ -458,9 +458,17 @@ def _scope_args(args: argparse.Namespace) -> tuple[str, ...]:
     they are global options, so ``command_for`` places them before the
     subcommand. Consolidation and the substrate tick are agent-scoped;
     person and project are not parameters they take.
+
+    The path is expanded here. ``resolve_scope`` returns the default store
+    as the literal string ``~/.mnemos/<agent>.db``, and launchd and systemd
+    are not shells — they pass argv through verbatim, so an unexpanded
+    tilde makes the job operate on a phantom store relative to its own
+    working directory. It then reports a perfectly healthy cycle over an
+    empty database while the real memory is never maintained.
     """
     scope = _cli_scope(args)
-    return ("--agent-id", scope.agent_id, "--db-path", scope.db_path)
+    db_path = str(Path(scope.db_path).expanduser())
+    return ("--agent-id", scope.agent_id, "--db-path", db_path)
 
 
 def _cmd_daemon(args: argparse.Namespace) -> int:
@@ -697,7 +705,10 @@ def _cmd_hooks(args: argparse.Namespace) -> int:
         ("--agent-id", args.agent_id),
         ("--person-id", args.person_id),
         ("--project-scope", args.project_scope),
-        ("--db-path", args.db_path),
+        # Expanded for the same reason as the scheduler: a hook runner is
+        # not guaranteed to be a shell, and an unexpanded tilde silently
+        # points the packet at a store that does not exist.
+        ("--db-path", str(Path(args.db_path).expanduser()) if args.db_path else None),
     ):
         if value:
             command_parts.extend([flag, value])

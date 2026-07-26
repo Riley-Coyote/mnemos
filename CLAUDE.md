@@ -74,9 +74,16 @@ Rules:
 - Push when the work is complete and verified, not as a checkpoint.
 - Breaking changes go in the CHANGELOG with the migration in the same entry.
 
-`main` requires a passing `Release hardening` run and a pull request. Admins
-are deliberately not subject to enforcement, so an agent can never get locked
-out mid-task — that escape hatch is for emergencies, not convenience.
+`main` is protected. Merging requires a pull request and passing `Python 3.10`
+through `Python 3.13` checks, the branch must be up to date with `main` first,
+and force-pushes and branch deletion are refused.
+
+Enforcement includes administrators. That is deliberate: the realistic risk is
+an agent with admin credentials pushing straight to `main`, and an exemption
+would leave the rule unenforced against exactly the party it exists to
+restrain. It is not a lock-out risk either — protection can be lifted through
+the API in a genuine emergency, so recovery never depends on anyone opening
+GitHub.
 
 ---
 

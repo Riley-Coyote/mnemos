@@ -27,7 +27,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
 
 ## Package Readiness
 
-- The distribution package is `mnemos-memory`.
+- The distribution package is `mnemos-continuity`.
 - The CLI command remains `mnemos`.
 - Wheel and sdist build successfully.
 - Wheel contains:

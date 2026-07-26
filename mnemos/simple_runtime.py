@@ -894,14 +894,35 @@ class MnemosRuntime:
 
         requested_deep = bool(deep)
         can_run_deep = requested_deep and self._llm_client is not None
+        # config={} meant the whole consolidation block in ~/.mnemos/config.json
+        # was never applied — decay_rate, thresholds and min_idle_minutes all
+        # silently fell back to hardcoded defaults.
+        try:
+            daemon_config = load_config()
+        except Exception:
+            daemon_config = {}
         daemon = ConsolidationDaemon(
             store=self._store,
-            config={},
+            config=daemon_config,
             llm_client=self._llm_client if can_run_deep else None,
             embedding_index=self._embedding_index,
             agent_model_hint=self._agent_model_hint,
         )
-        stats = daemon.run_cycle(deep=can_run_deep, agent_id=self.scope.agent_id)
+        # Automatic maintenance rides on reads (context) and writes (capture,
+        # correct). Those fire many times a session, so they honour the
+        # activity gate; an explicit maintain request always runs.
+        stats = daemon.run_cycle(
+            deep=can_run_deep,
+            agent_id=self.scope.agent_id,
+            respect_gate=auto,
+        )
+        if stats.get("skipped"):
+            return "\n".join([
+                f"Requested: {'deep' if requested_deep else 'standard'}",
+                "Cycle: skipped",
+                "Completed: no maintenance needed yet (ran recently)",
+                "Passes: none",
+            ])
         promoted = self._promote_candidates(limit=3)
 
         # Dream journal: narrate the cycle when it did meaningful work. The
@@ -979,6 +1000,27 @@ class MnemosRuntime:
         session counter, and never writes onboarding or verification meta.
         Safe to call any number of times without changing the store.
         """
+
+        # _ensure_init() builds the schema, so calling it here would create a
+        # database as a side effect of a tool annotated readOnlyHint=True.
+        # On a scope with no store yet, report that instead of creating one.
+        if not self.db_path.exists():
+            return {
+                "scope": {
+                    "agent_id": self.scope.agent_id,
+                    "person_id": self.scope.person_id,
+                    "project_scope": self.scope.project_scope,
+                },
+                "store": {
+                    "db_path": str(self.db_path),
+                    "exists": False,
+                    "size_bytes": 0,
+                },
+                "note": (
+                    "No memory store exists for this scope yet. It is created "
+                    "on first capture, not by reading health."
+                ),
+            }
 
         self._ensure_init()
         assert self._store is not None

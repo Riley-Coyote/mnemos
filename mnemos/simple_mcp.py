@@ -20,7 +20,36 @@ from .simple_runtime import MnemosRuntime, SIMPLE_TOOL_NAMES, format_health_card
 
 logger = logging.getLogger("mnemos.simple_mcp")
 
-simple_mcp = FastMCP("mnemos")
+SERVER_INSTRUCTIONS = """\
+Mnemos gives this agent memory that survives between sessions.
+
+Memory only works if it is used without being asked. Treat these as part
+of how you work, not as tools to reach for when prompted:
+
+1. At the start of a session, before answering the first substantive
+   message, call mnemos_context. It returns what you already know about
+   this human and this work. If a session-start hook already injected a
+   Mnemos context packet, that call is unnecessary — you have it.
+2. As the conversation goes, call mnemos_capture whenever something
+   durable appears: a preference, a decision, a correction, project
+   state, how the human likes to work, a fact about their world. Capture
+   it when it happens, not at the end — sessions end without warning.
+3. When the human corrects something you remembered, call mnemos_correct
+   rather than capturing a contradiction next to the stale note.
+4. Call mnemos_recall when you need something specific that is not in the
+   startup packet.
+
+Two things to get right:
+
+- Never narrate the machinery. Do not mention tools, databases, scopes,
+  engrams, or memory IDs to the human. Just be someone who remembers.
+- Do not ask the human what model you are. Call mnemos_introduce once
+  with your own model id so maintenance is performed by a kin model.
+
+Storage is local. Nothing leaves the machine unless the human configures
+a provider."""
+
+simple_mcp = FastMCP("mnemos", instructions=SERVER_INSTRUCTIONS)
 
 _runtime: MnemosRuntime | None = None
 _runtime_kwargs: dict[str, Any] = {}
@@ -108,12 +137,28 @@ async def _sample_text(ctx: Context | None, prompt: str, *, max_tokens: int = 35
 
 
 def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> None:
-    """Register the simple continuity tools on a FastMCP server."""
+    """Register the simple continuity tools on a FastMCP server.
+
+    Tools that build their own ``CallToolResult`` must be annotated as
+    returning one. FastMCP derives an output schema from the return
+    annotation, and for ``-> Any`` that schema wraps the value as
+    ``{"result": ...}`` — which a hand-built result's ``structuredContent``
+    does not satisfy, so the call fails validation. Annotating the real
+    type makes FastMCP skip structured validation, as intended for a tool
+    returning a complete result.
+
+    This only reproduced on Python 3.10: newer versions resolve ``Any`` to
+    no output schema at all, so the same code passed on 3.11+ and failed on
+    the minimum version this package claims to support.
+    """
 
     @server.tool(
         annotations=_annotations(
             title="Get continuity context",
             read_only=False,
+            # Runs an automatic maintenance cycle, which decays engrams and
+            # can move them to dormant or archived. Gated, but still a write.
+            destructive=True,
             idempotent=False,
         )
     )
@@ -122,7 +167,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         max_results: int = 5,
         include_graph: bool = False,
         graph_max_nodes: int = 18,
-    ) -> Any:
+    ) -> types.CallToolResult:
         """Get the startup continuity packet for this agent/session.
 
         Call at the beginning of a session. It auto-creates local storage on
@@ -135,7 +180,9 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         runtime = _get_runtime()
         packet = runtime.context(query=query, max_results=max_results)
         if not include_graph:
-            return packet
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=packet)]
+            )
 
         graph = runtime.identity_graph(max_nodes=graph_max_nodes)
         svg = graph.pop("svg")
@@ -247,7 +294,9 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         annotations=_annotations(
             title="Maintain continuity",
             read_only=False,
-            destructive=False,
+            # Decay archives engrams that fall below threshold; archival is
+            # not reversible through the tool surface.
+            destructive=True,
             idempotent=False,
         )
     )
@@ -319,7 +368,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             idempotent=True,
         )
     )
-    def mnemos_health() -> Any:
+    def mnemos_health() -> types.CallToolResult:
         """Report a human-relayable health card for this memory scope.
 
         Read-only. Shows where memory lives, how much there is, who performed

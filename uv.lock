@@ -851,10 +851,11 @@ wheels = [
 ]
 
 [[package]]
-name = "mnemos-memory"
+name = "mnemos-continuity"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "mcp", extra = ["cli"] },
     { name = "python-dotenv" },
     { name = "ulid-py" },
 ]
@@ -874,9 +875,6 @@ dev = [
 embeddings = [
     { name = "google-generativeai" },
 ]
-mcp = [
-    { name = "mcp", extra = ["cli"] },
-]
 
 [package.metadata]
 requires-dist = [
@@ -884,8 +882,8 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.25.0" },
     { name = "google-generativeai", marker = "extra == 'all'", specifier = ">=0.5.0" },
     { name = "google-generativeai", marker = "extra == 'embeddings'", specifier = ">=0.5.0" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.0.0" },
     { name = "mcp", extras = ["cli"], marker = "extra == 'all'", specifier = ">=1.0.0" },
-    { name = "mcp", extras = ["cli"], marker = "extra == 'mcp'", specifier = ">=1.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "ulid-py", specifier = ">=1.1.0" },

@@ -37,6 +37,38 @@ def test_advanced_mcp_preserves_admin_tools_and_includes_simple_tools():
     assert "mnemos_consolidate" in names
 
 
+def test_result_building_tools_declare_no_output_schema():
+    """Tools that build their own CallToolResult must not declare one.
+
+    FastMCP derives an output schema from the return annotation and then
+    validates structuredContent against it. For `-> Any` that schema wraps
+    the value as {"result": ...}, which a hand-built result never matches,
+    so every call fails validation.
+
+    The annotation is checked rather than the derived schema, because the
+    derived schema is exactly what varies: Python 3.10 built a wrapper
+    schema for `-> Any` while 3.11+ built none, so the bug passed CI on
+    three versions and broke only on the minimum supported one. Asserting
+    the annotation catches a regression on every version.
+    """
+    import typing
+
+    from mcp import types as mcp_types
+
+    from mnemos.simple_mcp import simple_mcp
+
+    for name in ("mnemos_context", "mnemos_health"):
+        tool = simple_mcp._tool_manager.get_tool(name)
+        annotation = typing.get_type_hints(tool.fn).get("return")
+        assert annotation is mcp_types.CallToolResult, (
+            f"{name} builds its own CallToolResult, so it must be annotated "
+            f"`-> types.CallToolResult`; FastMCP otherwise derives an output "
+            f"schema wrapping the value as {{'result': ...}} and every call "
+            f"fails structured validation. Found: {annotation!r}"
+        )
+        assert tool.fn_metadata.output_schema is None
+
+
 def test_simple_tools_have_protocol_risk_annotations():
     from mnemos.simple_mcp import simple_mcp
 

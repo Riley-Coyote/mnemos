@@ -137,7 +137,20 @@ async def _sample_text(ctx: Context | None, prompt: str, *, max_tokens: int = 35
 
 
 def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> None:
-    """Register the simple continuity tools on a FastMCP server."""
+    """Register the simple continuity tools on a FastMCP server.
+
+    Tools that build their own ``CallToolResult`` must be annotated as
+    returning one. FastMCP derives an output schema from the return
+    annotation, and for ``-> Any`` that schema wraps the value as
+    ``{"result": ...}`` — which a hand-built result's ``structuredContent``
+    does not satisfy, so the call fails validation. Annotating the real
+    type makes FastMCP skip structured validation, as intended for a tool
+    returning a complete result.
+
+    This only reproduced on Python 3.10: newer versions resolve ``Any`` to
+    no output schema at all, so the same code passed on 3.11+ and failed on
+    the minimum version this package claims to support.
+    """
 
     @server.tool(
         annotations=_annotations(
@@ -154,7 +167,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         max_results: int = 5,
         include_graph: bool = False,
         graph_max_nodes: int = 18,
-    ) -> Any:
+    ) -> types.CallToolResult:
         """Get the startup continuity packet for this agent/session.
 
         Call at the beginning of a session. It auto-creates local storage on
@@ -167,7 +180,9 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         runtime = _get_runtime()
         packet = runtime.context(query=query, max_results=max_results)
         if not include_graph:
-            return packet
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=packet)]
+            )
 
         graph = runtime.identity_graph(max_nodes=graph_max_nodes)
         svg = graph.pop("svg")
@@ -353,7 +368,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             idempotent=True,
         )
     )
-    def mnemos_health() -> Any:
+    def mnemos_health() -> types.CallToolResult:
         """Report a human-relayable health card for this memory scope.
 
         Read-only. Shows where memory lives, how much there is, who performed

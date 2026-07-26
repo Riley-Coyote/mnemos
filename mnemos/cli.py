@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -326,6 +327,28 @@ def main(argv: list[str] | None = None) -> int:
         "--write", action="store_true", help="Write the settings file instead of printing it"
     )
 
+    # ── daemon ──
+    p_daemon = sub.add_parser(
+        "daemon", help="Schedule background maintenance with the OS scheduler"
+    )
+    daemon_sub = p_daemon.add_subparsers(dest="daemon_command")
+    for _name, _help in (
+        ("install", "Print or write the scheduled maintenance jobs"),
+        ("status", "Show which maintenance jobs are scheduled"),
+        ("uninstall", "Remove the scheduled maintenance jobs"),
+    ):
+        _p = daemon_sub.add_parser(_name, help=_help)
+        _p.add_argument("--agent-id", default=None, help="Agent identity")
+        _p.add_argument("--person-id", default=None, help="Person/relationship scope")
+        _p.add_argument("--project-scope", default=None, help="Project scope")
+        _p.add_argument("--db-path", default=None, help="Database path")
+        if _name != "status":
+            _p.add_argument(
+                "--write",
+                action="store_true",
+                help="Apply the change instead of printing what it would do",
+            )
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -353,6 +376,7 @@ def main(argv: list[str] | None = None) -> int:
         "mcp": _cmd_mcp,
         "hook": _cmd_hook,
         "hooks": _cmd_hooks,
+        "daemon": _cmd_daemon,
     }
 
     handler = handlers.get(args.command)
@@ -421,6 +445,241 @@ def _cmd_hook(args: argparse.Namespace) -> int:
         }
     }))
     return 0
+
+
+def _scope_args(args: argparse.Namespace) -> tuple[str, ...]:
+    """The scope flags a scheduled job needs to reach the same memory.
+
+    A background job runs with no session, no client and no inherited
+    environment, so whatever scope this command resolved must be written
+    into the job itself or the job would maintain a different store.
+
+    Only the flags the top-level parser actually accepts are emitted, and
+    they are global options, so ``command_for`` places them before the
+    subcommand. Consolidation and the substrate tick are agent-scoped;
+    person and project are not parameters they take.
+    """
+    scope = _cli_scope(args)
+    return ("--agent-id", scope.agent_id, "--db-path", scope.db_path)
+
+
+def _cmd_daemon(args: argparse.Namespace) -> int:
+    """Schedule Mnemos maintenance with whatever scheduler the host provides."""
+    command = getattr(args, "daemon_command", None)
+    if command not in {"install", "status", "uninstall"}:
+        print("Usage: mnemos daemon {install|status|uninstall}", file=sys.stderr)
+        return 1
+
+    from .setup import scheduler
+
+    scope = _cli_scope(args)
+    blueprint = scheduler.plan(
+        agent_id=scope.agent_id,
+        mnemos_command=_mnemos_command(),
+        scope_args=_scope_args(args),
+    )
+    backend = blueprint["backend"]
+
+    if backend == "unsupported":
+        print(
+            "No supported scheduler found on this system (looked for launchd, "
+            "systemd and crontab).\n"
+            "Mnemos still maintains itself opportunistically while a session is "
+            "open; only unattended background maintenance is unavailable.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if command == "status":
+        return _daemon_status(blueprint)
+    if command == "uninstall":
+        return _daemon_uninstall(blueprint, write=args.write)
+    return _daemon_install(blueprint, write=args.write)
+
+
+def _daemon_install(blueprint: dict, *, write: bool) -> int:
+    backend = blueprint["backend"]
+    agent_id = blueprint["agent_id"]
+    entries = blueprint["entries"]
+
+    print(f"Scheduler:   {backend}")
+    print(f"Agent:       {agent_id}")
+    for entry in entries:
+        job = entry["job"]
+        print(f"\n  {job.name} — {job.description}")
+        print(f"    schedule: {entry['schedule']}")
+        print(f"    command:  {entry['command']}")
+        print(f"    log:      {entry['log']}")
+    for job in blueprint["skipped"]:
+        print(
+            f"\n  {job.name} — skipped: needs a model provider "
+            f"(set MNEMOS_LLM_PROVIDER and a key, then reinstall)"
+        )
+
+    from .setup import scheduler as _scheduler
+
+    warning = _scheduler.tcc_warning(_mnemos_command(), backend=backend)
+    if warning:
+        print(f"\n{warning}")
+
+    if not write:
+        print("\nThis is a preview. Re-run with --write to schedule these jobs.")
+        return 0
+
+    Path(Path.home() / ".mnemos" / "logs").mkdir(parents=True, exist_ok=True)
+
+    if backend == "launchd":
+        for entry in entries:
+            path = entry["path"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Unload an existing job before overwriting it; launchd keeps
+            # running the version it loaded, so writing alone changes nothing.
+            _launchctl("bootout", path)
+            path.write_bytes(entry["content"])
+            _launchctl("bootstrap", path)
+    elif backend == "systemd":
+        systemd_dir = None
+        for entry in entries:
+            for path, content in entry["units"].items():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+                systemd_dir = path.parent
+        if systemd_dir is not None:
+            _systemctl("daemon-reload")
+            for entry in entries:
+                _systemctl("enable", "--now", entry["timer_name"])
+    else:
+        merged = scheduler_merge_crontab(entries, agent_id)
+        if merged is None:
+            return 1
+
+    print(f"\nScheduled {len(entries)} job(s). Background maintenance is active.")
+    print("Check them any time with: mnemos daemon status")
+    return 0
+
+
+def scheduler_merge_crontab(entries: list[dict], agent_id: str) -> str | None:
+    """Write our crontab entries while preserving everything already there."""
+    from .setup import scheduler
+
+    existing = scheduler.read_crontab()
+    merged = scheduler.merge_cron_lines(
+        existing, [entry["line"] for entry in entries], agent_id
+    )
+    result = subprocess.run(["crontab", "-"], input=merged, text=True)
+    if result.returncode != 0:
+        print("Failed to write crontab.", file=sys.stderr)
+        return None
+    return merged
+
+
+def _daemon_status(blueprint: dict) -> int:
+    backend = blueprint["backend"]
+    agent_id = blueprint["agent_id"]
+
+    print(f"Scheduler:   {backend}")
+    print(f"Agent:       {agent_id}")
+
+    installed_any = False
+    for entry in blueprint["entries"]:
+        job = entry["job"]
+        if backend == "launchd":
+            installed = entry["path"].exists()
+        elif backend == "systemd":
+            installed = all(path.exists() for path in entry["units"])
+        else:
+            installed = f"{scheduler_marker(agent_id)}{job.name}" in _read_crontab_safe()
+        installed_any = installed_any or installed
+        state = "scheduled" if installed else "not scheduled"
+        print(f"  {job.name:<16} {state:<15} {entry['schedule']}")
+
+    for job in blueprint["skipped"]:
+        print(f"  {job.name:<16} {'unavailable':<15} needs a model provider")
+
+    if not installed_any:
+        print("\nNo background maintenance scheduled. Install it with:")
+        print("  mnemos daemon install --write")
+    return 0
+
+
+def scheduler_marker(agent_id: str) -> str:
+    from .setup import scheduler
+
+    return f"{scheduler.CRON_MARKER}:{agent_id}:"
+
+
+def _read_crontab_safe() -> str:
+    from .setup import scheduler
+
+    return scheduler.read_crontab()
+
+
+def _daemon_uninstall(blueprint: dict, *, write: bool) -> int:
+    backend = blueprint["backend"]
+    agent_id = blueprint["agent_id"]
+    entries = blueprint["entries"]
+
+    if not write:
+        print(f"Would remove {len(entries)} scheduled job(s) ({backend}):")
+        for entry in entries:
+            print(f"  {entry['job'].name}")
+        print("\nRe-run with --write to remove them.")
+        return 0
+
+    removed = 0
+    if backend == "launchd":
+        for entry in entries:
+            path = entry["path"]
+            if path.exists():
+                _launchctl("bootout", path)
+                path.unlink()
+                removed += 1
+    elif backend == "systemd":
+        for entry in entries:
+            _systemctl("disable", "--now", entry["timer_name"])
+            for path in entry["units"]:
+                if path.exists():
+                    path.unlink()
+                    removed += 1
+        _systemctl("daemon-reload")
+    else:
+        from .setup import scheduler
+
+        existing = scheduler.read_crontab()
+        merged = scheduler.merge_cron_lines(existing, [], agent_id)
+        subprocess.run(["crontab", "-"], input=merged, text=True)
+        removed = len(entries)
+
+    print(f"Removed {removed} scheduled item(s).")
+    return 0
+
+
+def _launchctl(action: str, plist: Path) -> None:
+    """Best-effort launchctl call. A missing job is not an error to report."""
+    import os
+
+    domain = f"gui/{os.getuid()}"
+    if action == "bootout":
+        target = f"{domain}/{plist.stem}"
+        subprocess.run(
+            ["launchctl", "bootout", target],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return
+    subprocess.run(
+        ["launchctl", "bootstrap", domain, str(plist)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _systemctl(*args: str) -> None:
+    subprocess.run(
+        ["systemctl", "--user", *args], capture_output=True, text=True, check=False
+    )
 
 
 def _claude_code_settings_path() -> Path:
@@ -897,12 +1156,58 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print(f"MCP SDK:      {'yes' if _mcp_available() else 'no'}")
         print(f"Model:        {'dedicated provider configured' if runtime.has_dedicated_model else 'local baseline only'}")
         _print_affinity_status()
+        _print_background_status(runtime.scope)
         print(f"Simple tools: {', '.join(SIMPLE_TOOL_NAMES)}")
         print()
         print(packet)
         return 0
     finally:
         runtime.close()
+
+
+def _print_background_status(scope) -> None:
+    """Tell the user whether memory does anything between sessions.
+
+    Without a scheduler, Mnemos only maintains itself opportunistically
+    while a session happens to be open — which is easy to mistake for a
+    system that is quietly working in the background.
+    """
+    try:
+        from .setup import scheduler
+
+        backend = scheduler.detect_backend()
+        if backend == "unsupported":
+            print("Background:   unavailable (no launchd, systemd or crontab)")
+            return
+
+        jobs = scheduler.jobs_for(has_model=scheduler.model_is_configured())
+        if backend == "launchd":
+            installed = sum(
+                1 for job in jobs
+                if scheduler.launchd_plist_path(scope.agent_id, job).exists()
+            )
+        elif backend == "systemd":
+            installed = sum(
+                1 for job in jobs
+                if (scheduler.systemd_unit_dir()
+                    / scheduler.systemd_unit_names(scope.agent_id, job)[1]).exists()
+            )
+        else:
+            crontab = scheduler.read_crontab()
+            installed = sum(
+                1 for job in jobs
+                if f"{scheduler.CRON_MARKER}:{scope.agent_id}:{job.name}" in crontab
+            )
+
+        if installed:
+            print(f"Background:   {installed} job(s) scheduled via {backend}")
+        else:
+            print(
+                f"Background:   not scheduled — run 'mnemos daemon install --write' "
+                f"({backend})"
+            )
+    except Exception:
+        print("Background:   unknown")
 
 
 def _cmd_identity(args: argparse.Namespace) -> int:

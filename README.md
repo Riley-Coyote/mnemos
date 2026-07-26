@@ -350,7 +350,47 @@ More detail lives in [HERMES_INSTALL.md](HERMES_INSTALL.md) and
 Mnemos works without background jobs. Normal MCP tool use can capture, recall,
 correct, and run lightweight maintenance.
 
-Use `substrate-tick` when you want one explicit cognitive substrate cycle:
+But memory that only works while a session is open is doing half the job.
+Decay, connection discovery, consolidation and the substrate tick are what make
+continuity feel alive between conversations.
+
+### Background Maintenance
+
+```bash
+mnemos daemon install --write
+```
+
+This schedules maintenance with whatever your machine already provides —
+launchd on macOS, systemd user timers on Linux, plain crontab as a fallback.
+No external agent runner is required.
+
+| job | what it does | schedule |
+|---|---|---|
+| `maintain` | decay and connection discovery | every 4h |
+| `maintain-deep` | softening, belief review, reflection | daily at 03:00 |
+| `substrate-tick` | handlers and modulators | every 4h |
+| `index` | index session transcripts | every 30m, only with a model provider |
+
+Preview before committing to anything:
+
+```bash
+mnemos daemon install          # prints exactly what it would schedule
+mnemos daemon status           # what is scheduled right now
+mnemos daemon uninstall --write
+```
+
+Jobs are namespaced per agent, so several agents can each keep their own
+maintenance on one machine. `mnemos doctor` reports whether background
+maintenance is scheduled.
+
+On macOS, install Mnemos outside `~/Documents`, `~/Desktop` and `~/Downloads`.
+Scheduled jobs do not inherit Full Disk Access, so a Mnemos living in one of
+those folders runs fine by hand and fails on every scheduled run. `mnemos
+daemon install` warns when it detects this.
+
+### One Explicit Cycle
+
+Use `substrate-tick` when you want a single cognitive substrate cycle:
 
 ```bash
 mnemos substrate-tick
@@ -427,6 +467,10 @@ mnemos mcp install claude --write     # Merge Claude Desktop config
 mnemos hooks install                  # Preview the SessionStart memory hook
 mnemos hooks install --write          # Install it (Claude Code)
 mnemos hook session-start             # Emit the packet the hook injects
+mnemos daemon install                 # Preview scheduled background maintenance
+mnemos daemon install --write         # Schedule it (launchd/systemd/crontab)
+mnemos daemon status                  # What is scheduled right now
+mnemos daemon uninstall --write       # Remove it
 
 mnemos init                           # Initialize a database
 mnemos remember "Prefers tabs"        # Capture continuity from the CLI

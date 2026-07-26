@@ -180,6 +180,20 @@ or from the CLI:
 mnemos consolidate --deep
 ```
 
+### Background Maintenance
+
+To have maintenance happen between sessions rather than only while one is
+open, schedule it with the OS:
+
+```bash
+mnemos daemon install --write     # launchd, systemd, or crontab
+mnemos daemon status
+```
+
+`mnemos daemon install` with no `--write` prints exactly what it would
+schedule. This requires no external agent runner. `mnemos doctor` reports
+whether background maintenance is active.
+
 ---
 
 ## 7. Advanced Mode
@@ -194,8 +208,8 @@ Advanced mode preserves the full tool surface: explicit remember/ingest/recall,
 hypomnema management, beliefs, shared memory, inspect, forget, and explicit
 consolidation.
 
-OpenClaw, crons, Forge, substrate ticks, and full agent workspaces are advanced
-integrations. They are no longer part of the baseline setup.
+Forge and full agent workspaces are advanced integrations, not part of the
+baseline setup.
 
 To bootstrap a full workspace:
 
@@ -203,7 +217,15 @@ To bootstrap a full workspace:
 mnemos bootstrap --agent-name Nova --workspace ~/nova --user-name Alex
 ```
 
-To register OpenClaw crons:
+### OpenClaw (optional)
+
+Background memory maintenance does **not** require OpenClaw — use `mnemos
+daemon install` (section 5), which schedules it with launchd, systemd, or
+crontab.
+
+OpenClaw adds a different class of job: agent-mediated work that needs a model
+and OpenClaw's session APIs, such as the observer context sync, `MEMORY.md`
+upkeep, morning briefs, and daily debriefs.
 
 ```bash
 mnemos setup-openclaw --agent main --dry-run

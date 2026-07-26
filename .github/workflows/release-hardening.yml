@@ -46,7 +46,9 @@ jobs:
           import zipfile
           from pathlib import Path
 
-          wheel = next(Path("dist").glob("mnemos_memory-*.whl"))
+          # Glob the project prefix, not the full distribution name, so a
+          # rename cannot silently break this check with a StopIteration.
+          wheel = next(Path("dist").glob("mnemos*.whl"))
           required = {
               "mnemos/simple_runtime.py",
               "mnemos/simple_mcp.py",

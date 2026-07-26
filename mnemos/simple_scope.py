@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from pathlib import Path
 
 from .config.loader import load_config
 
@@ -20,11 +19,14 @@ def _slugify(value: str, fallback: str) -> str:
     return clean or fallback
 
 
-def _default_project_scope() -> str:
-    cwd = Path.cwd()
-    if cwd.name:
-        return _slugify(cwd.name, "global")
-    return "global"
+# The project scope must never be inferred from the process working
+# directory. An MCP server's cwd is an accident of how the client spawned
+# it — Claude Code starts it in the open project, Claude Desktop somewhere
+# else entirely — so a cwd-derived scope silently partitions one agent's
+# memory by launch location. Continuity written from one directory then
+# becomes invisible from another while every layer still reports success.
+# Scope is identity, not location: it changes only when asked to.
+DEFAULT_PROJECT_SCOPE = "global"
 
 
 @dataclass(frozen=True)
@@ -70,8 +72,8 @@ def resolve_scope(
         project_scope
         or os.environ.get("MNEMOS_PROJECT_SCOPE", "")
         or str(config.get("project_scope", ""))
-        or _default_project_scope(),
-        "global",
+        or DEFAULT_PROJECT_SCOPE,
+        DEFAULT_PROJECT_SCOPE,
     )
 
     explicit_db = db_path or os.environ.get("MNEMOS_DB_PATH")
@@ -90,4 +92,42 @@ def resolve_scope(
         person_id=resolved_person,
         project_scope=resolved_project,
         db_path=resolved_db,
+    )
+
+
+# The advanced MCP tools historically declared these literals as their
+# parameter defaults. They were never real scopes — they are what a tool
+# signature says when the caller did not choose. Treating them as
+# "unspecified" is what lets both tool surfaces resolve through
+# resolve_scope() and land in the same partition.
+_UNSPECIFIED = {
+    "agent_id": {"", "default"},
+    "person_id": {"", "user"},
+    "project_scope": {"", "global"},
+}
+
+
+def resolve_tool_scope(
+    agent_id: str = "",
+    person_id: str = "",
+    project_scope: str = "",
+    *,
+    db_path: str | None = None,
+) -> MnemosScope:
+    """Resolve an MCP tool call's scope, honouring only deliberate arguments.
+
+    The advanced tool surface and the simple tool surface used to disagree:
+    simple resolved through ``resolve_scope`` while advanced took the literal
+    defaults ``default``/``user``/``global``. One wrote continuity the other
+    could not read. Routing both through here keeps a single answer to
+    "whose memory, about whom, on what".
+    """
+
+    return resolve_scope(
+        db_path=db_path,
+        agent_id=None if agent_id in _UNSPECIFIED["agent_id"] else agent_id,
+        person_id=None if person_id in _UNSPECIFIED["person_id"] else person_id,
+        project_scope=(
+            None if project_scope in _UNSPECIFIED["project_scope"] else project_scope
+        ),
     )

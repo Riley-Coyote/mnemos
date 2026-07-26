@@ -76,7 +76,7 @@ def render_plugin_readme() -> str:
     return (
         "# Mnemos for Hermes\n\n"
         "This directory is a small Hermes memory-provider shim. The durable identity-continuity "
-        "implementation lives in the installed `mnemos-memory` Python package.\n\n"
+        "implementation lives in the installed `mnemos-continuity` Python package.\n\n"
         "Provider Mode enables Mnemos as Hermes' single active external memory provider while "
         "leaving Hermes built-in `MEMORY.md` and `USER.md` active:\n\n"
         "```bash\n"

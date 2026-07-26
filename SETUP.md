@@ -16,10 +16,10 @@ pip install -e ".[mcp]"
 When published:
 
 ```bash
-pipx install "mnemos-memory[mcp]"
+pipx install "mnemos-continuity[mcp]"
 ```
 
-The distribution package is `mnemos-memory`. The Python import package and CLI
+The distribution package is `mnemos-continuity`. The Python import package and CLI
 command are still `mnemos`.
 
 ---
@@ -77,7 +77,31 @@ Paste the printed JSON into the client's MCP config.
 
 ---
 
-## 4. Simple Mode
+## 4. Make Continuity Automatic
+
+Connecting the MCP gives the agent memory tools. Two mechanisms make sure it
+actually uses them, so nothing has to be triggered by hand.
+
+**Server instructions** ship with the MCP server and need no setup. Every MCP
+client passes them to its agent: load context at session start, capture durable
+things as they come up, correct rather than contradict.
+
+**Session-start injection** is stronger, because it removes the tool call
+entirely. On Claude Code:
+
+```bash
+mnemos hooks install --write
+```
+
+Memory is then injected before the agent's first turn. Preview it first with
+`mnemos hooks install` (no `--write`).
+
+The hook fails silent by design: empty, unreadable, or missing memory
+contributes nothing and the session starts normally.
+
+---
+
+## 5. Simple Mode
 
 Simple mode is the default:
 
@@ -124,7 +148,7 @@ MNEMOS_AGENT_ID=nova MNEMOS_PERSON_ID=alex MNEMOS_PROJECT_SCOPE=mnemos mnemos se
 
 ---
 
-## 5. Maintenance and Models
+## 6. Maintenance and Models
 
 Mnemos maintenance has three levels:
 
@@ -156,9 +180,23 @@ or from the CLI:
 mnemos consolidate --deep
 ```
 
+### Background Maintenance
+
+To have maintenance happen between sessions rather than only while one is
+open, schedule it with the OS:
+
+```bash
+mnemos daemon install --write     # launchd, systemd, or crontab
+mnemos daemon status
+```
+
+`mnemos daemon install` with no `--write` prints exactly what it would
+schedule. This requires no external agent runner. `mnemos doctor` reports
+whether background maintenance is active.
+
 ---
 
-## 6. Advanced Mode
+## 7. Advanced Mode
 
 Use advanced mode for debugging, migration, research, or direct control:
 
@@ -170,8 +208,8 @@ Advanced mode preserves the full tool surface: explicit remember/ingest/recall,
 hypomnema management, beliefs, shared memory, inspect, forget, and explicit
 consolidation.
 
-OpenClaw, crons, Forge, substrate ticks, and full agent workspaces are advanced
-integrations. They are no longer part of the baseline setup.
+Forge and full agent workspaces are advanced integrations, not part of the
+baseline setup.
 
 To bootstrap a full workspace:
 
@@ -179,7 +217,15 @@ To bootstrap a full workspace:
 mnemos bootstrap --agent-name Nova --workspace ~/nova --user-name Alex
 ```
 
-To register OpenClaw crons:
+### OpenClaw (optional)
+
+Background memory maintenance does **not** require OpenClaw — use `mnemos
+daemon install` (section 5), which schedules it with launchd, systemd, or
+crontab.
+
+OpenClaw adds a different class of job: agent-mediated work that needs a model
+and OpenClaw's session APIs, such as the observer context sync, `MEMORY.md`
+upkeep, morning briefs, and daily debriefs.
 
 ```bash
 mnemos setup-openclaw --agent main --dry-run
@@ -189,14 +235,14 @@ Review generated commands before enabling them.
 
 ---
 
-## 7. Safety and Release Notes
+## 8. Safety and Release Notes
 
 - Privacy boundaries: [docs/privacy-security.md](docs/privacy-security.md)
 - Release checklist: [docs/release-hardening.md](docs/release-hardening.md)
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 ### The MCP client does not show Mnemos tools
 

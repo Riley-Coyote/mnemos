@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mnemos-memory"
+name = "mnemos-continuity"
 version = "0.1.0"
 description = "Local-first continuity memory for AI agents"
 readme = "README.md"
@@ -25,12 +25,17 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
+    # mcp is core: the MCP server is the primary product, and it is imported
+    # at module scope. Shipping it as an optional extra made a clean install
+    # yield a dead `mnemos serve` with the failure hidden on stderr.
+    "mcp[cli]>=1.0.0",
     "ulid-py>=1.1.0",
     "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp[cli]>=1.0.0"]
+# Kept as a no-op for backwards-compatible install commands; mcp is now core.
+mcp = []
 embeddings = ["google-generativeai>=0.5.0"]
 anthropic = ["anthropic>=0.25.0"]
 all = [

@@ -21,15 +21,26 @@ def _seed_home(tmp_path):
 
 
 class TestJobSelection:
-    def test_model_dependent_jobs_are_omitted_without_a_provider(self):
-        """A job that can only no-op should not wake up every 30 minutes."""
-        without = {job.name for job in scheduler.jobs_for(has_model=False)}
-        with_model = {job.name for job in scheduler.jobs_for(has_model=True)}
+    def test_transcript_indexing_is_never_scheduled(self):
+        """Harvesting transcripts is not continuity, and it buries continuity.
 
-        assert "index" not in without
-        assert "index" in with_model
-        # Everything deterministic runs regardless.
-        assert {"maintain", "maintain-deep", "substrate-tick"} <= without
+        `mnemos index` encodes extracted transcript facts as the agent's own
+        memories — general work-recall, which Mnemos is not for. On one live
+        install it had written ~7,058 engrams against 13 deliberate captures,
+        and a session-start packet spent five of six long-term slots on
+        paraphrases of a single harvested fact. Scheduling it by default
+        would rebuild that on every user's machine.
+        """
+        for has_model in (False, True):
+            names = {job.name for job in scheduler.jobs_for(has_model=has_model)}
+            assert "index" not in names, (
+                "transcript indexing must not be scheduled automatically"
+            )
+
+    def test_the_deterministic_maintenance_jobs_always_run(self):
+        """Continuity upkeep needs no model and must not be gated on one."""
+        names = {job.name for job in scheduler.jobs_for(has_model=False)}
+        assert {"maintain", "maintain-deep", "substrate-tick"} <= names
 
     def test_every_job_has_exactly_one_schedule(self):
         for job in scheduler.JOBS:
@@ -303,7 +314,7 @@ class TestPlan:
         assert {e["job"].name for e in blueprint["entries"]} == {
             "maintain", "maintain-deep", "substrate-tick",
         }
-        assert [j.name for j in blueprint["skipped"]] == ["index"]
+        assert blueprint["skipped"] == []
         for entry in blueprint["entries"]:
             assert not entry["path"].exists(), "plan() must not create anything"
 

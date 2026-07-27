@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..dream_journal import DREAM_JOURNAL_TAG
 from ..retrieval.reactive import ReactiveRetriever, RetrievalResult
 
 if TYPE_CHECKING:
@@ -23,6 +24,7 @@ def build_context_packet(
     session_id: str = "",
     token_budget: int = 3000,
     include_prompt: bool = True,
+    include_engrams: bool = True,
     max_functional: int = 10,
     max_hypomnema: int = 8,
     max_engrams: int = 6,
@@ -31,6 +33,14 @@ def build_context_packet(
 
     The packet orders memory from most immediately actionable to most durable:
     functional memory, hypomnema continuity, then Mnemos engrams and beliefs.
+
+    ``include_engrams=False`` returns continuity only. Mnemos is a continuity
+    and identity layer, usually running alongside whatever memory system the
+    human already has; the long-term graph accumulates general recall that can
+    crowd the scoped continuity out of a session-start packet. On one live
+    store the graph section spent five of six slots on paraphrases of a single
+    fact. Continuity-only keeps what the agent could not reconstruct from
+    anywhere else.
     """
     identity = store.get_identity(agent_id)
     beliefs = store.get_beliefs(agent_id, active_only=True)
@@ -43,13 +53,22 @@ def build_context_packet(
         project_scope=project_scope,
         limit=max_functional,
     )
+    # Fetch extra so dropping dream-journal notes still leaves a full section.
     hypomnema = store.search_hypomnema(
         query,
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
-        limit=max_hypomnema,
+        limit=max_hypomnema + 4,
     )
+    # Dream-journal entries are consolidation diary ("I connected 148 memories
+    # that belong together"), not continuity about the human or the work.
+    # runtime.context() renders them in their own section and excludes them
+    # here; this path was showing them as ordinary continuity notes.
+    hypomnema = [
+        entry for entry in hypomnema
+        if DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
+    ][:max_hypomnema]
     review_functional = store.load_functional_memories(
         "",
         agent_id=agent_id,
@@ -66,7 +85,7 @@ def build_context_packet(
     )
 
     engrams: list[dict[str, Any]] = []
-    if query.strip():
+    if include_engrams and query.strip():
         retriever = ReactiveRetriever(store)
         emotional_state = store.get_latest_emotional_state(agent_id)
         results = retriever.retrieve(
@@ -79,6 +98,7 @@ def build_context_packet(
 
     stats = store.get_stats(agent_id)
     packet: dict[str, Any] = {
+        "include_engrams": include_engrams,
         "scope": {
             "agent_id": agent_id,
             "person_id": person_id,
@@ -182,6 +202,23 @@ def _format_functional(packet: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# A single continuity note can be thousands of characters. Left whole, two
+# or three of them consume the entire packet and the rest — along with any
+# section after them — is hard-cut mid-word by the budget clamp. Capping each
+# note trades depth in one entry for the breadth the packet exists to give;
+# the full text is always one mnemos_recall away.
+_MAX_NOTE_CHARS = 420
+
+
+def _clip(text: str, limit: int = _MAX_NOTE_CHARS) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    # Cut on a word boundary so a note never ends mid-word.
+    head = collapsed[:limit].rsplit(" ", 1)[0]
+    return f"{head} […]"
+
+
 def _format_hypomnema(packet: dict[str, Any]) -> str:
     entries = packet.get("hypomnema") or []
     if not entries:
@@ -195,7 +232,7 @@ def _format_hypomnema(packet: dict[str, Any]) -> str:
             else ""
         )
         lines.append(
-            f"- {entry['content']} "
+            f"- {_clip(entry['content'])} "
             f"[{marker}{entry['domain']}, confidence {float(entry['confidence']):.2f}, "
             f"salience {float(entry['salience']):.2f}]"
         )
@@ -203,6 +240,11 @@ def _format_hypomnema(packet: dict[str, Any]) -> str:
 
 
 def _format_engrams(packet: dict[str, Any]) -> str:
+    # Continuity-only packets omit the section rather than announcing an
+    # empty one — a heading saying nothing was found is still noise in a
+    # block injected at the top of every session.
+    if not packet.get("include_engrams", True):
+        return ""
     engrams = packet.get("mnemos_engrams") or []
     if not engrams:
         return "### Mnemos Graph\n- No long-term engrams were retrieved for this cue."

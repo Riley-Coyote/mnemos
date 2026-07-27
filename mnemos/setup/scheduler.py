@@ -83,16 +83,22 @@ JOBS: tuple[SchedulerJob, ...] = (
         description="Cognitive substrate cycle: handlers and modulators",
         interval_seconds=4 * 3600,
     ),
-    SchedulerJob(
-        name="index",
-        args=("index",),
-        description="Index recent session transcripts into memory",
-        interval_seconds=30 * 60,
-        # Extraction is model-mediated; without a provider this job would
-        # wake up every half hour to do nothing.
-        requires_model=True,
-    ),
 )
+
+# Transcript indexing is deliberately NOT scheduled.
+#
+# `mnemos index` harvests conversation transcripts and encodes extracted
+# facts as the agent's own memories. That is general work-recall, not
+# continuity, and Mnemos is a continuity and identity layer that runs
+# alongside whatever memory system the human already has.
+#
+# It is also actively harmful to the layer it would share a store with. On
+# one live install the indexer had written ~7,058 engrams against 13
+# deliberate captures — a 543:1 ratio — and a session-start packet spent
+# five of six long-term slots on paraphrases of a single harvested fact.
+# Scheduling it by default would rebuild that on every user's machine.
+#
+# The command remains available to run by hand for anyone who wants it.
 
 
 def jobs_for(*, has_model: bool) -> list[SchedulerJob]:

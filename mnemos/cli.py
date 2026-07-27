@@ -304,6 +304,15 @@ def main(argv: list[str] | None = None) -> int:
     p_hook_start.add_argument(
         "--token-budget", type=int, default=2600, help="Approximate packet size"
     )
+    p_hook_start.add_argument(
+        "--include-graph",
+        action="store_true",
+        help=(
+            "Also inject long-term graph recall. Off by default: the packet "
+            "carries scoped continuity, which is what the agent cannot "
+            "reconstruct from anywhere else."
+        ),
+    )
 
     # ── hooks ──
     p_hooks = sub.add_parser("hooks", help="Install session-start memory injection")
@@ -427,6 +436,7 @@ def _cmd_hook(args: argparse.Namespace) -> int:
                 project_scope=scope.project_scope,
                 token_budget=args.token_budget,
                 include_prompt=True,
+                include_engrams=bool(getattr(args, "include_graph", False)),
             )
         finally:
             store.close()

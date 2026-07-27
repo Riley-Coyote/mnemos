@@ -99,6 +99,134 @@ class TestSessionStartHook:
         assert not missing.exists(), "reading memory created a database"
 
 
+class TestContinuityOnlyPacket:
+    """What the hook injects into every session, and what it must not.
+
+    Mnemos is a continuity and identity layer running alongside whatever
+    memory system the human already has. The long-term graph accumulates
+    general recall; on one live store a session-start packet spent five of
+    six graph slots on paraphrases of one fact. The packet defaults to
+    continuity, which is what an agent cannot reconstruct elsewhere.
+    """
+
+    def _seed(self, tmp_path):
+        from mnemos.simple_runtime import MnemosRuntime
+
+        db_path = str(tmp_path / "packet.db")
+        runtime = MnemosRuntime(db_path=db_path, agent_id="demo")
+        runtime.capture("Riley prefers cold brew", importance="high")
+        runtime.close()
+        return db_path
+
+    def test_the_hook_omits_the_graph_by_default(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("HOME", str(_seed_home(tmp_path)))
+        from mnemos.cli import main
+
+        db_path = self._seed(tmp_path)
+        assert main([
+            "hook", "session-start", "--db-path", db_path, "--agent-id", "demo",
+        ]) == 0
+
+        context = json.loads(capsys.readouterr().out)["hookSpecificOutput"][
+            "additionalContext"
+        ]
+        assert "Mnemos Graph" not in context, (
+            "the graph section must be absent, not merely empty — a heading "
+            "announcing nothing is still noise at the top of every session"
+        )
+        assert "Riley prefers cold brew" in context, "continuity was dropped too"
+
+    def test_the_graph_can_be_opted_back_in(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("HOME", str(_seed_home(tmp_path)))
+        from mnemos.cli import main
+
+        db_path = self._seed(tmp_path)
+        assert main([
+            "hook", "session-start", "--db-path", db_path,
+            "--agent-id", "demo", "--include-graph",
+        ]) == 0
+
+        context = json.loads(capsys.readouterr().out)["hookSpecificOutput"][
+            "additionalContext"
+        ]
+        assert "Mnemos Graph" in context
+
+    def test_one_long_note_cannot_consume_the_whole_packet(self, tmp_path, monkeypatch):
+        """Breadth beats depth in a block injected before every session.
+
+        Continuity notes can run to thousands of characters. Left whole, two
+        or three consumed the entire budget and everything after them — other
+        notes, later sections — was hard-cut mid-word by the clamp. On the
+        live store this was cutting a sentence off at "...and every".
+        """
+        monkeypatch.setenv("HOME", str(_seed_home(tmp_path)))
+        from mnemos.interface.context_packet import build_context_packet
+        from mnemos.simple_runtime import MnemosRuntime
+        from mnemos.store.sqlite_store import EngramStore
+
+        db_path = str(tmp_path / "long.db")
+        runtime = MnemosRuntime(db_path=db_path, agent_id="demo")
+        for i in range(6):
+            runtime.capture(
+                f"Note {i}: " + ("the quick brown fox jumps over the lazy dog. " * 90),
+                importance="high",
+            )
+        runtime.capture("Riley prefers cold brew", importance="high")
+        runtime.close()
+
+        store = EngramStore(db_path)
+        try:
+            packet = build_context_packet(
+                store, "", agent_id="demo", person_id="user",
+                project_scope="global", token_budget=2600,
+            )
+        finally:
+            store.close()
+
+        prompt = packet["prompt"]
+        assert "[context packet truncated" not in prompt, (
+            "the packet still overflows its budget and is being hard-cut"
+        )
+        # Every section must survive, not just the ones that sorted first.
+        assert "### Hypomnema" in prompt
+        assert "### Review Queue" in prompt
+        # And no note may end mid-word.
+        for line in prompt.splitlines():
+            if line.startswith("- ") and "…" in line:
+                assert " […]" in line, f"clipped mid-word: {line[-40:]!r}"
+
+    def test_dream_journal_notes_are_not_shown_as_continuity(self, tmp_path, monkeypatch):
+        """Consolidation diary is not continuity about the human or the work.
+
+        "I connected 148 memories that belong together" was appearing as an
+        ordinary continuity note in this path, spending a packet slot on the
+        machinery describing itself.
+        """
+        monkeypatch.setenv("HOME", str(_seed_home(tmp_path)))
+        from mnemos.dream_journal import DREAM_JOURNAL_TAG, write_dream_entry
+        from mnemos.interface.context_packet import build_context_packet
+        from mnemos.simple_runtime import MnemosRuntime
+        from mnemos.store.sqlite_store import EngramStore
+
+        db_path = str(tmp_path / "dream.db")
+        runtime = MnemosRuntime(db_path=db_path, agent_id="demo")
+        runtime.capture("Riley ships at 3am", importance="high")
+        write_dream_entry(runtime._store, runtime.scope, "I connected 148 memories.")
+        runtime.close()
+
+        store = EngramStore(db_path)
+        try:
+            packet = build_context_packet(
+                store, "", agent_id="demo", person_id="user", project_scope="global",
+            )
+        finally:
+            store.close()
+
+        for entry in packet["hypomnema"]:
+            assert DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
+        assert "148 memories" not in packet["prompt"]
+
+
 class TestHookInstaller:
     def test_write_preserves_unrelated_settings_and_hooks(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(_seed_home(tmp_path)))

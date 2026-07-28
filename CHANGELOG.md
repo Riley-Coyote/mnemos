@@ -1,6 +1,40 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (unreleased)
+
+The release that makes continuity actually work. Mnemos had memory and an
+agent and no reliable path between them; 0.2.0 is that path, plus the
+evidence that it holds.
+
+**Start here if you are upgrading:** two breaking changes are listed under
+*Changed* — the default database path and the distribution name.
+
+### What Mnemos is
+Clarified throughout, because the previous framing caused a real failure. Mnemos
+is a continuity and identity layer for the agent itself — it carries what the
+agent should know about you and how you work together, across sessions. It is
+**not** a general memory or retrieval system, and it runs alongside whatever you
+already use for that. Pointing general recall at it buries the continuity layer:
+on one live install the transcript indexer had written ~7,058 engrams against 13
+deliberate captures, and a session packet spent five of six long-term slots on
+paraphrases of a single harvested fact.
+
+### Proof
+- **The continuity assay** — spawns real subprocesses and passes no scope
+  arguments, because defaults are what an agent actually gets. Covers a capture
+  surviving into a later session, a capture written in one directory being
+  readable from another, earlier captures not being displaced, reading never
+  creating a store, and a corrupt store never failing a session. Reintroducing
+  the cwd-derived scope makes it fail; the fix makes it pass
+- **Health that reports absence** — `mnemos_health` and `mnemos doctor` now
+  report notes held, empty-packet streak, and sessions since the last capture,
+  and say plainly when memory is being read but coming back empty. Every failure
+  this system has had looked like success from the outside; this is the signal
+  none of them could fake
+- **Retrieval mode is legible** — `doctor` states whether recall is semantic or
+  keyword-only instead of leaving it to chance
+
+### Continuity Without Manual Triggering
 
 ### Background Maintenance Without OpenClaw
 - `mnemos daemon {install,status,uninstall}` — schedules maintenance with whatever the host provides: launchd on macOS, systemd user timers on Linux, crontab as a fallback. Background continuity previously existed only as OpenClaw cron templates, so every user without OpenClaw had a memory system that did nothing between sessions. The job logic was never OpenClaw-specific — `mnemos consolidate`, `mnemos substrate-tick` and `mnemos index` are plain CLI commands, and only the scheduling was bound to OpenClaw

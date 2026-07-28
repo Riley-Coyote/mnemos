@@ -171,3 +171,65 @@ class TestScopeIsolation:
             )
         finally:
             b.close()
+
+
+class TestTheHookPacketCarriesThem:
+    """The SessionStart hook is the path most agents actually receive.
+
+    Phase 2 built the loop into simple mode's context() only, so on the
+    hook path — the one Mnemos installs by default — a reflection request
+    existed in the queue and never reached the agent at all.
+    """
+
+    def test_the_session_start_packet_includes_pending_reflections(self, runtime):
+        from mnemos.interface.context_packet import build_context_packet
+
+        runtime.capture("Spent three hours on a guard clause", importance="high")
+        runtime.maintain()
+        assert runtime.pending_reflections(), "nothing queued to test with"
+
+        packet = build_context_packet(
+            runtime._store, "",
+            agent_id=runtime.scope.agent_id,
+            person_id=runtime.scope.person_id,
+            project_scope=runtime.scope.project_scope,
+            include_engrams=False,
+        )
+
+        assert packet["reflections"], "the packet carried no reflection request"
+        assert "Waiting On You" in packet["prompt"]
+        assert "mnemos_reflect(target_id=" in packet["prompt"]
+
+    def test_a_quiet_scope_adds_no_section(self, runtime):
+        from mnemos.interface.context_packet import build_context_packet
+
+        runtime._ensure_init()
+        packet = build_context_packet(
+            runtime._store, "",
+            agent_id=runtime.scope.agent_id,
+            person_id=runtime.scope.person_id,
+            project_scope=runtime.scope.project_scope,
+            include_engrams=False,
+        )
+        assert packet["reflections"] == []
+        assert "Waiting On You" not in packet["prompt"]
+
+    def test_a_read_only_caller_can_decline_to_consume_a_surfacing(self, runtime):
+        """Inspecting the packet must not use up an agent's chances to answer."""
+        from mnemos.interface.context_packet import build_context_packet
+
+        runtime.capture("Something worth reflecting on", importance="high")
+        runtime.maintain()
+
+        for _ in range(5):
+            build_context_packet(
+                runtime._store, "",
+                agent_id=runtime.scope.agent_id,
+                person_id=runtime.scope.person_id,
+                project_scope=runtime.scope.project_scope,
+                include_engrams=False, mark_surfaced=False,
+            )
+
+        assert runtime.pending_reflections(), (
+            "read-only inspection burned the request's surfacings"
+        )

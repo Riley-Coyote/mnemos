@@ -1,0 +1,133 @@
+name: Release
+
+# Publishing is triggered by pushing a version tag, so a release never
+# depends on anyone opening a browser. Trusted Publishing (OIDC) means no
+# API token exists anywhere — not in the repo, not in a secret, not on a
+# developer's machine.
+#
+# To cut a release:
+#   1. bump `version` in pyproject.toml, land it through a PR
+#   2. git tag v0.2.0 && git push origin v0.2.0
+#
+# The tag must match the version in pyproject.toml or the run fails before
+# anything is built. A published version can never be replaced on PyPI, so
+# every gate here runs before the upload, not after.
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Allows a dry run: builds and checks the artifacts, never publishes.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify tag and tests
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Read the packaged version
+        id: version
+        run: |
+          version=$(uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "pyproject version: $version"
+
+      - name: The tag must match the packaged version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          packaged="${{ steps.version.outputs.version }}"
+          if [ "$tag" != "$packaged" ]; then
+            echo "::error::tag v$tag does not match pyproject version $packaged"
+            exit 1
+          fi
+          echo "tag v$tag matches pyproject version"
+
+      - name: Tests must pass before anything is published
+        run: uv run --extra dev --extra mcp pytest -q
+
+  build:
+    name: Build distributions
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build
+        run: uv build
+
+      - name: The wheel must carry what the package promises
+        run: |
+          uv run python - <<'PY'
+          import zipfile
+          from pathlib import Path
+
+          wheel = next(Path("dist").glob("mnemos*.whl"))
+          required = {
+              "mnemos/simple_runtime.py",
+              "mnemos/simple_mcp.py",
+              "mnemos/setup/scheduler.py",
+              "templates/SOUL.md",
+              "templates/IDENTITY.md",
+          }
+          with zipfile.ZipFile(wheel) as archive:
+              names = set(archive.namelist())
+          missing = sorted(required - names)
+          if missing:
+              raise SystemExit(f"Missing from wheel: {missing}")
+          print(f"Wheel OK: {wheel}")
+          PY
+
+      - name: Check metadata renders on PyPI
+        run: uvx twine check dist/*
+
+      - name: A clean install must produce a working server
+        run: |
+          python -m venv /tmp/fresh
+          /tmp/fresh/bin/pip install -q dist/mnemos*.whl
+          /tmp/fresh/bin/mnemos --help > /dev/null
+          # The failure this guards: `mcp` was once an optional extra while
+          # being imported at module scope, so a clean install produced a
+          # server that died on first serve with the error hidden on stderr.
+          /tmp/fresh/bin/python -c "import mcp.server.fastmcp; print('mcp present in a clean install')"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    # Tags only. A manual dispatch builds and verifies without publishing,
+    # which makes the whole pipeline safe to rehearse.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/mnemos-continuity
+    permissions:
+      # Required for Trusted Publishing. This is the only credential
+      # involved, it is minted per-run by GitHub, and it cannot be reused.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1

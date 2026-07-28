@@ -43,6 +43,11 @@ VALID_FUNCTIONAL_TYPES = {
 
 VALID_SESSION_STATUSES = {"active", "paused", "closed"}
 
+# Upper bound on hypomnema rows considered for ranking. Deliberately far
+# above any healthy continuity store: this is a backstop against a
+# pathological store, not a relevance filter. See search_hypomnema.
+_MAX_HYPOMNEMA_CANDIDATES = 5000
+
 VALID_HYPO_SOURCES = {"observed", "synthesized", "co-formed"}
 VALID_HYPO_DOMAINS = {
     "foundational",
@@ -1292,7 +1297,18 @@ class EngramStore:
         params: list[Any] = [agent_id, person_id, project_scope]
         if not include_inactive:
             sql += " AND active = 1"
-        sql += " ORDER BY foundational DESC, last_revised_at DESC LIMIT 100"
+        # Every note in scope is scored. A cap applied *before* scoring is a
+        # silent amnesia: at 200 notes the old `LIMIT 100` made half of an
+        # agent's continuity unreachable no matter how relevant it was, and
+        # the packet still returned its full eight entries and looked
+        # healthy. Continuity is a small, curated layer by design — scoring
+        # a few thousand rows in Python costs milliseconds, and a store that
+        # has grown past the ceiling below has a different problem than
+        # ranking.
+        sql += (
+            " ORDER BY foundational DESC, last_revised_at DESC"
+            f" LIMIT {_MAX_HYPOMNEMA_CANDIDATES}"
+        )
         rows = conn.execute(sql, params).fetchall()
 
         scored: list[dict[str, Any]] = []

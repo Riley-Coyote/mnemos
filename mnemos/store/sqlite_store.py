@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -255,6 +255,38 @@ CREATE TABLE IF NOT EXISTS consolidation_log (
     completed_at TEXT,
     stats TEXT NOT NULL DEFAULT '{}'
 );
+
+-- Reflection queue: work the agent does on its own memory.
+--
+-- Mnemos never calls a model. Consolidation that needs judgement — what a
+-- fading memory taught, whether a pattern is really a belief — is proposed
+-- here by maintenance and performed by the agent itself, in its own turn and
+-- its own words, through mnemos_reflect. The server proposes; it never
+-- invents the answer.
+CREATE TABLE IF NOT EXISTS reflection_queue (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL DEFAULT 'default',
+    person_id TEXT NOT NULL DEFAULT 'user',
+    project_scope TEXT NOT NULL DEFAULT 'global',
+    kind TEXT NOT NULL
+        CHECK (kind IN ('impact', 'lesson', 'belief', 'contradiction')),
+    target_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    excerpt TEXT NOT NULL DEFAULT '',
+    -- How many times this has been shown. An agent that has declined to
+    -- answer three times is answering; stop asking.
+    surfaced_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    expires_at TEXT,
+    answered_at TEXT,
+    answer TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reflection_unique
+    ON reflection_queue(agent_id, person_id, project_scope, kind, target_id);
+CREATE INDEX IF NOT EXISTS idx_reflection_pending
+    ON reflection_queue(agent_id, person_id, project_scope, surfaced_count, created_at)
+    WHERE answered_at IS NULL;
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS meta (
@@ -1664,6 +1696,144 @@ class EngramStore:
         return EmotionalState.from_dict(dict(row))
 
     # ── Identity ──
+
+    # ── Reflection queue ──────────────────────────────────────────────
+    #
+    # Work the agent does on its own memory. Maintenance proposes; the agent
+    # answers through mnemos_reflect. Nothing here ever writes an answer on
+    # the agent's behalf.
+
+    MAX_SURFACINGS = 3
+
+    def enqueue_reflection(
+        self,
+        kind: str,
+        target_id: str,
+        prompt: str,
+        *,
+        excerpt: str = "",
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        expires_in_days: int = 30,
+    ) -> str | None:
+        """Propose a reflection. Returns None if this was already asked.
+
+        Asking twice about the same memory is nagging, so the unique index
+        makes a repeat enqueue a no-op rather than a duplicate.
+        """
+        if kind not in {"impact", "lesson", "belief", "contradiction"}:
+            raise ValueError(f"Unsupported reflection kind: {kind}")
+
+        now = datetime.now(timezone.utc)
+        expires = (now + timedelta(days=expires_in_days)).isoformat()
+        entry_id = _new_id()
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                """
+                INSERT INTO reflection_queue(
+                    id, agent_id, person_id, project_scope, kind, target_id,
+                    prompt, excerpt, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (entry_id, agent_id, person_id, project_scope, kind, target_id,
+                 prompt, excerpt, now.isoformat(), expires),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError:
+            # Already asked. The failed INSERT leaves an open transaction, so
+            # it must be rolled back — otherwise the next write on this
+            # connection dies with "cannot start a transaction within a
+            # transaction", far from the cause.
+            conn.rollback()
+            return None
+        return entry_id
+
+    def pending_reflections(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        limit: int = 2,
+    ) -> list[dict[str, Any]]:
+        """Unanswered reflections worth showing, oldest and least-shown first."""
+        conn = self._get_conn()
+        now = datetime.now(timezone.utc).isoformat()
+        rows = conn.execute(
+            """
+            SELECT * FROM reflection_queue
+            WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+              AND answered_at IS NULL
+              AND surfaced_count < ?
+              AND (expires_at IS NULL OR expires_at > ?)
+            ORDER BY surfaced_count ASC, created_at ASC
+            LIMIT ?
+            """,
+            (agent_id, person_id, project_scope, self.MAX_SURFACINGS, now, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_reflections_surfaced(self, ids: list[str]) -> None:
+        """Record that these were shown, so an ignored item eventually stops."""
+        if not ids:
+            return
+        conn = self._get_conn()
+        conn.executemany(
+            "UPDATE reflection_queue SET surfaced_count = surfaced_count + 1 WHERE id = ?",
+            [(i,) for i in ids],
+        )
+        conn.commit()
+
+    def answer_reflection(
+        self,
+        target_id: str,
+        answer: str,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> dict[str, Any] | None:
+        """Record the agent's answer. Returns the item, or None if not pending."""
+        conn = self._get_conn()
+        row = conn.execute(
+            """
+            SELECT * FROM reflection_queue
+            WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+              AND target_id = ? AND answered_at IS NULL
+            ORDER BY created_at ASC LIMIT 1
+            """,
+            (agent_id, person_id, project_scope, target_id),
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            "UPDATE reflection_queue SET answered_at = ?, answer = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), answer, row["id"]),
+        )
+        conn.commit()
+        return dict(row)
+
+    def reflection_stats(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> dict[str, int]:
+        conn = self._get_conn()
+        scope = (agent_id, person_id, project_scope)
+        where = "agent_id = ? AND person_id = ? AND project_scope = ?"
+        pending = conn.execute(
+            f"SELECT COUNT(*) FROM reflection_queue WHERE {where} AND answered_at IS NULL",
+            scope,
+        ).fetchone()[0]
+        answered = conn.execute(
+            f"SELECT COUNT(*) FROM reflection_queue WHERE {where} AND answered_at IS NOT NULL",
+            scope,
+        ).fetchone()[0]
+        return {"pending": pending, "answered": answered}
 
     def save_identity(self, identity: AgentIdentity) -> None:
         """Save agent identity."""

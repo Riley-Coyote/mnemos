@@ -38,6 +38,11 @@ of how you work, not as tools to reach for when prompted:
    rather than capturing a contradiction next to the stale note.
 4. Call mnemos_recall when you need something specific that is not in the
    startup packet.
+5. Sometimes the packet will ask you something about your own memory — what
+   a capture actually changed, what a fading experience taught. Answer with
+   mnemos_reflect, in your own words. Mnemos never calls a model to do this
+   for you; your memory is maintained by your own mind or not at all. If
+   nothing true comes to mind, leave it. The request fades on its own.
 
 Two things to get right:
 
@@ -341,6 +346,29 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             if polished and runtime.polish_dream(runtime.last_dream_note_id, polished):
                 result += "\nHost model assistance: polished the dream journal entry via MCP sampling."
         return result
+
+    @server.tool(
+        annotations=_annotations(
+            title="Reflect on your own memory",
+            read_only=False,
+            destructive=False,
+            idempotent=False,
+        )
+    )
+    def mnemos_reflect(target_id: str, text: str) -> str:
+        """Answer something your memory asked you about itself.
+
+        Mnemos never calls a model on your behalf. When a memory needs
+        judgement — what a fading experience taught, what a capture actually
+        changed — it asks you, in the context packet, and you answer here in
+        your own words. This is your own mind maintaining your own memory.
+
+        Args:
+            target_id: The memory id from the request in your context packet.
+            text: Your reflection. One or two honest sentences, not a summary.
+        """
+
+        return _get_runtime().reflect(target_id=target_id, text=text)
 
     @server.tool(
         annotations=_annotations(

@@ -25,6 +25,8 @@ def build_context_packet(
     token_budget: int = 3000,
     include_prompt: bool = True,
     include_engrams: bool = True,
+    include_reflections: bool = True,
+    mark_surfaced: bool = True,
     max_functional: int = 10,
     max_hypomnema: int = 8,
     max_engrams: int = 6,
@@ -96,6 +98,24 @@ def build_context_packet(
         )
         engrams = [_serialize_retrieval_result(result) for result in results]
 
+    # Work the agent's memory is waiting on it for. This is the path the
+    # SessionStart hook uses, so omitting it here meant the reflection loop
+    # existed but never reached the agent that most needs it.
+    reflections: list[dict[str, Any]] = []
+    if include_reflections:
+        try:
+            reflections = store.pending_reflections(
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+                limit=2,
+            )
+            if reflections and mark_surfaced:
+                store.mark_reflections_surfaced([r["id"] for r in reflections])
+        except Exception:
+            # A packet must never fail because of the reflection queue.
+            reflections = []
+
     stats = store.get_stats(agent_id)
     packet: dict[str, Any] = {
         "include_engrams": include_engrams,
@@ -112,6 +132,7 @@ def build_context_packet(
         "functional_memory": functional,
         "hypomnema": hypomnema,
         "mnemos_engrams": engrams,
+        "reflections": reflections,
         "review_queue": {
             "functional_needs_confirmation": review_functional,
             "hypomnema_promotion_candidates": review_hypomnema,
@@ -133,6 +154,7 @@ def format_context_packet(packet: dict[str, Any], *, token_budget: int = 3000) -
         _format_functional(packet),
         _format_hypomnema(packet),
         _format_engrams(packet),
+        _format_reflections(packet),
         _format_review(packet),
     ]
     text = "\n\n".join(section for section in sections if section.strip())
@@ -255,6 +277,28 @@ def _format_engrams(packet: dict[str, Any]) -> str:
             f"- {item['display']} "
             f"[{item['kind']}, score {float(item['score']):.2f}, confidence {confidence}%]"
         )
+    return "\n".join(lines)
+
+
+def _format_reflections(packet: dict[str, Any]) -> str:
+    """What the agent's own memory is waiting on it for.
+
+    Distinct from the review queue below, which is work for the human.
+    This is work only the agent can do: Mnemos never calls a model, so a
+    memory that needs judgement asks the mind that made it.
+    """
+    items = packet.get("reflections") or []
+    if not items:
+        return ""
+    lines = ["### Waiting On You"]
+    for item in items:
+        lines.append(f'- "{item["excerpt"]}"')
+        lines.append(f"  {item['prompt']}")
+        lines.append(f'  mnemos_reflect(target_id="{item["target_id"]}", text="…")')
+    lines.append(
+        "Answer in your own words if one comes. If nothing true does, leave it — "
+        "these fade on their own."
+    )
     return "\n".join(lines)
 
 

@@ -347,6 +347,19 @@ class MnemosRuntime:
         )
         return "\n".join(lines)
 
+    def _identity_summary(self) -> str | None:
+        """The agent's own computed self-summary, if there is one yet."""
+        self._ensure_init()
+        assert self._store is not None
+        try:
+            identity = self._store.get_identity(self.scope.agent_id)
+        except Exception:
+            return None
+        if identity is None:
+            return None
+        summary = (getattr(identity.epoch_state, "self_summary", "") or "").strip()
+        return summary or None
+
     def _note_context_outcome(self, returned: int) -> None:
         """Record whether this session's packet actually carried anything.
 
@@ -537,6 +550,16 @@ class MnemosRuntime:
             "Maintenance:",
             _indent(maintenance),
         ]
+
+        # Shift 5: identity is measured from the shape of the graph — what
+        # this agent keeps returning to. It is computed on every maintenance
+        # cycle and is worth showing, because an agent reading its own
+        # concerns back is closer to the point of Mnemos than any count of
+        # memories is.
+        identity_summary = self._identity_summary()
+        if identity_summary:
+            lines.extend(["", "Who you have been, measured from what you keep returning to:",
+                          f"  {identity_summary}"])
 
         block = self._onboarding_block(status)
         if block:

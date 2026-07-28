@@ -181,12 +181,16 @@ def main() -> int:
     parser.add_argument("--sizes", default="10,50,200,500")
     parser.add_argument("--k", type=int, default=8, help="notes the packet may carry")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--mind", metavar="DB", help="Measure the five shifts against a real store")
     parser.add_argument(
         "--flat", action="store_true",
         help="Model a store where every note claims equal importance",
     )
     args = parser.parse_args()
     args.differentiate = not args.flat
+
+    if args.mind:
+        return print_mind_state(args.mind)
 
     sizes = [int(s) for s in args.sizes.split(",") if s.strip()]
     results = [
@@ -225,6 +229,99 @@ def main() -> int:
         print(f"Cues that found nothing at size {worst['store_size']}:")
         for cue in worst["misses"][:5]:
             print(f'  - "{cue}"')
+    return 0
+
+
+
+# ── Mind state ────────────────────────────────────────────────────────────
+#
+# The five shifts each have a code path. The question that matters is whether
+# they leave a trace in a real store. Four of five were dormant when this was
+# first measured: 0 identity rows, 0 DISTILLED_INTO edges, surprise disabled
+# at every call site, and 96% of connections a single relation type.
+#
+#     python benchmarks/continuity_eval.py --mind ~/.mnemos/agent.db
+
+def mind_state(db_path: str) -> dict:
+    """Measure the five shifts against a real store."""
+    import sqlite3
+
+    conn = sqlite3.connect(f"file:{Path(db_path).expanduser()}?mode=ro", uri=True)
+    q = lambda sql: conn.execute(sql).fetchone()[0]  # noqa: E731
+
+    engrams = q("SELECT COUNT(*) FROM engrams") or 0
+    connections = q("SELECT COUNT(*) FROM connections") or 0
+    # Shift 1 asks for a trace of how understanding changed. A phrase the
+    # server chose from a fixed list is not that, however well it fills the
+    # column — counting it would make the metric flatter the system exactly
+    # where the system is weakest. Only impacts nothing templated could have
+    # written are counted.
+    boilerplate = (
+        "Foundational continuity for future interactions.",
+        "Recurring pattern worth carrying across sessions.",
+        "Long-arc context that should shape future work.",
+        "Current working context for continuity.",
+        "Preference to respect in future decisions.",
+        "Durable continuity captured from the session.",
+        "Stable scoped continuity promoted from hypomnema.",
+        "Stable continuity promoted during simple maintenance.",
+        "Correction to earlier continuity.",
+        "Corrected continuity for future interactions.",
+    )
+    placeholders = ",".join("?" * len(boilerplate))
+    with_impact = conn.execute(
+        f"SELECT COUNT(*) FROM engrams WHERE impact != '' AND impact IS NOT NULL "
+        f"AND impact NOT IN ({placeholders})",
+        boilerplate,
+    ).fetchone()[0]
+    distilled = q("SELECT COUNT(*) FROM connections WHERE relation = 'distilled_into'")
+    supports = q("SELECT COUNT(*) FROM connections WHERE relation = 'supports'")
+    try:
+        identities = q("SELECT COUNT(*) FROM agent_identity")
+    except sqlite3.Error:
+        identities = 0
+    relation_kinds = q("SELECT COUNT(DISTINCT relation) FROM connections")
+    conn.close()
+
+    return {
+        "engrams": engrams,
+        "connections": connections,
+        "shift_1_traces": {
+            "impact_coverage": round(with_impact / engrams, 3) if engrams else 0.0,
+            "alive": engrams > 0 and with_impact / engrams >= 0.5,
+        },
+        "shift_2_lessons": {"distilled_into": distilled, "alive": distilled > 0},
+        "shift_4_resonance": {
+            "relation_kinds": relation_kinds,
+            "supports_share": round(supports / connections, 3) if connections else 0.0,
+            "alive": connections > 0 and supports / connections < 0.8,
+        },
+        "shift_5_identity": {"identity_rows": identities, "alive": identities > 0},
+    }
+
+
+def print_mind_state(db_path: str) -> int:
+    state = mind_state(db_path)
+    print(f"Mind state — {db_path}")
+    print("=" * 66)
+    print(f"  {state['engrams']} engrams, {state['connections']} connections\n")
+    rows = [
+        ("1. traces, not records", state["shift_1_traces"],
+         f"{state['shift_1_traces']['impact_coverage']:.0%} carry a non-templated impact"),
+        ("2. forgetting that teaches", state["shift_2_lessons"],
+         f"{state['shift_2_lessons']['distilled_into']} distilled-into edges"),
+        ("4. resonance, not search", state["shift_4_resonance"],
+         f"{state['shift_4_resonance']['relation_kinds']} relation kinds, "
+         f"{state['shift_4_resonance']['supports_share']:.0%} 'supports'"),
+        ("5. identity from the graph", state["shift_5_identity"],
+         f"{state['shift_5_identity']['identity_rows']} identity rows"),
+    ]
+    for label, data, detail in rows:
+        mark = "alive " if data["alive"] else "DORMANT"
+        print(f"  [{mark}] {label:<28} {detail}")
+    print()
+    print("  Shift 3 (surprise) is observable only at encode time; see the")
+    print("  surprise value returned by a genuinely novel capture.")
     return 0
 
 

@@ -123,18 +123,53 @@ def run_reflection_pass(
             )
             stats["thoughts_generated"] += 1
 
-    # 3. SHIFT 5: Compute identity from graph (not narrative generation)
-    profile = compute_identity_profile(store, all_engrams, identity)
+    # Identity is computed by run_identity_pass, which runs on every cycle
+    # rather than only when a model is configured. See below.
+    return stats
 
-    # Store the computed profile as the self-summary (readable form)
+
+def run_identity_pass(
+    store: "EngramStore",
+    identity: AgentIdentity | None = None,
+    agent_id: str = "default",
+) -> dict[str, Any]:
+    """Shift 5: identity computed from graph topology, not narrated.
+
+    This needs no model and never did — ``compute_identity_profile`` is pure
+    graph measurement, and its own docstring says so. It nevertheless lived
+    inside the reflection pass, which is deep-only and skipped entirely when
+    no LLM client is configured. On the install Mnemos actually ships, the
+    result was zero identity rows: an agent whose sense of self was never
+    computed once.
+
+    It was gated a second time even with a model, by reflection's
+    ``len(recent) < 3`` guard on the last 24 hours. Identity is not a
+    property of the last day; a quiet week is not an absence of self. This
+    pass reads the whole active graph and runs every cycle.
+    """
+    stats: dict[str, Any] = {"identity_computed": False}
+
+    engrams = store.get_active_engrams(agent_id=agent_id, limit=1000)
+    if not engrams:
+        # Nothing to be the shape of yet. Not a failure.
+        stats["reason"] = "no active memories"
+        return stats
+
+    if identity is None:
+        identity = store.get_identity(agent_id) or AgentIdentity()
+        identity.memory_profile.agent_id = agent_id
+
+    profile = compute_identity_profile(store, engrams, identity)
     identity.epoch_state.self_summary = profile.to_summary()
     store.save_identity(identity)
 
-    stats["identity_computed"] = True
-    stats["persistent_concerns"] = len(profile.persistent_concerns)
-    stats["living_questions"] = len(profile.living_questions)
-    stats["lessons_accumulated"] = profile.lessons_accumulated
-
+    stats.update(
+        identity_computed=True,
+        engrams_considered=len(engrams),
+        persistent_concerns=len(profile.persistent_concerns),
+        living_questions=len(profile.living_questions),
+        lessons_accumulated=profile.lessons_accumulated,
+    )
     return stats
 
 

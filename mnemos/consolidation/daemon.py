@@ -34,7 +34,7 @@ from .connection_discovery import run_connection_discovery
 from .decay import run_decay_pass
 from .softening import run_softening_pass
 from .belief_review import run_belief_review
-from .reflection import run_reflection_pass
+from .reflection import run_identity_pass, run_reflection_pass
 
 
 def _now_iso() -> str:
@@ -153,6 +153,17 @@ class ConsolidationDaemon:
             stats["passes_run"].append("decay")
         except Exception as e:
             stats["decay_error"] = str(e)
+
+        # ── PASS 3: Identity (always runs) ──
+        # Shift 5 is measured from graph topology and needs no model. It used
+        # to live inside the deep, LLM-gated reflection pass, so on a default
+        # install an agent's identity was never computed at all.
+        try:
+            identity_stats = run_identity_pass(store=self._store, agent_id=agent_id)
+            stats["identity"] = identity_stats
+            stats["passes_run"].append("identity")
+        except Exception as e:
+            stats["identity_error"] = str(e)
 
         # ── DEEP ONLY PASSES ──
         if deep:

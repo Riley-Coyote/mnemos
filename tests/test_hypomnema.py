@@ -129,3 +129,36 @@ class TestHypomnemaStore:
 
         assert [entry["id"] for entry in candidates] == [high_id]
         assert low_id not in [entry["id"] for entry in candidates]
+
+
+def test_a_note_is_reachable_however_full_the_store_gets(store):
+    """Ranking must consider every note in scope, not a recent slice.
+
+    A cap applied *before* scoring is silent amnesia. With the old
+    `LIMIT 100`, a store of 200 notes could never surface the older half
+    no matter how relevant or how foundational — and the packet still
+    returned its full complement of entries and looked perfectly healthy.
+    """
+    scope = dict(agent_id="ceiling", person_id="user", project_scope="global")
+
+    buried_id = store.write_hypomnema_entry(
+        "The deploy pipeline runs migrations before rollout",
+        source="observed", domain="topical", confidence=0.9, salience=0.9,
+        **scope,
+    )
+    # Bury it under far more than the old ceiling, all revised later.
+    for i in range(250):
+        store.write_hypomnema_entry(
+            f"Routine note number {i} about unrelated day to day work",
+            source="observed", domain="situational",
+            confidence=0.5, salience=0.4, **scope,
+        )
+
+    found = store.search_hypomnema(
+        "deploy pipeline migrations rollout", limit=5, **scope
+    )
+
+    assert buried_id in [entry["id"] for entry in found], (
+        "a highly relevant note became unreachable purely because newer "
+        "notes were written after it"
+    )

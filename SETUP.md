@@ -3,6 +3,11 @@
 This guide covers the production path: connect the MCP, get continuity, and
 only opt into advanced infrastructure when you actually need it.
 
+Mnemos is a continuity and identity layer for the agent itself — it carries
+what the agent should know about *you and how you work together* across
+sessions. It is not a general memory or retrieval system, and it is designed to
+run alongside whatever you already use for that.
+
 ---
 
 ## 1. Install

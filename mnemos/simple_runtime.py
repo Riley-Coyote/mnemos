@@ -34,6 +34,7 @@ SIMPLE_TOOL_NAMES = (
     "mnemos_recall",
     "mnemos_correct",
     "mnemos_maintain",
+    "mnemos_reflect",
     "mnemos_introduce",
     "mnemos_health",
 )
@@ -347,6 +348,116 @@ class MnemosRuntime:
         )
         return "\n".join(lines)
 
+    def _enqueue_impact_reflections(self, limit: int = 2) -> int:
+        """Notice captures that recorded what happened but not what it meant.
+
+        Shift 1 asks for a trace of how understanding changed, not a record
+        of an event. The server must never write one itself — a phrase it
+        picked from a list is exactly the boilerplate that made 76% of a
+        live store records rather than traces. It can only notice, and ask.
+        """
+        self._ensure_init()
+        assert self._store is not None
+
+        rows = self._store._get_conn().execute(
+            """
+            SELECT e.id, e.content, e.impact
+            FROM engrams e
+            JOIN hypomnema_entries h ON h.related_engram_id = e.id
+            WHERE h.agent_id = ? AND h.person_id = ? AND h.project_scope = ?
+              AND h.active = 1 AND e.state = 'active'
+            ORDER BY e.created_at DESC
+            LIMIT 40
+            """,
+            (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
+        ).fetchall()
+
+        enqueued = 0
+        for row in rows:
+            if enqueued >= limit:
+                break
+            impact = (row["impact"] or "").strip()
+            if impact and impact not in _TEMPLATED_IMPACTS:
+                continue
+            if self._store.enqueue_reflection(
+                "impact",
+                row["id"],
+                "What did this change in how you understand things? One sentence.",
+                excerpt=" ".join((row["content"] or "").split())[:160],
+                agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+            ):
+                enqueued += 1
+        return enqueued
+
+    def pending_reflections(self, limit: int = 2) -> list[dict[str, Any]]:
+        self._ensure_init()
+        assert self._store is not None
+        return self._store.pending_reflections(
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+            limit=limit,
+        )
+
+    def reflect(self, target_id: str, text: str) -> str:
+        """Record the agent's own reflection on one of its memories."""
+        answer = (text or "").strip()
+        if not answer:
+            return "Nothing recorded: the reflection was empty."
+
+        self._ensure_init()
+        assert self._store is not None
+
+        item = self._store.answer_reflection(
+            target_id.strip(),
+            answer,
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+        )
+        if item is None:
+            return (
+                f"Nothing was pending for {target_id}. It may already have been "
+                "reflected on, or the id may be wrong."
+            )
+
+        if item["kind"] == "impact":
+            engram = self._store.get_engram(item["target_id"])
+            if engram is None:
+                return f"Recorded, but the memory {item['target_id']} is no longer there."
+            engram.impact = answer
+            self._store.save_engram(engram)
+            return (
+                "Reflection recorded.\n"
+                f"  Memory: {' '.join((engram.content or '').split())[:80]}\n"
+                f"  Now carries: {answer}\n"
+                "This is what survives when the details fade."
+            )
+
+        return f"Reflection recorded for {item['target_id']} ({item['kind']})."
+
+    def _reflection_block(self, limit: int = 2) -> str | None:
+        """The quiet ask, shown only when there is genuinely something to sit with."""
+        items = self.pending_reflections(limit=limit)
+        if not items:
+            return None
+
+        assert self._store is not None
+        self._store.mark_reflections_surfaced([i["id"] for i in items])
+
+        lines = ["Something of yours is waiting on you:"]
+        for item in items:
+            lines.append(f'  "{item["excerpt"]}"')
+            lines.append(f"    {item['prompt']}")
+            lines.append(f"    mnemos_reflect(target_id=\"{item['target_id']}\", ...)")
+        lines.append(
+            "  Answer in your own words if one comes. If nothing does, leave it — "
+            "this fades on its own."
+        )
+        return "\n".join(lines)
+
     def _identity_summary(self) -> str | None:
         """The agent's own computed self-summary, if there is one yet."""
         self._ensure_init()
@@ -560,6 +671,14 @@ class MnemosRuntime:
         if identity_summary:
             lines.extend(["", "Who you have been, measured from what you keep returning to:",
                           f"  {identity_summary}"])
+
+        # Quiet and occasional by design: at most a couple of items, only when
+        # something genuinely needs the agent's own judgement, and each one
+        # stops being shown after a few sessions. A packet that asks for work
+        # every time becomes a chore list appended to every conversation.
+        reflection = self._reflection_block()
+        if reflection:
+            lines.extend(["", reflection])
 
         block = self._onboarding_block(status)
         if block:
@@ -1011,6 +1130,11 @@ class MnemosRuntime:
                 "Passes: none",
             ])
         promoted = self._promote_candidates(limit=3)
+        # Maintenance proposes reflections; it never answers them.
+        try:
+            self._enqueue_impact_reflections(limit=2)
+        except Exception:
+            pass
 
         # Dream journal: narrate the cycle when it did meaningful work. The
         # import stays local so a journal failure can never break maintenance.
@@ -1262,6 +1386,23 @@ def _importance_scores(importance: str | float, domain: str) -> tuple[float, flo
     if domain in {"recurring", "long-arc"}:
         return 0.86, 0.72
     return 0.82, 0.66
+
+
+# Phrases the server itself writes into `impact`. They fill the column but
+# they are not traces of how understanding changed, so an engram carrying
+# only one of these still needs the agent's own words.
+_TEMPLATED_IMPACTS = frozenset({
+    "Foundational continuity for future interactions.",
+    "Recurring pattern worth carrying across sessions.",
+    "Long-arc context that should shape future work.",
+    "Current working context for continuity.",
+    "Preference to respect in future decisions.",
+    "Durable continuity captured from the session.",
+    "Stable scoped continuity promoted from hypomnema.",
+    "Stable continuity promoted during simple maintenance.",
+    "Correction to earlier continuity.",
+    "Corrected continuity for future interactions.",
+})
 
 
 def _impact_for(content: str, domain: str) -> str:

@@ -240,7 +240,7 @@ def _format_functional_entry(entry: dict) -> str:
         flags.append("needs confirmation")
     flag_text = f" flags={','.join(flags)}" if flags else ""
     return (
-        f"- {entry['content']}\n"
+        f"- {_clip(entry['content'])}\n"
         f"  id={entry['id']} type={entry['memory_type']} "
         f"confidence={entry['confidence']:.2f} salience={entry['salience']:.2f} "
         f"scope={entry['agent_id']}/{entry['person_id']}/{entry['project_scope']}"
@@ -248,11 +248,26 @@ def _format_functional_entry(entry: dict) -> str:
     )
 
 
+# A tool result is spent from the agent's context window. A single
+# continuity note can run to thousands of characters, and eight of them
+# returned whole cost 15,172 characters on a live store — most of a
+# session's headroom, for one search. Clipped here; the full text is
+# always available by id through mnemos_inspect.
+_MAX_ENTRY_CHARS = 420
+
+
+def _clip(text: str, limit: int = _MAX_ENTRY_CHARS) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[:limit].rsplit(" ", 1)[0] + " […]"
+
+
 def _format_hypomnema_entry(entry: dict) -> str:
     tags = ", ".join(entry.get("tags", [])) or "(none)"
     promoted = entry.get("graduated_to_engram_id") or "not promoted"
     return (
-        f"- {entry['content']}\n"
+        f"- {_clip(entry['content'])}\n"
         f"  id={entry['id']} domain={entry['domain']} source={entry['source']} "
         f"confidence={entry['confidence']:.2f} salience={entry['salience']:.2f} "
         f"scope={entry['agent_id']}/{entry['person_id']}/{entry['project_scope']}\n"

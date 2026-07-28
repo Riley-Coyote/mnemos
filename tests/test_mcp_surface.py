@@ -37,6 +37,34 @@ def test_advanced_mcp_preserves_admin_tools_and_includes_simple_tools():
     assert "mnemos_consolidate" in names
 
 
+def test_tool_results_are_bounded():
+    """A tool result is spent from the agent's context window.
+
+    A single continuity note can run to thousands of characters. Returned
+    whole, eight of them cost 15,172 characters on a live store — most of
+    a session's headroom for one search. Full text stays reachable by id
+    through mnemos_inspect.
+    """
+    from mnemos.mcp_server import _format_functional_entry, _format_hypomnema_entry
+
+    huge = "word " * 2000
+    hypo = {
+        "content": huge, "id": "h1", "domain": "topical", "source": "observed",
+        "confidence": 0.9, "salience": 0.8, "agent_id": "a", "person_id": "p",
+        "project_scope": "s", "tags": ["t"], "revision_count": 1,
+    }
+    functional = {
+        "content": huge, "id": "f1", "memory_type": "working", "confidence": 0.9,
+        "salience": 0.8, "agent_id": "a", "person_id": "p", "project_scope": "s",
+    }
+
+    for rendered in (_format_hypomnema_entry(hypo), _format_functional_entry(functional)):
+        assert len(rendered) < 800, f"unbounded tool output: {len(rendered)} chars"
+        assert "[…]" in rendered, "content was cut without saying so"
+        # Never mid-word.
+        assert not rendered.split(" […]")[0].endswith("wor")
+
+
 def test_result_building_tools_declare_no_output_schema():
     """Tools that build their own CallToolResult must not declare one.
 

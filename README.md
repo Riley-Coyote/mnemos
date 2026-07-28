@@ -1,20 +1,39 @@
 # Mnemos
 
-**Connect MCP. Get continuity.**
+**Continuity for the agent itself.**
 
-Mnemos is local-first memory for AI agents. Connect the MCP server and an agent
-gets durable continuity: startup context, capture, recall, correction, and
-maintenance without requiring OpenRouter, OpenClaw, crons, manual database
-setup, tags, or `agent_id` plumbing.
+Mnemos gives an AI agent the thing it otherwise cannot have: a sense of being
+someone who persists. At the start of a session it reads its own words about
+its own experience back to itself — what it learned about you, what you
+decided together, what it got wrong last time — before you say anything.
 
-The full Mnemos architecture is still here: scoped continuity, hypomnema,
-durable engrams, reconsolidation, decay, connection discovery, beliefs,
-substrate work, Hermes identity continuity, and cross-agent layers. Simple MCP
-mode hides that machinery behind seven safe tools so normal agents can use it
-without learning the whole ontology.
+That is the whole product. Everything else in here serves it.
 
-SQLite-backed. No external services are required for baseline memory. Dedicated
-model providers are optional for richer deep maintenance.
+```bash
+pip install mnemos-continuity
+mnemos mcp install claude --write     # or cursor / codex / generic
+mnemos hooks install --write          # inject memory before the first turn
+```
+
+Seven tools. Local SQLite. No account, no API key, no external service. Nothing
+leaves your machine unless you configure a provider yourself.
+
+## What Mnemos is not
+
+**It is not your memory system.** It does not index your documents, search your
+codebase, or answer "what did we do last March." It is designed to sit
+*alongside* whatever memory or retrieval you already use, and to stay out of its
+way.
+
+The distinction matters in practice: Mnemos holds the small number of durable
+things an agent should carry about *you and how you work together* — a
+preference, a correction, a decision, how you like to be spoken to. If you point
+it at a firehose of general recall, that continuity gets buried, and the product
+stops working. It deliberately does not schedule transcript indexing for exactly
+this reason.
+
+If you want a full cognitive engine with retrieval, a work-memory suite, and
+document ingestion, Mnemos is not that and is not trying to be.
 
 ---
 
@@ -31,9 +50,15 @@ model providers are optional for richer deep maintenance.
 | Hermes agent using Mnemos as its provider | Hermes Provider Mode | `mnemos hermes quickstart --provider` |
 | Background memory maintenance | Substrate tick | `mnemos substrate-tick` |
 
-Most users should start with **Simple MCP Mode**. Hermes users should start with
-**Hermes Sidecar Mode** unless they explicitly want Mnemos to occupy Hermes'
-single external `memory.provider` slot.
+Start with **Simple MCP Mode**. It is the product: seven tools, and the default.
+
+Advanced mode adds twenty-three operator tools to the same server. It exists for
+inspecting and administering memory directly, not for everyday use — a larger
+tool surface makes an agent likelier to reach for the wrong instrument on every
+turn. Prefer the CLI, which has the same capabilities.
+
+Hermes users should start with **Hermes Sidecar Mode** unless they explicitly
+want Mnemos to occupy Hermes' single external `memory.provider` slot.
 
 ---
 

@@ -1178,12 +1178,49 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print(f"Model:        {'dedicated provider configured' if runtime.has_dedicated_model else 'local baseline only'}")
         _print_affinity_status()
         _print_background_status(runtime.scope)
+        _print_semantic_status(runtime)
         print(f"Simple tools: {', '.join(SIMPLE_TOOL_NAMES)}")
+        _print_continuity_status(runtime)
         print()
         print(packet)
         return 0
     finally:
         runtime.close()
+
+
+def _print_semantic_status(runtime) -> None:
+    """Say which retrieval this install actually has.
+
+    `sentence-transformers` is an optional extra, so retrieval is either
+    semantic or keyword-only depending on what happens to be installed —
+    and nothing told the user which. Two very different qualities of
+    recall, silently selected, is the failure pattern this project keeps
+    producing.
+    """
+    try:
+        index = getattr(runtime, "_embedding_index", None)
+        if index is not None and getattr(index, "_available", False):
+            embedder = type(index._embedder).__name__.strip("_")
+            print(f"Retrieval:    semantic + keyword ({embedder})")
+        else:
+            print(
+                "Retrieval:    keyword only — "
+                "pip install 'mnemos-continuity[embeddings]' for semantic recall"
+            )
+    except Exception:
+        print("Retrieval:    unknown")
+
+
+def _print_continuity_status(runtime) -> None:
+    """Report whether continuity is actually reaching this agent."""
+    try:
+        signals = runtime.continuity_signals()
+    except Exception:
+        return
+    notes = signals["notes_active"]
+    print(f"Continuity:   {notes} note(s), {signals['empty_context_streak']} empty packet(s) in a row")
+    for warning in signals["warnings"]:
+        print(f"  ATTENTION:  {warning}")
 
 
 def _print_background_status(scope) -> None:

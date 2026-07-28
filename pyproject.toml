@@ -36,10 +36,20 @@ dependencies = [
 [project.optional-dependencies]
 # Kept as a no-op for backwards-compatible install commands; mcp is now core.
 mcp = []
-embeddings = ["google-generativeai>=0.5.0"]
+
+# Local semantic recall, no API key and nothing leaves the machine. Costs
+# roughly 700 MB once torch is resolved, which is why it is not core: on a
+# real store it changed ~8% of retrieval results, and the continuity path
+# does not use embeddings at all. `mnemos doctor` always states which
+# retrieval this install actually has.
+embeddings = ["sentence-transformers>=2.2.0"]
+
+# Hosted embeddings instead of local ones. Requires GEMINI_API_KEY.
+gemini = ["google-generativeai>=0.5.0"]
+
 anthropic = ["anthropic>=0.25.0"]
 all = [
-    "mcp[cli]>=1.0.0",
+    "sentence-transformers>=2.2.0",
     "google-generativeai>=0.5.0",
     "anthropic>=0.25.0",
 ]

@@ -347,6 +347,66 @@ class MnemosRuntime:
         )
         return "\n".join(lines)
 
+    def _note_context_outcome(self, returned: int) -> None:
+        """Record whether this session's packet actually carried anything.
+
+        Every failure this system has had looked identical from the
+        outside: a layer reporting success while carrying nothing. A
+        scope that did not match, a config never applied, a job
+        maintaining a phantom store — all of them logged healthy. The one
+        thing none of them could fake is that the packet came back empty,
+        session after session. Counting that turns silent amnesia into a
+        number someone can read.
+        """
+        if returned > 0:
+            self._set_meta("empty_context_streak", "0")
+            return
+        streak = int(self._get_meta("empty_context_streak", "0") or 0)
+        self._set_meta("empty_context_streak", str(streak + 1))
+
+    def continuity_signals(self) -> dict[str, Any]:
+        """Evidence about whether continuity is actually working here.
+
+        Read-only. Returns counts plus any warnings worth showing a human
+        in plain words.
+        """
+        stats = self._stats()
+        notes = int(stats.get("hypomnema_active", 0) or 0)
+        session = int(self._get_meta("session_counter", "0") or 0)
+        streak = int(self._get_meta("empty_context_streak", "0") or 0)
+
+        last_capture = self._get_meta("last_capture_session")
+        sessions_since_capture = (
+            session - int(last_capture) if last_capture is not None else None
+        )
+
+        warnings: list[str] = []
+        if notes == 0:
+            warnings.append(
+                "Nothing has been captured to this scope yet, so every "
+                "session starts from zero. If captures are being made, they "
+                "are landing somewhere this packet does not read."
+            )
+        if streak >= 3:
+            warnings.append(
+                f"The last {streak} context packets carried no continuity. "
+                "Memory is being read but is coming back empty."
+            )
+        if sessions_since_capture is not None and sessions_since_capture >= 5:
+            warnings.append(
+                f"No capture has reached this scope in {sessions_since_capture} "
+                "sessions. Either nothing durable has come up, or captures are "
+                "not arriving."
+            )
+
+        return {
+            "notes_active": notes,
+            "session": session,
+            "empty_context_streak": streak,
+            "sessions_since_capture": sessions_since_capture,
+            "warnings": warnings,
+        }
+
     def _record_first_capture(self, note_id: str, engram_id: str, content: str) -> None:
         """Record the first capture of a fresh scope for later verification."""
 
@@ -459,6 +519,7 @@ class MnemosRuntime:
             if DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
         ][:max_results]
         memories = self._retrieve(query, max_results=max_results) if query else []
+        self._note_context_outcome(len(continuity))
 
         lines = [
             "Mnemos continuity packet",
@@ -678,6 +739,9 @@ class MnemosRuntime:
         )
         self._store.mark_hypomnema_promoted(note_id, engram.id)
         self._record_first_capture(note_id, engram.id, content)
+        # Continuity just arrived, so any run of empty packets is over.
+        self._set_meta("last_capture_session", str(self._current_session()))
+        self._set_meta("empty_context_streak", "0")
         maintenance = self.maintain(auto=True)
 
         return (
@@ -1114,6 +1178,7 @@ class MnemosRuntime:
                 "last_written_at": dream_last_written_at,
                 "excerpt": dream_excerpt,
             },
+            "continuity": self.continuity_signals(),
         }
 
     def _retrieve(self, query: str, max_results: int = 5) -> list[Any]:
@@ -1276,6 +1341,24 @@ def format_health_card(data: dict[str, Any]) -> str:
     else:
         dream_line = f"{dream['last_written_at']}: \"{dream['excerpt']}\""
 
+    continuity = data.get("continuity") or {}
+    warnings = continuity.get("warnings") or []
+    if warnings:
+        # Amnesia is the failure that looks exactly like success, so it is
+        # stated first and in plain words rather than left to be inferred
+        # from a count further down the card.
+        continuity_lines = ["", "ATTENTION — continuity may not be reaching this agent:"]
+        continuity_lines += [f"  - {w}" for w in warnings]
+    else:
+        streak = continuity.get("empty_context_streak", 0)
+        since = continuity.get("sessions_since_capture")
+        detail = "carrying continuity"
+        if since == 0:
+            detail = "carrying continuity (captured this session)"
+        elif since is not None:
+            detail = f"carrying continuity (last capture {since} session(s) ago)"
+        continuity_lines = ["", f"Continuity check: {detail}, {streak} empty packet(s) in a row."]
+
     return "\n".join([
         "Mnemos health card",
         line(
@@ -1304,6 +1387,8 @@ def format_health_card(data: dict[str, Any]) -> str:
         ),
         line("Verification", verification_line),
         line("Last dream", dream_line),
+        *continuity_lines,
+        "",
         "Everything on this card is safe to relay to the human in plain words.",
     ])
 

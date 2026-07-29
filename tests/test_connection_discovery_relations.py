@@ -88,3 +88,44 @@ class TestNoLlmFallback:
 
         relations = {relation for relation, _ in _discovered_relations(store)}
         assert ConnectionRelation.SUPPORTS not in relations
+
+
+class TestEncodingTimeEdges:
+    """The larger source of the same mislabel.
+
+    #4 fixed the no-LLM fallback in connection discovery. The encoder had
+    the identical bug and accounted for far more of it: 32,857 of a live
+    store's 37,129 edges were `supports` written at encode time from
+    keyword overlap, against 2,850 from consolidation.
+    """
+
+    def test_encoding_without_a_model_records_correlation_not_evidence(
+        self, store, encoder
+    ):
+        for i in range(6):
+            _encode(encoder, f"Deploy pipeline note {i} on migrations and rollout",
+                    ["deploy"])
+
+        rows = store._get_conn().execute(
+            "SELECT relation, formed_by FROM connections WHERE formed_by LIKE 'encoding%'"
+        ).fetchall()
+
+        assert rows, "no encoding-time edges were formed, so this proves nothing"
+        for relation, formed_by in rows:
+            assert relation == ConnectionRelation.CO_ACTIVATED, (
+                f"an encode-time keyword edge claimed {relation!r}"
+            )
+            assert formed_by == "encoding_no_llm"
+
+    def test_no_supports_monoculture_forms_without_a_model(self, store, encoder):
+        """96% of one relation type hollows out spreading activation."""
+        for i in range(10):
+            _encode(encoder, f"Related note {i} about deployment and migrations",
+                    ["deploy"])
+
+        relations = {
+            r[0] for r in store._get_conn().execute(
+                "SELECT DISTINCT relation FROM connections"
+            ).fetchall()
+        }
+        assert ConnectionRelation.SUPPORTS not in relations

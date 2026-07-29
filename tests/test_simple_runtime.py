@@ -408,32 +408,6 @@ def test_introduce_rejects_empty_model(tmp_path):
     finally:
         store.close()
 
-
-def test_introduce_hint_gates_dedicated_model(tmp_path, monkeypatch):
-    monkeypatch.setenv("MNEMOS_LLM_PROVIDER", "openrouter")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-not-real")
-    monkeypatch.setenv("MNEMOS_MODEL", "anthropic/claude-sonnet-4-5")
-
-    runtime = MnemosRuntime(
-        db_path=str(tmp_path / "gate.db"),
-        agent_id="nova",
-        person_id="riley",
-        project_scope="demo",
-        use_dedicated_model=True,
-    )
-
-    try:
-        # gpt agent vs claude substrate — family policy blocks the client.
-        runtime.introduce("gpt-5")
-        assert runtime.has_dedicated_model is False
-
-        # claude agent vs claude substrate — kin, client comes through.
-        runtime.introduce("claude-opus-4-6")
-        assert runtime.has_dedicated_model is True
-    finally:
-        runtime.close()
-
-
 def _runtime(tmp_path, name="memory.db"):
     return MnemosRuntime(
         db_path=str(tmp_path / name),
@@ -612,7 +586,6 @@ def test_health_returns_structured_dict(tmp_path):
         "store",
         "counts",
         "last_cycle",
-        "affinity",
         "identity",
         "onboarding",
         "verification",
@@ -638,7 +611,6 @@ def test_health_card_renders_expected_lines(tmp_path):
     for needle in (
         "Mnemos health card",
         "Scope:",
-        "Affinity:",
         "Verification:",
         "Last dream:",
         "safe to relay",

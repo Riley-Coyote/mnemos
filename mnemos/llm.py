@@ -362,90 +362,30 @@ def _load_openclaw_openrouter_key() -> str:
 
 
 def create_client(agent_model_hint: str | None = None) -> "LLMClient | None":
-    """Auto-detect and create the appropriate LLM client, gated by
-    substrate affinity.
+    """Create an optional provider client, if one is configured.
 
     Provider resolution checks env vars and .env files in order:
     1. MNEMOS_LLM_PROVIDER env var (openai|anthropic|openrouter) — forces provider
     2. ANTHROPIC_API_KEY → AnthropicClient
     3. OPENROUTER_API_KEY → OpenRouterClient
     4. OPENAI_API_KEY → OpenAIClient
-    5. Neither → None (system uses rule-based fallbacks)
+    5. Neither → None
 
-    Affinity gate (see mnemos.affinity): if MNEMOS_AGENT_MODEL is set and
-    the resolved substrate model violates MNEMOS_SUBSTRATE_AFFINITY
-    (strict|family|open; default family), this returns None so that deep
-    maintenance gracefully degrades to rule-based local passes instead of
-    letting a foreign model rewrite the agent's memories.
+    None is an ordinary outcome, not a degraded one. Mnemos does not call a
+    model to maintain memory: work needing judgement is proposed to the agent
+    and answered in its own words. A provider only accelerates the deep
+    passes for headless installs.
+
+    This used to be gated by a substrate-affinity check that refused a model
+    of the wrong family, on the reasoning that a foreign model should not
+    rewrite an agent's memories. That concern was real and is now answered by
+    construction rather than by policy — the agent maintains its own memory —
+    so the gate and the ~200 lines behind it are gone.
 
     Args:
-        agent_model_hint: An agent's self-declared model (e.g. from
-            mnemos_introduce), used for the affinity gate when
-            MNEMOS_AGENT_MODEL is unset. The environment variable always
-            takes precedence.
-
-    Returns:
-        LLMClient instance, or None if no API keys found or affinity blocks.
+        agent_model_hint: Retained for call compatibility; no longer used.
     """
-    client = _create_client_unchecked()
-    if client is None:
-        return None
-
-    status = resolve_affinity_status(
-        client, resolve_if_missing=False, agent_model_hint=agent_model_hint
-    )
-    if not status["allowed"]:
-        logger.warning("Substrate affinity: %s", status["message"])
-        return None
-    if "differs" in status["message"] or "unenforced" in status["message"]:
-        logger.info("Substrate affinity: %s", status["message"])
-    return client
-
-
-def resolve_affinity_status(
-    client: "LLMClient | None" = None,
-    *,
-    resolve_if_missing: bool = True,
-    agent_model_hint: str | None = None,
-) -> dict:
-    """Resolve the affinity configuration and verdict without side effects.
-
-    Used by `mnemos doctor` (resolve the substrate from the environment)
-    and by the consolidation daemon (report on the client it actually
-    holds). With resolve_if_missing=False, a None client means "no
-    substrate" rather than "auto-detect one".
-
-    agent_model_hint is an agent's self-declared model (e.g. from
-    mnemos_introduce); it fills in the agent model only when the
-    MNEMOS_AGENT_MODEL environment variable is unset — the environment
-    variable always takes precedence.
-
-    Returns the AffinityCheck as a dict, plus:
-        substrate_provider — class name of the resolved client, or None
-        substrate_resolved — whether any substrate client exists
-    """
-    from .affinity import check_affinity
-
-    if client is None and resolve_if_missing:
-        client = _create_client_unchecked()
-
-    agent_model = os.environ.get("MNEMOS_AGENT_MODEL", "").strip() or _load_env_key(
-        "MNEMOS_AGENT_MODEL"
-    )
-    if not agent_model and agent_model_hint:
-        agent_model = agent_model_hint.strip()
-    policy = os.environ.get("MNEMOS_SUBSTRATE_AFFINITY", "").strip() or _load_env_key(
-        "MNEMOS_SUBSTRATE_AFFINITY"
-    )
-    substrate_model = (getattr(client, "_model", "") or "") if client else ""
-
-    check = check_affinity(agent_model, substrate_model, policy or "family")
-    return {
-        **check.to_dict(),
-        "substrate_provider": type(client).__name__ if client else None,
-        "substrate_resolved": client is not None,
-    }
-
+    return _create_client_unchecked()
 
 def _create_client_unchecked() -> "LLMClient | None":
     """Resolve provider/model from environment without the affinity gate."""

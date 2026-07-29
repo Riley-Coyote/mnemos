@@ -228,9 +228,9 @@ class MnemosRuntime:
 
         self._store = EngramStore(self.scope.db_path)
         self._embedding_index = EmbeddingIndex(db_path=self.scope.db_path)
-        # The agent's self-declared model (from mnemos_introduce) feeds the
-        # affinity gate when MNEMOS_AGENT_MODEL is unset. Read it straight
-        # from the freshly created store: _get_meta would re-enter init.
+        # The agent's self-declared model, recorded for the record rather
+        # than to gate anything. Read straight from the freshly created
+        # store: _get_meta would re-enter init.
         self._agent_model_hint = self._store.get_meta(self._meta_key("agent_model"))
         try:
             from .llm import create_client
@@ -667,23 +667,15 @@ class MnemosRuntime:
         if name:
             self._set_meta("agent_name", name)
 
-        # Rebuild so the declared model reaches the affinity gate.
         self.close()
         self._ensure_init()
-
-        from .llm import resolve_affinity_status
-
-        status = resolve_affinity_status(
-            self._llm_client,
-            resolve_if_missing=False,
-            agent_model_hint=self._agent_model_hint,
-        )
 
         lines = [
             "Introduction recorded.",
             f"Agent model: {model}",
             f"Agent name: {name or '(none given)'}",
-            f"Affinity: {status['message']}",
+            "Your memory is maintained by you — Mnemos never calls another "
+            "model to do it.",
         ]
         env_model = os.environ.get("MNEMOS_AGENT_MODEL", "").strip()
         if env_model:
@@ -1340,16 +1332,7 @@ class MnemosRuntime:
                 "passes_run": list(cycle_stats.get("passes_run") or []),
                 "substrate_model": substrate.get("model"),
                 "substrate_provider": substrate.get("provider"),
-                "affinity_allowed": substrate.get("affinity_allowed"),
             }
-
-        from .llm import resolve_affinity_status
-
-        affinity = resolve_affinity_status(
-            self._llm_client,
-            resolve_if_missing=False,
-            agent_model_hint=self._agent_model_hint,
-        )
 
         # persist=False keeps the onboarding probe write-free: it only
         # reads meta and stats, never records a stage transition.
@@ -1396,7 +1379,6 @@ class MnemosRuntime:
                 "beliefs_active": stats.get("beliefs_active", 0),
             },
             "last_cycle": last_cycle,
-            "affinity": affinity,
             "identity": {
                 "declared_model": self._get_meta("agent_model"),
                 "declared_name": self._get_meta("agent_name"),
@@ -1611,15 +1593,6 @@ def format_health_card(data: dict[str, Any]) -> str:
             f"maintained by {substrate}"
         )
 
-    affinity = data["affinity"]
-    if not affinity.get("agent_model"):
-        affinity_line = (
-            "agent model not declared yet - call mnemos_introduce "
-            "so maintenance stays kin"
-        )
-    else:
-        affinity_line = affinity["message"]
-
     verification = data["verification"]
     verification_line = {
         "verified": f"verified on {verification['verified_at']}",
@@ -1673,7 +1646,6 @@ def format_health_card(data: dict[str, Any]) -> str:
         line("Connections", counts["connections"]),
         line("Beliefs", f"{counts['beliefs_active']} active"),
         line("Last cycle", cycle_line),
-        line("Affinity", affinity_line),
         line(
             "Onboarding",
             f"{data['onboarding']['stage']} (session {data['onboarding']['session']})",

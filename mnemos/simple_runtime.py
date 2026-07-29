@@ -948,7 +948,10 @@ class MnemosRuntime:
             source=SourceType.SESSION,
             agent_id=self.scope.agent_id,
             override_confidence=confidence,
-            skip_surprise_detection=True,
+            # Shift 3: the moment something does not fit what is already held
+            # is the moment worth encoding deeply. This is now reachable
+            # without beliefs or a model, so it no longer has to be skipped.
+            skip_surprise_detection=False,
         )
         note_id = self._store.write_hypomnema_entry(
             content.strip(),

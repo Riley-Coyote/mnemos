@@ -271,6 +271,60 @@ class Encoder:
         )
         return baseline
 
+    # A store with almost nothing in it has no expectations to violate, so
+    # novelty there is meaningless — the first memories are not surprising,
+    # they are simply first.
+    _NOVELTY_MIN_STORE = 5
+
+    @staticmethod
+    def _terms(text: str) -> set[str]:
+        import re
+
+        return {
+            t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(t) >= 4
+        }
+
+    def _structural_novelty(self, engram: Any, store: Any, agent_id: str) -> float:
+        """How unlike everything already remembered this is, from 0.0 to 1.0.
+
+        Model-free and belief-free by construction: overlap against the
+        nearest existing memories. Being wrong is where understanding
+        reorganises, and the cheapest available signal for "this does not
+        fit what I already hold" is that nothing already held resembles it.
+        """
+        mine = self._terms(engram.content)
+        if not mine:
+            return 0.0
+
+        try:
+            if store.count_engrams(agent_id=agent_id) < self._NOVELTY_MIN_STORE:
+                return 0.0
+            # FTS5 ANDs the terms of a bare query, so passing whole content
+            # matches only near-identical text and every memory looks novel.
+            # Neighbours are anything sharing *any* salient term.
+            query = " OR ".join(sorted(mine)[:12])
+            neighbours = store.search_fts(query, limit=12)
+        except Exception:
+            return 0.0
+
+        best = 0.0
+        for other in neighbours:
+            if other.id == engram.id:
+                continue
+            theirs = self._terms(other.content)
+            if not theirs:
+                continue
+            # Overlap coefficient rather than Jaccard: "the same thing said
+            # at greater length" should read as familiar, and dividing by the
+            # union punishes it for the extra words alone.
+            overlap = len(mine & theirs) / min(len(mine), len(theirs))
+            best = max(best, overlap)
+
+        # No lexical neighbour at all is the strongest signal available, but
+        # it is still weaker evidence than a belief being contradicted, so it
+        # is deliberately capped below the contradiction range.
+        return round(min(0.6, 1.0 - best), 3)
+
     def _detect_surprise(
         self,
         engram: Engram,
@@ -297,10 +351,21 @@ class Encoder:
         surprise = 0.0
         agent_id = engram.owner_agent_id
 
+        # Shift 3 says surprise is the primary encoding trigger, but it was
+        # unreachable: surprise needed beliefs, beliefs were only created by
+        # the LLM-gated belief-review pass, and that pass never ran without a
+        # provider. So on the install Mnemos ships, surprise always returned
+        # 0.0 — which is why every call site passed skip_surprise_detection.
+        #
+        # Novelty breaks the cycle. Something unlike anything already
+        # remembered is genuinely surprising, and measuring that needs no
+        # beliefs and no model.
+        surprise = self._structural_novelty(engram, store, agent_id)
+
         # 1. Get active beliefs
         beliefs = store.get_beliefs(agent_id, active_only=True)
         if not beliefs:
-            return 0.0
+            return surprise
 
         # 2. LLM-based belief evaluation (or skip if no client)
         if self._llm_client:

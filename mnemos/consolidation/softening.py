@@ -72,11 +72,25 @@ def _gen_log_id(prefix: str) -> str:
     return f"{prefix}_{ULID()}"
 
 
+def _hours_since(timestamp: str) -> float:
+    """Hours since an ISO timestamp. Unparseable means old, never brand new."""
+    from datetime import datetime, timezone
+
+    try:
+        then = datetime.fromisoformat(timestamp)
+        if then.tzinfo is None:
+            then = then.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return float("inf")
+    return (datetime.now(timezone.utc) - then).total_seconds() / 3600.0
+
+
 def run_softening_pass(
     store: EngramStore,
     config: dict[str, Any],
     llm_client: Any | None,
     agent_id: str | None = None,
+    invent_impact: bool = False,
 ) -> dict[str, Any]:
     """Rewrite memories that have dropped below the resolution threshold.
 
@@ -127,9 +141,20 @@ def run_softening_pass(
     softened_count = 0
     dry_run_pairs: list[dict[str, Any]] = []
 
+    # Forgetting takes time. Softening triggers on accessibility alone, and a
+    # newly encoded engram already sits at 0.5 — so with the pass enabled, a
+    # memory captured seconds ago qualified as fading and the agent was asked
+    # what it had taught. Nothing had faded; the pass had simply never run
+    # before, so the missing notion of age had never mattered.
+    min_age_hours = float(config.get("softening_min_age_hours", 24))
+
     for engram in all_engrams:
         if engram.resolution <= minimum_resolution:
             continue  # Already at minimum resolution
+
+        if _hours_since(engram.created_at) < min_age_hours:
+            stats["too_recent"] = stats.get("too_recent", 0) + 1
+            continue
 
         stats["engrams_evaluated"] += 1
         total_res_before += engram.resolution
@@ -182,8 +207,15 @@ def run_softening_pass(
             if llm_client and stats["llm_calls"] < max_llm_calls:
                 engram.impact = _extract_impact(engram.content, llm_client)
                 stats["llm_calls"] += 1
-            else:
+            elif invent_impact:
                 engram.impact = _rule_based_impact(engram.content)
+            else:
+                # Shift 2 says the lesson is what survives the forgetting, so
+                # a lesson the server guessed at from keywords is the one
+                # thing that must not be written here. The compression is
+                # deterministic and happens anyway; the meaning is recorded
+                # for the agent to supply through mnemos_reflect.
+                stats.setdefault("awaiting_impact", []).append(engram.id)
 
         # SHIFT 2: Create or reinforce a lesson engram from the impact.
         # Forgetting feeds forward — the distilled insight becomes persistent wisdom.
@@ -424,6 +456,9 @@ def _create_or_reinforce_lesson(
             candidate.stability = min(1.0, candidate.stability + 0.05)
             candidate.record_access()
             store.save_engram(candidate)
+            # A second experience teaching the same lesson must also be
+            # linked to it, or the lesson's evidence stays invisible.
+            _link_distillation(engram, candidate.id, store)
             stats["lessons_reinforced"] = stats.get("lessons_reinforced", 0) + 1
             return candidate.id
 
@@ -445,8 +480,35 @@ def _create_or_reinforce_lesson(
     )
 
     store.save_engram(lesson)
+
+    # Shift 2 is not the lesson existing, it is the lesson being *reachable
+    # from* the experience it came from. Without this edge the distillate is
+    # an orphan, resonance can never travel from a fading memory to what it
+    # taught, and the count of DISTILLED_INTO edges stays at zero — which is
+    # exactly what it was across every Mnemos store ever built.
+    _link_distillation(engram, lesson.id, store)
+
     stats["lessons_created"] = stats.get("lessons_created", 0) + 1
     return lesson.id
+
+
+def _link_distillation(engram: Any, lesson_id: str, store: EngramStore) -> None:
+    """Connect an experience to the lesson drawn from it."""
+    from ..core.types import ConnectionRelation
+
+    already = any(
+        c.target_id == lesson_id and c.relation == ConnectionRelation.DISTILLED_INTO
+        for c in engram.connections
+    )
+    if already:
+        return
+    engram.add_connection(
+        target_id=lesson_id,
+        relation=ConnectionRelation.DISTILLED_INTO,
+        strength=0.9,
+        formed_by="softening",
+    )
+    store.save_engram(engram)
 
 
 def _rule_based_soften(content: str, target_resolution: float) -> str:

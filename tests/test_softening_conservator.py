@@ -90,7 +90,7 @@ def seeded(store):
 
 def test_prompt_carries_invariants_and_same_agent_exemplars(store, seeded):
     stub = StubLLM("a fading impression of debugging the activation threshold")
-    run_softening_pass(store, {}, stub, agent_id=AGENT_A)
+    run_softening_pass(store, {"softening_min_age_hours": 0}, stub, agent_id=AGENT_A)
 
     assert stub.prompts, "softener never called the LLM"
     prompt = stub.prompts[0]
@@ -109,7 +109,7 @@ def test_softened_output_never_longer(store, seeded):
     original = seeded["fading"].content
     inflated = original + " and then so much more happened that evening, truly a saga"
     stub = StubLLM(inflated)
-    run_softening_pass(store, {}, stub, agent_id=AGENT_A)
+    run_softening_pass(store, {"softening_min_age_hours": 0}, stub, agent_id=AGENT_A)
 
     softened = store.get_engram(seeded["fading"].id)
     assert len(softened.content) <= len(original)
@@ -118,7 +118,7 @@ def test_softened_output_never_longer(store, seeded):
 
 def test_softened_output_never_introduces_named_entities(store, seeded):
     stub = StubLLM("a hazy memory of debugging with Voldemort near the threshold")
-    run_softening_pass(store, {}, stub, agent_id=AGENT_A)
+    run_softening_pass(store, {"softening_min_age_hours": 0}, stub, agent_id=AGENT_A)
 
     softened = store.get_engram(seeded["fading"].id)
     assert "Voldemort" not in softened.content
@@ -127,7 +127,7 @@ def test_softened_output_never_introduces_named_entities(store, seeded):
 def test_conserved_llm_output_is_kept(store, seeded):
     response = "a fading sense of chasing the activation threshold"
     stub = StubLLM(response)
-    run_softening_pass(store, {}, stub, agent_id=AGENT_A)
+    run_softening_pass(store, {"softening_min_age_hours": 0}, stub, agent_id=AGENT_A)
 
     softened = store.get_engram(seeded["fading"].id)
     assert softened.content == response
@@ -143,8 +143,7 @@ def test_dry_run_writes_nothing_and_logs_pairs(store, seeded):
     }
 
     stub = StubLLM("a fading impression of the threshold")
-    stats = run_softening_pass(
-        store, {"softening_dry_run": True}, stub, agent_id=AGENT_A
+    stats = run_softening_pass(store, {"softening_min_age_hours": 0, "softening_dry_run": True}, stub, agent_id=AGENT_A
     )
 
     after = {
@@ -168,7 +167,7 @@ def test_dry_run_writes_nothing_and_logs_pairs(store, seeded):
 
 def test_rule_based_path_also_conserved(store, seeded):
     """No LLM at all: the rule-based fallback obeys the same invariants."""
-    run_softening_pass(store, {}, None, agent_id=AGENT_A)
+    run_softening_pass(store, {"softening_min_age_hours": 0}, None, agent_id=AGENT_A)
     softened = store.get_engram(seeded["fading"].id)
     assert len(softened.content) <= len(seeded["fading"].content_at_encoding)
 
@@ -176,7 +175,7 @@ def test_rule_based_path_also_conserved(store, seeded):
 def test_tiny_memory_keeps_original_rather_than_inflating(store):
     tiny = _engram(AGENT_A, "ok then.", accessibility=0.01)
     store.save_engram(tiny)
-    run_softening_pass(store, {}, None, agent_id=AGENT_A)
+    run_softening_pass(store, {"softening_min_age_hours": 0}, None, agent_id=AGENT_A)
     softened = store.get_engram(tiny.id)
     # Nothing to shed: conservation keeps the original instead of an
     # "impression" boilerplate that would be longer than the memory itself.

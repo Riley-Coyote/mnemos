@@ -372,10 +372,26 @@ class MnemosRuntime:
             (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
         ).fetchall()
 
+        # A memory already being asked about as a fading lesson must not also
+        # be asked about as a missing impact. Two questions about one memory
+        # in one packet reads as nagging, however reasonable each is alone.
+        already_asked = {
+            r[0] for r in self._store._get_conn().execute(
+                """
+                SELECT target_id FROM reflection_queue
+                WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+                  AND answered_at IS NULL
+                """,
+                (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
+            ).fetchall()
+        }
+
         enqueued = 0
         for row in rows:
             if enqueued >= limit:
                 break
+            if row["id"] in already_asked:
+                continue
             impact = (row["impact"] or "").strip()
             if impact and impact not in _TEMPLATED_IMPACTS:
                 continue
@@ -384,6 +400,47 @@ class MnemosRuntime:
                 row["id"],
                 "What did this change in how you understand things? One sentence.",
                 excerpt=" ".join((row["content"] or "").split())[:160],
+                agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+            ):
+                enqueued += 1
+        return enqueued
+
+    def _enqueue_lesson_reflections(self, softening_stats: dict, limit: int = 2) -> int:
+        """Ask what a fading memory taught, before the detail is gone.
+
+        Shift 2: the loss of detail is the learning. Softening compresses
+        deterministically, but what a memory *meant* is the one thing the
+        server must not guess at — a lesson assembled from keywords is not
+        wisdom, it is a summary wearing wisdom's clothes.
+        """
+        self._ensure_init()
+        assert self._store is not None
+
+        enqueued = 0
+        for engram_id in (softening_stats.get("awaiting_impact") or [])[:limit]:
+            engram = self._store.get_engram(engram_id)
+            if engram is None:
+                continue
+            # A plain "what did this change?" may already be pending from
+            # when the memory was captured. Now that it is actually fading,
+            # the lesson question subsumes it — asking both is asking twice.
+            self._store._get_conn().execute(
+                """
+                DELETE FROM reflection_queue
+                WHERE target_id = ? AND kind = 'impact' AND answered_at IS NULL
+                  AND agent_id = ? AND person_id = ? AND project_scope = ?
+                """,
+                (engram_id, self.scope.agent_id, self.scope.person_id,
+                 self.scope.project_scope),
+            )
+            self._store._get_conn().commit()
+            if self._store.enqueue_reflection(
+                "lesson",
+                engram_id,
+                "This is fading. What did it teach you? The lesson outlives the details.",
+                excerpt=" ".join((engram.content or "").split())[:160],
                 agent_id=self.scope.agent_id,
                 person_id=self.scope.person_id,
                 project_scope=self.scope.project_scope,
@@ -434,6 +491,27 @@ class MnemosRuntime:
                 f"  Memory: {' '.join((engram.content or '').split())[:80]}\n"
                 f"  Now carries: {answer}\n"
                 "This is what survives when the details fade."
+            )
+
+        if item["kind"] == "lesson":
+            engram = self._store.get_engram(item["target_id"])
+            if engram is None:
+                return f"Recorded, but the memory {item['target_id']} is no longer there."
+            engram.impact = answer
+            self._store.save_engram(engram)
+
+            # Shift 2: the distilled insight becomes its own durable memory,
+            # linked back to the experience it came from. This edge has been
+            # absent from every Mnemos store ever built.
+            from .consolidation.softening import _create_or_reinforce_lesson
+
+            lesson_id = _create_or_reinforce_lesson(engram, self._store, {})
+            return (
+                "Lesson recorded.\n"
+                f"  From: {' '.join((engram.content or '').split())[:70]}\n"
+                f"  Learned: {answer}\n"
+                + (f"  Kept as: {lesson_id}\n" if lesson_id else "")
+                + "The details can fade now. This is what stays."
             )
 
         return f"Reflection recorded for {item['target_id']} ({item['kind']})."
@@ -1138,6 +1216,7 @@ class MnemosRuntime:
         promoted = self._promote_candidates(limit=3)
         # Maintenance proposes reflections; it never answers them.
         try:
+            self._enqueue_lesson_reflections(stats.get("softening") or {})
             self._enqueue_impact_reflections(limit=2)
         except Exception:
             pass

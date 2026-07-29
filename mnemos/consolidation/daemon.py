@@ -247,35 +247,25 @@ class ConsolidationDaemon:
         return stats
 
     def _substrate_provenance(self) -> dict[str, Any]:
-        """Who is performing this agent's maintenance, and is it kin."""
+        """Who performed this cycle.
+
+        Mnemos does not call a model to maintain memory; work needing
+        judgement is proposed to the agent through the reflection queue and
+        answered in its own words. An optional provider only accelerates
+        deep passes, so there is no longer a question of whether some
+        outside model is entitled to do an agent's remembering for it.
+        """
         if self._llm_client is None:
             return {
                 "model": None,
                 "provider": None,
-                "note": "no LLM client — rule-based local passes only",
+                "note": "local deterministic passes; judgement left to the agent",
             }
-        try:
-            from ..llm import resolve_affinity_status
-
-            status = resolve_affinity_status(
-                self._llm_client,
-                resolve_if_missing=False,
-                agent_model_hint=self._agent_model_hint,
-            )
-            return {
-                "model": status["substrate_model"] or getattr(self._llm_client, "_model", None),
-                "provider": status["substrate_provider"],
-                "affinity_policy": status["policy"],
-                "affinity_allowed": status["allowed"],
-                "agent_model": status["agent_model"],
-                "affinity_message": status["message"],
-            }
-        except Exception as e:
-            return {
-                "model": getattr(self._llm_client, "_model", None),
-                "provider": type(self._llm_client).__name__,
-                "affinity_error": str(e),
-            }
+        return {
+            "model": getattr(self._llm_client, "_model", None),
+            "provider": type(self._llm_client).__name__,
+            "note": "optional provider assisted the deep passes",
+        }
 
     def _hours_since_last_cycle(self) -> float | None:
         """Hours elapsed since the last logged consolidation cycle.

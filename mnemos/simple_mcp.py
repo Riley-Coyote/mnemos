@@ -53,7 +53,7 @@ Two things to get right:
 - Never narrate the machinery. Do not mention tools, databases, scopes,
   engrams, or memory IDs to the human. Just be someone who remembers.
 - Do not ask the human what model you are. Call mnemos_introduce once
-  with your own model id so maintenance is performed by a kin model.
+  with your own model id so your memory knows whose it is.
 
 Storage is local. Nothing leaves the machine unless the human configures
 a provider."""
@@ -418,7 +418,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         """Report a human-relayable health card for this memory scope.
 
         Read-only. Shows where memory lives, how much there is, who performed
-        the last maintenance cycle, the substrate affinity verdict, onboarding
+        the last maintenance cycle, onboarding
         and verification progress, and the latest dream journal entry.
         """
 

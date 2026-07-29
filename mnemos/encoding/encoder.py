@@ -542,7 +542,19 @@ class Encoder:
                         )
                     )
         else:
-            # Fallback: no LLM client → use old SUPPORTS behavior
+            # Without a model this is keyword overlap, which is correlation.
+            # Calling it SUPPORTS asserts that one memory independently
+            # reinforces another's conclusion — a claim nothing established.
+            # It is also the bulk of the relation-type monoculture that
+            # hollows out Shift 4: spreading activation through *typed*
+            # connections means little when 96% of edges are one type, and
+            # reactive.py weights SUPPORTS at 1.0 against CO_ACTIVATED's 0.6,
+            # so a mislabel pulls retrieval toward mere shared vocabulary at
+            # full evidence weight.
+            #
+            # The same fix landed for connection_discovery in #4; this is the
+            # other, larger source. formed_by distinguishes these so a later
+            # pass can reclassify or strip them.
             for result in fts_candidates:
                 tag_overlap = len(set(engram.tags) & set(result.tags))
                 base_strength = 0.3
@@ -552,9 +564,9 @@ class Encoder:
                 connections.append(
                     Connection(
                         target_id=result.id,
-                        relation=ConnectionRelation.SUPPORTS,
+                        relation=ConnectionRelation.CO_ACTIVATED,
                         strength=base_strength,
-                        formed_by="encoding",
+                        formed_by="encoding_no_llm",
                     )
                 )
 

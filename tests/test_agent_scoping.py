@@ -98,7 +98,7 @@ def test_softening_scoped_leaves_other_agent_untouched(two_agent_store):
             two_agent_store.save_engram(e)
 
     before_b = _snapshot(two_agent_store, AGENT_B)
-    stats = run_softening_pass(two_agent_store, {"softening_threshold": 0.9}, None, agent_id=AGENT_A)
+    stats = run_softening_pass(two_agent_store, {"softening_threshold": 0.9, "softening_min_age_hours": 0}, None, agent_id=AGENT_A)
     after_b = _snapshot(two_agent_store, AGENT_B)
 
     b_content_before = {k: v[0] for k, v in before_b.items()}

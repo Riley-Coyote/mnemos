@@ -165,23 +165,29 @@ class ConsolidationDaemon:
         except Exception as e:
             stats["identity_error"] = str(e)
 
+        # ── PASS 4: Softening (always runs) ──
+        # Shift 2 is "forgetting that teaches", and the forgetting itself is
+        # deterministic — compression needs no model. Running it only in deep,
+        # model-gated cycles meant memories never faded and no lesson was ever
+        # distilled: 0 DISTILLED_INTO edges across a 37,000-edge graph.
+        # Without a model the lesson's wording is left for the agent rather
+        # than guessed at from keywords.
+        if consolidation_config.get("softening_enabled", True):
+            try:
+                softening_stats = run_softening_pass(
+                    store=self._store,
+                    config=consolidation_config,
+                    llm_client=self._llm_client if deep else None,
+                    agent_id=agent_id,
+                )
+                stats["softening"] = softening_stats
+                stats["passes_run"].append("softening")
+            except Exception as e:
+                stats["softening_error"] = str(e)
+
         # ── DEEP ONLY PASSES ──
         if deep:
-            # ── PASS 3: Softening ──
-            if consolidation_config.get("softening_enabled", True):
-                try:
-                    softening_stats = run_softening_pass(
-                        store=self._store,
-                        config=consolidation_config,
-                        llm_client=self._llm_client,
-                        agent_id=agent_id,
-                    )
-                    stats["softening"] = softening_stats
-                    stats["passes_run"].append("softening")
-                except Exception as e:
-                    stats["softening_error"] = str(e)
-
-            # ── PASS 4: Belief Review ──
+            # ── PASS 5: Belief Review ──
             if consolidation_config.get("belief_review_enabled", True):
                 try:
                     belief_stats = run_belief_review(

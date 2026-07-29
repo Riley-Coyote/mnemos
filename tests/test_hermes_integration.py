@@ -652,3 +652,52 @@ def test_docs_include_safe_hermes_agent_prompt():
     assert "memory.provider=mnemos" in install_doc or "provider: mnemos" in install_doc
     assert "Sidecar Mode is the default safe path" in install_doc
     assert "quickstart --agent-safe" in integration_doc
+
+
+def test_durable_memories_do_not_leak_between_people_sharing_an_agent(tmp_path, monkeypatch):
+    """Engrams carry only owner_agent_id; continuity is scoped by three.
+
+    Two people talking to one agent each build their own continuity, but
+    retrieval filtered engrams by agent alone — so one person's private
+    durable memories surfaced in the other's recall while the continuity
+    layer above them stayed correctly separated.
+
+    The leak was masked: a templated `impact` was crowding the private
+    memory out of the ranked results by accident. Removing the template is
+    what made it visible.
+    """
+    home = tmp_path / "home"
+    (home / ".mnemos").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    from mnemos.simple_runtime import MnemosRuntime
+
+    db = str(tmp_path / "shared.db")
+    secret = "Riley's private salary negotiation notes"
+
+    riley = MnemosRuntime(db_path=db, agent_id="hermes", person_id="riley",
+                          project_scope="work", use_dedicated_model=False)
+    try:
+        riley.capture(secret, importance="high")
+        assert secret in riley.recall("salary negotiation notes"), (
+            "the owner cannot see their own memory"
+        )
+    finally:
+        riley.close()
+
+    alex = MnemosRuntime(db_path=db, agent_id="hermes", person_id="alex",
+                         project_scope="work", use_dedicated_model=False)
+    try:
+        assert secret not in alex.recall("private salary negotiation notes"), (
+            "one person read another person's private memory"
+        )
+    finally:
+        alex.close()
+
+    other_project = MnemosRuntime(db_path=db, agent_id="hermes", person_id="riley",
+                                  project_scope="personal", use_dedicated_model=False)
+    try:
+        assert secret not in other_project.recall("private salary negotiation notes"), (
+            "a memory scoped to one project surfaced in another"
+        )
+    finally:
+        other_project.close()

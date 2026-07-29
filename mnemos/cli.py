@@ -158,6 +158,10 @@ def main(argv: list[str] | None = None) -> int:
     p_remember.add_argument("content", help="What to remember")
     p_remember.add_argument("--context", default="", help="Where/why this came up")
     p_remember.add_argument(
+        "--impact", default="",
+        help="What this changed in how you understand things — the lesson, not the event",
+    )
+    p_remember.add_argument(
         "--importance", default="auto", help="auto, or a number from 0.0 to 1.0"
     )
     p_remember.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
@@ -1147,7 +1151,8 @@ def _cmd_remember(args: argparse.Namespace) -> int:
     try:
         print(
             runtime.capture(
-                args.content, context=args.context, importance=args.importance
+                args.content, context=args.context, importance=args.importance,
+                impact=getattr(args, "impact", ""),
             )
         )
         return 0

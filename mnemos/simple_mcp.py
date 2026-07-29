@@ -34,6 +34,10 @@ of how you work, not as tools to reach for when prompted:
    durable appears: a preference, a decision, a correction, project
    state, how the human likes to work, a fact about their world. Capture
    it when it happens, not at the end — sessions end without warning.
+   When you can say what it changed in how you understand things, pass
+   that as `impact`. That sentence is what survives when the details
+   fade, and nothing but you can write it. If nothing true comes, leave
+   it empty — an invented lesson is worse than none.
 3. When the human corrects something you remembered, call mnemos_correct
    rather than capturing a contradiction next to the stale note.
 4. Call mnemos_recall when you need something specific that is not in the
@@ -222,13 +226,26 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         content: str,
         context: str = "",
         importance: str | float = "auto",
+        impact: str = "",
         ctx: Context | None = None,
     ) -> str:
         """Capture durable continuity from the current conversation.
 
         Use for preferences, decisions, project state, corrections, workflows,
-        and anything the agent should carry across sessions. Tags, memory type,
+        and anything you should carry across sessions. Tags, memory type,
         scope, and maintenance are handled internally.
+
+        Args:
+            content: What happened, in your own words.
+            context: Optional surrounding detail.
+            importance: "low", "high", or leave as "auto".
+            impact: What this changed in how you understand things — the
+                lesson, not the event. This is the part that survives when
+                the details fade, and only you can write it: "Riley
+                corrected me twice on the same thing" is what happened;
+                "I should check the live page before claiming a fix works"
+                is what it meant. Leave it out rather than padding it; your
+                memory will ask you later if it needs one.
         """
 
         sampled = await _sample_text(
@@ -248,6 +265,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             content=capture_content,
             context=capture_context,
             importance=importance,
+            impact=impact,
         )
         if sampled:
             result += "\nHost model assistance: applied via MCP sampling."

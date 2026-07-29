@@ -92,21 +92,37 @@ class TestTheLoop:
 
 
 class TestTheServerNeverAnswers:
-    def test_a_templated_impact_still_counts_as_missing(self, runtime):
-        """The server's own phrases are not traces.
+    def test_a_capture_without_a_trace_leaves_the_field_empty(self, runtime):
+        """Absence must look like absence.
 
-        `_impact_for` fills the column with a fixed phrase, which reads as
-        complete while carrying nothing about how understanding changed.
+        The server used to fill `impact` with a phrase of its own choosing,
+        which reads as complete while carrying nothing about how
+        understanding changed. Empty is honest, and it is what lets the
+        queue notice.
         """
         runtime.capture("Riley prefers cold brew", importance="high")
         runtime.maintain()
 
         engram_id = runtime.pending_reflections()[0]["target_id"]
-        engram = runtime._store.get_engram(engram_id)
-        from mnemos.simple_runtime import _TEMPLATED_IMPACTS
+        assert runtime._store.get_engram(engram_id).impact == ""
 
-        assert engram.impact in _TEMPLATED_IMPACTS, (
-            "test premise wrong: this capture did not get a templated impact"
+    def test_a_capture_carrying_its_own_trace_is_not_asked_about(self, runtime):
+        """An agent that already said what it meant should not be quizzed."""
+        runtime.capture(
+            "Spent three hours on a guard clause",
+            importance="high",
+            impact="Patience with small things pays off.",
+        )
+        runtime.maintain()
+
+        engram = runtime._store.get_engram(
+            runtime._store._get_conn().execute(
+                "SELECT id FROM engrams ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()["id"]
+        )
+        assert engram.impact == "Patience with small things pays off."
+        assert runtime.pending_reflections() == [], (
+            "the agent was asked to reflect on a memory it had already reflected on"
         )
 
     def test_an_empty_reflection_records_nothing(self, runtime):

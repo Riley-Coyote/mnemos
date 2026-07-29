@@ -830,6 +830,7 @@ class MnemosRuntime:
         content: str,
         context: str = "",
         importance: str | float = "auto",
+        impact: str = "",
     ) -> str:
         """Capture durable continuity without exposing Mnemos internals."""
 
@@ -854,7 +855,12 @@ class MnemosRuntime:
         kind = _classify_kind(full_content)
         tags = _simple_tags(content, context)
         confidence, salience = _importance_scores(importance, domain)
-        impact = _impact_for(content, domain)
+        # Shift 1: a trace is what the memory changed, and only the agent can
+        # say that. When it does not, the field stays empty rather than being
+        # filled with a phrase the server chose — a template reads as complete
+        # while carrying nothing, which is how a store ends up 76% records.
+        # Empty is honest, and the reflection queue asks about it later.
+        impact = (impact or "").strip()
 
         engram = self._encoder.encode(
             content=full_content,
@@ -1332,12 +1338,53 @@ class MnemosRuntime:
         assert self._store is not None
         assert self._retriever is not None
         emotional_state = self._store.get_latest_emotional_state(self.scope.agent_id)
-        return _filter_memories(query, self._retriever.retrieve(
+        results = _filter_memories(query, self._retriever.retrieve(
             cue=query,
             agent_id=self.scope.agent_id,
             max_results=max(1, max_results),
             emotional_state=emotional_state,
         ))
+        return [
+            result for result in results
+            if self._engram_visible_in_current_scope(result.engram.id)
+        ]
+
+    def _engram_visible_in_current_scope(self, engram_id: str) -> bool:
+        """Respect hypomnema person/project scope for durable memories.
+
+        Engrams carry only ``owner_agent_id``, so retrieval filters by agent
+        alone. Continuity, however, is scoped by the full three-tuple, and
+        every capture links its engram to a scoped hypomnema entry. Without
+        this check, two people sharing one agent — or one person's separate
+        projects — see each other's durable memories, while the continuity
+        layer above them stays correctly separated.
+
+        The leak predates this change; a templated ``impact`` had been
+        crowding the private memory out of the ranked results by accident,
+        so removing the template is what made it visible.
+
+        Engrams with no scoped link (older ones, or anything encoded outside
+        the continuity path) stay visible to their owning agent.
+        """
+
+        assert self._store is not None
+        rows = self._store._get_conn().execute(
+            """
+            SELECT agent_id, person_id, project_scope, active
+            FROM hypomnema_entries
+            WHERE related_engram_id = ? OR graduated_to_engram_id = ?
+            """,
+            (engram_id, engram_id),
+        ).fetchall()
+        if not rows:
+            return True
+        return any(
+            row["active"]
+            and row["agent_id"] == self.scope.agent_id
+            and row["person_id"] == self.scope.person_id
+            and row["project_scope"] == self.scope.project_scope
+            for row in rows
+        )
 
     def _promote_candidates(self, limit: int = 3) -> int:
         assert self._store is not None

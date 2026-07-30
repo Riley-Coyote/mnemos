@@ -9,7 +9,9 @@ Jobs:
 - mnemos-deep: Daily 3am — deep consolidation (all passes)
 - mnemos-export: Every 2h — export updated workspace files
 - mnemos-substrate-tick: Every 4h — cognitive substrate tick (handlers, modulators)
-- mnemos-session-indexer: Every 30min — index recent conversation sessions
+
+Transcript indexing is deliberately not scheduled here (it buries the
+continuity layer); it stays available as the explicit `mnemos index` command.
 """
 
 from __future__ import annotations
@@ -110,22 +112,11 @@ def generate_cron_jobs(
                 "message": "mnemos substrate-tick",
             },
         },
-        {
-            "id": f"mnemos-indexer-{uuid.uuid4().hex[:12]}",
-            "agentId": agent_id,
-            "name": "mnemos-session-indexer",
-            "enabled": True,
-            "schedule": {
-                "kind": "cron",
-                "expr": "*/30 * * * *",  # Every 30 minutes
-                "tz": timezone,
-            },
-            "sessionTarget": "isolated",
-            "payload": {
-                "kind": "command",
-                "message": "mnemos index",
-            },
-        },
+        # No session-indexer job. The turnkey scheduler (setup/scheduler.py)
+        # deliberately excludes transcript indexing — on one live store it
+        # wrote ~7,058 engrams against 13 deliberate captures and buried the
+        # continuity layer — so this generator must not schedule it either.
+        # Indexing stays available as the explicit `mnemos index` command.
     ]
 
 

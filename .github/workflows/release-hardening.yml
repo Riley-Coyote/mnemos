@@ -63,5 +63,34 @@ jobs:
           print(f"Wheel OK: {wheel}")
           PY
 
+      - name: Smoke-install the wheel with an unlocked resolver
+        run: |
+          # Everything above runs against uv.lock, so a broken *declared*
+          # dependency range passes every check while a real `pip install`
+          # fails. This installs the built wheel into a clean venv with no
+          # lockfile, resolving dependencies live from PyPI exactly as a user
+          # would — the only step that can catch "green CI, dead install".
+          python -m venv /tmp/mnemos-smoke
+          /tmp/mnemos-smoke/bin/pip install --quiet --upgrade pip
+          /tmp/mnemos-smoke/bin/pip install --quiet dist/*.whl
+          /tmp/mnemos-smoke/bin/python - <<'PY'
+          import asyncio
+          import importlib.metadata as md
+
+          # Importing constructs the FastMCP server and registers every simple
+          # tool at module scope. Under mcp 2.0 this line raised
+          # ModuleNotFoundError: No module named 'mcp.server.fastmcp'.
+          from mnemos.simple_mcp import SIMPLE_TOOL_NAMES, simple_mcp
+
+          print("resolved mcp:", md.version("mcp"))
+          tools = {t.name for t in asyncio.run(simple_mcp.list_tools())}
+          if tools != set(SIMPLE_TOOL_NAMES):
+              raise SystemExit(
+                  f"tool surface mismatch: {sorted(tools)} != "
+                  f"{sorted(SIMPLE_TOOL_NAMES)}"
+              )
+          print(f"Fresh install OK: {len(tools)} simple tools registered")
+          PY
+
       - name: Check package metadata
         run: uvx twine check dist/*

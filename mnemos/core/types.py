@@ -153,3 +153,47 @@ def classify_belief_change(
 # specific agent's name — scope leaks between agents are identity
 # contamination, not just bugs.
 DEFAULT_AGENT_ID = "default"
+
+
+# Tags that Mnemos stamps on memories itself — classifier buckets, domain and
+# kind labels, indexer bookkeeping, consolidation markers. They are how the
+# pipeline files a memory, not anything the agent or human meant by it.
+#
+# This set exists because identity ("what you keep returning to") was being
+# computed by counting tags, and these are on nearly everything by
+# construction — `continuity` is stamped on every capture, `trace-type:*` on
+# every indexed transcript line. The result read back "Persistent concerns:
+# session-indexed, trace-type:fact, decision", which is a histogram of the
+# classifier, not a self. Anything OUTSIDE this vocabulary came from a human or
+# from content (a project name, a topic) and is a truer signal of a concern.
+STRUCTURAL_TAGS: frozenset[str] = frozenset(
+    {
+        # _simple_tags classifier labels (mnemos/simple_runtime.py)
+        "continuity", "preference", "decision", "project", "identity", "correction",
+        # hypomnema domains
+        "foundational", "recurring", "long-arc", "topical", "situational",
+        # engram kinds
+        "episodic", "semantic", "procedural", "prospective",
+        # consolidation / reflection markers
+        "lesson", "distilled", "reflection", "synthesized",
+        # session indexer bookkeeping
+        "session-indexed",
+    }
+)
+
+#: Prefixes marking a tag as pipeline-generated regardless of its suffix.
+_STRUCTURAL_TAG_PREFIXES: tuple[str, ...] = ("trace-type:",)
+
+
+def is_structural_tag(tag: str) -> bool:
+    """Whether a tag is Mnemos bookkeeping rather than a meaningful concern.
+
+    Used wherever tags are surfaced as though they described the agent (most
+    importantly the identity profile). Kept in one place so a new pipeline tag
+    is excluded everywhere at once, instead of leaking back into "who you are"
+    the way ``trace-type:fact`` did.
+    """
+    t = tag.strip().lower()
+    if t in STRUCTURAL_TAGS:
+        return True
+    return any(t.startswith(prefix) for prefix in _STRUCTURAL_TAG_PREFIXES)

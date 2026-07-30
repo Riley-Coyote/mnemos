@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..core.emotional_state import EmotionalState
 from ..core.identity import AgentIdentity, IdentityProfile
-from ..core.types import EngramKind, SourceType
+from ..core.types import EngramKind, SourceType, is_structural_tag
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -207,11 +207,20 @@ def compute_identity_profile(
     """
     agent_id = identity.memory_profile.agent_id
 
-    # 1. PERSISTENT CONCERNS: what tags appear most across all engrams
+    # 1. PERSISTENT CONCERNS: what the agent keeps returning to.
+    # Count only tags that mean something. Mnemos stamps a fixed vocabulary of
+    # classifier, domain, kind and bookkeeping tags on nearly every memory by
+    # construction (`continuity` on all of them, `trace-type:*` on every
+    # indexed line), so counting those measured the pipeline, not the agent —
+    # the profile read back "Persistent concerns: session-indexed,
+    # trace-type:fact, decision". Whatever survives this filter came from a
+    # human or from content and is a truer concern; if nothing survives, the
+    # profile carries no concerns and the summary omits the line rather than
+    # narrate bookkeeping as a self.
     tag_counts: dict[str, int] = Counter()
     for e in all_engrams:
         for tag in e.tags:
-            if tag not in ("lesson", "distilled", "reflection", "synthesized"):
+            if not is_structural_tag(tag):
                 tag_counts[tag] += 1
     persistent_concerns = tag_counts.most_common(10)
 

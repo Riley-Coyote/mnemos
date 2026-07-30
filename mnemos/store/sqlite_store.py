@@ -1317,6 +1317,39 @@ class EngramStore:
             return None
         return self._hydrate_hypomnema_row(dict(row))
 
+    def get_hypomnema_entry_for_engram(
+        self,
+        engram_id: str,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> dict[str, Any] | None:
+        """The active continuity note a memory was captured as, if any.
+
+        Capture writes both an engram and a scoped hypomnema note, linked by
+        ``related_engram_id``. Anything that has learned something *about* an
+        engram needs this to reach the layer the session packet is built from;
+        writing only to the engram puts it somewhere the automatic path does
+        not read.
+
+        Returns None for engrams encoded outside the simple capture path,
+        which legitimately have no note.
+        """
+        conn = self._get_conn()
+        row = conn.execute(
+            """
+            SELECT * FROM hypomnema_entries
+            WHERE related_engram_id = ?
+              AND agent_id = ? AND person_id = ? AND project_scope = ?
+              AND active = 1
+            ORDER BY last_revised_at DESC
+            LIMIT 1
+            """,
+            (engram_id, agent_id, person_id, project_scope),
+        ).fetchone()
+        return self._hydrate_hypomnema_row(dict(row)) if row else None
+
     def search_hypomnema(
         self,
         query: str = "",

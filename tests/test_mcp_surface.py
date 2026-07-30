@@ -201,6 +201,76 @@ def test_simple_stdio_server_lists_and_calls_context(tmp_path):
     anyio.run(run_smoke)
 
 
+def test_simple_stdio_covers_recall_correct_maintain_reflect(tmp_path):
+    """The whole simple surface must work over the real protocol, not just
+    the four tools already smoked. recall/correct/maintain/reflect were only
+    exercised in-process; reflect especially — it is the keystone of the
+    inversion, the one tool through which the agent's own voice re-enters its
+    memory."""
+    import re
+
+    from mcp.client.session import ClientSession
+    from mcp.client.stdio import StdioServerParameters, stdio_client
+
+    def _text(result):
+        return "\n".join(
+            block.text for block in result.content
+            if getattr(block, "type", None) == "text"
+        )
+
+    async def run_smoke():
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=[
+                "-m", "mnemos.cli", "serve", "--mode", "simple",
+                "--db-path", str(tmp_path / "surface.db"),
+                "--agent-id", "surface", "--person-id", "tester",
+                "--project-scope", "stdio",
+            ],
+        )
+        async with stdio_client(params) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+
+                await session.call_tool(
+                    "mnemos_capture",
+                    {"content": "Riley prefers dark roast coffee in the morning"},
+                )
+
+                recall = await session.call_tool(
+                    "mnemos_recall", {"query": "coffee preference"}
+                )
+                assert not recall.isError
+                assert "roast" in _text(recall).lower(), _text(recall)
+
+                correct = await session.call_tool(
+                    "mnemos_correct",
+                    {"correction": "Riley prefers light roast now", "query": "coffee"},
+                )
+                assert not correct.isError
+                assert _text(correct).strip()
+
+                maintain = await session.call_tool("mnemos_maintain", {})
+                assert not maintain.isError
+                assert _text(maintain).strip()
+
+                # reflect: surface a real pending target from the packet, then
+                # answer it. If none is pending, the tool must still handle an
+                # unknown target gracefully rather than error.
+                ctx = _text(await session.call_tool("mnemos_context", {}))
+                match = re.search(r"(engram_[A-Z0-9]+)", ctx)
+                target = match.group(1) if match else "engram_NOTREAL"
+                reflect = await session.call_tool(
+                    "mnemos_reflect",
+                    {"target_id": target, "text": "it grounds how I answer him"},
+                )
+                assert not reflect.isError
+                body = _text(reflect).lower()
+                assert ("recorded" in body) or ("nothing was pending" in body), body
+
+    anyio.run(run_smoke)
+
+
 def test_simple_stdio_context_can_return_identity_graph(tmp_path):
     from mcp.client.session import ClientSession
     from mcp.client.stdio import StdioServerParameters, stdio_client

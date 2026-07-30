@@ -1227,22 +1227,37 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         project_scope=getattr(args, "project_scope", None),
     )
     try:
-        packet = runtime.context()
         print("Mnemos Doctor")
         print("-" * 40)
         print(f"Agent:       {runtime.scope.agent_id}")
         print(f"Person:      {runtime.scope.person_id}")
         print(f"Project:     {runtime.scope.project_scope}")
         print(f"Database:    {runtime.db_path}")
-        print(f"DB exists:    {'yes' if runtime.db_path.exists() else 'no'}")
         print(f"MCP SDK:      {'yes' if _mcp_available() else 'no'}")
+
+        # A diagnostic must not create the thing it inspects. `context()` opens
+        # the store (building its schema) and runs maintenance, so on a fresh or
+        # mistyped scope it would mint a phantom empty database and then report
+        # it healthy — the exact side effect health() and the hook avoid. When
+        # there is no store yet, report the store-free readiness fields and
+        # stop, without calling anything that would init.
+        if not runtime.db_path.exists():
+            print("DB exists:    no")
+            _print_background_status(runtime.scope)
+            print(f"Simple tools: {', '.join(SIMPLE_TOOL_NAMES)}")
+            print()
+            print("No store yet for this scope — nothing has been captured here.")
+            print("If you expected memory, check the --db-path / --agent-id in use.")
+            return 0
+
+        print("DB exists:    yes")
         print(f"Model:        {'dedicated provider configured' if runtime.has_dedicated_model else 'local baseline only'}")
         _print_background_status(runtime.scope)
         _print_semantic_status(runtime)
         print(f"Simple tools: {', '.join(SIMPLE_TOOL_NAMES)}")
         _print_continuity_status(runtime)
         print()
-        print(packet)
+        print(runtime.context())
         return 0
     finally:
         runtime.close()

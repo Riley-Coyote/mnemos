@@ -31,18 +31,11 @@ _CRON_JOBS = [
             "Keep under 2000 words. Skip cron sessions. Max 3 transcripts."
         ),
     },
-    {
-        "name": "session-indexer",
-        "schedule": "*/30 * * * *",
-        "model": "claude-sonnet-4-5",
-        "timeout": 420,
-        "session_target": "isolated",
-        "prompt_template": (
-            "Run the Mnemos session indexer. Execute:\n"
-            "cd {workspace} && python3 -m mnemos.indexer.session_indexer index\n"
-            "Then report results briefly. If nothing indexed, reply HEARTBEAT_OK."
-        ),
-    },
+    # No session-indexer job. The turnkey scheduler (setup/scheduler.py)
+    # deliberately excludes transcript indexing — on one live store it wrote
+    # ~7,058 engrams against 13 deliberate captures and buried the continuity
+    # layer — and this generator must not contradict it. Indexing stays
+    # available as the explicit `mnemos index` command.
     {
         "name": "substrate-tick",
         "schedule": "0 */4 * * *",

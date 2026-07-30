@@ -106,7 +106,17 @@ def run_softening_pass(
             to consolidation_log (pass_name "softening_dry_run") without
             rewriting any engram — audit the conservator before enabling.
         llm_client: LLM client with complete(prompt) -> str method.
-            If None, uses rule-based fallback.
+            If None, content is left intact — see soften_without_model.
+        config: also honours ``soften_without_model`` (default False). With no
+            provider, rewriting prose means `_rule_based_soften`, which
+            replaces a memory with "An impression related to <first word>...
+            [faded]" and cannot be undone through any product path. The
+            forgetting is accessibility decay and happens regardless; the
+            blurred wording was only ever a depiction of it. So the default
+            install now fades a memory in ranking and leaves its words
+            readable — which is also the only way the agent can answer the
+            lesson question honestly, since it is asked about a memory that is
+            supposedly fading.
 
     Returns:
         Statistics dict.
@@ -115,6 +125,7 @@ def run_softening_pass(
     minimum_resolution = config.get("minimum_resolution", 0.1)
     max_llm_calls = config.get("max_llm_calls_per_cycle", 50)
     dry_run = bool(config.get("softening_dry_run", False))
+    soften_without_model = bool(config.get("soften_without_model", False))
     started_at = datetime.now(timezone.utc).isoformat()
 
     stats = {
@@ -224,26 +235,41 @@ def run_softening_pass(
             lesson_id = _create_or_reinforce_lesson(engram, store, stats)
 
         # SOFTEN content (impact is preserved separately)
+        candidate = None
         if llm_client and stats["llm_calls"] < max_llm_calls:
             candidate = _llm_soften(
                 engram.content, engram.resolution, target, llm_client,
                 exemplars_block,
             )
             stats["llm_calls"] += 1
-        else:
+        elif soften_without_model:
             candidate = _rule_based_soften(engram.content, target)
+        else:
+            # No provider, and no licence to guess. Compressing prose requires
+            # reading it; `_rule_based_soften` does not read, it truncates, and
+            # the result is unrecoverable through any product path. Record that
+            # the wording is still owed — the memory keeps fading through
+            # accessibility either way, and the lesson request that goes to the
+            # agent now shows text the agent can actually read.
+            #
+            # Everything below this point still runs. Skipping the whole engram
+            # here would leave a lesson created above without its
+            # DISTILLED_INTO edge, which is the absence Shift 2 was repaired
+            # to fix.
+            stats["awaiting_compression"] = stats.get("awaiting_compression", 0) + 1
 
-        # Conservation guard: softening may compress, never inflate or
-        # invent. A candidate that grows or introduces new named entities
-        # is rejected in code, not just in the prompt.
-        softened_content = _conserve(engram.content, candidate, target)
+        if candidate is not None:
+            # Conservation guard: softening may compress, never inflate or
+            # invent. A candidate that grows or introduces new named entities
+            # is rejected in code, not just in the prompt.
+            softened_content = _conserve(engram.content, candidate, target)
 
-        # Version snapshot (preserve pre-softening state)
-        engram.add_version(reason="softening")
+            # Version snapshot (preserve pre-softening state)
+            engram.add_version(reason="softening")
 
-        # Update content (impact is already set and untouched)
-        engram.content = softened_content
-        engram.resolution = round(target, 2)
+            # Update content (impact is already set and untouched)
+            engram.content = softened_content
+            engram.resolution = round(target, 2)
 
         # Connect source to its lesson via DISTILLED_INTO
         if lesson_id:
@@ -257,8 +283,12 @@ def run_softening_pass(
         store.save_engram(engram)
 
         total_res_after += engram.resolution
-        softened_count += 1
-        stats["engrams_softened"] += 1
+        # Only a memory whose wording actually changed was softened. Counting
+        # the others would report compression that did not happen, in the one
+        # statistic an operator would use to check whether it did.
+        if candidate is not None:
+            softened_count += 1
+            stats["engrams_softened"] += 1
 
     if dry_run:
         stats["engrams_would_soften"] = len(dry_run_pairs)
@@ -509,6 +539,71 @@ def _link_distillation(engram: Any, lesson_id: str, store: EngramStore) -> None:
         formed_by="softening",
     )
     store.save_engram(engram)
+
+
+#: Exact tails `_rule_based_soften` produces. Provenance cannot tell a
+#: model-written softening from a truncated one — `change_reason` is
+#: "softening" for both — so the output signature is what makes a targeted
+#: repair possible at all. A model asked to write in the rememberer's own
+#: voice does not end a sentence this way.
+_RULE_BASED_TAILS = ("... [details faded]", "... [faded]")
+
+
+def repair_rule_based_softening(
+    store: EngramStore,
+    agent_id: str = "default",
+    *,
+    dry_run: bool = False,
+) -> int:
+    """Restore memories a model-less softening pass truncated.
+
+    Before ``soften_without_model`` defaulted to False, any engram older than
+    a day whose accessibility had dropped was rewritten to
+    "An impression related to <first word>... [faded]" and its ``impact`` left
+    empty. ``add_version(reason="softening")`` snapshotted the prior state
+    first, so the words are recoverable — but nothing recovers them on its
+    own, and ``archive.resharpen`` raises ``NotImplementedError``.
+
+    Only engrams whose current content ends in a rule-based tail *and* which
+    have a pre-softening snapshot are touched. Returns how many were restored
+    (or would be, when ``dry_run``).
+
+    This is deliberately narrow. Restoring on a guess would be the same
+    mistake as the 32,857 keyword-overlap edges written as SUPPORTS: a
+    plausible rewrite of memory that nobody can audit afterwards.
+    """
+    restored = 0
+    for engram in store.get_active_engrams(agent_id=agent_id, limit=100000):
+        content = (engram.content or "").rstrip()
+        if not content.endswith(_RULE_BASED_TAILS):
+            continue
+
+        snapshot = next(
+            (
+                v for v in reversed(getattr(engram, "versions", []) or [])
+                if getattr(v, "change_reason", "") == "softening"
+                and (getattr(v, "content_snapshot", "") or "").strip()
+                and not (getattr(v, "content_snapshot", "") or "")
+                .rstrip()
+                .endswith(_RULE_BASED_TAILS)
+            ),
+            None,
+        )
+        if snapshot is None:
+            continue
+
+        restored += 1
+        if dry_run:
+            continue
+
+        engram.content = snapshot.content_snapshot
+        engram.resolution = max(
+            engram.resolution, getattr(snapshot, "resolution_at_version", 1.0) or 1.0
+        )
+        engram.add_version(reason="repair_rule_based_softening")
+        store.save_engram(engram)
+
+    return restored
 
 
 def _rule_based_soften(content: str, target_resolution: float) -> str:

@@ -399,7 +399,6 @@ class MnemosRuntime:
                 "impact",
                 row["id"],
                 "What did this change in how you understand things? One sentence.",
-                excerpt=" ".join((row["content"] or "").split())[:160],
                 agent_id=self.scope.agent_id,
                 person_id=self.scope.person_id,
                 project_scope=self.scope.project_scope,
@@ -440,7 +439,6 @@ class MnemosRuntime:
                 "lesson",
                 engram_id,
                 "This is fading. What did it teach you? The lesson outlives the details.",
-                excerpt=" ".join((engram.content or "").split())[:160],
                 agent_id=self.scope.agent_id,
                 person_id=self.scope.person_id,
                 project_scope=self.scope.project_scope,
@@ -614,12 +612,15 @@ class MnemosRuntime:
 
         if self._get_meta("first_capture") is not None or self._get_meta("verified_at") is not None:
             return
+        # No excerpt. The block that renders this re-reads the note by id, so
+        # storing a copy of the text here would put a quotable snapshot of the
+        # human's first capture somewhere no deletion path reaches — and that
+        # block instructs the agent to say it out loud.
         payload = {
             "note_id": note_id,
             "engram_id": engram_id,
             "session": self._current_session(),
             "captured_at": datetime.now(timezone.utc).isoformat(),
-            "excerpt": content.strip().replace("\n", " ")[:160],
         }
         self._set_meta("first_capture", json.dumps(payload, ensure_ascii=True, sort_keys=True))
 
@@ -633,13 +634,32 @@ class MnemosRuntime:
             return None
         try:
             first_capture = json.loads(raw)
-            excerpt = first_capture["excerpt"]
+            note_id = first_capture["note_id"]
             first_session = int(first_capture["session"])
         except (ValueError, KeyError, TypeError):
             return None
         if self._get_meta("onboarding_stage") != "complete":
             return None
         if self._current_session() <= first_session:
+            return None
+
+        # Resolve the text now, from the live note. A pre-fix store may still
+        # hold an ``excerpt`` key here; it is deliberately never read, because
+        # the whole defect was that a frozen copy outlived the memory it came
+        # from. If the note is gone or deactivated, the celebration simply does
+        # not happen — a missing celebration is the correct failure, and
+        # speaking a forgotten memory aloud is not.
+        note = self._store.get_hypomnema_entry(
+            note_id,
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+            active_only=True,
+        )
+        if note is None:
+            return None
+        excerpt = " ".join((note.get("content") or "").split())[:160]
+        if not excerpt:
             return None
 
         self._set_meta("verified_at", datetime.now(timezone.utc).isoformat())
@@ -1211,6 +1231,9 @@ class MnemosRuntime:
         promoted = self._promote_candidates(limit=3)
         # Maintenance proposes reflections; it never answers them.
         try:
+            # Hygiene first: a store written before excerpts were dropped can
+            # still hold a frozen copy of a memory the human asked to forget.
+            self._store.purge_stale_reflections()
             self._enqueue_lesson_reflections(stats.get("softening") or {})
             self._enqueue_impact_reflections(limit=2)
         except Exception:

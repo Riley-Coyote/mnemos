@@ -444,7 +444,15 @@ def test_first_capture_records_meta_once(tmp_path):
     assert payload["engram_id"] == memory_id
     assert payload["note_id"] == note_id
     assert payload["session"] >= 1
-    assert len(payload["excerpt"]) <= 160
+    # Ids only, never a copy of the text. This used to store a 160-char
+    # excerpt, which the verification block then quoted at the agent with an
+    # instruction to say it to the human out loud — and no correction, archive
+    # or forget path could reach it. The block re-reads the note by id now.
+    assert "excerpt" not in payload, (
+        "a quotable snapshot of the human's first capture was stored where no "
+        "deletion path reaches it"
+    )
+    assert "gnome" not in raw
 
 
 def test_verification_fires_on_later_session_then_never_again(tmp_path):

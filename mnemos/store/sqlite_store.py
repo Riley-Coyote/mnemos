@@ -764,6 +764,13 @@ class EngramStore:
         # Remove from active tables
         conn.execute("UPDATE engrams SET state = 'archived' WHERE id = ?", (engram.id,))
         conn.execute("DELETE FROM engrams_fts WHERE id = ?", (engram.id,))
+        # An unanswered reflection request about an archived memory is a dead
+        # end, and pre-fix rows carry a frozen copy of its text. Every path
+        # that forgets something ends here, so this is where the request goes.
+        conn.execute(
+            "DELETE FROM reflection_queue WHERE target_id = ? AND answered_at IS NULL",
+            (engram.id,),
+        )
         conn.commit()
 
     def search_archive(self, query: str, limit: int = 20) -> list[dict]:
@@ -1711,7 +1718,6 @@ class EngramStore:
         target_id: str,
         prompt: str,
         *,
-        excerpt: str = "",
         agent_id: str = "default",
         person_id: str = "user",
         project_scope: str = "global",
@@ -1721,6 +1727,10 @@ class EngramStore:
 
         Asking twice about the same memory is nagging, so the unique index
         makes a repeat enqueue a no-op rather than a duplicate.
+
+        No excerpt is stored. The queue holds a ``target_id`` and nothing else
+        quotable, so ``pending_reflections`` resolves the text live and a
+        forgotten memory has no second copy here to leak from.
         """
         if kind not in {"impact", "lesson", "belief", "contradiction"}:
             raise ValueError(f"Unsupported reflection kind: {kind}")
@@ -1735,10 +1745,10 @@ class EngramStore:
                 INSERT INTO reflection_queue(
                     id, agent_id, person_id, project_scope, kind, target_id,
                     prompt, excerpt, created_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)
                 """,
                 (entry_id, agent_id, person_id, project_scope, kind, target_id,
-                 prompt, excerpt, now.isoformat(), expires),
+                 prompt, now.isoformat(), expires),
             )
             conn.commit()
         except sqlite3.IntegrityError:
@@ -1758,22 +1768,66 @@ class EngramStore:
         project_scope: str = "global",
         limit: int = 2,
     ) -> list[dict[str, Any]]:
-        """Unanswered reflections worth showing, oldest and least-shown first."""
+        """Unanswered reflections worth showing, oldest and least-shown first.
+
+        ``excerpt`` is resolved from the engram **at read time**, and the join
+        drops any request whose subject is gone or archived. Both properties
+        are load-bearing:
+
+        * The queue used to carry a frozen ``content[:160]`` snapshot, so a
+          memory the human had asked Mnemos to forget was read back to the
+          agent until the surfacing quota ran out. Clearing by quota is not
+          deletion.
+        * A request pointing at an archived engram is a dead end — ``reflect()``
+          answers "the memory is no longer there" — so surfacing one spends the
+          agent's turn to reach nothing.
+        """
         conn = self._get_conn()
         now = datetime.now(timezone.utc).isoformat()
         rows = conn.execute(
             """
-            SELECT * FROM reflection_queue
-            WHERE agent_id = ? AND person_id = ? AND project_scope = ?
-              AND answered_at IS NULL
-              AND surfaced_count < ?
-              AND (expires_at IS NULL OR expires_at > ?)
-            ORDER BY surfaced_count ASC, created_at ASC
+            SELECT q.*, e.content AS live_content
+            FROM reflection_queue q
+            JOIN engrams e ON e.id = q.target_id
+            WHERE q.agent_id = ? AND q.person_id = ? AND q.project_scope = ?
+              AND q.answered_at IS NULL
+              AND q.surfaced_count < ?
+              AND (q.expires_at IS NULL OR q.expires_at > ?)
+              AND e.state != 'archived'
+            ORDER BY q.surfaced_count ASC, q.created_at ASC
             LIMIT ?
             """,
             (agent_id, person_id, project_scope, self.MAX_SURFACINGS, now, limit),
         ).fetchall()
-        return [dict(row) for row in rows]
+
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["excerpt"] = " ".join((item.pop("live_content") or "").split())[:160]
+            items.append(item)
+        return items
+
+    def purge_stale_reflections(self) -> int:
+        """Drop unanswered requests whose subject is archived or gone.
+
+        ``pending_reflections`` already refuses to surface these, so this is
+        about the copy on disk rather than the one on screen. Stores written
+        before excerpts were removed still hold a frozen ``content[:160]`` of
+        memories the human may since have asked Mnemos to forget, and no
+        deletion path reached it. Existing stores do not otherwise self-heal.
+
+        Returns the number of rows removed.
+        """
+        conn = self._get_conn()
+        cur = conn.execute(
+            """
+            DELETE FROM reflection_queue
+            WHERE answered_at IS NULL
+              AND target_id NOT IN (SELECT id FROM engrams WHERE state != 'archived')
+            """
+        )
+        conn.commit()
+        return cur.rowcount or 0
 
     def mark_reflections_surfaced(self, ids: list[str]) -> None:
         """Record that these were shown, so an ignored item eventually stops."""

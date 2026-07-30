@@ -534,6 +534,47 @@ class EngramStore:
             conn.rollback()
             raise
 
+    def engram_visible_in_scope(
+        self,
+        engram_id: str,
+        *,
+        agent_id: str,
+        person_id: str,
+        project_scope: str,
+    ) -> bool:
+        """Whether an engram may surface for a full three-tuple scope.
+
+        Engrams carry only ``owner_agent_id``, so retrieval filters by agent
+        alone. Continuity is scoped by agent/person/project, and every capture
+        links its engram to a scoped hypomnema row. Without this check, two
+        people sharing one agent — or one person's separate projects — see each
+        other's durable memories, while the continuity layer above them stays
+        correctly separated.
+
+        This is the single source of truth for that question. Both the simple
+        runtime's ``_retrieve`` and ``build_context_packet`` route through it,
+        so the two read paths cannot drift about whose memory this is. Engrams
+        with no scoped hypomnema link (older ones, or anything encoded outside
+        the continuity path) stay visible to their owning agent.
+        """
+        rows = self._get_conn().execute(
+            """
+            SELECT agent_id, person_id, project_scope, active
+            FROM hypomnema_entries
+            WHERE related_engram_id = ? OR graduated_to_engram_id = ?
+            """,
+            (engram_id, engram_id),
+        ).fetchall()
+        if not rows:
+            return True
+        return any(
+            row["active"]
+            and row["agent_id"] == agent_id
+            and row["person_id"] == person_id
+            and row["project_scope"] == project_scope
+            for row in rows
+        )
+
     def get_engram(self, engram_id: str) -> Engram | None:
         """Load an engram by ID, including connections and versions."""
         conn = self._get_conn()

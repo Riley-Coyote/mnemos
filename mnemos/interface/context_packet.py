@@ -96,7 +96,20 @@ def build_context_packet(
             max_results=max_engrams,
             emotional_state=emotional_state,
         )
-        engrams = [_serialize_retrieval_result(result) for result in results]
+        # Retrieval filters by agent only; re-scope to the full three-tuple the
+        # same way the simple runtime does, or this section leaks one person's
+        # (or project's) durable memories into another's packet while the
+        # hypomnema section above stays correctly separated.
+        engrams = [
+            _serialize_retrieval_result(result)
+            for result in results
+            if store.engram_visible_in_scope(
+                result.engram.id,
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+            )
+        ]
 
     # Work the agent's memory is waiting on it for. This is the path the
     # SessionStart hook uses, so omitting it here meant the reflection loop

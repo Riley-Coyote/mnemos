@@ -1524,38 +1524,16 @@ class MnemosRuntime:
     def _engram_visible_in_current_scope(self, engram_id: str) -> bool:
         """Respect hypomnema person/project scope for durable memories.
 
-        Engrams carry only ``owner_agent_id``, so retrieval filters by agent
-        alone. Continuity, however, is scoped by the full three-tuple, and
-        every capture links its engram to a scoped hypomnema entry. Without
-        this check, two people sharing one agent — or one person's separate
-        projects — see each other's durable memories, while the continuity
-        layer above them stays correctly separated.
-
-        The leak predates this change; a templated ``impact`` had been
-        crowding the private memory out of the ranked results by accident,
-        so removing the template is what made it visible.
-
-        Engrams with no scoped link (older ones, or anything encoded outside
-        the continuity path) stay visible to their owning agent.
+        Thin wrapper over the store's shared visibility check, so this path and
+        ``build_context_packet`` cannot disagree about whose memory an engram
+        is. See ``EngramStore.engram_visible_in_scope``.
         """
-
         assert self._store is not None
-        rows = self._store._get_conn().execute(
-            """
-            SELECT agent_id, person_id, project_scope, active
-            FROM hypomnema_entries
-            WHERE related_engram_id = ? OR graduated_to_engram_id = ?
-            """,
-            (engram_id, engram_id),
-        ).fetchall()
-        if not rows:
-            return True
-        return any(
-            row["active"]
-            and row["agent_id"] == self.scope.agent_id
-            and row["person_id"] == self.scope.person_id
-            and row["project_scope"] == self.scope.project_scope
-            for row in rows
+        return self._store.engram_visible_in_scope(
+            engram_id,
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
         )
 
     def _promote_candidates(self, limit: int = 3) -> int:

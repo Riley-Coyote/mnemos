@@ -259,6 +259,18 @@ class Engram:
     When displayed, impact is preferred over content.
     Left empty when no genuine insight exists (don't fabricate)."""
 
+    impact_source: str = ""
+    """Who wrote the impact: 'agent' (via mnemos_reflect), 'human' (supplied
+    with the capture), 'model' (extracted by a configured provider), or
+    'template' (server boilerplate). Empty means unknown — the state of every
+    impact written before this column existed.
+
+    The product's central claim is that only the agent can say what a memory
+    changed, so being able to tell an agent-authored impact from a templated
+    one is load-bearing, not decoration. It cannot be reconstructed after the
+    fact — `_TEMPLATED_IMPACTS` in simple_runtime is exactly the archaeology
+    done because this was not recorded — so it must be captured at write time."""
+
     # Encoding context
     encoding_context: EncodingContext = field(default_factory=EncodingContext)
 
@@ -354,6 +366,7 @@ class Engram:
             "resolution": self.resolution,
             "content_at_encoding": self.content_at_encoding,
             "impact": self.impact,
+            "impact_source": self.impact_source,
             "encoding_context": json.dumps(self.encoding_context.to_dict()),
             "kind": self.kind,
             "tags": json.dumps(self.tags),
@@ -402,6 +415,7 @@ class Engram:
             resolution=d.get("resolution", 1.0),
             content_at_encoding=d.get("content_at_encoding", d.get("content", "")),
             impact=d.get("impact", ""),
+            impact_source=d.get("impact_source", "") or "",
             encoding_context=EncodingContext.from_dict(encoding_ctx),
             kind=d.get("kind", EngramKind.EPISODIC),
             tags=tags,

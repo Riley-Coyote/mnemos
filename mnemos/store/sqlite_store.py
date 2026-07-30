@@ -27,7 +27,7 @@ from ..core.identity import AgentIdentity
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -60,7 +60,8 @@ VALID_HYPO_DOMAINS = {
 
 # Allowed column names for engrams table — prevents SQL injection via to_dict() keys
 _ENGRAM_COLUMNS = frozenset({
-    "id", "content", "content_at_encoding", "impact", "resolution", "kind", "tags",
+    "id", "content", "content_at_encoding", "impact", "impact_source",
+    "resolution", "kind", "tags",
     "schema_refs", "strength", "stability", "accessibility", "encoding_context",
     "source", "lineage", "owner_agent_id", "visibility", "state", "created_at",
     "last_accessed", "access_count", "reconsolidation_count",
@@ -80,6 +81,7 @@ CREATE TABLE IF NOT EXISTS engrams (
     content TEXT NOT NULL,
     content_at_encoding TEXT NOT NULL,
     impact TEXT NOT NULL DEFAULT '',
+    impact_source TEXT NOT NULL DEFAULT '',
     resolution REAL NOT NULL DEFAULT 1.0,
     kind TEXT NOT NULL DEFAULT 'episodic',
     tags TEXT NOT NULL DEFAULT '[]',
@@ -399,6 +401,13 @@ class EngramStore:
         # Migrate: add impact column if missing (v0.1 → v0.2)
         try:
             conn.execute("ALTER TABLE engrams ADD COLUMN impact TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        # Migrate: add impact_source if missing. Existing rows keep '' —
+        # 'unknown' — which is the honest state of any impact written before
+        # provenance was recorded, and must not be guessed at retroactively.
+        try:
+            conn.execute("ALTER TABLE engrams ADD COLUMN impact_source TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
             pass  # Column already exists
         # Set schema version

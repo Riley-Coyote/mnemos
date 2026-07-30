@@ -501,6 +501,7 @@ class MnemosRuntime:
             if engram is None:
                 return f"Recorded, but the memory {item['target_id']} is no longer there."
             engram.impact = answer
+            engram.impact_source = "agent"
             self._store.save_engram(engram)
             self._carry_reflection_into_note(engram.id, answer)
             return (
@@ -515,6 +516,7 @@ class MnemosRuntime:
             if engram is None:
                 return f"Recorded, but the memory {item['target_id']} is no longer there."
             engram.impact = answer
+            engram.impact_source = "agent"
             self._store.save_engram(engram)
             self._carry_reflection_into_note(engram.id, answer)
 
@@ -993,8 +995,16 @@ class MnemosRuntime:
         context: str = "",
         importance: str | float = "auto",
         impact: str = "",
+        impact_source: str = "agent",
     ) -> str:
-        """Capture durable continuity without exposing Mnemos internals."""
+        """Capture durable continuity without exposing Mnemos internals.
+
+        ``impact_source`` records who wrote the impact. It defaults to 'agent'
+        because the product caller is `mnemos_capture`, which the agent invokes
+        mid-conversation with an impact in its own words. Server-internal
+        captures that pass a boilerplate impact set this to 'template' so the
+        two never blur — the whole point of the field is that an agent-authored
+        trace can be told from a generated one after the fact."""
 
         if not content.strip():
             return "Nothing captured: content was empty."
@@ -1027,6 +1037,7 @@ class MnemosRuntime:
         engram = self._encoder.encode(
             content=full_content,
             impact=impact,
+            impact_source=impact_source if impact else "",
             kind=kind,
             tags=tags,
             source=SourceType.SESSION,
@@ -1159,6 +1170,7 @@ class MnemosRuntime:
                 replacement = self._encoder.encode(
                     content=correction.strip(),
                     impact="Correction to earlier continuity.",
+                    impact_source="template",
                     kind=_classify_kind(correction),
                     tags=["continuity", "correction"],
                     source=SourceType.SESSION,
@@ -1234,6 +1246,7 @@ class MnemosRuntime:
                 replacement = self._encoder.encode(
                     content=correction.strip(),
                     impact="Corrected continuity for future interactions.",
+                    impact_source="template",
                     kind=_classify_kind(correction),
                     tags=sorted(set(["continuity", "correction", *_simple_tags(correction)])),
                     source=SourceType.SESSION,
@@ -1563,6 +1576,7 @@ class MnemosRuntime:
             engram = self._encoder.encode(
                 content=entry["content"],
                 impact="Stable continuity promoted during simple maintenance.",
+                impact_source="template",
                 kind="semantic",
                 tags=["continuity", "promoted", *entry.get("tags", [])],
                 source=SourceType.BACKGROUND,

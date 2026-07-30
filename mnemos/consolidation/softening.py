@@ -217,9 +217,11 @@ def run_softening_pass(
         if not engram.impact:
             if llm_client and stats["llm_calls"] < max_llm_calls:
                 engram.impact = _extract_impact(engram.content, llm_client)
+                engram.impact_source = "model"
                 stats["llm_calls"] += 1
             elif invent_impact:
                 engram.impact = _rule_based_impact(engram.content)
+                engram.impact_source = "template"
             else:
                 # Shift 2 says the lesson is what survives the forgetting, so
                 # a lesson the server guessed at from keywords is the one

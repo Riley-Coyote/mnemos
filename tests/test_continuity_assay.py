@@ -196,3 +196,37 @@ class TestReadingIsSafe:
         read = _run("hook", "session-start", home=home)
         assert read.returncode == 0, "a broken store took the session down with it"
         assert read.stdout.strip() == "", "a broken store emitted a packet anyway"
+
+
+class TestAgentsAreIsolatedAcrossProcesses:
+    """One machine, several agents, separate memories.
+
+    Storage is one database file per agent (``~/.mnemos/<agent>.db``), so two
+    agents on the same machine must never read each other's captures. The other
+    tests here prove a single agent's continuity survives a process boundary;
+    this proves the boundary between agents holds across it too — a real
+    subprocess each, with only ``--agent-id`` distinguishing them.
+    """
+
+    def test_one_agents_capture_never_reaches_another(self, home):
+        token_a = f"alpha-only-{uuid.uuid4().hex[:12]}"
+        token_b = f"beta-only-{uuid.uuid4().hex[:12]}"
+
+        assert _run(
+            "remember", f"Alpha remembers {token_a}", "--agent-id", "alpha",
+            home=home,
+        ).returncode == 0
+        assert _run(
+            "remember", f"Beta remembers {token_b}", "--agent-id", "beta",
+            home=home,
+        ).returncode == 0
+
+        read_a = _run("hook", "session-start", "--agent-id", "alpha", home=home)
+        packet_a = json.loads(read_a.stdout)["hookSpecificOutput"]["additionalContext"]
+        assert token_a in packet_a, "alpha lost its own memory"
+        assert token_b not in packet_a, "alpha read beta's memory across the boundary"
+
+        read_b = _run("hook", "session-start", "--agent-id", "beta", home=home)
+        packet_b = json.loads(read_b.stdout)["hookSpecificOutput"]["additionalContext"]
+        assert token_b in packet_b, "beta lost its own memory"
+        assert token_a not in packet_b, "beta read alpha's memory across the boundary"

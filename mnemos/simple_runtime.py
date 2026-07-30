@@ -484,6 +484,7 @@ class MnemosRuntime:
                 return f"Recorded, but the memory {item['target_id']} is no longer there."
             engram.impact = answer
             self._store.save_engram(engram)
+            self._carry_reflection_into_note(engram.id, answer)
             return (
                 "Reflection recorded.\n"
                 f"  Memory: {' '.join((engram.content or '').split())[:80]}\n"
@@ -497,6 +498,7 @@ class MnemosRuntime:
                 return f"Recorded, but the memory {item['target_id']} is no longer there."
             engram.impact = answer
             self._store.save_engram(engram)
+            self._carry_reflection_into_note(engram.id, answer)
 
             # Shift 2: the distilled insight becomes its own durable memory,
             # linked back to the experience it came from. This edge has been
@@ -513,6 +515,58 @@ class MnemosRuntime:
             )
 
         return f"Reflection recorded for {item['target_id']} ({item['kind']})."
+
+    #: How a reflection is labelled inside a continuity note. Stable, because
+    #: re-reflecting has to find and replace the previous one rather than
+    #: stack a second copy underneath it.
+    _REFLECTION_MARKER = "What this changed:"
+
+    def _carry_reflection_into_note(self, engram_id: str, answer: str) -> str | None:
+        """Write the agent's reflection into the layer the packet is built from.
+
+        `engram.impact` is the right home for a trace, and it is not enough on
+        its own: the session packet is assembled from hypomnema, and the engram
+        layer is excluded from it by default. A reflection written only to the
+        engram was therefore unreachable from the automatic path — recoverable
+        only by a manual recall whose cue happened to match — while the tool
+        reported "Reflection recorded."
+
+        The note keeps its original content and gains the sentence. Revising
+        preserves the prior version in the entry's revision trail, so nothing
+        the human said is overwritten. Returns the note id, or None when the
+        memory has no note, which is not an error.
+        """
+        assert self._store is not None
+        try:
+            note = self._store.get_hypomnema_entry_for_engram(
+                engram_id,
+                agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+            )
+            if note is None:
+                return None
+
+            base = (note.get("content") or "")
+            # Drop an earlier reflection before adding this one, so answering
+            # twice revises rather than accumulates.
+            head = base.split(f"\n\n{self._REFLECTION_MARKER}")[0].rstrip()
+            if not head:
+                return None
+
+            return self._store.revise_hypomnema_entry(
+                note["id"],
+                f"{head}\n\n{self._REFLECTION_MARKER} {answer.strip()}",
+                reason="agent reflection",
+                agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+            )
+        except Exception:
+            # The impact write already succeeded. Losing the note update is
+            # worth reporting as a partial success, never as a failed
+            # reflection the agent might retype.
+            return None
 
     def _reflection_block(self, limit: int = 2) -> str | None:
         """The quiet ask, shown only when there is genuinely something to sit with."""

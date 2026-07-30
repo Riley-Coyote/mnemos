@@ -176,6 +176,21 @@ def main(argv: list[str] | None = None) -> int:
     p_doctor.add_argument("--person-id", default=None, help="Person/user scope")
     p_doctor.add_argument("--project-scope", default=None, help="Project/workspace scope")
 
+    # ── repair-softening ──
+    p_repair = sub.add_parser(
+        "repair-softening",
+        help="Restore memories truncated by an earlier version's softening",
+    )
+    p_repair.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
+    p_repair.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_repair.add_argument("--person-id", default=None, help="Person/user scope")
+    p_repair.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    p_repair.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would be restored without writing",
+    )
+
     # ── hermes ──
     p_hermes = sub.add_parser("hermes", help="Hermes Agent identity-continuity integration")
     hermes_sub = p_hermes.add_subparsers(dest="hermes_command")
@@ -384,6 +399,7 @@ def main(argv: list[str] | None = None) -> int:
         "bridge": _cmd_bridge,
         "remember": _cmd_remember,
         "doctor": _cmd_doctor,
+        "repair-softening": _cmd_repair_softening,
         "hermes": _cmd_hermes,
         "identity": _cmd_identity,
         "mcp": _cmd_mcp,
@@ -1160,6 +1176,36 @@ def _cmd_remember(args: argparse.Namespace) -> int:
         runtime.close()
 
 
+def _cmd_repair_softening(args: argparse.Namespace) -> int:
+    """Restore memories an earlier version truncated without a model.
+
+    Before ``soften_without_model`` defaulted to False, a store with no
+    provider rewrote fading memories to "An impression related to <word>...
+    [faded]" and left the impact empty. Nothing recovers that on its own.
+    """
+    from .simple_runtime import MnemosRuntime
+
+    runtime = MnemosRuntime(
+        db_path=getattr(args, "db_path", None),
+        agent_id=getattr(args, "agent_id", None),
+        person_id=getattr(args, "person_id", None),
+        project_scope=getattr(args, "project_scope", None),
+    )
+    try:
+        dry_run = bool(getattr(args, "dry_run", False))
+        count = runtime.repair_softening(dry_run=dry_run)
+        if not count:
+            print(f"Nothing to repair in {runtime.db_path}.")
+            return 0
+        verb = "would be restored" if dry_run else "restored"
+        print(f"{count} memory(ies) {verb} in {runtime.db_path}.")
+        if dry_run:
+            print("Re-run without --dry-run to write the restoration.")
+        return 0
+    finally:
+        runtime.close()
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     """Check simple-mode readiness."""
     from .simple_runtime import MnemosRuntime, SIMPLE_TOOL_NAMES
@@ -1225,6 +1271,19 @@ def _print_continuity_status(runtime) -> None:
     print(f"Continuity:   {notes} note(s), {signals['empty_context_streak']} empty packet(s) in a row")
     for warning in signals["warnings"]:
         print(f"  ATTENTION:  {warning}")
+
+    # Damage from a version that truncated memories it could not read. The
+    # user has no other way to discover this: the store reports healthy, and
+    # the memories still exist — they just no longer say anything.
+    try:
+        damaged = runtime.repair_softening(dry_run=True)
+    except Exception:
+        return
+    if damaged:
+        print(
+            f"  ATTENTION:  {damaged} memory(ies) were truncated by an earlier "
+            "version and can be restored — run 'mnemos repair-softening'"
+        )
 
 
 def _print_background_status(scope) -> None:

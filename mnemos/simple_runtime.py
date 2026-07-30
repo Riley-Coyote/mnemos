@@ -213,6 +213,24 @@ class MnemosRuntime:
         self._ensure_init()
         return self._llm_client is not None
 
+    def repair_softening(self, dry_run: bool = False) -> int:
+        """Restore memories an earlier version truncated without a model.
+
+        Returns how many were restored, or would be when ``dry_run``. A store
+        that does not exist yet has nothing to repair and must not be brought
+        into existence by the asking — `doctor` calls this, and a check that
+        creates the thing it is checking reports health about itself.
+        """
+        if not self.db_path.exists():
+            return 0
+        self._ensure_init()
+        assert self._store is not None
+        from .consolidation.softening import repair_rule_based_softening
+
+        return repair_rule_based_softening(
+            self._store, agent_id=self.scope.agent_id, dry_run=dry_run
+        )
+
     def close(self) -> None:
         if self._store is not None:
             self._store.close()

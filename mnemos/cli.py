@@ -430,8 +430,18 @@ def _cmd_hook(args: argparse.Namespace) -> int:
     # A memory hiccup must never cost someone their session. Every failure
     # path here exits 0 with no stdout, which the harness reads as "this
     # hook contributed nothing" rather than as an error.
+    #
+    # Drain any payload the harness passed on stdin, but never block on it. A
+    # bare read() waits for EOF, so a harness that spawns the hook and leaves
+    # stdin open would hang session start forever. select() drains only what is
+    # already there and returns the moment there is nothing more to read.
     try:
-        sys.stdin.read()
+        import select
+
+        fd = sys.stdin.fileno()
+        while select.select([fd], [], [], 0.0)[0]:
+            if not os.read(fd, 65536):
+                break  # EOF — writer closed its end
     except Exception:
         pass
 

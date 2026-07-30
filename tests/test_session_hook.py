@@ -99,6 +99,60 @@ class TestSessionStartHook:
         assert not missing.exists(), "reading memory created a database"
 
 
+class TestTheHookNeverBlocksOnStdin:
+    """Session start must not hang, whatever the harness does with stdin.
+
+    The hook drains stdin (harnesses may pass a payload there), but a bare
+    ``sys.stdin.read()`` reads to EOF — so a harness that spawns the hook and
+    leaves stdin open blocks it forever. A hook that never returns is worse
+    than one that returns nothing: it stalls the session it exists to help.
+
+    Driven as a real subprocess with an open stdin pipe, because that is the
+    only way to observe a blocking read. Points at a missing store so the hook
+    returns promptly via its own no-store guard; the timeout is what fails on
+    the blocking version.
+    """
+
+    def test_returns_promptly_with_stdin_held_open(self, tmp_path):
+        import subprocess
+        import sys
+
+        missing = tmp_path / "nope" / "memory.db"
+        proc = subprocess.Popen(
+            [
+                sys.executable, "-m", "mnemos.cli", "hook", "session-start",
+                "--db-path", str(missing), "--agent-id", "demo",
+            ],
+            # stdin is a pipe whose write end we deliberately hold open and
+            # never feed. `communicate()` would close it (sending EOF), which
+            # is exactly the case that does NOT hang — so we wait() instead and
+            # leave stdin open, reproducing a harness that forgot to close it.
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env={
+                "HOME": str(_seed_home(tmp_path)),
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                "MNEMOS_DISABLE_DOTENV": "1",
+                "PYTHONPATH": ":".join(sys.path),
+            },
+        )
+        try:
+            # On the blocking version `sys.stdin.read()` never sees EOF, so the
+            # process never exits and this raises TimeoutExpired — the failure.
+            returncode = proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise AssertionError(
+                "the hook hung with stdin held open — session start would stall"
+            )
+        finally:
+            if proc.stdin:
+                proc.stdin.close()
+        assert returncode == 0
+
+
 class TestContinuityOnlyPacket:
     """What the hook injects into every session, and what it must not.
 

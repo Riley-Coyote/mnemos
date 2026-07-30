@@ -74,6 +74,35 @@ _BELIEF_COLUMNS = frozenset({
     "supporting_engram_ids",
 })
 
+# Columns a store from before 0.2 may be missing, added on open by
+# `_reconcile_columns`. Every definition (and its default) must match the
+# corresponding column in SQL_CREATE_TABLES below. Only columns that carry a
+# default are listed — a NOT NULL column without one cannot be added to a table
+# that already has rows, and those (id, content, created_at, …) are structural
+# originals present in any store that has the table.
+_RECONCILABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "engrams": [
+        ("impact", "impact TEXT NOT NULL DEFAULT ''"),
+        ("impact_source", "impact_source TEXT NOT NULL DEFAULT ''"),
+        ("resolution", "resolution REAL NOT NULL DEFAULT 1.0"),
+        ("kind", "kind TEXT NOT NULL DEFAULT 'episodic'"),
+        ("tags", "tags TEXT NOT NULL DEFAULT '[]'"),
+        ("schema_refs", "schema_refs TEXT NOT NULL DEFAULT '[]'"),
+        ("strength", "strength REAL NOT NULL DEFAULT 0.5"),
+        ("stability", "stability REAL NOT NULL DEFAULT 0.1"),
+        ("accessibility", "accessibility REAL NOT NULL DEFAULT 0.5"),
+        ("encoding_context", "encoding_context TEXT NOT NULL DEFAULT '{}'"),
+        ("source", "source TEXT NOT NULL DEFAULT '{}'"),
+        ("lineage", "lineage TEXT NOT NULL DEFAULT '{}'"),
+        ("owner_agent_id", "owner_agent_id TEXT NOT NULL DEFAULT 'default'"),
+        ("visibility", "visibility TEXT NOT NULL DEFAULT 'private'"),
+        ("state", "state TEXT NOT NULL DEFAULT 'active'"),
+        ("access_count", "access_count INTEGER NOT NULL DEFAULT 0"),
+        ("reconsolidation_count", "reconsolidation_count INTEGER NOT NULL DEFAULT 0"),
+    ],
+}
+
+
 SQL_CREATE_TABLES = """
 -- Core engram storage
 CREATE TABLE IF NOT EXISTS engrams (
@@ -395,27 +424,50 @@ class EngramStore:
         self._init_db()
 
     def _init_db(self) -> None:
-        """Initialize database with schema."""
+        """Initialize database with schema.
+
+        Reconciliation runs **before** the schema script, not after. The script
+        creates indexes on engram columns (`state`, `accessibility`, …); on a
+        store written by an earlier Mnemos whose `engrams` table lacks those
+        columns, `CREATE INDEX` raises at open time — so a bare `ALTER` after
+        `executescript` never even runs. Adding the missing columns first lets
+        the rest of the script (which is all `IF NOT EXISTS`) apply cleanly.
+        """
         conn = self._get_conn()
+        self._reconcile_columns(conn)
         conn.executescript(SQL_CREATE_TABLES)
-        # Migrate: add impact column if missing (v0.1 → v0.2)
-        try:
-            conn.execute("ALTER TABLE engrams ADD COLUMN impact TEXT NOT NULL DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        # Migrate: add impact_source if missing. Existing rows keep '' —
-        # 'unknown' — which is the honest state of any impact written before
-        # provenance was recorded, and must not be guessed at retroactively.
-        try:
-            conn.execute("ALTER TABLE engrams ADD COLUMN impact_source TEXT NOT NULL DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        # Set schema version
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
             ("schema_version", str(SCHEMA_VERSION)),
         )
         conn.commit()
+
+    @staticmethod
+    def _reconcile_columns(conn: sqlite3.Connection) -> None:
+        """Add any expected column an older table is missing.
+
+        `CREATE TABLE IF NOT EXISTS` never alters a table that already exists,
+        so a database from before a column was added is not upgraded by the
+        schema script alone — only `impact`/`impact_source` had one-off `ALTER`
+        backfills, and a store missing any of the other 0.2 columns raised
+        `OperationalError` in ordinary use. This adds every missing column with
+        its schema default. It is idempotent (present columns are skipped), and
+        it skips a table that does not exist yet (a fresh database — the schema
+        script will create it in full).
+
+        Every default here matches ``SQL_CREATE_TABLES``. Columns with no
+        default (the structural originals: id, content, created_at, …) are not
+        listed: they exist in any store old enough to have the table at all,
+        and SQLite cannot ADD a NOT NULL column without a default to a
+        populated table anyway.
+        """
+        for table, columns in _RECONCILABLE_COLUMNS.items():
+            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if not existing:
+                continue  # table absent — the schema script will create it whole
+            for name, add_ddl in columns:
+                if name not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {add_ddl}")
 
     def _get_conn(self) -> sqlite3.Connection:
         """Get or create SQLite connection with WAL mode."""
@@ -481,6 +533,47 @@ class EngramStore:
         except Exception:
             conn.rollback()
             raise
+
+    def engram_visible_in_scope(
+        self,
+        engram_id: str,
+        *,
+        agent_id: str,
+        person_id: str,
+        project_scope: str,
+    ) -> bool:
+        """Whether an engram may surface for a full three-tuple scope.
+
+        Engrams carry only ``owner_agent_id``, so retrieval filters by agent
+        alone. Continuity is scoped by agent/person/project, and every capture
+        links its engram to a scoped hypomnema row. Without this check, two
+        people sharing one agent — or one person's separate projects — see each
+        other's durable memories, while the continuity layer above them stays
+        correctly separated.
+
+        This is the single source of truth for that question. Both the simple
+        runtime's ``_retrieve`` and ``build_context_packet`` route through it,
+        so the two read paths cannot drift about whose memory this is. Engrams
+        with no scoped hypomnema link (older ones, or anything encoded outside
+        the continuity path) stay visible to their owning agent.
+        """
+        rows = self._get_conn().execute(
+            """
+            SELECT agent_id, person_id, project_scope, active
+            FROM hypomnema_entries
+            WHERE related_engram_id = ? OR graduated_to_engram_id = ?
+            """,
+            (engram_id, engram_id),
+        ).fetchall()
+        if not rows:
+            return True
+        return any(
+            row["active"]
+            and row["agent_id"] == agent_id
+            and row["person_id"] == person_id
+            and row["project_scope"] == project_scope
+            for row in rows
+        )
 
     def get_engram(self, engram_id: str) -> Engram | None:
         """Load an engram by ID, including connections and versions."""

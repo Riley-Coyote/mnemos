@@ -144,6 +144,7 @@ class Encoder:
         override_confidence: float | None = None,
         override_confidence_source: str | None = None,
         skip_surprise_detection: bool = False,
+        impact_source: str = "",
     ) -> Engram:
         """Create a new engram from raw content.
 
@@ -205,6 +206,7 @@ class Encoder:
         engram = Engram(
             content=content,
             impact=impact,
+            impact_source=impact_source if impact else "",
             kind=kind,
             tags=tags,
             strength=strength,

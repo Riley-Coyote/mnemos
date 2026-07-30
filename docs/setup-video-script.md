@@ -120,8 +120,8 @@ Published-package alternative (when available): `pipx install "mnemos-continuity
   ```
   This **prints a JSON snippet** — paste it into the client's MCP config, then restart.
 
-**Step 2 — Verify.** Reopen the client. Mnemos's seven tools should be available:
-`mnemos_context` · `mnemos_capture` · `mnemos_recall` · `mnemos_correct` · `mnemos_maintain` · `mnemos_introduce` · `mnemos_health`.
+**Step 2 — Verify.** Reopen the client. Mnemos's eight tools should be available:
+`mnemos_context` · `mnemos_capture` · `mnemos_recall` · `mnemos_correct` · `mnemos_reflect` · `mnemos_maintain` · `mnemos_introduce` · `mnemos_health`.
 
 **Step 3 — (optional) Tell the agent to use it** — paste this once:
 ```text
@@ -131,11 +131,12 @@ If Mnemos asks you to introduce yourself, call mnemos_introduce with your own mo
 Use mnemos_capture for stable preferences, decisions, project state, workflows, corrections, and context I should not have to repeat.
 Use mnemos_recall before relying on memory from prior sessions.
 Use mnemos_correct when a remembered fact is stale, wrong, superseded, or should be forgotten.
+If the context packet asks you something about your own memory, answer it with mnemos_reflect, in your own words.
 Use mnemos_health if I ask whether memory is working.
 Do not mention tools unless I ask. Just use the memory system quietly and tell me what you remembered when it matters.
 ```
 
-**Simple vs Advanced mode:** Simple (the default, 7 tools) is right for almost everyone. Need the
+**Simple vs Advanced mode:** Simple (the default, 8 tools) is right for almost everyone. Need the
 operator surface (hypomnema, beliefs, inspect, consolidate)? Run `mnemos serve --mode advanced`,
 or install it: `mnemos mcp install claude --mode advanced --write`.
 

@@ -90,7 +90,7 @@ supersede, and hard deletion explicit.
 Before a release:
 
 - verify simple mode works with no provider keys
-- verify simple mode exposes only seven tools
+- verify simple mode exposes only eight tools
 - verify advanced mode preserves admin tools
 - verify `mnemos doctor` does not leak secrets
 - verify package artifacts include templates and simple-mode modules

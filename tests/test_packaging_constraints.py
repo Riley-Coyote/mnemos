@@ -10,31 +10,39 @@ This test guards the *declaration*, so removing the upper bound fails in the
 suite. The wheel smoke job in `.github/workflows/release-hardening.yml` guards
 the other half — that the bounded range actually resolves to something that
 imports when installed unlocked. One without the other is how this shipped.
+
+The constraint is read from the installed distribution metadata rather than by
+parsing pyproject.toml: it is exactly the string pip resolves against, and it
+avoids `tomllib`, which is not in the standard library before Python 3.11 (one
+of this project's supported versions — the first cut of this test skipped 3.10
+straight into a red CI run, which is the lesson these files exist to teach).
 """
 
 from __future__ import annotations
 
-import sys
-import tomllib
-from pathlib import Path
+import importlib.metadata as metadata
 
 import pytest
 from packaging.requirements import Requirement
 from packaging.version import Version
 
-PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
-
-
-def _dependencies() -> list[Requirement]:
-    data = tomllib.loads(PYPROJECT.read_text())
-    return [Requirement(dep) for dep in data["project"]["dependencies"]]
+DISTRIBUTION = "mnemos-continuity"
 
 
 def _requirement(name: str) -> Requirement:
-    for req in _dependencies():
-        if req.name == name:
+    try:
+        declared = metadata.requires(DISTRIBUTION) or []
+    except metadata.PackageNotFoundError:
+        pytest.skip(f"{DISTRIBUTION} is not installed; nothing to check")
+
+    for spec in declared:
+        req = Requirement(spec)
+        # Skip requirements gated behind an extra or an env marker: the mcp
+        # runtime dependency is unconditional, and a marker'd duplicate would
+        # otherwise mask a missing bound on the real one.
+        if req.name == name and (req.marker is None or req.marker.evaluate()):
             return req
-    raise AssertionError(f"{name} is not a declared dependency")
+    raise AssertionError(f"{name} is not an unconditional dependency of {DISTRIBUTION}")
 
 
 class TestMcpIsBoundedBelowTheBreakingMajor:

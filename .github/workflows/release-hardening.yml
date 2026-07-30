@@ -49,9 +49,12 @@ jobs:
           # Glob the project prefix, not the full distribution name, so a
           # rename cannot silently break this check with a StopIteration.
           wheel = next(Path("dist").glob("mnemos*.whl"))
+          # Keep this set identical to the one in release.yml — a packaging
+          # regression must not pass one gate and fail the other.
           required = {
               "mnemos/simple_runtime.py",
               "mnemos/simple_mcp.py",
+              "mnemos/setup/scheduler.py",
               "templates/SOUL.md",
               "templates/IDENTITY.md",
           }

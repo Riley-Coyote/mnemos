@@ -41,7 +41,7 @@
     <text x="540" y="434" fill="#ffffff" fill-opacity="0.82">ok</text>
     <circle cx="104" cy="470" r="3" fill="#ffffff" fill-opacity="0.7"/>
     <text x="126" y="476" fill="#ffffff" fill-opacity="0.6">mcp surface</text>
-    <text x="540" y="476" fill="#ffffff" fill-opacity="0.82">7 tools</text>
+    <text x="540" y="476" fill="#ffffff" fill-opacity="0.82">8 tools</text>
   </g>
   <circle cx="102" cy="544" r="5" fill="#ffffff"/>
   <text x="124" y="552" font-family="JetBrains Mono, ui-monospace, monospace" font-size="27"><tspan fill="#f5f6f7">ready</tspan><tspan fill="#ffffff" fill-opacity="0.4"> — local-first, no external services required.</tspan></text>

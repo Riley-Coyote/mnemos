@@ -50,7 +50,7 @@ document ingestion, Mnemos is not that and is not trying to be.
 | Hermes agent using Mnemos as its provider | Hermes Provider Mode | `mnemos hermes quickstart --provider` |
 | Background memory maintenance | Substrate tick | `mnemos substrate-tick` |
 
-Start with **Simple MCP Mode**. It is the product: seven tools, and the default.
+Start with **Simple MCP Mode**. It is the product: eight tools, and the default.
 
 Advanced mode adds twenty-three operator tools to the same server. It exists for
 inspecting and administering memory directly, not for everyday use — a larger
@@ -106,7 +106,7 @@ Simple mode is the default and safest path for most agents.
 mnemos serve
 ```
 
-Simple mode exposes seven user-facing tools:
+Simple mode exposes eight user-facing tools:
 
 | Tool | Purpose |
 |---|---|
@@ -114,9 +114,10 @@ Simple mode exposes seven user-facing tools:
 | `mnemos_capture` | Capture durable preferences, decisions, project state, workflows, and context. |
 | `mnemos_recall` | Search scoped continuity and durable memory with natural language. |
 | `mnemos_correct` | Update, supersede, or archive stale memory. |
+| `mnemos_reflect` | Answer a reflection the packet raised — what a memory changed, or what a fading one taught — in the agent's own words. Mnemos never calls a model to write this; the agent's memory is maintained by its own mind or not at all. |
 | `mnemos_maintain` | Run the best available maintenance without requiring setup. |
-| `mnemos_introduce` | Let the agent declare its own model id and name so memory maintenance stays kin from day one. |
-| `mnemos_health` | Human-relayable health card: store location and size, counts, last maintenance cycle, affinity verdict, onboarding state, and last dream entry. |
+| `mnemos_introduce` | Let the agent declare its own model id and name, so its memory knows whose it is. |
+| `mnemos_health` | Human-relayable health card: store location and size, counts, last maintenance cycle, onboarding state, and last dream entry. |
 
 Agents do not need to pass tags, memory kinds, confidence, source types, or
 agent IDs. Mnemos resolves scope once from CLI flags, environment, config, and
@@ -229,6 +230,7 @@ If Mnemos asks you to introduce yourself, call mnemos_introduce with your own mo
 Use mnemos_capture for stable preferences, decisions, project state, workflows, corrections, and context I should not have to repeat.
 Use mnemos_recall before relying on memory from prior sessions.
 Use mnemos_correct when a remembered fact is stale, wrong, superseded, or should be forgotten.
+If the context packet asks you something about your own memory — what a capture changed, what a fading memory taught — answer it with mnemos_reflect, in your own words. If nothing true comes to mind, leave it.
 Use mnemos_health if I ask whether memory is working.
 
 Do not mention tools unless I ask. Just use the memory system quietly and tell me what you remembered when it matters.
@@ -281,7 +283,7 @@ operator needs direct access to Mnemos internals.
 ```text
 You have Mnemos advanced MCP tools.
 
-Prefer the simple Mnemos tools for normal continuity: mnemos_context, mnemos_capture, mnemos_recall, mnemos_correct, mnemos_maintain, mnemos_introduce, and mnemos_health.
+Prefer the simple Mnemos tools for normal continuity: mnemos_context, mnemos_capture, mnemos_recall, mnemos_correct, mnemos_reflect, mnemos_maintain, mnemos_introduce, and mnemos_health.
 Use hypomnema tools when we need precise scoped continuity before promotion.
 Use mnemos_inspect, mnemos_status, mnemos_beliefs, and mnemos_consolidate for debugging, migration, or explicit maintenance.
 Do not promote uncertain claims into durable memory without evidence or user confirmation.
@@ -470,10 +472,9 @@ memory voice unless explicitly allowed.
 ```text
 Run a Mnemos maintenance check for this agent.
 
-First run mnemos doctor and read the affinity status.
+First run mnemos doctor and read the retrieval, continuity, and background status.
 If the doctor output is healthy, run mnemos substrate-tick for one maintenance cycle.
-If a dedicated model provider is not configured, explain that Mnemos will use local/rule-based maintenance only.
-If affinity blocks the substrate model, do not force it. Explain the mismatch and what environment variables would fix it.
+If a dedicated model provider is not configured, explain that Mnemos will use local, deterministic maintenance only, and that work needing judgement is left for the agent to answer through mnemos_reflect rather than performed by an outside model.
 Report what maintenance ran and whether any follow-up is needed.
 ```
 

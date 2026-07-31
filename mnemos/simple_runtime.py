@@ -113,6 +113,17 @@ def _simple_tags(content: str, context: str = "") -> list[str]:
     return sorted(set(tags))
 
 
+# A theme must recur across at least this many memories before the agent is
+# asked whether it has become a belief — a belief is a stable pattern, not a
+# single mention.
+_BELIEF_MIN_MEMORIES = 4
+
+# Only captures whose encoding registered real surprise (they did not fit what
+# was already held) are offered as contradiction candidates. Keeps the ask rare
+# and tied to genuine tension, not mere topical overlap.
+_CONTRADICTION_MIN_SURPRISE = 0.4
+
+
 _STOPWORDS = {
     "about",
     "after",
@@ -464,6 +475,191 @@ class MnemosRuntime:
                 enqueued += 1
         return enqueued
 
+    def _enqueue_belief_reflections(self, limit: int = 1) -> int:
+        """Notice a theme the agent keeps returning to, and ask if it is a belief.
+
+        Belief formation is otherwise absent on a keyless install — nothing
+        mints new beliefs. Maintenance can only NOTICE a recurring theme (a
+        non-bookkeeping tag across several memories, with no belief covering it
+        yet) and ask; the agent states the belief in its own words through
+        mnemos_reflect, or leaves it. The server never writes a belief itself.
+
+        If nothing new emerges, it may instead re-surface one existing
+        agent-authored belief for reaffirmation — the automatic
+        belief-correction loop: a "no" retires it. Conservative by design
+        (limit 1), and the packet's own ≤2 cap keeps it from ever nagging.
+        """
+        self._ensure_init()
+        assert self._store is not None
+        from collections import Counter
+
+        already = {
+            r[0] for r in self._store._get_conn().execute(
+                "SELECT target_id FROM reflection_queue WHERE agent_id = ? "
+                "AND person_id = ? AND project_scope = ? AND answered_at IS NULL",
+                (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
+            ).fetchall()
+        }
+
+        rows = self._store._get_conn().execute(
+            """
+            SELECT e.id, e.content
+            FROM engrams e
+            JOIN hypomnema_entries h ON h.related_engram_id = e.id
+            WHERE h.agent_id = ? AND h.person_id = ? AND h.project_scope = ?
+              AND h.active = 1 AND e.state = 'active'
+            ORDER BY e.created_at DESC
+            LIMIT 200
+            """,
+            (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
+        ).fetchall()
+
+        # A theme is a salient content term recurring across several memories.
+        # Tags from a simple capture are all bookkeeping, so cluster on content
+        # instead — the agent then judges whether the recurrence is a belief.
+        term_engrams: dict[str, list[str]] = {}
+        for row in rows:  # newest first
+            for term in _query_terms(row["content"] or ""):
+                if len(term) <= 3:
+                    continue
+                ids = term_engrams.setdefault(term, [])
+                if row["id"] not in ids:
+                    ids.append(row["id"])
+
+        existing = " ".join(
+            b.content.lower()
+            for b in self._store.get_beliefs(self.scope.agent_id, active_only=True)
+        )
+
+        ranked = sorted(term_engrams.items(), key=lambda kv: len(kv[1]), reverse=True)
+        for theme, ids in ranked:
+            if len(ids) < _BELIEF_MIN_MEMORIES:
+                break  # descending — nothing else clears the bar
+            if theme.lower() in existing:
+                continue
+            # A belief ask must not share a target with another pending
+            # reflection: the tool answers by target_id alone, so a collision
+            # would route the agent's belief answer to an impact question.
+            target = next((i for i in ids if i not in already), None)
+            if target is None:
+                continue
+            if self._store.enqueue_reflection(
+                "belief",
+                target,
+                f'You keep returning to "{theme}" ({len(ids)} memories). Is that a '
+                f"belief you now hold? State it in one line, or leave it. [theme:{theme}]",
+                agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+            ):
+                return 1  # one belief ask per cycle, never more
+
+        return self._enqueue_belief_reaffirmation(already)
+
+    def _enqueue_belief_reaffirmation(self, already: set[str]) -> int:
+        """Re-surface one stale agent-authored belief to confirm it still holds."""
+        assert self._store is not None
+        beliefs = [
+            b for b in self._store.get_beliefs(self.scope.agent_id, active_only=True)
+            if b.source == "agent" and b.supporting_engram_ids
+        ]
+        beliefs.sort(key=lambda b: b.last_challenged)  # least-recently-checked first
+        for belief in beliefs:
+            target = belief.supporting_engram_ids[0]
+            if target in already:
+                continue
+            if self._store.get_engram(target) is None:
+                continue
+            if self._store.enqueue_reflection(
+                "belief",
+                target,
+                f'You hold this belief: "{belief.content[:100]}". Still true? '
+                f"Reply 'no' to retire it, or anything else to keep it. "
+                f"[belief:{belief.id}]",
+                agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+            ):
+                return 1
+        return 0
+
+    def _enqueue_contradiction_reflections(self, limit: int = 1) -> int:
+        """Ask the agent to judge a genuine tension it just encountered.
+
+        Contradiction is the highest-value edge — it is how wrong memory gets
+        corrected — but detecting one needs judgement no keyword heuristic has.
+        So maintenance only surfaces a *candidate*: a capture whose encoding
+        registered real surprise (it did not fit what was already held) paired
+        with its nearest existing neighbour. The agent decides whether they
+        actually conflict. Rare by construction — most captures aren't
+        surprising — so this is not a chore stream.
+        """
+        self._ensure_init()
+        assert self._store is not None
+
+        already = {
+            r[0] for r in self._store._get_conn().execute(
+                "SELECT target_id FROM reflection_queue WHERE agent_id = ? "
+                "AND person_id = ? AND project_scope = ? AND answered_at IS NULL",
+                (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
+            ).fetchall()
+        }
+
+        recent = self._store.get_active_engrams(agent_id=self.scope.agent_id, limit=25)
+        for engram in recent:
+            if engram.id in already:
+                continue
+            surprise = float(
+                getattr(engram.encoding_context, "surprise_level", 0.0) or 0.0
+            )
+            if surprise < _CONTRADICTION_MIN_SURPRISE:
+                continue
+            neighbor = self._nearest_neighbor(engram)
+            if neighbor is None:
+                continue
+            # Skip if the pair is already typed as contradicting.
+            if any(
+                c.target_id == neighbor.id
+                and str(getattr(c.relation, "value", c.relation)) == "contradicts"
+                for c in engram.connections
+            ):
+                continue
+            excerpt = " ".join((neighbor.content or "").split())[:120]
+            if self._store.enqueue_reflection(
+                "contradiction",
+                engram.id,
+                f'This memory surprised you. Does it contradict an earlier one: '
+                f'"{excerpt}"? Reply yes (and why) or no. [ref:{neighbor.id}]',
+                agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+            ):
+                return 1
+        return 0
+
+    def _nearest_neighbor(self, engram: Any) -> Any:
+        """The most topically-overlapping other active engram, or None.
+
+        Reuses the FTS OR-query neighbour pattern the encoder uses, so a
+        contradiction candidate is found the same cheap way connections are.
+        """
+        assert self._store is not None
+        words = [w for w in (engram.content or "").split() if len(w) > 3 and w.isalnum()]
+        if not words:
+            return None
+        query = " OR ".join(f'"{w}"' for w in words[:8])
+        try:
+            results = self._store.search_fts(query, limit=5)
+        except (ValueError, OSError):
+            return None
+        for r in results:
+            if r.id == engram.id:
+                continue
+            neighbor = self._store.get_engram(r.id)
+            if neighbor is not None and neighbor.owner_agent_id == self.scope.agent_id:
+                return neighbor
+        return None
+
     def pending_reflections(self, limit: int = 2) -> list[dict[str, Any]]:
         self._ensure_init()
         assert self._store is not None
@@ -534,7 +730,106 @@ class MnemosRuntime:
                 + "The details can fade now. This is what stays."
             )
 
+        if item["kind"] == "belief":
+            return self._apply_belief_reflection(item, answer)
+
+        if item["kind"] == "contradiction":
+            return self._apply_contradiction_reflection(item, answer)
+
         return f"Reflection recorded for {item['target_id']} ({item['kind']})."
+
+    def _apply_belief_reflection(self, item: dict[str, Any], answer: str) -> str:
+        """Form a belief the agent stated, or retire one it disavowed.
+
+        The queue row carries the context in its prompt: a `[belief:<id>]`
+        marker means this was a reaffirmation (a 'no' retires it); otherwise
+        it is a fresh belief the agent is stating in its own words. The server
+        never invents the content — an empty answer just clears the ask.
+        """
+        assert self._store is not None
+        from .core.belief import Belief
+
+        prompt = item.get("prompt") or ""
+
+        m = re.search(r"\[belief:(belief_[A-Za-z0-9]+)\]", prompt)
+        if m:  # reaffirmation of an existing belief
+            belief_id = m.group(1)
+            if answer.strip().lower().startswith("no") or "no longer" in answer.lower():
+                self._store.supersede_belief(belief_id, reason="agent no longer holds it")
+                return "Retired. That belief no longer shapes your context."
+            belief = self._store.get_belief(belief_id)
+            if belief is not None:
+                self._store.revise_belief(
+                    belief_id, min(0.95, belief.confidence + 0.05),
+                    reason="reaffirmed by the agent",
+                )
+            return "Kept. The belief stands, a little more firmly."
+
+        # Formation. A themed prompt carries the domain; the target is evidence.
+        theme = ""
+        tm = re.search(r"\[theme:([^\]]+)\]", prompt)
+        if tm:
+            theme = tm.group(1).strip()
+        belief = Belief(
+            agent_id=self.scope.agent_id,
+            content=answer,
+            confidence=0.4,
+            domain=theme or "general",
+            supporting_engram_ids=[item["target_id"]],
+            source="agent",
+        )
+        self._store.save_belief(belief)
+        return (
+            "Belief recorded, in your words.\n"
+            f"  {answer}\n"
+            "It will shape what you notice and can be revised as you learn."
+        )
+
+    def _apply_contradiction_reflection(self, item: dict[str, Any], answer: str) -> str:
+        """Record the agent's judgement of a candidate contradiction.
+
+        On 'yes', write a CONTRADICTS edge (marked `agent_reflection` so it is
+        distinguishable and correctable) and apply a bounded, floored decrement
+        to the older memory's strength — the first deliberate downward move in
+        a graph whose stability otherwise only ratchets up. On 'no', clear the
+        ask and remove any stale agent-typed contradiction between the pair.
+        """
+        assert self._store is not None
+        from .core.types import ConnectionRelation
+
+        prompt = item.get("prompt") or ""
+        m = re.search(r"\[ref:(engram_[A-Za-z0-9]+)\]", prompt)
+        if not m:
+            return "Recorded."
+        other_id = m.group(1)
+        source = self._store.get_engram(item["target_id"])
+        other = self._store.get_engram(other_id)
+        if source is None or other is None:
+            return "Recorded, but one of the memories is no longer there."
+
+        said_yes = answer.strip().lower().startswith("y") or "contradict" in answer.lower()
+        if not said_yes:
+            # The agent judged them compatible — undo any agent-typed edge.
+            self._store.remove_connection(source.id, other.id)
+            return "Noted — not a contradiction. No conflict recorded."
+
+        source.add_connection(
+            target_id=other.id,
+            relation=ConnectionRelation.CONTRADICTS,
+            strength=0.7,
+            formed_by="agent_reflection",
+        )
+        self._store.save_engram(source)
+        # Erode the older memory — new evidence usually corrects the prior.
+        older = other if other.created_at <= source.created_at else source
+        older.strength = max(0.1, older.strength - 0.15)
+        self._store.save_engram(older)
+        return (
+            "Contradiction recorded.\n"
+            f"  {' '.join((source.content or '').split())[:70]}\n"
+            f"  vs {' '.join((other.content or '').split())[:70]}\n"
+            "The earlier memory carries a little less weight now."
+        )
 
     #: How a reflection is labelled inside a continuity note. Stable, because
     #: re-reflecting has to find and replace the previous one rather than
@@ -1377,6 +1672,12 @@ class MnemosRuntime:
             self._store.purge_stale_reflections()
             self._enqueue_lesson_reflections(stats.get("softening") or {})
             self._enqueue_impact_reflections(limit=2)
+            # Judgement the agent alone can do, proposed rarely: whether a
+            # recurring theme is a belief, and whether a surprising capture
+            # contradicts what was already held. The packet's ≤2 cap and the
+            # per-cycle limit of 1 each keep these from ever becoming a chore.
+            self._enqueue_belief_reflections(limit=1)
+            self._enqueue_contradiction_reflections(limit=1)
         except Exception:
             pass
 

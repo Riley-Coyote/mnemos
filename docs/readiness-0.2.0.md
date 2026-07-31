@@ -39,6 +39,26 @@ From `scripts/readiness_check.py`, no provider configured:
 All five are alive with no API key — the claim the explainer makes, now true on
 the default install.
 
+### The last two judgment tasks, also keyless
+
+A provider used to be needed for two things: forming beliefs and detecting
+contradictions. Both now run through the agent's own turns (the reflection
+queue) — the inversion, completed. Measured on a keyless store in the same
+run:
+
+| Task | Signal | Result |
+|---|---|---|
+| belief formation | agent-authored beliefs standing | **1** |
+| contradiction judgment | agent-typed `CONTRADICTS` edges | **1** |
+| correction | a wrong agent belief retired (confidence/stability **down**) | **yes** |
+
+So a keyless install now forms beliefs it can state, judges contradictions it
+can see, and — the safety floor — can correct a wrong one. There is nothing a
+provider is *required* for; a configured model only accelerates this
+unattended (headless installs with no agent turn). The honest limit below
+still holds: general `supports`/`causes` edge-typing stays `co_activated`
+until an agent or provider types it.
+
 ## Issues the pass found and fixed
 
 Each landed with a test proven to fail on the prior code (stash/run/restore),

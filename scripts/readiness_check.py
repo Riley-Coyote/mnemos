@@ -189,6 +189,81 @@ def c2_mind_state(workdir: Path) -> dict:
     return state
 
 
+# ──────────── C4: the agent forms/judges/corrects, keyless ────────────
+
+def c4_agent_judgment(workdir: Path) -> dict:
+    """The last two judgment tasks, run through the agent with no provider.
+
+    Belief formation, contradiction judgment, and correction — all keyless,
+    the thing a provider used to be needed for. Drives the real runtime end to
+    end: a theme becomes a belief the agent states, a surprising capture
+    becomes a contradiction the agent judges (writing an edge and a deliberate
+    decrement), and a wrong belief is corrected away.
+    """
+    import re as _re
+
+    from benchmarks.continuity_eval import mind_state
+    from mnemos.simple_runtime import MnemosRuntime
+
+    db = str(workdir / "judgment.db")
+    rt = MnemosRuntime(db_path=db, agent_id="mind", person_id="tester",
+                       project_scope="check")
+
+    # A recurring theme → a belief candidate.
+    for i in range(6):
+        rt.capture(content=f"The vektor renderer needs another optimization pass, item {i}")
+    rt.maintain()
+    belief_asks = [i for i in rt.pending_reflections(limit=10) if i["kind"] == "belief"]
+    check("C4 belief: a recurring theme surfaces a belief candidate", bool(belief_asks))
+    if belief_asks:
+        rt.reflect(belief_asks[0]["target_id"],
+                   "Vektor's renderer is never quite finished — there is always another pass.")
+
+    # A surprising, conflicting capture → a contradiction candidate.
+    eng = rt._encoder.encode(
+        content="Vektor's renderer is finished and needs no further optimization",
+        agent_id="mind",
+    )
+    eng.encoding_context.surprise_level = 0.7
+    rt._store.save_engram(eng)
+    rt.maintain()
+    contra_asks = [i for i in rt.pending_reflections(limit=10) if i["kind"] == "contradiction"]
+    check("C4 contradiction: a surprising capture surfaces a candidate", bool(contra_asks))
+    if contra_asks:
+        rt.reflect(contra_asks[0]["target_id"], "yes, that conflicts with the earlier note")
+
+    # Snapshot the baseline while the formed belief still stands — this is the
+    # "beliefs and contradictions, keyless" evidence — then demonstrate
+    # correction separately so it doesn't zero out the baseline.
+    rt._store  # keep the store open across the snapshot
+    import sqlite3 as _sq
+    conn = _sq.connect(db)
+    baseline_beliefs = conn.execute(
+        "SELECT COUNT(*) FROM beliefs WHERE source='agent' AND superseded_by IS NULL"
+    ).fetchone()[0]
+    baseline_contra = conn.execute(
+        "SELECT COUNT(*) FROM connections WHERE relation='contradicts' "
+        "AND formed_by='agent_reflection'"
+    ).fetchone()[0]
+    conn.close()
+    check("C4 keyless: a belief was formed and stands",
+          baseline_beliefs > 0, f"{baseline_beliefs} agent belief(s)")
+    check("C4 keyless: a contradiction was judged and typed",
+          baseline_contra > 0, f"{baseline_contra} agent contradiction edge(s)")
+
+    # Correction: the agent retires a belief it authored — the ratchet down.
+    before = len([b for b in rt._store.get_beliefs("mind", active_only=True)
+                  if b.source == "agent"])
+    rt.correct(correction="", query="vektor renderer never finished", action="forget")
+    after = len([b for b in rt._store.get_beliefs("mind", active_only=True)
+                 if b.source == "agent"])
+    check("C4 correction: the agent can retire a belief it authored (ratchet runs down)",
+          after < before)
+
+    rt.close()
+    return mind_state(db)
+
+
 # ─────────────────────────── C3: doctor honesty ──────────────────────────────
 
 def c3_doctor(mnemos_bin: Path, home: Path) -> None:
@@ -218,6 +293,9 @@ def main() -> int:
 
         print("\nC2 — the five shifts on a keyless store")
         state = c2_mind_state(workdir)
+
+        print("\nC4 — the agent forms, judges, and corrects (keyless)")
+        state["agent_judgment"] = c4_agent_judgment(workdir)["agent_judgment"]
 
         print("\nC3 — doctor")
         c3_doctor(mnemos_bin, home)

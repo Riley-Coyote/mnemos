@@ -281,6 +281,22 @@ def mind_state(db_path: str) -> dict:
     except sqlite3.Error:
         identities = 0
     relation_kinds = q("SELECT COUNT(DISTINCT relation) FROM connections")
+    # Judgement the agent alone can do, now available keyless: beliefs it
+    # stated, and contradiction edges it typed. Both were provider-only before.
+    try:
+        agent_beliefs = q(
+            "SELECT COUNT(*) FROM beliefs WHERE source = 'agent' "
+            "AND superseded_by IS NULL"
+        )
+    except sqlite3.Error:
+        agent_beliefs = 0
+    try:
+        agent_contradictions = q(
+            "SELECT COUNT(*) FROM connections "
+            "WHERE relation = 'contradicts' AND formed_by = 'agent_reflection'"
+        )
+    except sqlite3.Error:
+        agent_contradictions = 0
     conn.close()
 
     return {
@@ -297,6 +313,11 @@ def mind_state(db_path: str) -> dict:
             "alive": connections > 0 and supports / connections < 0.8,
         },
         "shift_5_identity": {"identity_rows": identities, "alive": identities > 0},
+        "agent_judgment": {
+            "beliefs": agent_beliefs,
+            "contradictions": agent_contradictions,
+            "alive": agent_beliefs > 0 or agent_contradictions > 0,
+        },
     }
 
 

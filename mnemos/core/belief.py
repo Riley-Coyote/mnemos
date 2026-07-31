@@ -81,6 +81,14 @@ class Belief:
     supporting_engram_ids: list[str] = field(default_factory=list)
     """Engrams that provide evidence for this belief."""
 
+    source: str = ""
+    """Who authored this belief: 'agent' (stated by the agent via
+    mnemos_reflect), 'seed' (onboarding), 'model' (a configured provider), or
+    '' (unknown — the honest state of a belief written before provenance
+    existed). Only the correction path uses it: an agent may downweight or
+    supersede a belief it authored, but must not be able to erase a seed or
+    model belief by mistake."""
+
     def revise(
         self,
         new_confidence: float,
@@ -121,6 +129,7 @@ class Belief:
             ),
             "superseded_by": self.superseded_by,
             "supporting_engram_ids": json.dumps(self.supporting_engram_ids),
+            "source": self.source,
         }
 
     @classmethod
@@ -145,4 +154,5 @@ class Belief:
             revision_history=[BeliefRevision.from_dict(r) for r in revisions],
             superseded_by=d.get("superseded_by"),
             supporting_engram_ids=supporting,
+            source=d.get("source", "") or "",
         )

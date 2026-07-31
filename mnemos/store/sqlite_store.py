@@ -27,7 +27,7 @@ from ..core.identity import AgentIdentity
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -71,7 +71,7 @@ _ENGRAM_COLUMNS = frozenset({
 _BELIEF_COLUMNS = frozenset({
     "id", "agent_id", "content", "confidence", "domain", "created_at",
     "last_revised", "last_challenged", "revision_history", "superseded_by",
-    "supporting_engram_ids",
+    "supporting_engram_ids", "source",
 })
 
 # Columns a store from before 0.2 may be missing, added on open by
@@ -99,6 +99,9 @@ _RECONCILABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("state", "state TEXT NOT NULL DEFAULT 'active'"),
         ("access_count", "access_count INTEGER NOT NULL DEFAULT 0"),
         ("reconsolidation_count", "reconsolidation_count INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "beliefs": [
+        ("source", "source TEXT NOT NULL DEFAULT ''"),
     ],
 }
 
@@ -170,7 +173,8 @@ CREATE TABLE IF NOT EXISTS beliefs (
     last_challenged TEXT NOT NULL,
     revision_history TEXT NOT NULL DEFAULT '[]',
     superseded_by TEXT,
-    supporting_engram_ids TEXT NOT NULL DEFAULT '[]'
+    supporting_engram_ids TEXT NOT NULL DEFAULT '[]',
+    source TEXT NOT NULL DEFAULT ''
 );
 
 -- Hypomnema: scoped durable continuity that can revise before promotion
@@ -926,6 +930,48 @@ class EngramStore:
         query += " ORDER BY confidence DESC"
         rows = conn.execute(query, params).fetchall()
         return [Belief.from_dict(dict(r)) for r in rows]
+
+    def get_belief(self, belief_id: str) -> Belief | None:
+        """Load a single belief by id, or None."""
+        row = self._get_conn().execute(
+            "SELECT * FROM beliefs WHERE id = ?", (belief_id,)
+        ).fetchone()
+        return Belief.from_dict(dict(row)) if row else None
+
+    def revise_belief(
+        self, belief_id: str, new_confidence: float, reason: str,
+        *, trigger_engram_id: str | None = None,
+    ) -> bool:
+        """Lower (or raise) a belief's confidence with an audit trail.
+
+        The one deliberate way to erode a belief's confidence from the
+        agent-facing side — the graph's stability ratchet otherwise only runs
+        upward. Wraps ``Belief.revise`` (which clamps and records the change)
+        and persists. Returns False if the belief is gone.
+        """
+        belief = self.get_belief(belief_id)
+        if belief is None:
+            return False
+        belief.revise(new_confidence, reason, trigger_engram_id=trigger_engram_id)
+        self.save_belief(belief)
+        return True
+
+    def supersede_belief(self, belief_id: str, *, reason: str = "") -> bool:
+        """Retire a belief. It stops appearing in ``get_beliefs(active_only)``.
+
+        Activates the built-but-never-called ``superseded_by`` plumbing: the
+        row is kept for provenance but hidden from every read path. Records the
+        retirement in the revision history so the reason survives.
+        """
+        belief = self.get_belief(belief_id)
+        if belief is None:
+            return False
+        if reason:
+            belief.revise(belief.confidence, f"superseded: {reason}")
+        # A sentinel that reads as "retired" without pointing at a replacement.
+        belief.superseded_by = belief.superseded_by or "retired"
+        self.save_belief(belief)
+        return True
 
     # ── Functional Memory ──
 

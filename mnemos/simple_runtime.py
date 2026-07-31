@@ -1108,6 +1108,51 @@ class MnemosRuntime:
             lines.extend(_format_memory(result) for result in memories)
         return "\n".join(lines)
 
+    def _maybe_correct_belief(self, correction: str, query: str, action: str) -> str:
+        """Retire or downweight an agent-authored belief the correction names.
+
+        Matches the correction text against active beliefs the agent itself
+        stated (``source == 'agent'``) by token overlap, above a conservative
+        threshold so a memory correction that merely brushes a belief does not
+        move it. Forget/archive → supersede (hidden from every read path);
+        otherwise → erode confidence toward the floor. Returns a note if it
+        acted, else ''.
+        """
+        assert self._store is not None
+        text = query.strip() or correction.strip()
+        terms = _query_terms(text)
+        if not terms:
+            return ""
+        beliefs = [
+            b for b in self._store.get_beliefs(self.scope.agent_id, active_only=True)
+            if b.source == "agent"
+        ]
+        best, best_overlap = None, 0.0
+        for belief in beliefs:
+            bterms = _query_terms(belief.content)
+            if not bterms:
+                continue
+            overlap = len(terms & bterms) / len(terms)
+            if overlap > best_overlap:
+                best, best_overlap = belief, overlap
+        if best is None or best_overlap < 0.5:
+            return ""
+
+        if action in {"forget", "archive", "remove", "delete"}:
+            self._store.supersede_belief(best.id, reason=f"agent correction: {text[:80]}")
+            return (
+                f'Retired the belief "{best.content[:80]}". '
+                "It will no longer shape your context."
+            )
+        new_conf = max(0.05, best.confidence - 0.3)
+        self._store.revise_belief(
+            best.id, new_conf, reason=f"agent correction: {text[:80]}"
+        )
+        return (
+            f'Lowered confidence in the belief "{best.content[:80]}" '
+            f"to {int(new_conf * 100)}%."
+        )
+
     def correct(
         self,
         correction: str,
@@ -1126,6 +1171,17 @@ class MnemosRuntime:
 
         action = action.strip().lower() or "update"
         target = target_id.strip()
+
+        # Belief correction (agent-authored only). Checked before the memory
+        # paths, on the free-text / query form, so "forget that I believe X"
+        # can retire a belief the agent stated — not only a note. Restricted to
+        # source=='agent' so a seed or model belief can't be erased by mistake.
+        # This is one of the few deliberate downward moves in a graph whose
+        # stability otherwise only ratchets up.
+        if not target:
+            belief_note = self._maybe_correct_belief(correction, query, action)
+            if belief_note:
+                return belief_note
 
         if target:
             hypo = self._store.get_hypomnema_entry(

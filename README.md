@@ -15,7 +15,7 @@ mnemos mcp install claude --write     # or cursor / codex / generic
 mnemos hooks install --write          # inject memory before the first turn
 ```
 
-Seven tools. Local SQLite. No account, no API key, no external service. Nothing
+Eight tools. Local SQLite. No account, no API key, no external service. Nothing
 leaves your machine unless you configure a provider yourself.
 
 ## What Mnemos is not

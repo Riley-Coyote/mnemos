@@ -40,7 +40,7 @@ CRT vignette, faux chrome). Whitespace and typography do the work.
 | 1 | `01-title.html` | animated (canvas) | Title — living substrate + wordmark + tagline. Open in a browser; tap to fire. |
 | 2 | `02-install.svg` | static | Install beat (`pip install` → `mnemos doctor` → **ready**). |
 | 3 | `03-connect.svg` | static | Connect to client (`mnemos mcp install claude --write`). |
-| 4 | `04-tools.svg` | static | Seven tools; `capture` shown in use. |
+| 4 | `04-tools.svg` | static | Eight tools; `capture` shown in use. |
 | 5 | `05-hermes.svg` | static | Hermes — Sidecar vs Provider. |
 | 6 | `06-close.html` | animated (canvas) | Close — fuller settled substrate + CTA. |
 
@@ -67,8 +67,8 @@ Each scene: **[VISUAL]** (use the matching frame) · **[ON-SCREEN]** (the cards/
 - **[VO]** "Connect it to your client. For Claude Desktop, one command writes the config. Restart, and Mnemos is connected. Codex, Cursor, anything else — the same installer prints exactly what to paste."
 
 **Scene 4 · It works** — `04-tools.svg`
-- **[VISUAL]** Seven tools; `capture` burns brightest as the agent uses it.
-- **[VO]** "Seven simple tools — and your agent learns no ontology to use them. It captures what matters, recalls it next time, corrects what's stale. Paste a short starter prompt and you're done."
+- **[VISUAL]** Eight tools; `capture` burns brightest as the agent uses it.
+- **[VO]** "Eight simple tools — and your agent learns no ontology to use them. It captures what matters, recalls it next time, corrects what's stale, and answers its own reflections. Paste a short starter prompt and you're done."
 
 ### ACT 2 — Add the Hermes plugin (~2:30)
 

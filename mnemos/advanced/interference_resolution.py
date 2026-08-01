@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..experimental import unavailable
+
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
 
@@ -38,11 +40,4 @@ def resolve_interference(
             "preserved": int,
         }
     """
-    # TODO: Implementation
-    return {
-        "pairs_evaluated": 0,
-        "merged": 0,
-        "differentiated": 0,
-        "suppressed": 0,
-        "preserved": 0,
-    }
+    unavailable("interference resolution")

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ..experimental import unavailable
+
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
 
@@ -39,5 +41,4 @@ def spread_activation(
     Returns:
         Dict of {engram_id: activation_level} for all activated engrams.
     """
-    # TODO: Implementation
-    return {}
+    unavailable("experimental spreading activation")

@@ -23,6 +23,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..experimental import unavailable
+
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
 
@@ -53,7 +55,7 @@ def export_memory(
     Raises:
         FileNotFoundError: If parent directory of output_path doesn't exist.
     """
-    raise NotImplementedError("Step 13: Memory export implementation")
+    unavailable("portable JSON memory export")
 
 
 def import_memory(
@@ -84,4 +86,4 @@ def import_memory(
         FileNotFoundError: If input_path doesn't exist.
         ValueError: If file format is invalid or version is incompatible.
     """
-    raise NotImplementedError("Step 13: Memory import implementation")
+    unavailable("portable JSON memory import")

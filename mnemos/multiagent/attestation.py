@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..experimental import unavailable
+
 
 @dataclass
 class Attestation:
@@ -29,14 +31,12 @@ class Attestation:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict."""
-        # TODO: Implementation
-        return {}
+        unavailable("memory attestation serialization")
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Attestation:
         """Deserialize from dict."""
-        # TODO: Implementation
-        return cls()
+        unavailable("memory attestation deserialization")
 
 
 class AttestationService:
@@ -61,8 +61,7 @@ class AttestationService:
         Returns:
             An Attestation object.
         """
-        # TODO: Implementation
-        return Attestation()
+        unavailable("memory attestation")
 
     def verify(self, attestation: Attestation, content: str) -> bool:
         """Verify an attestation against content.
@@ -74,5 +73,4 @@ class AttestationService:
         Returns:
             True if the attestation is valid.
         """
-        # TODO: Implementation
-        return False
+        unavailable("memory attestation verification")

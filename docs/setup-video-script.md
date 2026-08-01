@@ -137,8 +137,8 @@ Do not mention tools unless I ask. Just use the memory system quietly and tell m
 ```
 
 **Simple vs Advanced mode:** Simple (the default, 8 tools) is right for almost everyone. Need the
-operator surface (hypomnema, beliefs, inspect, consolidate)? Run `mnemos serve --mode advanced`,
-or install it: `mnemos mcp install claude --mode advanced --write`.
+operator access? Use the supported CLI. The older advanced MCP surface is
+experimental and blocked by default in 0.2.x.
 
 ### 5B · Install Mnemos into a Hermes agent
 
@@ -199,7 +199,7 @@ mnemos mcp install claude --write       # Claude Desktop (writes config)
 mnemos mcp install codex                # prints a `codex mcp add …` command
 mnemos mcp install cursor               # prints JSON to paste
 mnemos mcp install generic              # prints JSON to paste
-mnemos serve --mode advanced            # advanced (operator) surface
+MNEMOS_ENABLE_EXPERIMENTAL=1 mnemos serve --mode advanced  # unsupported research only
 
 # Hermes
 mnemos hermes quickstart --agent-safe   # Sidecar (safe default)

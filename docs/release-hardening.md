@@ -10,10 +10,12 @@ Use this checklist before publishing Mnemos or opening a release PR.
   - `mnemos_recall`
   - `mnemos_correct`
   - `mnemos_maintain`
-- Advanced mode preserves the existing admin tools.
+  - `mnemos_reflect`
+  - `mnemos_introduce`
+  - `mnemos_health`
+- Advanced mode is blocked unless explicitly enabled for research.
 - Injected FastMCP context parameters are not exposed in public tool schemas.
-- Sampling is optional and occurs only inside an active client request.
-- Sampling failures, denials, or unsupported clients fall back cleanly.
+- Baseline tools never request host-model sampling.
 - Tool annotations match local side effects.
 
 ## Install UX
@@ -23,7 +25,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - `mnemos mcp install claude --write` safely merges the Claude Desktop config.
 - `mnemos mcp install codex` prints a usable `codex mcp add` command.
 - `mnemos serve` defaults to simple mode.
-- `mnemos serve --mode advanced` exposes the admin surface.
+- `mnemos serve --mode advanced` refuses unless experimental mode is explicit.
 
 ## Package Readiness
 

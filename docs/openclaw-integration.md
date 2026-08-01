@@ -174,11 +174,9 @@ After bootstrap, your workspace looks like:
 ├── memory/
 │   ├── active-context.md         # Current threads (updated by Observer)
 │   └── cross-agent-context.md    # Other agents' status (updated by Bridge)
-├── daily/
-│   ├── morning-brief-2025-01-15.md
-│   └── debrief-2025-01-15.md
-└── inner_life/
-    └── (substrate outputs, reflections, dreams)
+└── daily/
+    ├── morning-brief-2025-01-15.md
+    └── debrief-2025-01-15.md
 ```
 
 ## Troubleshooting

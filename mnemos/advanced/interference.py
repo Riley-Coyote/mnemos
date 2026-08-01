@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..experimental import unavailable
+
 if TYPE_CHECKING:
     from ..core.engram import Engram
     from ..store.sqlite_store import EngramStore
@@ -31,8 +33,7 @@ def calculate_interference(
     Returns:
         Interference level (0.0 = no interference, 1.0 = maximum).
     """
-    # TODO: Implementation
-    return 0.0
+    unavailable("memory interference calculation")
 
 
 def apply_interference(
@@ -49,5 +50,4 @@ def apply_interference(
         competitor_ids: Engrams that competed with the target.
         interference_level: The calculated interference level.
     """
-    # TODO: Implementation
-    pass
+    unavailable("memory interference application")

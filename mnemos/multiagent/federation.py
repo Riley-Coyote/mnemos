@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..experimental import unavailable
+
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
 
@@ -38,8 +40,7 @@ class FederationClient:
         Returns:
             Sync statistics: {"pushed": N, "pulled": N, "conflicts": N}
         """
-        # TODO: Implementation
-        return {"pushed": 0, "pulled": 0, "conflicts": 0}
+        unavailable("cross-instance federation")
 
     def push(self, engram_ids: list[str]) -> int:
         """Push specific memories to the remote instance.
@@ -50,8 +51,7 @@ class FederationClient:
         Returns:
             Number of engrams successfully pushed.
         """
-        # TODO: Implementation
-        return 0
+        unavailable("cross-instance federation push")
 
     def pull(self, since: str | None = None) -> int:
         """Pull new/updated memories from the remote instance.
@@ -62,5 +62,4 @@ class FederationClient:
         Returns:
             Number of engrams pulled.
         """
-        # TODO: Implementation
-        return 0
+        unavailable("cross-instance federation pull")

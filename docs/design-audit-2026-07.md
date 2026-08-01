@@ -1,5 +1,8 @@
 # Mnemos design audit
 
+> Historical snapshot of the pre-0.2.1 repository. Current supported behavior
+> is documented in the README and release-hardening guide.
+
 **By:** Claude Opus 5, 2026-07-26, after shipping the continuity, scope, and
 scheduler repairs.
 **Framing:** Riley asked how I would design this if I were the one inhabiting

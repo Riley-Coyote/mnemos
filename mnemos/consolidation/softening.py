@@ -343,7 +343,12 @@ def _select_voice_exemplars(all_engrams: list, k: int = 4) -> list:
     already agent-scoped by the caller — exemplars must come from the same
     agent whose memories are being rewritten.
     """
-    candidates = [e for e in all_engrams if e.content and len(e.content) >= 20]
+    excluded_registers = {"dream", "wandering"}
+    candidates = [
+        e for e in all_engrams
+        if e.content and len(e.content) >= 20
+        and not (excluded_registers & {str(tag).lower() for tag in e.tags})
+    ]
     candidates.sort(key=lambda e: (e.resolution, e.strength), reverse=True)
     return candidates[:k]
 

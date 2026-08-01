@@ -30,19 +30,9 @@ hints. They are not a security boundary.
 
 ## Host-Model Sampling
 
-When an MCP client supports sampling, Mnemos may ask the host client's model for
-in-band assistance during an active tool call. The client controls whether that
-request is allowed.
-
-Sampling requests should be:
-
-- optional
-- tied to the originating client request
-- concise
-- resilient when declined or unsupported
-- free of secrets unless the user intentionally supplied them as memory content
-
-Mnemos must always continue to work without sampling.
+The supported Mnemos tools do not request host-model sampling. Capture stores
+the supplied text exactly, and baseline maintenance remains local and
+deterministic. Optional dedicated providers run only when explicitly configured.
 
 ## Dedicated Providers
 
@@ -63,8 +53,8 @@ agent_id / person_id / project_scope
 ```
 
 This prevents multiple agents on the same machine from accidentally sharing
-continuity through the same database. Shared memory and federation are advanced
-features and should stay opt-in.
+continuity through the same database. Federation is an unsupported experimental
+feature and must stay opt-in.
 
 ## Visual Artifacts
 
@@ -91,9 +81,9 @@ Before a release:
 
 - verify simple mode works with no provider keys
 - verify simple mode exposes only eight tools
-- verify advanced mode preserves admin tools
+- verify advanced mode stays quarantined unless explicitly enabled for research
 - verify `mnemos doctor` does not leak secrets
 - verify package artifacts include templates and simple-mode modules
-- verify MCP sampling failures do not break tool calls
+- verify baseline MCP tools make no sampling requests
 - verify agent/person/project scope isolation
 - verify docs say provider keys are optional

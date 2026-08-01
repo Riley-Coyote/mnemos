@@ -1,7 +1,8 @@
-"""Advanced modules for Mnemos (opt-in).
+"""Experimental Mnemos prototypes (unsupported, opt-in).
 
-These modules extend the core memory system with more sophisticated
-cognitive capabilities. Each is independently toggleable via configuration.
+These modules remain importable for research and compatibility. They are not
+production-supported. Unfinished operations raise an explicit error instead
+of returning placeholder success.
 
 Modules:
 - working_memory: Soft attention gradient working memory (capacity ~7 items)

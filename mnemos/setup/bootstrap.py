@@ -36,7 +36,6 @@ _TEMPLATE_MAP = {
 _WORKSPACE_DIRS = [
     "memory",
     "daily",
-    "inner_life",
 ]
 
 # .env template contents

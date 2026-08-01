@@ -929,6 +929,13 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     """Start MCP server."""
     try:
         if getattr(args, "mode", "simple") == "advanced":
+            if os.environ.get("MNEMOS_ENABLE_EXPERIMENTAL") != "1":
+                print(
+                    "Advanced MCP mode is experimental and unsupported in 0.2.x. "
+                    "Use simple mode, or set MNEMOS_ENABLE_EXPERIMENTAL=1 for research use.",
+                    file=sys.stderr,
+                )
+                return 1
             from .mcp_server import run_server
 
             run_server(
@@ -1453,6 +1460,13 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     """MCP client helper commands."""
     if args.mcp_command != "install":
         print("Usage: mnemos mcp install {claude|cursor|codex|generic}", file=sys.stderr)
+        return 1
+    if args.mode == "advanced" and os.environ.get("MNEMOS_ENABLE_EXPERIMENTAL") != "1":
+        print(
+            "Refusing to install unsupported advanced mode. Use simple mode, or set "
+            "MNEMOS_ENABLE_EXPERIMENTAL=1 for explicit research use.",
+            file=sys.stderr,
+        )
         return 1
 
     snippet = _mcp_server_snippet(

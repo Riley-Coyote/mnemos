@@ -45,17 +45,17 @@ document ingestion, Mnemos is not that and is not trying to be.
 | Claude Desktop | Simple MCP Mode, written config | `mnemos mcp install claude --write` |
 | Codex | Simple MCP Mode, printed add command | `mnemos mcp install codex` |
 | Cursor or another MCP client | Simple MCP Mode, printed JSON | `mnemos mcp install cursor` or `mnemos mcp install generic` |
-| Operator/admin/debugging tools | Advanced MCP Mode | `mnemos serve --mode advanced` |
+| Experimental research prototypes | Source imports only | Not production-supported |
 | Hermes agent with another memory provider | Hermes Sidecar Mode | `mnemos hermes quickstart --agent-safe` |
 | Hermes agent using Mnemos as its provider | Hermes Provider Mode | `mnemos hermes quickstart --provider` |
 | Background memory maintenance | Substrate tick | `mnemos substrate-tick` |
 
 Start with **Simple MCP Mode**. It is the product: eight tools, and the default.
 
-Advanced mode adds twenty-three operator tools to the same server. It exists for
-inspecting and administering memory directly, not for everyday use — a larger
-tool surface makes an agent likelier to reach for the wrong instrument on every
-turn. Prefer the CLI, which has the same capabilities.
+The older advanced MCP surface and prototype modules are quarantined in 0.2.x.
+They remain importable for research, but unfinished operations fail clearly and
+they are not production-supported. The CLI contains the supported administrative
+operations.
 
 Hermes users should start with **Hermes Sidecar Mode** unless they explicitly
 want Mnemos to occupy Hermes' single external `memory.provider` slot.
@@ -238,57 +238,18 @@ Do not mention tools unless I ask. Just use the memory system quietly and tell m
 
 ---
 
-## Advanced MCP Mode
+## Experimental Advanced Prototypes
 
-Advanced mode includes the simple tools plus the full operator/admin surface.
-Use it for debugging, migration, research, direct control, and hypomnema work.
-
-```bash
-mnemos serve --mode advanced
-```
-
-Install advanced mode into a client:
+Advanced mode is retained only for compatibility and research. It is incomplete,
+unsupported, and intentionally blocked by default. Do not install it for users.
 
 ```bash
-mnemos mcp install generic --mode advanced
-mnemos mcp install claude --mode advanced --write
+MNEMOS_ENABLE_EXPERIMENTAL=1 mnemos serve --mode advanced
 ```
 
-Advanced tools include:
+There is no supported client-install path for advanced mode.
 
-| Tool | Description |
-|---|---|
-| `mnemos_setup` | Legacy guided setup and seeding flow. |
-| `mnemos_remember` | Encode a memory with explicit fields. |
-| `mnemos_ingest` | Ingest external knowledge with provenance. |
-| `mnemos_recall` | Retrieve memories. |
-| `mnemos_inspect` | View full memory details. |
-| `mnemos_status` | Show memory system statistics. |
-| `mnemos_beliefs` | List current beliefs. |
-| `mnemos_shared` | Read shared memory pool entries. |
-| `mnemos_hypomnema_write` | Write scoped continuity manually. |
-| `mnemos_hypomnema_search` | Search scoped continuity manually. |
-| `mnemos_hypomnema_revise` | Revise a continuity entry. |
-| `mnemos_hypomnema_supersede` | Replace an active continuity entry. |
-| `mnemos_hypomnema_candidates` | List promotion-ready continuity. |
-| `mnemos_hypomnema_promote` | Promote continuity into a durable engram. |
-| `mnemos_forget` | Archive a memory. |
-| `mnemos_consolidate` | Trigger explicit consolidation. |
-
-Use simple mode for normal continuity. Use advanced mode when the agent or
-operator needs direct access to Mnemos internals.
-
-### Prompt For An Advanced MCP Agent
-
-```text
-You have Mnemos advanced MCP tools.
-
-Prefer the simple Mnemos tools for normal continuity: mnemos_context, mnemos_capture, mnemos_recall, mnemos_correct, mnemos_reflect, mnemos_maintain, mnemos_introduce, and mnemos_health.
-Use hypomnema tools when we need precise scoped continuity before promotion.
-Use mnemos_inspect, mnemos_status, mnemos_beliefs, and mnemos_consolidate for debugging, migration, or explicit maintenance.
-Do not promote uncertain claims into durable memory without evidence or user confirmation.
-When you change memory, summarize the change in plain language.
-```
+Use simple mode and the CLI for all production continuity and administration.
 
 ---
 
@@ -488,7 +449,7 @@ Core commands:
 ```bash
 mnemos doctor                         # Verify simple-mode readiness
 mnemos serve                          # Start simple MCP server
-mnemos serve --mode advanced          # Start advanced MCP server
+MNEMOS_ENABLE_EXPERIMENTAL=1 mnemos serve --mode advanced  # unsupported research mode
 mnemos mcp install generic            # Print MCP config
 mnemos mcp install claude --write     # Merge Claude Desktop config
 mnemos hooks install                  # Preview the SessionStart memory hook
@@ -623,7 +584,7 @@ Simple MCP Surface      context | capture | recall | correct
 Continuity Layer        scoped notes | revisions | supersession | promotion
 Mnemos Core             engrams | connections | beliefs | reconsolidation
 Substrate               decay | softening | reflection | modulators | events
-Cross-Agent Layer       shared pool | bridge | federation | attestation
+Cross-Agent Layer       shared pool | bridge | experimental federation/attestation
 Hermes Integration      sidecar MCP | provider shim | identity continuity
 ```
 

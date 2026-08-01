@@ -6,7 +6,7 @@ Release rule: prepare the release candidate, but do not publish without Riley's 
 
 ## Release containment
 
-- Yank 0.2.0 from PyPI with its history preserved.
+- Leave the unannounced 0.2.0 package available on PyPI; do not yank it.
 - Keep the existing `v0.2.0` tag unchanged.
 - Publish the repaired package as 0.2.1 only after every gate below passes.
 

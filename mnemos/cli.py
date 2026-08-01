@@ -652,6 +652,8 @@ def scheduler_merge_crontab(entries: list[dict], agent_id: str) -> str | None:
 
 
 def _daemon_status(blueprint: dict) -> int:
+    from .setup import scheduler
+
     backend = blueprint["backend"]
     agent_id = blueprint["agent_id"]
 

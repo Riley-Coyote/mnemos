@@ -16,18 +16,27 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Run tests with MCP surface
+        if: matrix.python-version != '3.13'
         run: uv run --extra dev --extra mcp pytest -q
+
+      - name: Enforce supported-code coverage
+        if: matrix.python-version == '3.13'
+        run: uv run --extra dev --extra mcp pytest -q --cov --cov-report=term
+
+      - name: Reject correctness errors
+        if: matrix.python-version == '3.13'
+        run: uv run --extra dev ruff check mnemos
 
       - name: Compile release entrypoints
         run: |
@@ -97,3 +106,31 @@ jobs:
 
       - name: Check package metadata
         run: uvx twine check dist/*
+
+  security:
+    name: Dependency and code security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: Audit locked runtime dependencies
+        run: |
+          uv export --frozen --no-dev --no-hashes --output-file /tmp/mnemos-runtime.txt
+          uvx pip-audit --no-deps --disable-pip -r /tmp/mnemos-runtime.txt
+
+      - name: Reject high-severity code findings
+        run: |
+          uvx bandit -q -lll \
+            mnemos/simple_runtime.py \
+            mnemos/simple_mcp.py \
+            mnemos/simple_scope.py \
+            mnemos/backup.py \
+            mnemos/file_security.py \
+            mnemos/store/sqlite_store.py \
+            mnemos/setup/scheduler.py \
+            mnemos/cli.py \
+            mnemos/llm.py \
+            mnemos/integrations/hermes/*.py

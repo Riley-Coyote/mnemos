@@ -60,7 +60,31 @@ all = [
 ]
 dev = [
     "pytest>=7.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.12",
 ]
+
+[tool.coverage.run]
+branch = true
+source = [
+    "mnemos.simple_runtime",
+    "mnemos.simple_mcp",
+    "mnemos.simple_scope",
+    "mnemos.backup",
+    "mnemos.file_security",
+    "mnemos.store.sqlite_store",
+    "mnemos.setup.scheduler",
+]
+
+[tool.coverage.report]
+fail_under = 80
+skip_covered = true
+
+[tool.ruff.lint]
+# Start with correctness failures that can ship broken code. Broader style
+# cleanup remains separate from the release gate so it cannot hide real risk
+# in hundreds of legacy formatting changes.
+select = ["E9", "F63", "F7", "F82"]
 
 [project.scripts]
 mnemos = "mnemos.cli:main"

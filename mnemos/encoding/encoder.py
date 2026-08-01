@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timezone, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..core.engram import Connection, Engram, EncodingContext, MemorySource
 from ..core.types import (

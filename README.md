@@ -635,7 +635,7 @@ functional memory -> scoped continuity -> durable Mnemos graph
 Simple mode uses the same architecture; it just keeps the ontology out of the
 agent's normal tool choices.
 
-See [docs/architecture.md](docs/architecture.md) for the full architecture.
+See [docs/vision.md](docs/vision.md) for the full architecture.
 See [docs/identity-model.md](docs/identity-model.md) for the identity stance
 (one traversal, one graph: why there is no fork/merge).
 See [docs/privacy-security.md](docs/privacy-security.md) for local-first

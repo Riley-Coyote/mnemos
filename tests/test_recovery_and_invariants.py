@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Barrier
 
 import pytest
@@ -49,6 +50,10 @@ def test_backup_is_private_and_corruption_is_rejected(tmp_path):
     result = create_backup(source)
     if os.name != "nt":
         assert os.stat(result["path"]).st_mode & 0o777 == 0o600
+    assert not list(Path(result["path"]).parent.glob("*.db-wal"))
+    assert not list(Path(result["path"]).parent.glob("*.db-shm"))
+    assert not list(Path(result["path"]).parent.glob(".*.tmp-wal"))
+    assert not list(Path(result["path"]).parent.glob(".*.tmp-shm"))
 
     corrupt = tmp_path / "corrupt.db"
     corrupt.write_bytes(b"not sqlite")

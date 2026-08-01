@@ -15,6 +15,13 @@ def _stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
 
 
+def _remove_sidecars(path: Path) -> None:
+    """Remove transient SQLite files belonging to a closed private copy."""
+
+    for suffix in ("-wal", "-shm"):
+        path.with_name(path.name + suffix).unlink(missing_ok=True)
+
+
 def check_database(path: str | Path) -> dict[str, Any]:
     """Open a database read-only and run SQLite's complete integrity check."""
     db_path = Path(path).expanduser().resolve()
@@ -90,13 +97,20 @@ def create_backup(
 
     secure_file(temp_path)
     try:
-        check_database(temp_path)
+        verified = check_database(temp_path)
+        # Opening a WAL-format copy for verification can create empty helper
+        # files. The copy is closed and private here; carry only the complete
+        # database into its final name rather than leaving .tmp/final debris.
+        _remove_sidecars(temp_path)
         os.replace(temp_path, destination_path)
         secure_file(destination_path)
     except Exception:
         temp_path.unlink(missing_ok=True)
+        _remove_sidecars(temp_path)
         raise
-    return check_database(destination_path)
+    verified["path"] = str(destination_path)
+    verified["size_bytes"] = destination_path.stat().st_size
+    return verified
 
 
 def restore_backup(

@@ -134,3 +134,37 @@ jobs:
             mnemos/cli.py \
             mnemos/llm.py \
             mnemos/integrations/hermes/*.py
+
+  platform-blackbox:
+    name: Black box (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: Build release wheel
+        run: uv build
+
+      - name: Audit installed wheel on macOS
+        if: runner.os != 'Windows'
+        run: |
+          uv venv .audit-venv --python 3.12
+          uv pip install --python .audit-venv/bin/python dist/*.whl
+          .audit-venv/bin/python scripts/release_blackbox.py \
+            --mnemos .audit-venv/bin/mnemos
+
+      - name: Audit installed wheel on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          uv venv .audit-venv --python 3.12
+          $wheel = (Get-ChildItem dist/*.whl).FullName
+          uv pip install --python .audit-venv/Scripts/python.exe $wheel
+          .audit-venv/Scripts/python.exe scripts/release_blackbox.py `
+            --mnemos .audit-venv/Scripts/mnemos.exe

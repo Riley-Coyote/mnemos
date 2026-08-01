@@ -31,7 +31,18 @@ Advanced modules (opt-in):
 - Multi-agent federation
 """
 
-__version__ = "0.1.0"
+# Read from installed package metadata so there is exactly one source of
+# truth. Hardcoding it here meant this said 0.1.0 while the distribution
+# said 0.2.0, and nothing failed — a released package can misreport its own
+# version to every user and to every bug report, and PyPI versions cannot be
+# replaced once uploaded. The fallback covers running from a source tree
+# that was never installed.
+try:  # pragma: no cover - trivial branch
+    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+    __version__ = _pkg_version("mnemos-continuity")
+except (ImportError, PackageNotFoundError):  # pragma: no cover
+    __version__ = "0.0.0+unknown"
 
 # Public API
 from .store.sqlite_store import EngramStore

@@ -1,8 +1,8 @@
 """Simple-mode continuity runtime for Mnemos.
 
 This module is intentionally MCP-agnostic so the product path can be tested
-without a running client. It exposes the real Mnemos stack through seven simple
-operations: context, capture, recall, correct, maintain, introduce, and health.
+without a running client. It exposes the real Mnemos stack through nine simple
+operations, including agent-written handoff and reflection.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from .store.sqlite_store import EngramStore
 
 SIMPLE_TOOL_NAMES = (
     "mnemos_context",
+    "mnemos_handoff",
     "mnemos_capture",
     "mnemos_recall",
     "mnemos_correct",
@@ -932,6 +933,9 @@ class MnemosRuntime:
         """
         if returned > 0:
             self._set_meta("empty_context_streak", "0")
+            self._set_meta(
+                "last_context_delivery_at", datetime.now(timezone.utc).isoformat()
+            )
             return
         streak = int(self._get_meta("empty_context_streak", "0") or 0)
         self._set_meta("empty_context_streak", str(streak + 1))
@@ -970,12 +974,44 @@ class MnemosRuntime:
                 "sessions. Either nothing durable has come up, or captures are "
                 "not arriving."
             )
+        last_delivery = self._get_meta("last_context_delivery_at")
+        if notes > 0 and last_delivery is None:
+            warnings.append(
+                "Continuity exists in this scope, but no successful startup "
+                "delivery has been recorded yet."
+            )
+        elif notes > 0 and last_delivery is not None:
+            try:
+                delivered_at = datetime.fromisoformat(last_delivery)
+                if delivered_at.tzinfo is None:
+                    delivered_at = delivered_at.replace(tzinfo=timezone.utc)
+                age = datetime.now(timezone.utc) - delivered_at
+                if age.days >= 7:
+                    warnings.append(
+                        f"Continuity has not been delivered for {age.days} days. "
+                        "Check that the startup integration is still active."
+                    )
+            except ValueError:
+                warnings.append(
+                    "Continuity exists, but its last delivery time is unreadable."
+                )
+        assert self._store is not None
+        active_handoff = self._store.get_latest_handoff(
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+        )
+        if active_handoff and int(active_handoff.get("surface_count", 0)) == 0:
+            warnings.append(
+                "A session handoff is waiting but has not been delivered yet."
+            )
 
         return {
             "notes_active": notes,
             "session": session,
             "empty_context_streak": streak,
             "sessions_since_capture": sessions_since_capture,
+            "last_delivered_at": last_delivery,
             "warnings": warnings,
         }
 
@@ -1090,22 +1126,35 @@ class MnemosRuntime:
         self._current_session()
         maintenance = self.maintain(auto=True)
         stats = self._stats()
-        # Fetch one extra entry so dropping the dream note (rendered in its
-        # own section below) still leaves max_results continuity notes.
-        continuity = self._store.search_hypomnema(
+        handoff = self._store.get_latest_handoff(
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+        )
+        # Fetch extras so dedicated handoff and maintenance sections never
+        # reduce the number of ordinary continuity notes.
+        all_continuity = self._store.search_hypomnema(
             query,
             agent_id=self.scope.agent_id,
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
-            limit=max_results + 1,
+            limit=max_results + 4,
         )
-        continuity = _filter_continuity(query, continuity)
+        all_continuity = _filter_continuity(query, all_continuity)
+        maintenance_reports = [
+            entry for entry in all_continuity
+            if entry.get("entry_kind") == "maintenance_report"
+            and DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
+        ][:3]
         continuity = [
-            entry for entry in continuity
-            if DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
+            entry for entry in all_continuity
+            if entry.get("entry_kind") not in {"handoff", "maintenance_report"}
+            and DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
         ][:max_results]
         memories = self._retrieve(query, max_results=max_results) if query else []
-        self._note_context_outcome(len(continuity))
+        self._note_context_outcome(
+            len(continuity) + len(maintenance_reports) + int(handoff is not None)
+        )
 
         lines = [
             "Mnemos continuity packet",
@@ -1118,11 +1167,30 @@ class MnemosRuntime:
                 f"{stats.get('connections', 0)} connections"
             ),
             "",
+        ]
+
+        if handoff:
+            lines.extend([
+                "",
+                "From your previous session, in your own words.",
+                f"Saved {_age_text(handoff['created_at'])}:",
+                handoff["content"],
+                "Continue naturally from this. Do not announce Mnemos or the memory system.",
+            ])
+            self._store.mark_handoff_surfaced(
+                handoff["id"],
+                agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+            )
+
+        lines.extend([
+            "",
             "Use this at the start of a session. Capture important preferences, decisions, project state, corrections, and durable context as the conversation unfolds.",
             "",
             "Maintenance:",
             _indent(maintenance),
-        ]
+        ])
 
         # Shift 5: identity is measured from the shape of the graph — what
         # this agent keeps returning to. It is computed on every maintenance
@@ -1156,8 +1224,16 @@ class MnemosRuntime:
                 "",
                 "While you were away:",
                 _indent(dream["content"]),
-                "  (Mnemos wrote this while consolidating memory. Share it with the human if the moment fits.)",
+                "  (System-generated maintenance report, not your own words. Legacy reports may use first-person wording.)",
             ])
+
+        if maintenance_reports:
+            lines.extend(["", "System-generated continuity checks:"])
+            for report in maintenance_reports:
+                lines.append(_indent(report["content"]))
+            lines.append(
+                "  (Mnemos mechanically produced these checks. They are not your own words.)"
+            )
 
         if continuity:
             lines.extend(["", "Continuity notes:"])
@@ -1170,6 +1246,27 @@ class MnemosRuntime:
             lines.extend(_format_memory(result) for result in memories)
 
         return "\n".join(lines)
+
+    def handoff(self, text: str) -> str:
+        """Save the agent's exact private note for the next session."""
+
+        if not text.strip():
+            return "Nothing saved: handoff text was empty."
+        self._ensure_init()
+        assert self._store is not None
+        handoff_id = self._store.write_handoff(
+            text,
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+            author_id=self.scope.agent_id,
+        )
+        return (
+            "Session handoff saved exactly as written.\n"
+            f"Handoff ID: {handoff_id}\n"
+            "It will be delivered first in the next session and will remain "
+            "active until you replace or forget it."
+        )
 
     def identity_graph(self, max_nodes: int = 18) -> dict[str, Any]:
         """Build a portable identity graph snapshot for visual-capable clients."""
@@ -1186,6 +1283,10 @@ class MnemosRuntime:
             project_scope=self.scope.project_scope,
             limit=max_nodes,
         )
+        continuity = [
+            entry for entry in continuity
+            if entry.get("entry_kind") == "continuity"
+        ]
         engrams = self._store.get_active_engrams(
             agent_id=self.scope.agent_id,
             person_id=self.scope.person_id,
@@ -1356,6 +1457,9 @@ class MnemosRuntime:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             source="observed",
+            entry_kind="continuity",
+            authored_by="agent",
+            author_id=self.scope.agent_id,
             domain=domain,
             tags=tags,
             confidence=confidence,
@@ -1860,6 +1964,24 @@ class MnemosRuntime:
             if dream_last_written_at is None:
                 dream_last_written_at = dream.get("last_revised_at")
 
+        latest_handoff = self._store.get_latest_handoff(
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+            active_only=False,
+        )
+        handoff_health = {
+            "id": latest_handoff.get("id") if latest_handoff else None,
+            "active": bool(latest_handoff.get("active")) if latest_handoff else False,
+            "last_saved_at": latest_handoff.get("created_at") if latest_handoff else None,
+            "last_surfaced_at": (
+                latest_handoff.get("last_surfaced_at") if latest_handoff else None
+            ),
+            "delivery_count": int(latest_handoff.get("surface_count", 0)) if latest_handoff else 0,
+            "authored_by": latest_handoff.get("authored_by") if latest_handoff else None,
+            "author_id": latest_handoff.get("author_id") if latest_handoff else None,
+        }
+
         return {
             "scope": {
                 "agent_id": self.scope.agent_id,
@@ -1895,6 +2017,7 @@ class MnemosRuntime:
                 "last_written_at": dream_last_written_at,
                 "excerpt": dream_excerpt,
             },
+            "handoff": handoff_health,
             "continuity": self.continuity_signals(),
         }
 
@@ -2040,6 +2163,28 @@ def _indent(text: str) -> str:
     return "\n".join(f"  {line}" if line else "" for line in text.splitlines())
 
 
+def _age_text(timestamp: str) -> str:
+    """Render a compact age while remaining safe around legacy timestamps."""
+
+    try:
+        moment = datetime.fromisoformat(timestamp)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        seconds = max(0, int((datetime.now(timezone.utc) - moment).total_seconds()))
+    except (TypeError, ValueError):
+        return "at an unknown time"
+    if seconds < 60:
+        return "just now"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    days = hours // 24
+    return f"{days} day{'s' if days != 1 else ''} ago"
+
+
 def _human_size(num_bytes: int) -> str:
     """Render a byte count in 1024-base units: "0 B", "412 KB", "1.2 MB"."""
 
@@ -2064,6 +2209,20 @@ def format_health_card(data: dict[str, Any]) -> str:
 
     scope = data["scope"]
     store = data["store"]
+    if store.get("exists") is False:
+        return "\n".join([
+            "Mnemos health card",
+            line(
+                "Scope",
+                f"agent={scope['agent_id']} person={scope['person_id']} "
+                f"project={scope['project_scope']}",
+            ),
+            line("Store", f"{store['db_path']} (not created yet)"),
+            "",
+            data.get("note", "No memory store exists for this scope yet."),
+            "",
+            "Everything on this card is safe to relay to the human in plain words.",
+        ])
     counts = data["counts"]
 
     last_cycle = data["last_cycle"]
@@ -2089,6 +2248,17 @@ def format_health_card(data: dict[str, Any]) -> str:
         dream_line = "none yet"
     else:
         dream_line = f"{dream['last_written_at']}: \"{dream['excerpt']}\""
+
+    handoff = data.get("handoff") or {}
+    if handoff.get("last_saved_at") is None:
+        handoff_line = "none yet"
+    else:
+        state = "active" if handoff.get("active") else "removed"
+        handoff_line = (
+            f"{handoff['last_saved_at']} ({state}, {handoff.get('authored_by')}, "
+            f"delivered {handoff.get('delivery_count', 0)} time(s), "
+            f"last {handoff.get('last_surfaced_at') or 'never'})"
+        )
 
     continuity = data.get("continuity") or {}
     warnings = continuity.get("warnings") or []
@@ -2134,6 +2304,7 @@ def format_health_card(data: dict[str, Any]) -> str:
             f"{data['onboarding']['stage']} (session {data['onboarding']['session']})",
         ),
         line("Verification", verification_line),
+        line("Last handoff", handoff_line),
         line("Last dream", dream_line),
         *continuity_lines,
         "",

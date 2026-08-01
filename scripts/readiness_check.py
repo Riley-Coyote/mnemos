@@ -96,8 +96,8 @@ def c1_stdio_and_restart(mnemos_bin: Path, home: Path) -> None:
             async with ClientSession(r, w) as s:
                 await s.initialize()
                 tools = {t.name for t in (await s.list_tools()).tools}
-                check("C1 stdio: 8 simple tools list over the wire",
-                      len(tools) == 8, f"{len(tools)} tools")
+                check("C1 stdio: 9 simple tools list over the wire",
+                      len(tools) == 9, f"{len(tools)} tools")
                 await s.call_tool(
                     "mnemos_capture",
                     {"content": f"Riley drinks {token} every morning"},

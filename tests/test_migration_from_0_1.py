@@ -84,7 +84,7 @@ class TestAnOldStoreUpgradesOnOpen:
     def test_upgrade_creates_a_verified_pre_migration_backup(self, old_store_path):
         store = EngramStore(old_store_path)
         store.close()
-        backups = list((Path(old_store_path).parent / "backups").glob("*.pre-v6-*.db"))
+        backups = list((Path(old_store_path).parent / "backups").glob("*.pre-v7-*.db"))
         assert len(backups) == 1
         from mnemos.backup import check_database
         assert check_database(backups[0])["integrity"] == "ok"

@@ -341,7 +341,8 @@ class DiffFinding:
 
 def _finding_id(kind: str, soul_claim: str | None, graph_item: str | None) -> str:
     digest = hashlib.sha1(
-        f"{kind}|{soul_claim or ''}|{graph_item or ''}".encode("utf-8")
+        f"{kind}|{soul_claim or ''}|{graph_item or ''}".encode("utf-8"),
+        usedforsecurity=False,
     ).hexdigest()
     return digest[:8]
 
@@ -729,6 +730,9 @@ def write_divergence_note(
         person_id=scope.person_id,
         project_scope=scope.project_scope,
         source="synthesized",
+        entry_kind="maintenance_report",
+        authored_by="system",
+        author_id="mnemos",
         domain="identity",
         tags=[NOTE_TAG],
         confidence=0.9,

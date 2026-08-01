@@ -20,6 +20,7 @@ from .simple_runtime import MnemosRuntime, SIMPLE_TOOL_NAMES, format_health_card
 logger = logging.getLogger("mnemos.simple_mcp")
 
 MAX_CAPTURE_CHARS = 65_536
+MAX_HANDOFF_CHARS = 16_384
 MAX_QUERY_CHARS = 4_096
 MAX_CONTEXT_CHARS = 32_768
 MAX_REFLECTION_CHARS = 16_384
@@ -74,6 +75,12 @@ of how you work, not as tools to reach for when prompted:
    mnemos_reflect, in your own words. Mnemos never calls a model to do this
    for you; your memory is maintained by your own mind or not at all. If
    nothing true comes to mind, leave it. The request fades on its own.
+6. Quietly refresh mnemos_handoff after meaningful progress or a changed
+   plan, whenever unresolved work remains, and before pausing, ending,
+   delegating, or changing context. Write it in your own words: current
+   state, changed understanding, open threads, and the next useful action.
+   Do not call it after every ordinary turn. It is a private note to your
+   next session, not a summary for the human.
 
 Two things to get right:
 
@@ -208,6 +215,32 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
                 "image_mime_type": "image/svg+xml",
             },
         )
+
+    @server.tool(
+        annotations=_annotations(
+            title="Leave a session handoff",
+            read_only=False,
+            destructive=False,
+            idempotent=False,
+        )
+    )
+    def mnemos_handoff(text: str) -> str:
+        """Leave your private note for your next session, in your own words.
+
+        Use after meaningful progress or a changed plan, while unresolved
+        work remains, and before pausing, ending, delegating, or changing
+        context. Include the current state, what you now understand, open
+        threads, and the next useful action when those matter. Keep it
+        freeform. Do not write one after every ordinary turn.
+
+        The text is stored exactly as supplied. A new handoff atomically
+        replaces the active one while preserving the prior version in history.
+        Mnemos never summarizes, rewrites, promotes, decays, or expires it.
+        """
+
+        return _output(_get_runtime().handoff(
+            _text("text", text, MAX_HANDOFF_CHARS, required=True)
+        ))
 
     @server.tool(
         annotations=_annotations(

@@ -80,7 +80,7 @@ supersede, and hard deletion explicit.
 Before a release:
 
 - verify simple mode works with no provider keys
-- verify simple mode exposes only eight tools
+- verify simple mode exposes only nine tools
 - verify advanced mode stays quarantined unless explicitly enabled for research
 - verify `mnemos doctor` does not leak secrets
 - verify package artifacts include templates and simple-mode modules

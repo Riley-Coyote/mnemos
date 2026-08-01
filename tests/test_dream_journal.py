@@ -1,6 +1,7 @@
-"""Tests for the dream journal: consolidation rendered as first-person narrative."""
+"""Tests for neutral, explicitly system-authored maintenance reports."""
 
 from datetime import datetime, timedelta, timezone
+import re
 
 import pytest
 
@@ -55,7 +56,9 @@ def test_compose_returns_none_when_nothing_noteworthy():
 
 def test_compose_deep_cycle_writes_fallback():
     narrative = compose_dream_narrative({"cycle_type": "deep"}, [], promoted=0)
-    assert narrative == "I went through everything and it all still holds."
+    assert narrative == (
+        "Mnemos checked the stored continuity; no mechanical changes were needed."
+    )
 
 
 def test_compose_includes_counts_and_belief_deltas():
@@ -79,14 +82,15 @@ def test_compose_includes_counts_and_belief_deltas():
     narrative = compose_dream_narrative(stats, deltas, promoted=2)
 
     assert narrative is not None
-    assert "Deep consolidation ran while you were away." in narrative
-    assert "I connected 2 memories" in narrative
-    assert "I softened 1 stale detail and kept their lessons." in narrative
-    assert "3 faded memories" in narrative
+    assert "Mnemos ran deep consolidation while the agent was away." in narrative
+    assert "Mnemos connected 2 memories" in narrative
+    assert "Mnemos softened 1 stale detail and kept their lessons." in narrative
+    assert "Mnemos moved 3 faded memories into the archive." in narrative
     assert '"tests matter" strengthened' in narrative
     assert "0.72 -> 0.81" in narrative
     assert "promoted 2 continuity notes" in narrative
-    assert "2 new thoughts surfaced" in narrative
+    assert "Maintenance surfaced 2 new thoughts." in narrative
+    assert re.search(r"\b(?:I|me|my|mine)\b", narrative, re.IGNORECASE) is None
     assert len(narrative) <= MAX_NARRATIVE_CHARS
 
 
@@ -174,7 +178,7 @@ def test_maintain_writes_dream_and_context_renders_section(tmp_path):
         assert runtime.last_dream_note_id is not None
         narrative = runtime.last_dream_narrative
         assert narrative is not None
-        assert "I promoted 1 continuity note into durable memory." in narrative
+        assert "Mnemos promoted 1 continuity note into durable memory." in narrative
         assert runtime._get_meta("dream_last_written_at") is not None
 
         packet = runtime.context()

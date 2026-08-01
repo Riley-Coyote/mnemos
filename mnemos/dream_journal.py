@@ -1,11 +1,9 @@
-"""Consolidation as narrative: the dream journal.
+"""Neutral, system-authored reports from deterministic consolidation.
 
 Maintenance is invisible by default — connections form, details soften,
 memories settle into the archive, and nobody hears about it. The dream
 journal turns a maintenance cycle that did meaningful work into a short
-first-person account of what the agent's sleep produced, written so the
-next session can know it. The narrative is deterministic; an optional
-host-model pass may warm its voice without changing its facts.
+mechanical account for the next session. It never speaks as the agent.
 """
 
 from __future__ import annotations
@@ -31,7 +29,7 @@ def compose_dream_narrative(
     belief_deltas: list[dict] | None = None,
     promoted: int = 0,
 ) -> str | None:
-    """Render a consolidation cycle as a short first-person narrative.
+    """Render a consolidation cycle in neutral system language.
 
     Returns None when the cycle did nothing worth telling. Deep cycles are
     always worth telling, even when everything held steady.
@@ -59,22 +57,22 @@ def compose_dream_narrative(
 
     sentences: list[str] = []
     if is_deep:
-        sentences.append("Deep consolidation ran while you were away.")
+        sentences.append("Mnemos ran deep consolidation while the agent was away.")
     if connections_created > 0:
         sentences.append(
-            f"I connected {connections_created} "
+            f"Mnemos connected {connections_created} "
             f"{_plural(connections_created, 'memory', 'memories')} that belong together."
         )
     if engrams_softened > 0:
         kept = "their lessons" if (lessons_created + lessons_reinforced) > 0 else "what mattered"
         sentences.append(
-            f"I softened {engrams_softened} stale "
+            f"Mnemos softened {engrams_softened} stale "
             f"{_plural(engrams_softened, 'detail', 'details')} and kept {kept}."
         )
     if engrams_archived > 0:
         sentences.append(
-            f"I let {engrams_archived} faded "
-            f"{_plural(engrams_archived, 'memory', 'memories')} rest in the archive."
+            f"Mnemos moved {engrams_archived} faded "
+            f"{_plural(engrams_archived, 'memory', 'memories')} into the archive."
         )
     elif engrams_dormant > 0:
         sentences.append(
@@ -86,22 +84,27 @@ def compose_dream_narrative(
         new = float(delta.get("new_confidence", 0.0))
         verb = "strengthened" if new >= old else "softened"
         content = str(delta.get("content", ""))[:60]
-        sentences.append(f'My belief that "{content}" {verb} ({old:.2f} -> {new:.2f}).')
+        sentences.append(
+            f'Mnemos recorded that the belief "{content}" {verb} '
+            f"({old:.2f} -> {new:.2f})."
+        )
     if promoted > 0:
         sentences.append(
-            f"I promoted {promoted} continuity "
+            f"Mnemos promoted {promoted} continuity "
             f"{_plural(promoted, 'note', 'notes')} into durable memory."
         )
     if thoughts_generated > 0:
         sentences.append(
-            f"{thoughts_generated} new "
-            f"{_plural(thoughts_generated, 'thought', 'thoughts')} surfaced as I worked."
+            f"Maintenance surfaced {thoughts_generated} new "
+            f"{_plural(thoughts_generated, 'thought', 'thoughts')}."
         )
 
     # A deep cycle with nothing to report still deserves one true sentence.
     has_work = bool(sentences) and not (is_deep and len(sentences) == 1)
     if not has_work:
-        sentences = ["I went through everything and it all still holds."]
+        sentences = [
+            "Mnemos checked the stored continuity; no mechanical changes were needed."
+        ]
 
     narrative = " ".join(sentences)
     if len(narrative) > MAX_NARRATIVE_CHARS:
@@ -192,6 +195,9 @@ def write_dream_entry(store: EngramStore, scope: MnemosScope, narrative: str) ->
         person_id=scope.person_id,
         project_scope=scope.project_scope,
         source="synthesized",
+        entry_kind="maintenance_report",
+        authored_by="system",
+        author_id="mnemos",
         domain=DREAM_DOMAIN,
         tags=[DREAM_JOURNAL_TAG],
         confidence=0.55,

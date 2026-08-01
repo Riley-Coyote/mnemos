@@ -28,7 +28,7 @@ from ..core.identity import AgentIdentity
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -50,6 +50,12 @@ VALID_SESSION_STATUSES = {"active", "paused", "closed"}
 _MAX_HYPOMNEMA_CANDIDATES = 5000
 
 VALID_HYPO_SOURCES = {"observed", "synthesized", "co-formed"}
+VALID_HYPO_ENTRY_KINDS = {
+    "continuity",
+    "handoff",
+    "maintenance_report",
+}
+VALID_HYPO_AUTHORSHIP = {"agent", "system", "coauthored", "unknown"}
 VALID_HYPO_DOMAINS = {
     "foundational",
     "identity",
@@ -111,6 +117,23 @@ _RECONCILABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("agent_id", "agent_id TEXT"),
         ("person_id", "person_id TEXT"),
         ("project_scope", "project_scope TEXT"),
+    ],
+    "hypomnema_entries": [
+        (
+            "entry_kind",
+            "entry_kind TEXT NOT NULL "
+            "CHECK (entry_kind IN ('continuity', 'handoff', 'maintenance_report')) "
+            "DEFAULT 'continuity'",
+        ),
+        (
+            "authored_by",
+            "authored_by TEXT NOT NULL "
+            "CHECK (authored_by IN ('agent', 'system', 'coauthored', 'unknown')) "
+            "DEFAULT 'unknown'",
+        ),
+        ("author_id", "author_id TEXT NOT NULL DEFAULT ''"),
+        ("last_surfaced_at", "last_surfaced_at TEXT"),
+        ("surface_count", "surface_count INTEGER NOT NULL DEFAULT 0"),
     ],
 }
 
@@ -195,6 +218,11 @@ CREATE TABLE IF NOT EXISTS hypomnema_entries (
     person_id TEXT NOT NULL DEFAULT 'user',
     project_scope TEXT NOT NULL DEFAULT 'global',
     content TEXT NOT NULL,
+    entry_kind TEXT NOT NULL DEFAULT 'continuity'
+        CHECK (entry_kind IN ('continuity', 'handoff', 'maintenance_report')),
+    authored_by TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (authored_by IN ('agent', 'system', 'coauthored', 'unknown')),
+    author_id TEXT NOT NULL DEFAULT '',
     source TEXT NOT NULL DEFAULT 'observed'
         CHECK (source IN ('observed', 'synthesized', 'co-formed')),
     density REAL NOT NULL DEFAULT 0.5,
@@ -213,7 +241,9 @@ CREATE TABLE IF NOT EXISTS hypomnema_entries (
     superseded_by TEXT REFERENCES hypomnema_entries(id),
     created_at TEXT NOT NULL,
     last_revised_at TEXT NOT NULL,
-    last_challenged_at TEXT
+    last_challenged_at TEXT,
+    last_surfaced_at TEXT,
+    surface_count INTEGER NOT NULL DEFAULT 0
 );
 
 -- Functional memory sessions: the active conversational frame
@@ -362,6 +392,9 @@ CREATE INDEX IF NOT EXISTS idx_hypomnema_scope_revised
 CREATE INDEX IF NOT EXISTS idx_hypomnema_promotion
     ON hypomnema_entries(agent_id, project_scope, created_at)
     WHERE active = 1 AND graduated_to_engram_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hypomnema_one_active_handoff
+    ON hypomnema_entries(agent_id, person_id, project_scope)
+    WHERE active = 1 AND entry_kind = 'handoff';
 CREATE INDEX IF NOT EXISTS idx_memory_sessions_scope
     ON memory_sessions(agent_id, person_id, project_scope, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_functional_scope
@@ -470,6 +503,7 @@ class EngramStore:
         self._backup_before_migration(conn)
         self._reconcile_columns(conn)
         conn.executescript(SQL_CREATE_TABLES)
+        self._classify_legacy_hypomnema(conn)
         self._backfill_engram_scopes(conn)
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
@@ -487,20 +521,59 @@ class EngramStore:
 
     def _backup_before_migration(self, conn: sqlite3.Connection) -> None:
         """Create a verified recovery point before altering an older schema."""
-        tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='engrams'"
+        existing = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name IN ('engrams', 'hypomnema_entries') LIMIT 1"
         ).fetchone()
-        if not tables:
+        if not existing:
             return
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(engrams)")}
-        if {"person_id", "project_scope"}.issubset(columns):
+
+        version_row = None
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
+        ).fetchone():
+            version_row = conn.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'"
+            ).fetchone()
+        try:
+            current_version = int(version_row[0]) if version_row else 0
+        except (TypeError, ValueError):
+            current_version = 0
+        if current_version >= SCHEMA_VERSION:
             return
         from ..backup import create_backup
 
         backup_dir = self.db_path.parent / "backups"
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         destination = backup_dir / f"{self.db_path.stem}.pre-v{SCHEMA_VERSION}-{stamp}.db"
         create_backup(self.db_path, destination, source_connection=conn)
+
+    @staticmethod
+    def _classify_legacy_hypomnema(conn: sqlite3.Connection) -> None:
+        """Classify legacy rows without pretending ambiguous prose was agent-written."""
+
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(hypomnema_entries)")
+        }
+        if not {"entry_kind", "authored_by", "author_id"}.issubset(columns):
+            return
+        conn.execute(
+            """
+            UPDATE hypomnema_entries
+            SET entry_kind = 'maintenance_report',
+                authored_by = 'system',
+                author_id = 'mnemos'
+            WHERE authored_by = 'unknown'
+              AND tags_json LIKE '%"dream-journal"%'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE hypomnema_entries
+            SET authored_by = 'coauthored'
+            WHERE authored_by = 'unknown' AND source = 'co-formed'
+            """
+        )
 
     @staticmethod
     def _backfill_engram_scopes(conn: sqlite3.Connection) -> None:
@@ -1395,6 +1468,8 @@ class EngramStore:
                 person_id=person_id,
                 project_scope=project_scope,
                 source="synthesized",
+                authored_by="agent" if synthesis.strip() else "system",
+                author_id=agent_id if synthesis.strip() else "mnemos",
                 density=0.72,
                 domain="situational",
                 tags=["session-close", "functional-memory", project_scope],
@@ -1499,6 +1574,9 @@ class EngramStore:
         person_id: str = "user",
         project_scope: str = "global",
         source: str = "observed",
+        entry_kind: str = "continuity",
+        authored_by: str | None = None,
+        author_id: str = "",
         density: float = 0.5,
         domain: str = "topical",
         tags: str | list[str] | tuple[str, ...] | None = None,
@@ -1515,6 +1593,12 @@ class EngramStore:
         """
         if source not in VALID_HYPO_SOURCES:
             raise ValueError(f"Unsupported hypomnema source: {source}")
+        if authored_by is None:
+            authored_by = "coauthored" if source == "co-formed" else "unknown"
+        if entry_kind not in VALID_HYPO_ENTRY_KINDS:
+            raise ValueError(f"Unsupported hypomnema entry kind: {entry_kind}")
+        if authored_by not in VALID_HYPO_AUTHORSHIP:
+            raise ValueError(f"Unsupported hypomnema authorship: {authored_by}")
         if domain not in VALID_HYPO_DOMAINS:
             raise ValueError(f"Unsupported hypomnema domain: {domain}")
         if not content.strip():
@@ -1526,11 +1610,12 @@ class EngramStore:
         conn.execute(
             """
             INSERT INTO hypomnema_entries(
-                id, agent_id, person_id, project_scope, content, source,
+                id, agent_id, person_id, project_scope, content,
+                entry_kind, authored_by, author_id, source,
                 density, domain, tags_json, confidence, salience,
                 active, foundational, revision_count, revisions_json,
                 related_session_id, related_engram_id, created_at, last_revised_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, '[]', ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, '[]', ?, ?, ?, ?)
             """,
             (
                 entry_id,
@@ -1538,6 +1623,9 @@ class EngramStore:
                 person_id,
                 project_scope,
                 content.strip(),
+                entry_kind,
+                authored_by,
+                author_id.strip(),
                 source,
                 _clamp(density),
                 domain,
@@ -1553,6 +1641,132 @@ class EngramStore:
         )
         conn.commit()
         return entry_id
+
+    def write_handoff(
+        self,
+        text: str,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        author_id: str = "",
+    ) -> str:
+        """Atomically replace the active handoff while preserving exact prose."""
+
+        if not text.strip():
+            raise ValueError("Handoff text cannot be empty")
+
+        conn = self._get_conn()
+        new_id = _new_id()
+        now = _utc_now()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            prior = conn.execute(
+                """
+                SELECT * FROM hypomnema_entries
+                WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+                  AND entry_kind = 'handoff' AND active = 1
+                LIMIT 1
+                """,
+                (agent_id, person_id, project_scope),
+            ).fetchone()
+            if prior is not None:
+                revisions = _decode_json(prior["revisions_json"], [])
+                revisions.append({
+                    "at": now,
+                    "prior_content": prior["content"],
+                    "reason": "superseded: newer agent-written session handoff",
+                })
+                conn.execute(
+                    """
+                    UPDATE hypomnema_entries
+                    SET active = 0,
+                        revision_count = revision_count + 1,
+                        revisions_json = ?, last_revised_at = ?
+                    WHERE id = ?
+                    """,
+                    (_encode_json(revisions), now, prior["id"]),
+                )
+
+            conn.execute(
+                """
+                INSERT INTO hypomnema_entries(
+                    id, agent_id, person_id, project_scope, content,
+                    entry_kind, authored_by, author_id, source,
+                    density, domain, tags_json, confidence, salience,
+                    active, foundational, revision_count, revisions_json,
+                    created_at, last_revised_at, surface_count
+                ) VALUES (?, ?, ?, ?, ?, 'handoff', 'agent', ?, 'observed',
+                          0.9, 'situational', ?, 1.0, 1.0,
+                          1, 0, 0, '[]', ?, ?, 0)
+                """,
+                (
+                    new_id,
+                    agent_id,
+                    person_id,
+                    project_scope,
+                    text,
+                    (author_id or agent_id).strip(),
+                    _encode_json(["session-handoff", "continuity"]),
+                    now,
+                    now,
+                ),
+            )
+            if prior is not None:
+                conn.execute(
+                    "UPDATE hypomnema_entries SET superseded_by = ? WHERE id = ?",
+                    (new_id, prior["id"]),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return new_id
+
+    def get_latest_handoff(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        active_only: bool = True,
+    ) -> dict[str, Any] | None:
+        """Return the newest handoff in this exact scope."""
+
+        sql = (
+            "SELECT * FROM hypomnema_entries "
+            "WHERE agent_id = ? AND person_id = ? AND project_scope = ? "
+            "AND entry_kind = 'handoff'"
+        )
+        if active_only:
+            sql += " AND active = 1"
+        sql += " ORDER BY created_at DESC LIMIT 1"
+        row = self._get_conn().execute(
+            sql, (agent_id, person_id, project_scope)
+        ).fetchone()
+        return self._hydrate_hypomnema_row(dict(row)) if row else None
+
+    def mark_handoff_surfaced(
+        self,
+        handoff_id: str,
+        *,
+        agent_id: str,
+        person_id: str,
+        project_scope: str,
+    ) -> bool:
+        """Record a real delivery of the currently active scoped handoff."""
+
+        cursor = self._get_conn().execute(
+            """
+            UPDATE hypomnema_entries
+            SET last_surfaced_at = ?, surface_count = surface_count + 1
+            WHERE id = ? AND agent_id = ? AND person_id = ? AND project_scope = ?
+              AND entry_kind = 'handoff' AND active = 1
+            """,
+            (_utc_now(), handoff_id, agent_id, person_id, project_scope),
+        )
+        self._get_conn().commit()
+        return cursor.rowcount == 1
 
     def get_hypomnema_entry(
         self,
@@ -1811,7 +2025,10 @@ class EngramStore:
             agent_id=agent_id,
             person_id=person_id,
             project_scope=project_scope,
-            source="synthesized",
+            source=row["source"],
+            entry_kind=row["entry_kind"],
+            authored_by=row["authored_by"],
+            author_id=row["author_id"],
             density=row["density"],
             domain=row["domain"],
             tags=row["tags"],
@@ -1918,6 +2135,7 @@ class EngramStore:
             SELECT * FROM hypomnema_entries
             WHERE agent_id = ? AND person_id = ? AND project_scope = ?
               AND active = 1
+              AND entry_kind = 'continuity'
               AND graduated_to_engram_id IS NULL
               AND confidence >= 0.82
               AND salience >= 0.65
@@ -1963,6 +2181,7 @@ class EngramStore:
             "SELECT COUNT(*) FROM hypomnema_entries "
             f"WHERE {where_sql} "
             "AND active = 1 "
+            "AND entry_kind = 'continuity' "
             "AND graduated_to_engram_id IS NULL "
             "AND confidence >= 0.82 "
             "AND salience >= 0.65 "

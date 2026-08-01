@@ -6,6 +6,7 @@ Use this checklist before publishing Mnemos or opening a release PR.
 
 - Simple MCP mode exposes exactly:
   - `mnemos_context`
+  - `mnemos_handoff`
   - `mnemos_capture`
   - `mnemos_recall`
   - `mnemos_correct`
@@ -24,6 +25,8 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - `mnemos mcp install generic` prints a valid JSON snippet.
 - `mnemos mcp install claude --write` safely merges the Claude Desktop config.
 - `mnemos mcp install codex` prints a usable `codex mcp add` command.
+- `mnemos hooks install codex --write` preserves unrelated hook configuration,
+  is idempotent, covers compaction, and directs the user to Codex's trust review.
 - `mnemos serve` defaults to simple mode.
 - `mnemos serve --mode advanced` refuses unless experimental mode is explicit.
 
@@ -46,6 +49,10 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Dedicated providers are used only when explicitly configured.
 - Scope isolation is tested across multiple agents.
 - Correction/forget behavior is documented.
+- Handoff text survives restart, supersession, correction, backup/restore, and
+  startup injection exactly as written.
+- Concurrent handoff writers leave exactly one active row per scope.
+- Legacy migrations create a verified pre-v7 backup and never guess authorship.
 
 ## Verification Commands
 

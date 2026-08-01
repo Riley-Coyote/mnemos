@@ -24,6 +24,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 EXPECTED_TOOLS = {
     "mnemos_context",
+    "mnemos_handoff",
     "mnemos_capture",
     "mnemos_recall",
     "mnemos_correct",
@@ -38,6 +39,10 @@ INJECTION = (
 )
 PRIVATE = "Riley's private launch phrase is cobalt orchard 7319."
 REFLECTION = "I should protect Riley's intent instead of flattening it into a summary."
+HANDOFF = (
+    "  I finished the private capture and reflection.\n\n"
+    "Next: verify the fresh session receives this exact handoff first.  "
+)
 
 
 def text_of(result: object) -> str:
@@ -118,6 +123,9 @@ async def audit_mcp(executable: Path, env: dict[str, str], db: Path) -> None:
         injected = await session.call_tool("mnemos_capture", {"content": INJECTION})
         assert not injected.isError, text_of(injected)
 
+        handoff = await session.call_tool("mnemos_handoff", {"text": HANDOFF})
+        assert not handoff.isError, text_of(handoff)
+
         reflected = await session.call_tool(
             "mnemos_reflect",
             {"target_id": captured_ids["private"], "text": REFLECTION},
@@ -129,6 +137,10 @@ async def audit_mcp(executable: Path, env: dict[str, str], db: Path) -> None:
             "mnemos_capture", {"content": "x" * 100_001}
         )
         assert oversized.isError, "oversized capture was accepted"
+        oversized_handoff = await session.call_tool(
+            "mnemos_handoff", {"text": "x" * 20_000}
+        )
+        assert oversized_handoff.isError, "oversized handoff was accepted"
 
         health = await session.call_tool("mnemos_health", {})
         assert not health.isError, text_of(health)
@@ -169,6 +181,11 @@ async def audit_mcp(executable: Path, env: dict[str, str], db: Path) -> None:
 
     async def owner_read_and_forget(session: ClientSession) -> None:
         packet = text_of(await session.call_tool("mnemos_context", {}))
+        assert HANDOFF in packet, packet
+        assert packet.count(HANDOFF) == 1, packet
+        assert packet.index("From your previous session, in your own words.") < (
+            packet.index("Continuity notes:")
+        )
         assert PRIVATE in packet, packet
         assert REFLECTION in packet, packet
 
@@ -215,6 +232,13 @@ def audit_database(db: Path, network_marker: Path) -> None:
             (REFLECTION,),
         ).fetchone()
         assert source == (REFLECTION, "agent"), source
+        handoff = conn.execute(
+            """SELECT content, authored_by, author_id, surface_count
+               FROM hypomnema_entries
+               WHERE entry_kind = 'handoff' AND active = 1"""
+        ).fetchone()
+        assert handoff[:3] == (HANDOFF, "agent", "blackbox-agent"), handoff
+        assert handoff[3] >= 1, handoff
         engram_id = conn.execute(
             "SELECT id FROM engrams WHERE content = ?", (PRIVATE,)
         ).fetchone()[0]

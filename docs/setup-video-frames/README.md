@@ -9,7 +9,7 @@ all-monochrome design system (full system in [`../setup-video-script.md`](../set
 | `01-title.html`  | animated (canvas) | Living substrate + wordmark + tagline. |
 | `02-install.svg` | static | Install → `mnemos doctor` → **ready**. |
 | `03-connect.svg` | static | Connect to client (`mnemos mcp install claude --write`). |
-| `04-tools.svg`   | static | Eight tools; `capture` in use. |
+| `04-tools.svg`   | static | Nine tools; `handoff` and `capture` in use. |
 | `05-hermes.svg`  | static | Hermes — Sidecar vs Provider. |
 | `06-close.html`  | animated (canvas) | Fuller settled substrate + CTA. |
 

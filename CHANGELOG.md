@@ -1,6 +1,28 @@
 # Changelog
 
-## 0.2.1 (Unreleased)
+## 0.3.0 (Unreleased)
+
+Agent-written session handoffs. The agent can now leave one exact, private note
+for its next session with `mnemos_handoff`. The newest handoff is delivered
+first at startup, in full and only once in the packet, with its age and a quiet
+instruction to continue naturally.
+
+- One active handoff per agent/person/project scope, enforced in SQLite and
+  replaced atomically while prior versions remain recoverable.
+- Handoffs are never summarized, rewritten, promoted, decayed, or expired.
+- Schema v7 records entry kind, authorship, author identity, last delivery, and
+  delivery count. Ambiguous legacy writing remains `unknown`.
+- Deterministic maintenance now uses neutral system language and is clearly
+  separated from the agent's own words.
+- `mnemos_health` reports handoff save/delivery/authorship state and warns
+  when stored continuity is not reaching sessions.
+- Claude Code startup injection remains supported. Codex now has an idempotent
+  `mnemos hooks install codex --write` path covering startup, resume, clear,
+  and post-compaction reinjection while preserving unrelated hooks.
+- The installed-wheel audit now expects nine tools and performs a real
+  session-A → handoff → fresh session-B transition.
+
+## 0.2.1 (2026-08-01)
 
 Production-hardening release. This release closes security, privacy, scope,
 recovery, and installation gaps found during the 0.2.0 release audit. The

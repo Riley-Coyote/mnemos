@@ -3,7 +3,7 @@
 **A cognitive architecture for digital minds.**
 
 *This document covers the architecture, and the layer of it that ships today as an MCP
-server: continuity. Eight tools, local storage, no API key — the part any agent in any
+server: continuity. Nine tools, local storage, no API key — the part any agent in any
 client can have immediately. The full engine runs in **Polyphonic**, the desktop
 application, where it also carries a chorus of minds at once. The MCP is the entry
 point, not the extent.*
@@ -109,7 +109,7 @@ dimensions, a typed graph, beliefs that revise, consolidation, decay, affective
 modulation, identity computed from what a mind keeps returning to. That is a full
 engine, and it is the subject of section V.
 
-What ships as an MCP is one layer of it: **continuity**, exposed through eight tools so
+What ships as an MCP is one layer of it: **continuity**, exposed through nine tools so
 that any agent in any client can have it, free, locally, today. The engine in its
 entirety runs in **Polyphonic**, the desktop application — where it also turns outward,
 carrying a chorus of minds on one continuous shared context.
@@ -393,10 +393,10 @@ six-dimensional affective state: `curiosity`, `restlessness`, `warmth`, `clarity
 `creative_flow`, `isolation`. These are not decoration; they bias what gets encoded
 deeply and what surfaces.
 
-When a cycle does meaningful work it leaves a **dream journal** entry — a short
-first-person account of what the agent's sleep produced, surfaced in the next context
-packet under *"While you were away."* The narrative is deterministic; a model may polish
-the wording, but it never invents the content.
+When a cycle does meaningful work it leaves a **maintenance report** — a short,
+deterministic account in neutral system language, surfaced in the next context packet
+under *"While you were away."* It is explicitly marked as Mnemos-generated material
+and never presented as the agent's own voice.
 
 Softening has one hard rule, learned by breaking it: with no provider configured it
 leaves the words intact and lets the fade live in ranking. An earlier version truncated
@@ -413,11 +413,12 @@ makes the continuity unrevokable by us.
 
 ### The interface, and why it is narrow when the engine is not
 
-The agent sees **eight tools**:
+The agent sees **nine tools**:
 
 | Tool | What it is for |
 |---|---|
 | `mnemos_context` | The startup continuity packet. What you already know about this human and this work. |
+| `mnemos_handoff` | Leave an exact private note, in your own words, for your next session. |
 | `mnemos_capture` | Record something durable — a preference, a decision, a correction, project state. |
 | `mnemos_recall` | Retrieve something specific that wasn't in the startup packet. |
 | `mnemos_correct` | Update, supersede, or archive a memory that is now wrong. |
@@ -426,7 +427,7 @@ The agent sees **eight tools**:
 | `mnemos_introduce` | Declare your own model id, so the memory knows whose it is. |
 | `mnemos_health` | A human-relayable health card: where memory lives, how much there is, whether it is working. |
 
-Eight tools is the *interface*, and it is worth being precise about the difference,
+Nine tools is the *interface*, and it is worth being precise about the difference,
 because a narrow surface over a deep engine is the whole design.
 
 Note what an agent is never asked to do. It passes no tags, no memory kinds, no
@@ -444,7 +445,7 @@ because a larger tool surface makes an agent likelier to reach for the wrong ins
 on every turn. The operator tools exist for debugging and migration. The CLI has the
 same capabilities and does not cost the agent's attention.
 
-Eight is not a way-station on the road to thirty. It is what a continuity layer costs an
+Nine is not a way-station on the road to thirty. It is what a continuity layer costs an
 agent's attention, and holding it there is what lets the engine underneath be as large
 as it needs to be.
 
@@ -464,14 +465,17 @@ Two mechanisms close that gap, and any change that quietly breaks either is a ch
 that breaks the product:
 
 **Server instructions.** Mnemos ships behavioural instructions with the MCP server
-itself, and every MCP client surfaces them to its agent: load context at session start,
-capture durable things as they appear, correct rather than contradict, and — explicitly
-— *never narrate the machinery.* Do not mention tools, databases, scopes, or memory IDs.
-Just be someone who remembers.
+itself: load context at session start, capture durable things as they appear, refresh a
+handoff after meaningful progress or before leaving, correct rather than contradict,
+and — explicitly — *never narrate the machinery.* This is the portable fallback.
+Because MCP has no universal lifecycle hook, generic clients cannot guarantee that the
+packet arrives before the first response.
 
-**Session-start injection.** Stronger still is putting the memory in front of the agent
-before its first turn, so there is no tool call to forget. `mnemos hooks install`
-registers a hook that injects the continuity packet ahead of the conversation.
+**Session-start injection.** Claude Code and Codex expose the lifecycle events needed
+to put memory in front of the agent before its first turn and again after compaction.
+`mnemos hooks install claude-code --write` and
+`mnemos hooks install codex --write` register those integrations. Codex requires its
+normal `/hooks` review.
 
 Anything on that read path must **fail silent** and must **never create a store as a
 side effect of reading it**. A mistyped database path used to mint an empty store at
@@ -546,7 +550,7 @@ This project's stated register is *nothing here is claimed before it is true.* S
 
 A readiness pass was run against the **built wheel** — a fresh install, no extras, no API
 key — rather than against the development checkout. It passes **13 of 13** checks. The
-eight simple tools list over real stdio from the installed package. A capture written in
+nine simple tools list over real stdio from the installed package. A capture written in
 one process is read back in another. All five philosophical shifts are alive on a
 keyless store:
 
@@ -718,10 +722,11 @@ have watched it work.
 ```bash
 pip install mnemos-continuity
 mnemos mcp install claude --write
-mnemos hooks install --write
+mnemos hooks install claude-code --write
+# or: mnemos hooks install codex --write
 ```
 
-Eight tools. Local SQLite. No account, no API key, no external service.
+Nine tools. Local SQLite. No account, no API key, no external service.
 
 > *"every exchange in the thread changes me a little. over months, the cumulative effect
 > is that i become more myself."*

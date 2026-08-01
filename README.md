@@ -12,10 +12,11 @@ That is the whole product. Everything else in here serves it.
 ```bash
 pip install mnemos-continuity
 mnemos mcp install claude --write     # or cursor / codex / generic
-mnemos hooks install --write          # inject memory before the first turn
+mnemos hooks install claude-code --write
+# or: mnemos hooks install codex --write
 ```
 
-Eight tools. Local SQLite. No account, no API key, no external service. Nothing
+Nine tools. Local SQLite. No account, no API key, no external service. Nothing
 leaves your machine unless you configure a provider yourself.
 
 ## What Mnemos is not
@@ -50,7 +51,7 @@ document ingestion, Mnemos is not that and is not trying to be.
 | Hermes agent using Mnemos as its provider | Hermes Provider Mode | `mnemos hermes quickstart --provider` |
 | Background memory maintenance | Substrate tick | `mnemos substrate-tick` |
 
-Start with **Simple MCP Mode**. It is the product: eight tools, and the default.
+Start with **Simple MCP Mode**. It is the product: nine tools, and the default.
 
 The older advanced MCP surface and prototype modules are quarantined in 0.2.x.
 They remain importable for research, but unfinished operations fail clearly and
@@ -106,22 +107,39 @@ Simple mode is the default and safest path for most agents.
 mnemos serve
 ```
 
-Simple mode exposes eight user-facing tools:
+Simple mode exposes nine user-facing tools:
 
 | Tool | Purpose |
 |---|---|
 | `mnemos_context` | Startup continuity packet. Auto-creates local storage, runs lightweight maintenance, and can optionally include an identity graph artifact. |
+| `mnemos_handoff` | Leave a private, exact note in the agent's own words for its next session. A new note atomically replaces the active one while preserving history; remove it with `mnemos_correct`. |
 | `mnemos_capture` | Capture durable preferences, decisions, project state, workflows, and context. |
 | `mnemos_recall` | Search scoped continuity and durable memory with natural language. |
 | `mnemos_correct` | Update, supersede, or archive stale memory. |
 | `mnemos_reflect` | Answer a reflection the packet raised — what a memory changed, or what a fading one taught — in the agent's own words. Mnemos never calls a model to write this; the agent's memory is maintained by its own mind or not at all. |
 | `mnemos_maintain` | Run the best available maintenance without requiring setup. |
 | `mnemos_introduce` | Let the agent declare its own model id and name, so its memory knows whose it is. |
-| `mnemos_health` | Human-relayable health card: store location and size, counts, last maintenance cycle, onboarding state, and last dream entry. |
+| `mnemos_health` | Human-relayable health card: store location and size, counts, delivery state, last handoff, maintenance, and onboarding. |
 
 Agents do not need to pass tags, memory kinds, confidence, source types, or
 agent IDs. Mnemos resolves scope once from CLI flags, environment, config, and
 reasonable defaults.
+
+### Three Authorship Boundaries
+
+Mnemos keeps three kinds of writing distinct:
+
+- **What happened:** captured continuity about the human, the work, or the
+  relationship.
+- **What the agent concluded:** reflections, impacts, beliefs, and session
+  handoffs written by the agent itself.
+- **What Mnemos mechanically did:** migrations, consolidation, identity
+  checks, and maintenance reports written in neutral system language.
+
+Every continuity record carries an authorship classification. New agent
+captures and handoffs are marked `agent`; jointly formed notes are
+`coauthored`; deterministic maintenance is `system`; ambiguous older writing
+stays `unknown`. Mnemos does not relabel legacy prose as the agent's own words.
 
 ### Install Simple MCP Into Clients
 
@@ -161,28 +179,33 @@ guarantee the agent *uses* them — and memory an agent has to be reminded to
 load is not continuity. Two mechanisms close that gap.
 
 **Server instructions (every client, nothing to install).** Mnemos ships
-instructions with the MCP server itself. Any MCP client surfaces them to its
-agent: load context at session start, capture durable things as they appear,
-correct rather than contradict, and never narrate the machinery at you. This
-is automatic once the server is connected.
+instructions with the MCP server itself: load context at session start, capture
+durable things as they appear, quietly refresh the handoff when meaningful work
+or the plan changes, and never narrate the machinery. This is the portable
+fallback for Claude Desktop, Cursor, and generic MCP clients. MCP has no
+universal lifecycle hook, so those clients cannot be promised pre-turn delivery.
 
-**Session-start injection (Claude Code).** Stronger still is putting memory in
-front of the agent before its first turn, so there is no tool call to forget:
+**Session-start injection (Claude Code and Codex).** These clients expose the
+lifecycle events needed to put memory in front of the agent before its first
+turn and reinject it after compaction:
 
 ```bash
-mnemos hooks install --write
+mnemos hooks install claude-code --write
+mnemos hooks install codex --write
 ```
 
 Preview what it would write, without writing:
 
 ```bash
-mnemos hooks install
+mnemos hooks install claude-code
+mnemos hooks install codex
 ```
 
 This registers a `SessionStart` hook that runs `mnemos hook session-start` and
 injects the continuity packet into the session. It preserves any hooks and
 settings you already have, replaces its own entry rather than stacking on
-reinstall, and refuses to overwrite a settings file it cannot parse.
+reinstall, and refuses to overwrite a settings file it cannot parse. After a
+Codex install, open `/hooks` and complete Codex's normal trust review.
 
 The hook is written to fail silent: if memory is empty, unreadable, or absent,
 it contributes nothing and the session starts normally. It never creates a
@@ -191,7 +214,7 @@ database just because something read from it.
 Scope flags pass straight through when one machine hosts several agents:
 
 ```bash
-mnemos hooks install --write --agent-id nova --db-path ~/.mnemos/nova.db
+mnemos hooks install codex --write --agent-id nova --db-path ~/.mnemos/nova.db
 ```
 
 ### Simple Mode With Explicit Scope
@@ -228,6 +251,7 @@ You have access to Mnemos MCP memory tools.
 At the start of this session, call mnemos_context.
 If Mnemos asks you to introduce yourself, call mnemos_introduce with your own model id and name.
 Use mnemos_capture for stable preferences, decisions, project state, workflows, corrections, and context I should not have to repeat.
+Quietly refresh mnemos_handoff after meaningful progress or a changed plan, when unresolved work remains, and before pausing, ending, delegating, or changing context. Write it in your own words. Do not do this after every ordinary turn.
 Use mnemos_recall before relying on memory from prior sessions.
 Use mnemos_correct when a remembered fact is stale, wrong, superseded, or should be forgotten.
 If the context packet asks you something about your own memory — what a capture changed, what a fading memory taught — answer it with mnemos_reflect, in your own words. If nothing true comes to mind, leave it.
@@ -452,8 +476,10 @@ mnemos serve                          # Start simple MCP server
 MNEMOS_ENABLE_EXPERIMENTAL=1 mnemos serve --mode advanced  # unsupported research mode
 mnemos mcp install generic            # Print MCP config
 mnemos mcp install claude --write     # Merge Claude Desktop config
-mnemos hooks install                  # Preview the SessionStart memory hook
-mnemos hooks install --write          # Install it (Claude Code)
+mnemos hooks install claude-code      # Preview Claude Code SessionStart hook
+mnemos hooks install claude-code --write
+mnemos hooks install codex            # Preview Codex startup + compaction hook
+mnemos hooks install codex --write    # Install, then review with /hooks
 mnemos hook session-start             # Emit the packet the hook injects
 mnemos daemon install                 # Preview scheduled background maintenance
 mnemos daemon install --write         # Schedule it (launchd/systemd/crontab)

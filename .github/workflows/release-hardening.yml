@@ -141,7 +141,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -151,7 +151,7 @@ jobs:
       - name: Build release wheel
         run: uv build
 
-      - name: Audit installed wheel on macOS
+      - name: Audit installed wheel on macOS or Linux
         if: runner.os != 'Windows'
         run: |
           uv venv .audit-venv --python 3.12

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 (Unreleased)
+## 0.3.0 (2026-08-01)
 
 Agent-written session handoffs. The agent can now leave one exact, private note
 for its next session with `mnemos_handoff`. The newest handoff is delivered

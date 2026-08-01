@@ -341,7 +341,8 @@ class DiffFinding:
 
 def _finding_id(kind: str, soul_claim: str | None, graph_item: str | None) -> str:
     digest = hashlib.sha1(
-        f"{kind}|{soul_claim or ''}|{graph_item or ''}".encode("utf-8")
+        f"{kind}|{soul_claim or ''}|{graph_item or ''}".encode("utf-8"),
+        usedforsecurity=False,
     ).hexdigest()
     return digest[:8]
 

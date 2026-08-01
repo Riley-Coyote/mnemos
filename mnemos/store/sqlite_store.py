@@ -107,6 +107,11 @@ _RECONCILABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "beliefs": [
         ("source", "source TEXT NOT NULL DEFAULT ''"),
     ],
+    "consolidation_log": [
+        ("agent_id", "agent_id TEXT"),
+        ("person_id", "person_id TEXT"),
+        ("project_scope", "project_scope TEXT"),
+    ],
 }
 
 
@@ -291,6 +296,9 @@ CREATE TABLE IF NOT EXISTS archive (
 -- Consolidation audit log
 CREATE TABLE IF NOT EXISTS consolidation_log (
     id TEXT PRIMARY KEY,
+    agent_id TEXT,
+    person_id TEXT,
+    project_scope TEXT,
     pass_name TEXT NOT NULL,
     started_at TEXT NOT NULL,
     completed_at TEXT,
@@ -345,6 +353,8 @@ CREATE INDEX IF NOT EXISTS idx_engrams_scope
 CREATE INDEX IF NOT EXISTS idx_engrams_last_accessed ON engrams(last_accessed);
 CREATE INDEX IF NOT EXISTS idx_connections_source ON connections(source_id);
 CREATE INDEX IF NOT EXISTS idx_connections_target ON connections(target_id);
+CREATE INDEX IF NOT EXISTS idx_consolidation_scope
+    ON consolidation_log(agent_id, person_id, project_scope, completed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_beliefs_domain ON beliefs(agent_id, domain);
 CREATE INDEX IF NOT EXISTS idx_hypomnema_scope_revised
     ON hypomnema_entries(agent_id, person_id, project_scope, last_revised_at DESC)
@@ -457,6 +467,7 @@ class EngramStore:
         the rest of the script (which is all `IF NOT EXISTS`) apply cleanly.
         """
         conn = self._get_conn()
+        self._backup_before_migration(conn)
         self._reconcile_columns(conn)
         conn.executescript(SQL_CREATE_TABLES)
         self._backfill_engram_scopes(conn)
@@ -465,6 +476,26 @@ class EngramStore:
             ("schema_version", str(SCHEMA_VERSION)),
         )
         conn.commit()
+        result = conn.execute("PRAGMA integrity_check").fetchone()
+        if not result or result[0] != "ok":
+            raise RuntimeError("SQLite integrity check failed after migration")
+
+    def _backup_before_migration(self, conn: sqlite3.Connection) -> None:
+        """Create a verified recovery point before altering an older schema."""
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='engrams'"
+        ).fetchone()
+        if not tables:
+            return
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(engrams)")}
+        if {"person_id", "project_scope"}.issubset(columns):
+            return
+        from ..backup import create_backup
+
+        backup_dir = self.db_path.parent / "backups"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        destination = backup_dir / f"{self.db_path.stem}.pre-v{SCHEMA_VERSION}-{stamp}.db"
+        create_backup(self.db_path, destination, source_connection=conn)
 
     @staticmethod
     def _backfill_engram_scopes(conn: sqlite3.Connection) -> None:
@@ -2138,10 +2169,22 @@ class EngramStore:
         return {"pending": pending, "answered": answered}
 
     def save_identity(self, identity: AgentIdentity) -> None:
-        """Save agent identity."""
+        """Save identity while preserving its append-only kernel and history."""
         conn = self._get_conn()
+        agent_id = identity.memory_profile.agent_id
+        existing = self.get_identity(agent_id)
+        if existing is not None:
+            if identity.kernel_id != existing.kernel_id:
+                raise ValueError("Identity kernel_id is immutable")
+            self._validate_identity_invariants(existing.invariants, identity.invariants)
+            old_history = [epoch.to_dict() for epoch in existing.epoch_history]
+            new_history = [epoch.to_dict() for epoch in identity.epoch_history]
+            if new_history[:len(old_history)] != old_history:
+                raise ValueError("Identity epoch history is append-only")
+            if identity.epoch_state.epoch_number < existing.epoch_state.epoch_number:
+                raise ValueError("Identity epoch number cannot move backward")
         data = identity.to_dict()
-        data["agent_id"] = identity.memory_profile.agent_id
+        data["agent_id"] = agent_id
         columns = ", ".join(data.keys())
         placeholders = ", ".join("?" for _ in data)
         updates = ", ".join(f"{k}=excluded.{k}" for k in data if k != "agent_id")
@@ -2152,6 +2195,24 @@ class EngramStore:
             list(data.values()),
         )
         conn.commit()
+
+    @classmethod
+    def _validate_identity_invariants(cls, old: Any, new: Any, path: str = "invariants") -> None:
+        """Reject removal or rewriting of any existing invariant value."""
+        if isinstance(old, dict):
+            if not isinstance(new, dict):
+                raise ValueError(f"Identity {path} cannot change type")
+            for key, value in old.items():
+                if key not in new:
+                    raise ValueError(f"Identity {path}.{key} cannot be removed")
+                cls._validate_identity_invariants(value, new[key], f"{path}.{key}")
+            return
+        if isinstance(old, list):
+            if not isinstance(new, list) or new[:len(old)] != old:
+                raise ValueError(f"Identity {path} is append-only")
+            return
+        if new != old:
+            raise ValueError(f"Identity {path} is immutable")
 
     def get_identity(self, agent_id: str = "default") -> AgentIdentity | None:
         """Load agent identity."""
@@ -2191,14 +2252,18 @@ class EngramStore:
         started_at: str,
         completed_at: str | None = None,
         stats: dict | None = None,
+        agent_id: str | None = None,
+        person_id: str | None = None,
+        project_scope: str | None = None,
     ) -> None:
         """Log a consolidation pass."""
         conn = self._get_conn()
         conn.execute(
             "INSERT OR REPLACE INTO consolidation_log "
-            "(id, pass_name, started_at, completed_at, stats) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (log_id, pass_name, started_at, completed_at, json.dumps(stats or {})),
+            "(id, agent_id, person_id, project_scope, pass_name, started_at, completed_at, stats) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (log_id, agent_id, person_id, project_scope, pass_name, started_at,
+             completed_at, json.dumps(stats or {})),
         )
         conn.commit()
 

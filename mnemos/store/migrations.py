@@ -55,7 +55,20 @@ def get_current_version(conn: sqlite3.Connection) -> int:
     Returns:
         Current schema version number. Returns 0 if meta table doesn't exist.
     """
-    raise NotImplementedError("Step 18: Version detection implementation")
+    table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
+    ).fetchone()
+    if table is None:
+        return 0
+    row = conn.execute(
+        "SELECT value FROM meta WHERE key = 'schema_version'"
+    ).fetchone()
+    if row is None:
+        return 0
+    try:
+        return int(row[0])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid schema_version: {row[0]!r}") from exc
 
 
 def run_migrations(conn: sqlite3.Connection, target_version: int | None = None) -> list[int]:
@@ -71,7 +84,39 @@ def run_migrations(conn: sqlite3.Connection, target_version: int | None = None) 
     Raises:
         RuntimeError: If a migration fails (transaction is rolled back).
     """
-    raise NotImplementedError("Step 18: Migration runner implementation")
+    current = get_current_version(conn)
+    latest = max(_MIGRATIONS, default=current)
+    target = latest if target_version is None else target_version
+    if target < current:
+        raise ValueError(
+            f"Schema downgrade is not supported ({current} -> {target})"
+        )
+    pending = [
+        version for version in sorted(_MIGRATIONS)
+        if current < version <= target
+    ]
+    applied: list[int] = []
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    conn.commit()
+    for version in pending:
+        description, migration = _MIGRATIONS[version]
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            migration(conn)
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+                (str(version),),
+            )
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            raise RuntimeError(
+                f"Migration {version} failed ({description}): {exc}"
+            ) from exc
+        applied.append(version)
+    return applied
 
 
 def list_migrations() -> list[dict[str, str | int]]:

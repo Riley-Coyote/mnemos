@@ -574,7 +574,9 @@ def repair_rule_based_softening(
     "An impression related to <first word>... [faded]" and its ``impact`` left
     empty. ``add_version(reason="softening")`` snapshotted the prior state
     first, so the words are recoverable — but nothing recovers them on its
-    own, and ``archive.resharpen`` raises ``NotImplementedError``.
+    own. Mnemos 0.2.1 also restores archived records through
+    ``archive.resharpen``; this repair remains narrower because it targets
+    destructive softening performed before archival.
 
     Only engrams whose current content ends in a rule-based tail *and* which
     have a pre-softening snapshot are touched. Returns how many were restored

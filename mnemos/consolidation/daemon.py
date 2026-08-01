@@ -103,7 +103,7 @@ class ConsolidationDaemon:
             Dict with per-pass statistics and cycle metadata. A gated cycle
             returns ``skipped: True`` and runs no passes.
         """
-        if respect_gate and not self._should_run():
+        if respect_gate and not self._should_run(agent_id, person_id, project_scope):
             return {
                 "cycle_id": None,
                 "cycle_type": "skipped",
@@ -125,6 +125,11 @@ class ConsolidationDaemon:
             # Substrate provenance: every consolidation_log row records who
             # performed this agent's sleep.
             "substrate": self._substrate_provenance(),
+            "scope": {
+                "agent_id": agent_id,
+                "person_id": person_id,
+                "project_scope": project_scope,
+            },
         }
 
         consolidation_config = self._config.get("consolidation", self._config)
@@ -153,7 +158,9 @@ class ConsolidationDaemon:
                 agent_id=agent_id,
                 person_id=person_id,
                 project_scope=project_scope,
-                max_elapsed_hours=self._hours_since_last_cycle(),
+                max_elapsed_hours=self._hours_since_last_cycle(
+                    agent_id, person_id, project_scope
+                ),
             )
             stats["decay"] = decay_stats
             stats["passes_run"].append("decay")
@@ -255,6 +262,9 @@ class ConsolidationDaemon:
                 started_at=started_at,
                 completed_at=completed_at,
                 stats=stats,
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
             )
         except Exception:
             pass  # Don't fail the cycle over a logging error
@@ -282,7 +292,9 @@ class ConsolidationDaemon:
             "note": "optional provider assisted the deep passes",
         }
 
-    def _hours_since_last_cycle(self) -> float | None:
+    def _hours_since_last_cycle(
+        self, agent_id: str, person_id: str | None, project_scope: str | None
+    ) -> float | None:
         """Hours elapsed since the last logged consolidation cycle.
 
         Decay is applied for *elapsed time*, but each engram measures its own
@@ -297,10 +309,19 @@ class ConsolidationDaemon:
         """
         try:
             conn = self._store._get_conn()
-            row = conn.execute(
-                "SELECT completed_at FROM consolidation_log "
-                "ORDER BY completed_at DESC LIMIT 1"
-            ).fetchone()
+            if person_id is not None and project_scope is not None:
+                row = conn.execute(
+                    "SELECT completed_at FROM consolidation_log "
+                    "WHERE agent_id = ? AND person_id = ? AND project_scope = ? "
+                    "ORDER BY completed_at DESC LIMIT 1",
+                    (agent_id, person_id, project_scope),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT completed_at FROM consolidation_log "
+                    "WHERE agent_id = ? OR agent_id IS NULL "
+                    "ORDER BY completed_at DESC LIMIT 1", (agent_id,),
+                ).fetchone()
         except Exception:
             return None
 
@@ -317,7 +338,9 @@ class ConsolidationDaemon:
         elapsed = (datetime.now(timezone.utc) - last).total_seconds() / 3600.0
         return max(0.0, elapsed)
 
-    def _should_run(self) -> bool:
+    def _should_run(
+        self, agent_id: str, person_id: str | None, project_scope: str | None
+    ) -> bool:
         """Check whether consolidation should run now.
 
         Activity gate: checks if enough time has passed since the
@@ -327,10 +350,19 @@ class ConsolidationDaemon:
 
         # Check last consolidation timestamp from the log
         conn = self._store._get_conn()
-        row = conn.execute(
-            "SELECT completed_at FROM consolidation_log "
-            "ORDER BY completed_at DESC LIMIT 1"
-        ).fetchone()
+        if person_id is not None and project_scope is not None:
+            row = conn.execute(
+                "SELECT completed_at FROM consolidation_log "
+                "WHERE agent_id = ? AND person_id = ? AND project_scope = ? "
+                "ORDER BY completed_at DESC LIMIT 1",
+                (agent_id, person_id, project_scope),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT completed_at FROM consolidation_log "
+                "WHERE agent_id = ? OR agent_id IS NULL "
+                "ORDER BY completed_at DESC LIMIT 1", (agent_id,),
+            ).fetchone()
 
         if row is None:
             return True  # Never run before

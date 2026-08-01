@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -377,6 +378,22 @@ def main(argv: list[str] | None = None) -> int:
                 help="Apply the change instead of printing what it would do",
             )
 
+    # ── backup ──
+    p_backup = sub.add_parser("backup", help="Create, inspect, or restore verified backups")
+    backup_sub = p_backup.add_subparsers(dest="backup_command")
+    p_backup_create = backup_sub.add_parser("create", help="Create and verify a private backup")
+    p_backup_create.add_argument("--output", default=None, help="Backup destination")
+    p_backup_create.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
+    p_backup_inspect = backup_sub.add_parser("inspect", help="Verify and inspect a backup")
+    p_backup_inspect.add_argument("path", help="Backup file")
+    p_backup_restore = backup_sub.add_parser("restore", help="Restore a verified backup")
+    p_backup_restore.add_argument("path", help="Backup file")
+    p_backup_restore.add_argument("--db-path", default=argparse.SUPPRESS, help="Restore destination")
+    p_backup_restore.add_argument(
+        "--force", action="store_true",
+        help="Replace an existing database after preserving a safety backup",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -406,6 +423,7 @@ def main(argv: list[str] | None = None) -> int:
         "hook": _cmd_hook,
         "hooks": _cmd_hooks,
         "daemon": _cmd_daemon,
+        "backup": _cmd_backup,
     }
 
     handler = handlers.get(args.command)
@@ -851,6 +869,36 @@ def _cmd_init(args: argparse.Namespace) -> int:
     print(f"Initialized Mnemos database: {db_path}")
     print("Run 'mnemos stats' to verify.")
     return 0
+
+
+def _cmd_backup(args: argparse.Namespace) -> int:
+    """Create, inspect, or atomically restore a verified SQLite backup."""
+    from .backup import check_database, create_backup, restore_backup
+
+    command = getattr(args, "backup_command", None)
+    try:
+        if command == "create":
+            result = create_backup(_resolve_db_path(args), args.output)
+            print(f"Backup verified: {result['path']}")
+            print(f"  Memories: {result['engrams']}  Size: {result['size_bytes']} bytes")
+            return 0
+        if command == "inspect":
+            result = check_database(args.path)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0
+        if command == "restore":
+            result = restore_backup(
+                args.path, _resolve_db_path(args), replace=args.force,
+            )
+            print(f"Restore verified: {result['path']}")
+            if result.get("safety_backup"):
+                print(f"  Previous database preserved: {result['safety_backup']}")
+            return 0
+        print("Usage: mnemos backup {create|inspect|restore}", file=sys.stderr)
+        return 1
+    except (FileNotFoundError, FileExistsError, RuntimeError, sqlite3.DatabaseError) as exc:
+        print(f"Backup failed: {exc}", file=sys.stderr)
+        return 1
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:

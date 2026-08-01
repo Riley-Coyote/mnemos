@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-07-31)
 
 Two things happen in this release. Continuity starts arriving on its own —
 loaded at session start and captured as work happens, with nobody asking for

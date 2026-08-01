@@ -9,11 +9,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ...file_security import atomic_write_text
 from .scope import default_hermes_home, save_hermes_mnemos_config, slugify
 
 
 PLUGIN_NAME = "mnemos"
-PLUGIN_VERSION = "0.2.0"
+PLUGIN_VERSION = "0.2.1"
 PROVIDER_MODE = "provider"
 SIDECAR_MODE = "sidecar"
 DEFAULT_MCP_SERVER_NAME = "mnemos"
@@ -269,7 +270,7 @@ def install_hermes_plugin(
             result.files_written.append(path)
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        atomic_write_text(path, content, backup_existing=force)
         result.files_written.append(path)
 
     config_updates = {
@@ -507,7 +508,7 @@ def _configure_mcp_server(
                 config_path,
             )
         home.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(_render_mcp_only_config(server_name, server), encoding="utf-8")
+        atomic_write_text(config_path, _render_mcp_only_config(server_name, server))
         return True, None, config_path
 
     home.mkdir(parents=True, exist_ok=True)
@@ -544,7 +545,10 @@ def _configure_mcp_server(
             )
         mcp_servers[server_name] = server
         existing["mcp_servers"] = mcp_servers
-        config_path.write_text(yaml.safe_dump(existing, sort_keys=False), encoding="utf-8")
+        atomic_write_text(
+            config_path, yaml.safe_dump(existing, sort_keys=False),
+            backup_existing=config_path.exists(),
+        )
         return True, None, config_path
     except Exception as exc:
         return False, f"Could not update {config_path} for MCP sidecar mode: {exc}", config_path
@@ -693,17 +697,24 @@ def _activate_memory_provider(home: Path) -> tuple[bool, str | None]:
         if config_path.exists():
             return False, "PyYAML is not available, so existing config.yaml was not modified."
         home.mkdir(parents=True, exist_ok=True)
-        config_path.write_text("memory:\n  provider: mnemos\n", encoding="utf-8")
+        atomic_write_text(config_path, "memory:\n  provider: mnemos\n")
         return True, None
 
     home.mkdir(parents=True, exist_ok=True)
     try:
         existing = yaml.safe_load(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
         if not isinstance(existing, dict):
-            existing = {}
-        existing.setdefault("memory", {})
+            return False, f"Existing {config_path} is not a YAML mapping, so it was not modified."
+        memory = existing.get("memory")
+        if memory is None:
+            existing["memory"] = {}
+        elif not isinstance(memory, dict):
+            return False, f"Existing memory section in {config_path} is not a mapping, so it was not modified."
         existing["memory"]["provider"] = PLUGIN_NAME
-        config_path.write_text(yaml.safe_dump(existing, sort_keys=False), encoding="utf-8")
+        atomic_write_text(
+            config_path, yaml.safe_dump(existing, sort_keys=False),
+            backup_existing=config_path.exists(),
+        )
         return True, None
     except Exception as exc:
         return False, f"Could not update {config_path}: {exc}"

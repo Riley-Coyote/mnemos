@@ -2268,7 +2268,8 @@ class EngramStore:
         conn.commit()
 
     def get_consolidation_runs(
-        self, pass_name: str, limit: int = 5
+        self, pass_name: str, limit: int = 5, *, agent_id: str | None = None,
+        person_id: str | None = None, project_scope: str | None = None,
     ) -> list[dict]:
         """Most recent consolidation_log rows for a pass, newest first.
 
@@ -2276,11 +2277,14 @@ class EngramStore:
         column; passes that need agent scoping carry it inside stats.
         """
         conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT * FROM consolidation_log WHERE pass_name = ? "
-            "ORDER BY started_at DESC LIMIT ?",
-            (pass_name, limit),
-        ).fetchall()
+        query = "SELECT * FROM consolidation_log WHERE pass_name = ?"
+        params: list[Any] = [pass_name]
+        if agent_id is not None and person_id is not None and project_scope is not None:
+            query += " AND agent_id = ? AND person_id = ? AND project_scope = ?"
+            params.extend([agent_id, person_id, project_scope])
+        query += " ORDER BY started_at DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
         out = []
         for row in rows:
             item = dict(row)
@@ -2293,22 +2297,38 @@ class EngramStore:
 
     # ── Stats ──
 
-    def get_stats(self, agent_id: str = "default") -> dict:
+    def get_stats(
+        self, agent_id: str = "default", *, person_id: str | None = None,
+        project_scope: str | None = None,
+    ) -> dict:
         """Get summary statistics for an agent's memory."""
         conn = self._get_conn()
         stats = {}
 
         # Engram counts by state
         for state in ("active", "consolidating", "dormant", "archived"):
-            row = conn.execute(
-                "SELECT COUNT(*) FROM engrams "
-                "WHERE owner_agent_id = ? AND state = ?",
-                (agent_id, state),
-            ).fetchone()
+            if person_id is not None and project_scope is not None:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM engrams WHERE owner_agent_id = ? "
+                    "AND person_id = ? AND project_scope = ? AND state = ?",
+                    (agent_id, person_id, project_scope, state),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM engrams WHERE owner_agent_id = ? AND state = ?",
+                    (agent_id, state),
+                ).fetchone()
             stats[f"engrams_{state}"] = row[0] if row else 0
 
         # Connection count
-        row = conn.execute("SELECT COUNT(*) FROM connections").fetchone()
+        if person_id is not None and project_scope is not None:
+            row = conn.execute(
+                """SELECT COUNT(*) FROM connections c JOIN engrams e ON e.id = c.source_id
+                   WHERE e.owner_agent_id = ? AND e.person_id = ? AND e.project_scope = ?""",
+                (agent_id, person_id, project_scope),
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT COUNT(*) FROM connections").fetchone()
         stats["connections"] = row[0] if row else 0
 
         # Belief count
@@ -2319,27 +2339,40 @@ class EngramStore:
         stats["beliefs_active"] = row[0] if row else 0
 
         # Version count (reconsolidation events)
-        row = conn.execute("SELECT COUNT(*) FROM versions").fetchone()
+        if person_id is not None and project_scope is not None:
+            row = conn.execute(
+                """SELECT COUNT(*) FROM versions v JOIN engrams e ON e.id = v.engram_id
+                   WHERE e.owner_agent_id = ? AND e.person_id = ? AND e.project_scope = ?""",
+                (agent_id, person_id, project_scope),
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT COUNT(*) FROM versions").fetchone()
         stats["reconsolidation_events"] = row[0] if row else 0
 
         # Archive count
-        row = conn.execute("SELECT COUNT(*) FROM archive").fetchone()
-        stats["archived"] = row[0] if row else 0
+        stats["archived"] = stats["engrams_archived"]
 
         # Hypomnema counts use the default person/project scope for status.
-        stats.update(self.get_hypomnema_stats(agent_id=agent_id))
+        stats.update(self.get_hypomnema_stats(
+            agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        ))
 
         # Functional memory counts cover active working context and review load.
-        stats.update(self.get_functional_stats(agent_id=agent_id))
+        stats.update(self.get_functional_stats(
+            agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        ))
 
         # Accessibility distribution
+        scope_sql = ""
+        params: list[Any] = [agent_id]
+        if person_id is not None and project_scope is not None:
+            scope_sql = " AND person_id = ? AND project_scope = ?"
+            params.extend([person_id, project_scope])
         rows = conn.execute(
-            "SELECT "
-            "AVG(accessibility) as avg_acc, "
-            "MIN(accessibility) as min_acc, "
-            "MAX(accessibility) as max_acc "
-            "FROM engrams WHERE owner_agent_id = ? AND state = 'active'",
-            (agent_id,),
+            "SELECT AVG(accessibility) as avg_acc, MIN(accessibility) as min_acc, "
+            "MAX(accessibility) as max_acc FROM engrams "
+            "WHERE owner_agent_id = ? AND state = 'active'" + scope_sql,
+            params,
         ).fetchone()
         if rows and rows["avg_acc"] is not None:
             stats["accessibility_avg"] = round(rows["avg_acc"], 3)

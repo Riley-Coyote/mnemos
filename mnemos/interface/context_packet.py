@@ -93,13 +93,13 @@ def build_context_packet(
         results = retriever.retrieve(
             cue=query,
             agent_id=agent_id,
+            person_id=person_id,
+            project_scope=project_scope,
             max_results=max_engrams,
             emotional_state=emotional_state,
         )
-        # Retrieval filters by agent only; re-scope to the full three-tuple the
-        # same way the simple runtime does, or this section leaks one person's
-        # (or project's) durable memories into another's packet while the
-        # hypomnema section above stays correctly separated.
+        # Keep a defensive scope check at serialization even though retrieval
+        # now filters before graph traversal and reconsolidation.
         engrams = [
             _serialize_retrieval_result(result)
             for result in results

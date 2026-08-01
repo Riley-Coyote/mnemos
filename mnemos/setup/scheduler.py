@@ -20,6 +20,7 @@ shelling out to ``launchctl`` or ``systemctl``.
 from __future__ import annotations
 
 import plistlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -216,7 +217,7 @@ def systemd_units(
 ) -> tuple[str, str]:
     """The (service, timer) unit files for one job."""
     argv = command_for(job, mnemos_command=mnemos_command, scope_args=scope_args)
-    exec_start = " ".join(argv)
+    exec_start = shlex.join(argv)
     service = "\n".join([
         "[Unit]",
         f"Description=Mnemos {job.name} ({job.description})",
@@ -257,6 +258,37 @@ def systemd_unit_names(agent_id: str, job: SchedulerJob) -> tuple[str, str]:
     return f"{stem}.service", f"{stem}.timer"
 
 
+def launchd_job_active(agent_id: str, job: SchedulerJob) -> bool:
+    """Return true only when launchd has the generated job loaded."""
+    import os
+
+    try:
+        result = subprocess.run(
+            ["launchctl", "print", f"gui/{os.getuid()}/{label_for(agent_id, job)}"],
+            capture_output=True, text=True, check=False,
+        )
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0
+
+
+def systemd_timer_active(agent_id: str, job: SchedulerJob) -> bool:
+    """Return true only when the generated user timer is enabled and active."""
+    _service, timer = systemd_unit_names(agent_id, job)
+    try:
+        enabled = subprocess.run(
+            ["systemctl", "--user", "is-enabled", "--quiet", timer],
+            capture_output=True, text=True, check=False,
+        )
+        active = subprocess.run(
+            ["systemctl", "--user", "is-active", "--quiet", timer],
+            capture_output=True, text=True, check=False,
+        )
+    except FileNotFoundError:
+        return False
+    return enabled.returncode == 0 and active.returncode == 0
+
+
 # ─────────────────────────── crontab (fallback) ───────────────────────────
 
 CRON_MARKER = "# mnemos-scheduler"
@@ -283,7 +315,7 @@ def cron_line(
     argv = command_for(job, mnemos_command=mnemos_command, scope_args=scope_args)
     log = log_path_for(agent_id, job)
     return (
-        f"{schedule} {' '.join(argv)} >> {log} 2>&1 "
+        f"{schedule} {shlex.join(argv)} >> {shlex.quote(log)} 2>&1 "
         f"{CRON_MARKER}:{agent_id}:{job.name}"
     )
 
@@ -367,7 +399,7 @@ def plan(
         entry: dict = {
             "job": job,
             "schedule": job.schedule_description,
-            "command": " ".join(
+            "command": shlex.join(
                 command_for(job, mnemos_command=mnemos_command, scope_args=scope_args)
             ),
             "log": log_path_for(agent_id, job),

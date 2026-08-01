@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -36,11 +37,16 @@ def atomic_write_text(
     content: str,
     *,
     encoding: str = "utf-8",
+    backup_existing: bool = False,
 ) -> Path:
     """Write a private text file and replace the destination atomically."""
 
     destination = Path(path).expanduser()
     parent = secure_directory(destination.parent)
+    if backup_existing and destination.exists():
+        backup = destination.with_suffix(destination.suffix + ".bak")
+        shutil.copy2(destination, backup)
+        secure_file(backup)
     fd, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.", suffix=".tmp", dir=parent
     )
@@ -49,6 +55,39 @@ def atomic_write_text(
         if os.name != "nt":
             os.fchmod(fd, PRIVATE_FILE_MODE)
         with os.fdopen(fd, "w", encoding=encoding) as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+        secure_file(destination)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        temporary.unlink(missing_ok=True)
+        raise
+    return destination
+
+
+def atomic_write_bytes(
+    path: str | Path, content: bytes, *, backup_existing: bool = False
+) -> Path:
+    """Write private bytes atomically, with an optional recoverable backup."""
+    destination = Path(path).expanduser()
+    parent = secure_directory(destination.parent)
+    if backup_existing and destination.exists():
+        backup = destination.with_suffix(destination.suffix + ".bak")
+        shutil.copy2(destination, backup)
+        secure_file(backup)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        if os.name != "nt":
+            os.fchmod(fd, PRIVATE_FILE_MODE)
+        with os.fdopen(fd, "wb") as handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())

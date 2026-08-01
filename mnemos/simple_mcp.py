@@ -19,6 +19,34 @@ from .simple_runtime import MnemosRuntime, SIMPLE_TOOL_NAMES, format_health_card
 
 logger = logging.getLogger("mnemos.simple_mcp")
 
+MAX_CAPTURE_CHARS = 65_536
+MAX_QUERY_CHARS = 4_096
+MAX_CONTEXT_CHARS = 32_768
+MAX_REFLECTION_CHARS = 16_384
+MAX_ID_CHARS = 256
+MAX_RESULTS = 20
+MAX_TOOL_OUTPUT_CHARS = 131_072
+
+
+def _text(name: str, value: str, limit: int, *, required: bool = False) -> str:
+    if required and not value.strip():
+        raise ValueError(f"{name} cannot be empty")
+    if len(value) > limit:
+        raise ValueError(f"{name} is too large (maximum {limit:,} characters)")
+    return value
+
+
+def _count(name: str, value: int, *, minimum: int, maximum: int) -> int:
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _output(value: str) -> str:
+    if len(value) <= MAX_TOOL_OUTPUT_CHARS:
+        return value
+    return value[:MAX_TOOL_OUTPUT_CHARS] + "\n\n[Output limited by Mnemos.]"
+
 SERVER_INSTRUCTIONS = """\
 Mnemos gives this agent memory that survives between sessions.
 
@@ -149,13 +177,18 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         """
 
         runtime = _get_runtime()
-        packet = runtime.context(query=query, max_results=max_results)
+        packet = _output(runtime.context(
+            query=_text("query", query, MAX_QUERY_CHARS),
+            max_results=_count("max_results", max_results, minimum=1, maximum=MAX_RESULTS),
+        ))
         if not include_graph:
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=packet)]
             )
 
-        graph = runtime.identity_graph(max_nodes=graph_max_nodes)
+        graph = runtime.identity_graph(
+            max_nodes=_count("graph_max_nodes", graph_max_nodes, minimum=4, maximum=48)
+        )
         svg = graph.pop("svg")
         graph_text = (
             f"{packet}\n\n"
@@ -209,12 +242,12 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
                 memory will ask you later if it needs one.
         """
 
-        return _get_runtime().capture(
-            content=content,
-            context=context,
+        return _output(_get_runtime().capture(
+            content=_text("content", content, MAX_CAPTURE_CHARS, required=True),
+            context=_text("context", context, MAX_CONTEXT_CHARS),
             importance=importance,
-            impact=impact,
-        )
+            impact=_text("impact", impact, MAX_REFLECTION_CHARS),
+        ))
 
     if include_recall:
         @server.tool(
@@ -228,7 +261,10 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         def mnemos_recall(query: str, max_results: int = 5) -> str:
             """Recall relevant continuity and durable memories."""
 
-            return _get_runtime().recall(query=query, max_results=max_results)
+            return _output(_get_runtime().recall(
+                query=_text("query", query, MAX_QUERY_CHARS, required=True),
+                max_results=_count("max_results", max_results, minimum=1, maximum=MAX_RESULTS),
+            ))
 
     @server.tool(
         annotations=_annotations(
@@ -251,12 +287,12 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         to archive a target or closest query match.
         """
 
-        return _get_runtime().correct(
-            correction=correction,
-            target_id=target_id,
-            query=query,
-            action=action,
-        )
+        return _output(_get_runtime().correct(
+            correction=_text("correction", correction, MAX_CAPTURE_CHARS),
+            target_id=_text("target_id", target_id, MAX_ID_CHARS),
+            query=_text("query", query, MAX_QUERY_CHARS),
+            action=_text("action", action, 32),
+        ))
 
     @server.tool(
         annotations=_annotations(
@@ -275,7 +311,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         is configured, deep maintenance can also run model-mediated passes.
         """
 
-        return _get_runtime().maintain(deep=deep)
+        return _output(_get_runtime().maintain(deep=deep))
 
     @server.tool(
         annotations=_annotations(
@@ -298,7 +334,10 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             text: Your reflection. One or two honest sentences, not a summary.
         """
 
-        return _get_runtime().reflect(target_id=target_id, text=text)
+        return _output(_get_runtime().reflect(
+            target_id=_text("target_id", target_id, MAX_ID_CHARS, required=True),
+            text=_text("text", text, MAX_REFLECTION_CHARS, required=True),
+        ))
 
     @server.tool(
         annotations=_annotations(
@@ -316,7 +355,10 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         model so memory maintenance is performed by a kin model. An explicit
         MNEMOS_AGENT_MODEL environment setting always takes precedence.
         """
-        return _get_runtime().introduce(agent_model=agent_model, agent_name=agent_name)
+        return _output(_get_runtime().introduce(
+            agent_model=_text("agent_model", agent_model, 256, required=True),
+            agent_name=_text("agent_name", agent_name, 256),
+        ))
 
     @server.tool(
         annotations=_annotations(

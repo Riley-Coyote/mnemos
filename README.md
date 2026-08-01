@@ -442,7 +442,6 @@ MNEMOS_LLM_PROVIDER=openrouter
 OPENROUTER_API_KEY=...
 MNEMOS_MODEL=anthropic/claude-sonnet-4-5
 MNEMOS_AGENT_MODEL=claude-opus-4-6
-MNEMOS_SUBSTRATE_AFFINITY=family
 ```
 
 Anthropic:
@@ -463,9 +462,11 @@ MNEMOS_MODEL=gpt-5
 MNEMOS_AGENT_MODEL=gpt-5
 ```
 
-`MNEMOS_SUBSTRATE_AFFINITY` can be `strict`, `family`, or `open`. The default is
-`family`, which prevents a mismatched model family from rewriting an agent's
-memory voice unless explicitly allowed.
+There is no longer a substrate-affinity setting. It existed to stop a mismatched
+model family from rewriting an agent's memory voice, and became unnecessary when
+maintenance stopped calling a model at all: judgement work is proposed to the
+agent and answered in its own turn through `mnemos_reflect`, so the question of
+which outside model may write an agent's memory is answered by construction.
 
 ### Prompt For A Maintenance Agent
 
@@ -564,7 +565,6 @@ Dedicated model variables:
 MNEMOS_LLM_PROVIDER=openrouter
 MNEMOS_MODEL=anthropic/claude-sonnet-4-5
 MNEMOS_AGENT_MODEL=claude-opus-4-6
-MNEMOS_SUBSTRATE_AFFINITY=family
 OPENROUTER_API_KEY=...
 ```
 
@@ -618,7 +618,8 @@ image can still read the continuity packet and structured data.
 Mnemos operates in layered form:
 
 ```text
-Simple MCP Surface      context | capture | recall | correct | maintain
+Simple MCP Surface      context | capture | recall | correct
+                        reflect | maintain | introduce | health
 Continuity Layer        scoped notes | revisions | supersession | promotion
 Mnemos Core             engrams | connections | beliefs | reconsolidation
 Substrate               decay | softening | reflection | modulators | events

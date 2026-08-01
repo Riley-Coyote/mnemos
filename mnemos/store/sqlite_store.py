@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from ..file_security import secure_directory, secure_file
 from ..core.engram import Connection, Engram, VersionRef
 from ..core.belief import Belief
 from ..core.emotional_state import EmotionalState
@@ -27,7 +28,7 @@ from ..core.identity import AgentIdentity
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -63,7 +64,8 @@ _ENGRAM_COLUMNS = frozenset({
     "id", "content", "content_at_encoding", "impact", "impact_source",
     "resolution", "kind", "tags",
     "schema_refs", "strength", "stability", "accessibility", "encoding_context",
-    "source", "lineage", "owner_agent_id", "visibility", "state", "created_at",
+    "source", "lineage", "owner_agent_id", "person_id", "project_scope",
+    "visibility", "state", "created_at",
     "last_accessed", "access_count", "reconsolidation_count",
 })
 
@@ -95,6 +97,8 @@ _RECONCILABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("source", "source TEXT NOT NULL DEFAULT '{}'"),
         ("lineage", "lineage TEXT NOT NULL DEFAULT '{}'"),
         ("owner_agent_id", "owner_agent_id TEXT NOT NULL DEFAULT 'default'"),
+        ("person_id", "person_id TEXT"),
+        ("project_scope", "project_scope TEXT"),
         ("visibility", "visibility TEXT NOT NULL DEFAULT 'private'"),
         ("state", "state TEXT NOT NULL DEFAULT 'active'"),
         ("access_count", "access_count INTEGER NOT NULL DEFAULT 0"),
@@ -125,6 +129,8 @@ CREATE TABLE IF NOT EXISTS engrams (
     source TEXT NOT NULL DEFAULT '{}',
     lineage TEXT NOT NULL DEFAULT '{}',
     owner_agent_id TEXT NOT NULL DEFAULT 'default',
+    person_id TEXT,
+    project_scope TEXT,
     visibility TEXT NOT NULL DEFAULT 'private',
     state TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL,
@@ -334,6 +340,8 @@ CREATE INDEX IF NOT EXISTS idx_engrams_state ON engrams(state);
 CREATE INDEX IF NOT EXISTS idx_engrams_accessibility ON engrams(accessibility DESC);
 CREATE INDEX IF NOT EXISTS idx_engrams_kind ON engrams(kind);
 CREATE INDEX IF NOT EXISTS idx_engrams_owner ON engrams(owner_agent_id);
+CREATE INDEX IF NOT EXISTS idx_engrams_scope
+    ON engrams(owner_agent_id, person_id, project_scope, state);
 CREATE INDEX IF NOT EXISTS idx_engrams_last_accessed ON engrams(last_accessed);
 CREATE INDEX IF NOT EXISTS idx_connections_source ON connections(source_id);
 CREATE INDEX IF NOT EXISTS idx_connections_target ON connections(target_id);
@@ -423,9 +431,20 @@ class EngramStore:
 
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path).expanduser()
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        private_root = Path.home() / ".mnemos"
+        try:
+            owned_directory = self.db_path.parent == private_root or self.db_path.parent.is_relative_to(private_root)
+        except AttributeError:  # Python 3.8 compatibility for downstream imports
+            owned_directory = str(self.db_path.parent).startswith(str(private_root))
+        secure_directory(self.db_path.parent, force=owned_directory)
         self._conn: sqlite3.Connection | None = None
         self._init_db()
+
+    def _secure_sqlite_files(self) -> None:
+        """Keep the database and transient WAL files private."""
+
+        for suffix in ("", "-wal", "-shm"):
+            secure_file(f"{self.db_path}{suffix}")
 
     def _init_db(self) -> None:
         """Initialize database with schema.
@@ -440,11 +459,43 @@ class EngramStore:
         conn = self._get_conn()
         self._reconcile_columns(conn)
         conn.executescript(SQL_CREATE_TABLES)
+        self._backfill_engram_scopes(conn)
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
             ("schema_version", str(SCHEMA_VERSION)),
         )
         conn.commit()
+
+    @staticmethod
+    def _backfill_engram_scopes(conn: sqlite3.Connection) -> None:
+        """Backfill only legacy engrams with one unambiguous continuity scope.
+
+        Ambiguous or unlinked legacy rows remain unscoped and are therefore
+        quarantined from normal scoped reads. Guessing would risk disclosing a
+        memory to the wrong person or project.
+        """
+        rows = conn.execute(
+            """
+            SELECT e.id, MIN(h.agent_id) AS agent_id,
+                   MIN(h.person_id) AS person_id,
+                   MIN(h.project_scope) AS project_scope,
+                   COUNT(DISTINCT h.agent_id || char(31) || h.person_id || char(31) || h.project_scope) AS scopes
+            FROM engrams e
+            JOIN hypomnema_entries h
+              ON h.related_engram_id = e.id OR h.graduated_to_engram_id = e.id
+            WHERE e.person_id IS NULL OR e.person_id = ''
+               OR e.project_scope IS NULL OR e.project_scope = ''
+            GROUP BY e.id
+            HAVING scopes = 1
+            """
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                """UPDATE engrams
+                   SET owner_agent_id = ?, person_id = ?, project_scope = ?
+                   WHERE id = ?""",
+                (row["agent_id"], row["person_id"], row["project_scope"], row["id"]),
+            )
 
     @staticmethod
     def _reconcile_columns(conn: sqlite3.Connection) -> None:
@@ -484,6 +535,12 @@ class EngramStore:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
+            self._conn.set_trace_callback(
+                lambda statement: self._secure_sqlite_files()
+                if statement.lstrip().upper().startswith(("COMMIT", "END"))
+                else None
+            )
+            self._secure_sqlite_files()
         return self._conn
 
     def close(self) -> None:
@@ -491,6 +548,7 @@ class EngramStore:
         if self._conn:
             self._conn.close()
             self._conn = None
+        self._secure_sqlite_files()
 
     # ── Engram CRUD ──
 
@@ -546,38 +604,25 @@ class EngramStore:
         person_id: str,
         project_scope: str,
     ) -> bool:
-        """Whether an engram may surface for a full three-tuple scope.
+        """Whether an engram belongs to one exact person/project scope."""
+        row = self._get_conn().execute(
+            """SELECT 1 FROM engrams
+               WHERE id = ? AND owner_agent_id = ?
+                 AND person_id = ? AND project_scope = ?""",
+            (engram_id, agent_id, person_id, project_scope),
+        ).fetchone()
+        return row is not None
 
-        Engrams carry only ``owner_agent_id``, so retrieval filters by agent
-        alone. Continuity is scoped by agent/person/project, and every capture
-        links its engram to a scoped hypomnema row. Without this check, two
-        people sharing one agent — or one person's separate projects — see each
-        other's durable memories, while the continuity layer above them stays
-        correctly separated.
-
-        This is the single source of truth for that question. Both the simple
-        runtime's ``_retrieve`` and ``build_context_packet`` route through it,
-        so the two read paths cannot drift about whose memory this is. Engrams
-        with no scoped hypomnema link (older ones, or anything encoded outside
-        the continuity path) stay visible to their owning agent.
-        """
-        rows = self._get_conn().execute(
-            """
-            SELECT agent_id, person_id, project_scope, active
-            FROM hypomnema_entries
-            WHERE related_engram_id = ? OR graduated_to_engram_id = ?
-            """,
-            (engram_id, engram_id),
-        ).fetchall()
-        if not rows:
-            return True
-        return any(
-            row["active"]
-            and row["agent_id"] == agent_id
-            and row["person_id"] == person_id
-            and row["project_scope"] == project_scope
-            for row in rows
-        )
+    def get_engram_in_scope(
+        self, engram_id: str, *, agent_id: str, person_id: str, project_scope: str
+    ) -> Engram | None:
+        """Load an engram only when its complete scope matches."""
+        if not self.engram_visible_in_scope(
+            engram_id, agent_id=agent_id, person_id=person_id,
+            project_scope=project_scope,
+        ):
+            return None
+        return self.get_engram(engram_id)
 
     def get_engram(self, engram_id: str) -> Engram | None:
         """Load an engram by ID, including connections and versions."""
@@ -603,6 +648,8 @@ class EngramStore:
         agent_id: str | None = "default",
         limit: int = 1000,
         load_connections: bool = True,
+        person_id: str | None = None,
+        project_scope: str | None = None,
     ) -> list[Engram]:
         """Get all active engrams for an agent, sorted by accessibility.
 
@@ -619,6 +666,13 @@ class EngramStore:
                 "SELECT * FROM engrams WHERE state = 'active' "
                 "ORDER BY accessibility DESC LIMIT ?",
                 (limit,),
+            ).fetchall()
+        elif person_id is not None and project_scope is not None:
+            rows = conn.execute(
+                "SELECT * FROM engrams WHERE state = 'active' "
+                "AND owner_agent_id = ? AND person_id = ? AND project_scope = ? "
+                "ORDER BY accessibility DESC LIMIT ?",
+                (agent_id, person_id, project_scope, limit),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -667,15 +721,22 @@ class EngramStore:
 
     # ── Full-Text Search ──
 
-    def search_fts(self, query: str, limit: int = 50) -> list[Engram]:
+    def search_fts(
+        self, query: str, limit: int = 50, *, agent_id: str | None = None,
+        person_id: str | None = None, project_scope: str | None = None,
+    ) -> list[Engram]:
         """Search engrams using FTS5 full-text search."""
         conn = self._get_conn()
+        scope_sql = ""
+        params: list[Any] = [query]
+        if agent_id is not None and person_id is not None and project_scope is not None:
+            scope_sql = " AND e.owner_agent_id = ? AND e.person_id = ? AND e.project_scope = ?"
+            params.extend([agent_id, person_id, project_scope])
+        params.append(limit)
         rows = conn.execute(
-            "SELECT e.* FROM engrams e "
-            "JOIN engrams_fts f ON e.id = f.id "
-            "WHERE engrams_fts MATCH ? AND e.state = 'active' "
-            "ORDER BY rank LIMIT ?",
-            (query, limit),
+            "SELECT e.* FROM engrams e JOIN engrams_fts f ON e.id = f.id "
+            "WHERE engrams_fts MATCH ? AND e.state = 'active'" + scope_sql +
+            " ORDER BY rank LIMIT ?", params,
         ).fetchall()
         return [Engram.from_dict(dict(r)) for r in rows]
 
@@ -751,6 +812,8 @@ class EngramStore:
         agent_id: str | None = None,
         since: "datetime | None" = None,
         limit: int = 50,
+        person_id: str | None = None,
+        project_scope: str | None = None,
     ) -> list:
         """Get recently created engrams, optionally filtered by agent and time.
 
@@ -768,6 +831,10 @@ class EngramStore:
         if agent_id:
             query += " AND owner_agent_id = ?"
             params.append(agent_id)
+
+        if person_id is not None and project_scope is not None:
+            query += " AND person_id = ? AND project_scope = ?"
+            params.extend([person_id, project_scope])
 
         if since:
             query += " AND created_at > ?"

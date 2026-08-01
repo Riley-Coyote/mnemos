@@ -36,6 +36,8 @@ def run_belief_review(
     config: dict[str, Any] | None = None,
     llm_client: Any | None = None,
     agent_id: str = DEFAULT_AGENT_ID,
+    person_id: str | None = None,
+    project_scope: str | None = None,
 ) -> dict[str, Any]:
     """Review recent memories against active beliefs.
 
@@ -81,6 +83,8 @@ def run_belief_review(
         agent_id=agent_id,
         since=cutoff,
         limit=max_memories,
+        person_id=person_id,
+        project_scope=project_scope,
     )
 
     for engram in recent:

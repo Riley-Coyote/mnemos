@@ -84,6 +84,8 @@ class ConsolidationDaemon:
         self,
         deep: bool = False,
         agent_id: str = "default",
+        person_id: str | None = None,
+        project_scope: str | None = None,
         respect_gate: bool = False,
     ) -> dict[str, Any]:
         """Run a consolidation cycle with all enabled passes.
@@ -135,6 +137,8 @@ class ConsolidationDaemon:
                 config=consolidation_config,
                 llm_client=self._llm_client,
                 agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
             )
             stats["connection_discovery"] = discovery_stats
             stats["passes_run"].append("connection_discovery")
@@ -147,6 +151,8 @@ class ConsolidationDaemon:
                 store=self._store,
                 config=consolidation_config,
                 agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
                 max_elapsed_hours=self._hours_since_last_cycle(),
             )
             stats["decay"] = decay_stats
@@ -159,7 +165,10 @@ class ConsolidationDaemon:
         # to live inside the deep, LLM-gated reflection pass, so on a default
         # install an agent's identity was never computed at all.
         try:
-            identity_stats = run_identity_pass(store=self._store, agent_id=agent_id)
+            identity_stats = run_identity_pass(
+                store=self._store, agent_id=agent_id, person_id=person_id,
+                project_scope=project_scope,
+            )
             stats["identity"] = identity_stats
             stats["passes_run"].append("identity")
         except Exception as e:
@@ -179,6 +188,8 @@ class ConsolidationDaemon:
                     config=consolidation_config,
                     llm_client=self._llm_client if deep else None,
                     agent_id=agent_id,
+                    person_id=person_id,
+                    project_scope=project_scope,
                 )
                 stats["softening"] = softening_stats
                 stats["passes_run"].append("softening")
@@ -195,6 +206,8 @@ class ConsolidationDaemon:
                         config=consolidation_config,
                         llm_client=self._llm_client,
                         agent_id=agent_id,
+                        person_id=person_id,
+                        project_scope=project_scope,
                     )
                     stats["belief_review"] = belief_stats
                     stats["passes_run"].append("belief_review")
@@ -223,6 +236,8 @@ class ConsolidationDaemon:
                         emotional_state=emotional_state,
                         llm_client=self._llm_client,
                         config=consolidation_config,
+                        person_id=person_id,
+                        project_scope=project_scope,
                     )
                     stats["reflection"] = reflection_stats
                     stats["passes_run"].append("reflection")

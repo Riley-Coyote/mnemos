@@ -90,6 +90,8 @@ def run_softening_pass(
     config: dict[str, Any],
     llm_client: Any | None,
     agent_id: str | None = None,
+    person_id: str | None = None,
+    project_scope: str | None = None,
     invent_impact: bool = False,
 ) -> dict[str, Any]:
     """Rewrite memories that have dropped below the resolution threshold.
@@ -140,7 +142,10 @@ def run_softening_pass(
     }
 
     # Get all engrams that could need softening (active or dormant, resolution > minimum)
-    all_engrams = store.get_active_engrams(agent_id=agent_id, limit=5000) if agent_id is not None else store.get_active_engrams(limit=5000)
+    all_engrams = store.get_active_engrams(
+        agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        limit=5000,
+    )
 
     # Conservator: the softener should preserve the agent's register, not
     # normalize it into the substrate model's voice. The most vivid
@@ -474,7 +479,10 @@ def _create_or_reinforce_lesson(
 
     query = " OR ".join(f'"{w}"' for w in words[:6])
     try:
-        existing = store.search_fts(query, limit=10)
+        existing = store.search_fts(
+            query, limit=10, agent_id=engram.owner_agent_id,
+            person_id=engram.person_id, project_scope=engram.project_scope,
+        )
     except Exception:
         existing = []
 
@@ -509,6 +517,8 @@ def _create_or_reinforce_lesson(
             confidence_source=engram.source.confidence_source,
         ),
         owner_agent_id=engram.owner_agent_id,
+        person_id=engram.person_id,
+        project_scope=engram.project_scope,
     )
 
     store.save_engram(lesson)

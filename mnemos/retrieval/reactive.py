@@ -97,6 +97,8 @@ class ReactiveRetriever:
         self,
         cue: str,
         agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
         max_results: int = 10,
         emotional_state: EmotionalState | None = None,
     ) -> list[RetrievalResult]:
@@ -120,7 +122,10 @@ class ReactiveRetriever:
 
         # FTS seeds (keyword matching)
         fts_query = _to_fts_query(cue)
-        fts_results = self._store.search_fts(fts_query, limit=30)
+        fts_results = self._store.search_fts(
+            fts_query, limit=30, agent_id=agent_id, person_id=person_id,
+            project_scope=project_scope,
+        )
         for engram in fts_results:
             if engram.owner_agent_id == agent_id:
                 seeds[engram.id] = engram
@@ -143,8 +148,11 @@ class ReactiveRetriever:
                 )
                 for eid, similarity in embedding_hits:
                     if similarity > 0.3 and eid not in seeds:  # Threshold for relevance
-                        engram = self._store.get_engram(eid)
-                        if engram and engram.state == "active" and engram.owner_agent_id == agent_id:
+                        engram = self._store.get_engram_in_scope(
+                            eid, agent_id=agent_id, person_id=person_id,
+                            project_scope=project_scope,
+                        )
+                        if engram and engram.state == "active":
                             seeds[eid] = engram
             except Exception:
                 pass  # Embeddings are optional — FTS still works
@@ -176,6 +184,11 @@ class ReactiveRetriever:
                     except Exception:
                         pass
                 for conn in connections:
+                    if not self._store.engram_visible_in_scope(
+                        conn.target_id, agent_id=agent_id, person_id=person_id,
+                        project_scope=project_scope,
+                    ):
+                        continue
                     # Weight by relation type
                     relation_weight = _RELATION_WEIGHTS.get(conn.relation, 0.5)
                     propagated = current_act * hop_decay * conn.strength * relation_weight
@@ -192,7 +205,10 @@ class ReactiveRetriever:
             bias = emotional_state.get_retrieval_bias()
             if bias:
                 for eid in list(activation.keys()):
-                    engram = seeds.get(eid) or self._store.get_engram(eid)
+                    engram = seeds.get(eid) or self._store.get_engram_in_scope(
+                        eid, agent_id=agent_id, person_id=person_id,
+                        project_scope=project_scope,
+                    )
                     if engram and engram.tags:
                         overlap = sum(bias.get(tag, 0.0) for tag in engram.tags)
                         if overlap > 0:
@@ -206,7 +222,10 @@ class ReactiveRetriever:
 
             engram = seeds.get(eid)
             if not engram:
-                engram = self._store.get_engram(eid)
+                engram = self._store.get_engram_in_scope(
+                    eid, agent_id=agent_id, person_id=person_id,
+                    project_scope=project_scope,
+                )
             # Cross-DB: check shared store if not found in private
             if not engram and self._shared_store:
                 engram = self._shared_store.get_engram(eid)

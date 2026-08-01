@@ -32,6 +32,8 @@ def run_connection_discovery(
     config: dict[str, Any] | None = None,
     llm_client: Any | None = None,
     agent_id: str = DEFAULT_AGENT_ID,
+    person_id: str | None = None,
+    project_scope: str | None = None,
 ) -> dict[str, Any]:
     """Find semantically related engrams and create/reclassify connections.
 
@@ -67,7 +69,10 @@ def run_connection_discovery(
         "fts_candidates": 0,
     }
 
-    all_active = store.get_active_engrams(agent_id=agent_id, limit=max_per_pass * 2)
+    all_active = store.get_active_engrams(
+        agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        limit=max_per_pass * 2,
+    )
 
     # ── Phase A: Discover new connections for underconnected engrams ──
     underconnected = []
@@ -88,7 +93,14 @@ def run_connection_discovery(
             )
             for eid, score in emb_results:
                 if eid not in existing_target_ids and score > 0.3:
-                    candidate = store.get_engram(eid)
+                    candidate = (
+                        store.get_engram_in_scope(
+                            eid, agent_id=agent_id, person_id=person_id,
+                            project_scope=project_scope,
+                        )
+                        if person_id is not None and project_scope is not None
+                        else store.get_engram(eid)
+                    )
                     if candidate:
                         candidates.append(candidate)
                         stats["embedding_candidates"] += 1
@@ -98,7 +110,10 @@ def run_connection_discovery(
         if words:
             query = " OR ".join(f'"{w}"' for w in words[:8])
             try:
-                fts_results = store.search_fts(query, limit=10)
+                fts_results = store.search_fts(
+                    query, limit=10, agent_id=agent_id,
+                    person_id=person_id, project_scope=project_scope,
+                )
                 for match in fts_results:
                     if match.id != engram.id and match.id not in existing_target_ids:
                         # Don't duplicate embedding candidates

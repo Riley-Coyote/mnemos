@@ -26,6 +26,8 @@ def run_decay_pass(
     store: EngramStore,
     config: dict[str, Any],
     agent_id: str | None = "default",
+    person_id: str | None = None,
+    project_scope: str | None = None,
     max_elapsed_hours: float | None = None,
 ) -> dict[str, Any]:
     """Recalculate strength, stability, and accessibility for all active engrams.
@@ -50,7 +52,10 @@ def run_decay_pass(
     archive_threshold = config.get("archive_threshold", 0.01)
 
     # load_connections=True because decay uses connection count for decay resistance
-    engrams = store.get_active_engrams(agent_id=agent_id, limit=10000, load_connections=True)
+    engrams = store.get_active_engrams(
+        agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        limit=10000, load_connections=True,
+    )
 
     stats = {
         "engrams_processed": 0,

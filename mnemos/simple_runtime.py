@@ -1185,6 +1185,8 @@ class MnemosRuntime:
         )
         engrams = self._store.get_active_engrams(
             agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
             limit=max_nodes,
             load_connections=False,
         )
@@ -1337,6 +1339,8 @@ class MnemosRuntime:
             tags=tags,
             source=SourceType.SESSION,
             agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
             override_confidence=confidence,
             # Shift 3: the moment something does not fit what is already held
             # is the moment worth encoding deeply. This is now reachable
@@ -1513,7 +1517,11 @@ class MnemosRuntime:
                 )
                 return f"Updated continuity note {target}."
 
-            engram = self._store.get_engram(target)
+            engram = self._store.get_engram_in_scope(
+                target, agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+            )
             if engram is not None:
                 self._store.archive_engram(engram, reason=f"simple_correction_{action}")
                 if action in {"forget", "archive", "remove", "delete"} and not correction.strip():
@@ -1526,6 +1534,8 @@ class MnemosRuntime:
                     tags=["continuity", "correction"],
                     source=SourceType.SESSION,
                     agent_id=self.scope.agent_id,
+                    person_id=self.scope.person_id,
+                    project_scope=self.scope.project_scope,
                     override_confidence=0.92,
                     skip_surprise_detection=True,
                 )
@@ -1602,6 +1612,8 @@ class MnemosRuntime:
                     tags=sorted(set(["continuity", "correction", *_simple_tags(correction)])),
                     source=SourceType.SESSION,
                     agent_id=self.scope.agent_id,
+                    person_id=self.scope.person_id,
+                    project_scope=self.scope.project_scope,
                     override_confidence=0.92,
                     skip_surprise_detection=True,
                 )
@@ -1655,6 +1667,8 @@ class MnemosRuntime:
         stats = daemon.run_cycle(
             deep=can_run_deep,
             agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
             respect_gate=auto,
         )
         if stats.get("skipped"):
@@ -1916,6 +1930,8 @@ class MnemosRuntime:
                 tags=["continuity", "promoted", *entry.get("tags", [])],
                 source=SourceType.BACKGROUND,
                 agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
                 override_confidence=float(entry["confidence"]),
                 skip_surprise_detection=True,
             )
@@ -2100,4 +2116,3 @@ def format_health_card(data: dict[str, Any]) -> str:
         "",
         "Everything on this card is safe to relay to the human in plain words.",
     ])
-

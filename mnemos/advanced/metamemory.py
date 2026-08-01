@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..experimental import unavailable
+
 
 @dataclass
 class MetamemoryState:
@@ -43,8 +45,7 @@ class MetamemoryState:
         Returns:
             Confidence level (0.0 = no knowledge, 1.0 = expert coverage).
         """
-        # TODO: Implementation
-        return 0.0
+        unavailable("metamemory confidence")
 
     def has_gap(self, topic: str) -> bool:
         """Check if the agent has a known knowledge gap.
@@ -55,16 +56,13 @@ class MetamemoryState:
         Returns:
             True if this topic is in the known gaps list.
         """
-        # TODO: Implementation
-        return False
+        unavailable("metamemory gap detection")
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize metamemory state to dict."""
-        # TODO: Implementation
-        return {}
+        unavailable("metamemory serialization")
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> MetamemoryState:
         """Deserialize metamemory state from dict."""
-        # TODO: Implementation
-        return cls()
+        unavailable("metamemory deserialization")

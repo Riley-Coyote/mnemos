@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ...file_security import atomic_write_text
+
 
 def slugify(value: str | None, fallback: str) -> str:
     """Return a stable identifier that is safe in paths and SQLite scopes."""
@@ -206,5 +208,8 @@ def save_hermes_mnemos_config(
     path = _config_path(home)
     existing = _load_json_config(home)
     merged = {**existing, **{k: v for k, v in updates.items() if v not in (None, "")}}
-    path.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic_write_text(
+        path, json.dumps(merged, indent=2, sort_keys=True) + "\n",
+        backup_existing=True,
+    )
     return path

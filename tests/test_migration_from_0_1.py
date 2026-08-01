@@ -17,6 +17,7 @@ and preserve the old row.
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -76,9 +77,17 @@ class TestAnOldStoreUpgradesOnOpen:
             "impact", "impact_source", "resolution", "strength", "stability",
             "accessibility", "encoding_context", "source", "lineage",
             "owner_agent_id", "visibility", "state", "access_count",
-            "reconsolidation_count", "schema_refs",
+            "reconsolidation_count", "schema_refs", "person_id", "project_scope",
         ):
             assert expected in cols, f"{expected} was not added on upgrade"
+
+    def test_upgrade_creates_a_verified_pre_migration_backup(self, old_store_path):
+        store = EngramStore(old_store_path)
+        store.close()
+        backups = list((Path(old_store_path).parent / "backups").glob("*.pre-v6-*.db"))
+        assert len(backups) == 1
+        from mnemos.backup import check_database
+        assert check_database(backups[0])["integrity"] == "ok"
 
     def test_the_old_row_survives_and_reads_back(self, old_store_path):
         store = EngramStore(old_store_path)

@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..experimental import unavailable
+
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
 
@@ -48,5 +50,4 @@ class Observer:
         Returns:
             Observation report dict.
         """
-        # TODO: Implementation
-        return {}
+        unavailable("external observer")

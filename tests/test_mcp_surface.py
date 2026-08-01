@@ -141,6 +141,20 @@ def test_simple_capture_accepts_numeric_or_string_importance():
     assert {entry["type"] for entry in importance_schema["anyOf"]} >= {"number", "string"}
 
 
+def test_simple_tools_reject_oversized_inputs_before_runtime_work():
+    from mnemos.simple_mcp import MAX_CAPTURE_CHARS, MAX_QUERY_CHARS, simple_mcp
+
+    capture = simple_mcp._tool_manager.get_tool("mnemos_capture").fn
+    recall = simple_mcp._tool_manager.get_tool("mnemos_recall").fn
+    context = simple_mcp._tool_manager.get_tool("mnemos_context").fn
+    with pytest.raises(ValueError, match="content is too large"):
+        capture("x" * (MAX_CAPTURE_CHARS + 1))
+    with pytest.raises(ValueError, match="query is too large"):
+        recall("x" * (MAX_QUERY_CHARS + 1))
+    with pytest.raises(ValueError, match="max_results"):
+        context(max_results=10_000)
+
+
 def test_simple_stdio_server_lists_and_calls_context(tmp_path):
     from mcp.client.session import ClientSession
     from mcp.client.stdio import StdioServerParameters, stdio_client

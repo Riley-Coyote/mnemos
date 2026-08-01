@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..experimental import unavailable
+
 
 @dataclass
 class WorkingMemoryItem:
@@ -45,25 +47,20 @@ class WorkingMemory:
 
     def attend(self, engram_id: str, content_preview: str = "") -> None:
         """Bring an engram into working memory focus."""
-        # TODO: Implementation
-        pass
+        unavailable("experimental working memory")
 
     def release(self, engram_id: str) -> None:
         """Release an engram from working memory."""
-        # TODO: Implementation
-        pass
+        unavailable("experimental working memory")
 
     def snapshot(self) -> list[str]:
         """Get current WM engram IDs for encoding context."""
-        # TODO: Implementation
-        return []
+        unavailable("experimental working memory")
 
     def get_attention_weights(self) -> dict[str, float]:
         """Get attention weights for all WM items."""
-        # TODO: Implementation
-        return {}
+        unavailable("experimental working memory")
 
     def current_load(self) -> float:
         """Get current WM load as fraction of capacity (can exceed 1.0)."""
-        # TODO: Implementation
-        return 0.0
+        unavailable("experimental working memory")

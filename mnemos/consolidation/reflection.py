@@ -60,6 +60,8 @@ def run_reflection_pass(
     emotional_state: EmotionalState,
     llm_client: Any | None,
     config: dict[str, Any] | None = None,
+    person_id: str | None = None,
+    project_scope: str | None = None,
 ) -> dict[str, Any]:
     """Generate thoughts, curiosity questions, and update narrative self-summary.
 
@@ -86,7 +88,10 @@ def run_reflection_pass(
     }
 
     # 1. LOAD RECENT ENGRAMS
-    all_engrams = store.get_active_engrams(agent_id=agent_id, limit=200)
+    all_engrams = store.get_active_engrams(
+        agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        limit=200,
+    )
     recent = [
         e for e in all_engrams
         if _hours_since(e.created_at) < lookback_hours
@@ -120,6 +125,8 @@ def run_reflection_pass(
                 tags=["reflection", "synthesized"],
                 source=SourceType.REFLECTION,
                 agent_id=agent_id,
+                person_id=person_id or "user",
+                project_scope=project_scope or "global",
             )
             stats["thoughts_generated"] += 1
 
@@ -132,6 +139,8 @@ def run_identity_pass(
     store: "EngramStore",
     identity: AgentIdentity | None = None,
     agent_id: str = "default",
+    person_id: str | None = None,
+    project_scope: str | None = None,
 ) -> dict[str, Any]:
     """Shift 5: identity computed from graph topology, not narrated.
 
@@ -149,7 +158,10 @@ def run_identity_pass(
     """
     stats: dict[str, Any] = {"identity_computed": False}
 
-    engrams = store.get_active_engrams(agent_id=agent_id, limit=1000)
+    engrams = store.get_active_engrams(
+        agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        limit=1000,
+    )
     if not engrams:
         # Nothing to be the shape of yet. Not a failure.
         stats["reason"] = "no active memories"

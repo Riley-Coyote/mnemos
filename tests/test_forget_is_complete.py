@@ -26,6 +26,7 @@ the human's screen wrapped in a celebration.
 from __future__ import annotations
 
 import sqlite3
+import re
 
 import pytest
 
@@ -142,6 +143,39 @@ class TestForgetIsHonouredOnEveryDeliveryPath:
 
         assert queue == [], f"reflection_queue still holds the text: {queue}"
         assert meta == [], f"meta still holds the text: {meta}"
+
+    def test_forgetting_by_engram_id_deactivates_its_revised_continuity_note(self, db):
+        """The MCP returns an engram id, so this is the natural agent path.
+
+        Query-based forgetting found the continuity note first and passed the
+        older tests. Target-id forgetting archived only the engram, leaving a
+        reflected hypomnema note active in every later startup packet.
+        """
+
+        rt = _runtime(db)
+        result = rt.capture(content=CAPTURE, importance="high")
+        match = re.search(r"engram_[A-Z0-9]+", result)
+        assert match, result
+        engram_id = match.group(0)
+        rt.context()  # surface the reflection request
+        reflected = rt.reflect(
+            target_id=engram_id,
+            text="I should never repeat a secret after Riley retracts it.",
+        )
+        assert "recorded" in reflected.lower(), reflected
+
+        forgotten = rt.correct(correction="", target_id=engram_id, action="forget")
+        assert "archived" in forgotten.lower(), forgotten
+        assert SECRET not in _runtime(db).context()
+
+        conn = sqlite3.connect(db)
+        active = conn.execute(
+            """SELECT active FROM hypomnema_entries
+               WHERE related_engram_id = ? OR graduated_to_engram_id = ?""",
+            (engram_id, engram_id),
+        ).fetchall()
+        conn.close()
+        assert active and all(value == 0 for (value,) in active), active
 
 
 class TestAPreFixStoreHealsOnUpgrade:

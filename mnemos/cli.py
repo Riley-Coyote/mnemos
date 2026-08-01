@@ -25,6 +25,8 @@ import argparse
 import json
 import os
 import shutil
+import shlex
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -69,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Agent identifier (default: env/config/default)",
     )
+    parser.add_argument("--person-id", default=None, help="Person/user scope")
+    parser.add_argument("--project-scope", default=None, help="Project/workspace scope")
 
     sub = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -377,6 +381,22 @@ def main(argv: list[str] | None = None) -> int:
                 help="Apply the change instead of printing what it would do",
             )
 
+    # ── backup ──
+    p_backup = sub.add_parser("backup", help="Create, inspect, or restore verified backups")
+    backup_sub = p_backup.add_subparsers(dest="backup_command")
+    p_backup_create = backup_sub.add_parser("create", help="Create and verify a private backup")
+    p_backup_create.add_argument("--output", default=None, help="Backup destination")
+    p_backup_create.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
+    p_backup_inspect = backup_sub.add_parser("inspect", help="Verify and inspect a backup")
+    p_backup_inspect.add_argument("path", help="Backup file")
+    p_backup_restore = backup_sub.add_parser("restore", help="Restore a verified backup")
+    p_backup_restore.add_argument("path", help="Backup file")
+    p_backup_restore.add_argument("--db-path", default=argparse.SUPPRESS, help="Restore destination")
+    p_backup_restore.add_argument(
+        "--force", action="store_true",
+        help="Replace an existing database after preserving a safety backup",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -406,6 +426,7 @@ def main(argv: list[str] | None = None) -> int:
         "hook": _cmd_hook,
         "hooks": _cmd_hooks,
         "daemon": _cmd_daemon,
+        "backup": _cmd_backup,
     }
 
     handler = handlers.get(args.command)
@@ -494,10 +515,10 @@ def _scope_args(args: argparse.Namespace) -> tuple[str, ...]:
     environment, so whatever scope this command resolved must be written
     into the job itself or the job would maintain a different store.
 
-    Only the flags the top-level parser actually accepts are emitted, and
-    they are global options, so ``command_for`` places them before the
-    subcommand. Consolidation and the substrate tick are agent-scoped;
-    person and project are not parameters they take.
+    Only the flags the top-level parser accepts are emitted, and they are
+    global options, so ``command_for`` places them before the subcommand.
+    The complete scope prevents unattended maintenance from touching a
+    different person or project in the same agent store.
 
     The path is expanded here. ``resolve_scope`` returns the default store
     as the literal string ``~/.mnemos/<agent>.db``, and launchd and systemd
@@ -508,7 +529,12 @@ def _scope_args(args: argparse.Namespace) -> tuple[str, ...]:
     """
     scope = _cli_scope(args)
     db_path = str(Path(scope.db_path).expanduser())
-    return ("--agent-id", scope.agent_id, "--db-path", db_path)
+    return (
+        "--agent-id", scope.agent_id,
+        "--person-id", scope.person_id,
+        "--project-scope", scope.project_scope,
+        "--db-path", db_path,
+    )
 
 
 def _cmd_daemon(args: argparse.Namespace) -> int:
@@ -574,32 +600,36 @@ def _daemon_install(blueprint: dict, *, write: bool) -> int:
         print("\nThis is a preview. Re-run with --write to schedule these jobs.")
         return 0
 
-    Path(Path.home() / ".mnemos" / "logs").mkdir(parents=True, exist_ok=True)
+    from .file_security import atomic_write_bytes, atomic_write_text, secure_directory
 
-    if backend == "launchd":
-        for entry in entries:
-            path = entry["path"]
-            path.parent.mkdir(parents=True, exist_ok=True)
-            # Unload an existing job before overwriting it; launchd keeps
-            # running the version it loaded, so writing alone changes nothing.
-            _launchctl("bootout", path)
-            path.write_bytes(entry["content"])
-            _launchctl("bootstrap", path)
-    elif backend == "systemd":
-        systemd_dir = None
-        for entry in entries:
-            for path, content in entry["units"].items():
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(content)
-                systemd_dir = path.parent
-        if systemd_dir is not None:
-            _systemctl("daemon-reload")
+    secure_directory(Path.home() / ".mnemos" / "logs", force=True)
+
+    try:
+        if backend == "launchd":
             for entry in entries:
-                _systemctl("enable", "--now", entry["timer_name"])
-    else:
-        merged = scheduler_merge_crontab(entries, agent_id)
-        if merged is None:
-            return 1
+                path = entry["path"]
+                secure_directory(path.parent)
+                _launchctl("bootout", path, allow_missing=True)
+                atomic_write_bytes(path, entry["content"], backup_existing=True)
+                _launchctl("bootstrap", path)
+        elif backend == "systemd":
+            systemd_dir = None
+            for entry in entries:
+                for path, content in entry["units"].items():
+                    secure_directory(path.parent)
+                    atomic_write_text(path, content, backup_existing=True)
+                    systemd_dir = path.parent
+            if systemd_dir is not None:
+                _systemctl("daemon-reload")
+                for entry in entries:
+                    _systemctl("enable", "--now", entry["timer_name"])
+        else:
+            merged = scheduler_merge_crontab(entries, agent_id)
+            if merged is None:
+                return 1
+    except (OSError, RuntimeError) as exc:
+        print(f"Failed to activate background maintenance: {exc}", file=sys.stderr)
+        return 1
 
     print(f"\nScheduled {len(entries)} job(s). Background maintenance is active.")
     print("Check them any time with: mnemos daemon status")
@@ -622,6 +652,8 @@ def scheduler_merge_crontab(entries: list[dict], agent_id: str) -> str | None:
 
 
 def _daemon_status(blueprint: dict) -> int:
+    from .setup import scheduler
+
     backend = blueprint["backend"]
     agent_id = blueprint["agent_id"]
 
@@ -632,9 +664,13 @@ def _daemon_status(blueprint: dict) -> int:
     for entry in blueprint["entries"]:
         job = entry["job"]
         if backend == "launchd":
-            installed = entry["path"].exists()
+            installed = entry["path"].exists() and scheduler.launchd_job_active(
+                agent_id, job
+            )
         elif backend == "systemd":
-            installed = all(path.exists() for path in entry["units"])
+            installed = all(path.exists() for path in entry["units"]) and scheduler.systemd_timer_active(
+                agent_id, job
+            )
         else:
             installed = f"{scheduler_marker(agent_id)}{job.name}" in _read_crontab_safe()
         installed_any = installed_any or installed
@@ -702,32 +738,37 @@ def _daemon_uninstall(blueprint: dict, *, write: bool) -> int:
     return 0
 
 
-def _launchctl(action: str, plist: Path) -> None:
-    """Best-effort launchctl call. A missing job is not an error to report."""
+def _launchctl(action: str, plist: Path, *, allow_missing: bool = False) -> None:
     import os
 
     domain = f"gui/{os.getuid()}"
     if action == "bootout":
         target = f"{domain}/{plist.stem}"
-        subprocess.run(
+        result = subprocess.run(
             ["launchctl", "bootout", target],
             capture_output=True,
             text=True,
             check=False,
         )
+        if result.returncode != 0 and not allow_missing:
+            raise RuntimeError(result.stderr.strip() or "launchctl bootout failed")
         return
-    subprocess.run(
+    result = subprocess.run(
         ["launchctl", "bootstrap", domain, str(plist)],
         capture_output=True,
         text=True,
         check=False,
     )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "launchctl bootstrap failed")
 
 
 def _systemctl(*args: str) -> None:
-    subprocess.run(
+    result = subprocess.run(
         ["systemctl", "--user", *args], capture_output=True, text=True, check=False
     )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"systemctl {' '.join(args)} failed")
 
 
 def _claude_code_settings_path() -> Path:
@@ -757,7 +798,7 @@ def _cmd_hooks(args: argparse.Namespace) -> int:
         "matcher": "*",
         "hooks": [{
             "type": "command",
-            "command": " ".join(command_parts),
+            "command": shlex.join(command_parts),
             "timeout": args.timeout,
         }],
     }
@@ -769,6 +810,8 @@ def _cmd_hooks(args: argparse.Namespace) -> int:
         print()
         print(f"Merge this into {path}, or re-run with --write to do it automatically.")
         return 0
+
+    from .file_security import atomic_write_text
 
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
@@ -792,8 +835,9 @@ def _cmd_hooks(args: argparse.Namespace) -> int:
         session_start.remove(stale)
     session_start.append(entry)
 
-    with open(path, "w") as f:
-        json.dump(settings, f, indent=2)
+    atomic_write_text(
+        path, json.dumps(settings, indent=2) + "\n", backup_existing=True
+    )
 
     action = "Replaced" if existing else "Installed"
     print(f"{action} the Mnemos SessionStart hook in {path}")
@@ -853,10 +897,47 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_backup(args: argparse.Namespace) -> int:
+    """Create, inspect, or atomically restore a verified SQLite backup."""
+    from .backup import check_database, create_backup, restore_backup
+
+    command = getattr(args, "backup_command", None)
+    try:
+        if command == "create":
+            result = create_backup(_resolve_db_path(args), args.output)
+            print(f"Backup verified: {result['path']}")
+            print(f"  Memories: {result['engrams']}  Size: {result['size_bytes']} bytes")
+            return 0
+        if command == "inspect":
+            result = check_database(args.path)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0
+        if command == "restore":
+            result = restore_backup(
+                args.path, _resolve_db_path(args), replace=args.force,
+            )
+            print(f"Restore verified: {result['path']}")
+            if result.get("safety_backup"):
+                print(f"  Previous database preserved: {result['safety_backup']}")
+            return 0
+        print("Usage: mnemos backup {create|inspect|restore}", file=sys.stderr)
+        return 1
+    except (FileNotFoundError, FileExistsError, RuntimeError, sqlite3.DatabaseError) as exc:
+        print(f"Backup failed: {exc}", file=sys.stderr)
+        return 1
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     """Start MCP server."""
     try:
         if getattr(args, "mode", "simple") == "advanced":
+            if os.environ.get("MNEMOS_ENABLE_EXPERIMENTAL") != "1":
+                print(
+                    "Advanced MCP mode is experimental and unsupported in 0.2.x. "
+                    "Use simple mode, or set MNEMOS_ENABLE_EXPERIMENTAL=1 for research use.",
+                    file=sys.stderr,
+                )
+                return 1
             from .mcp_server import run_server
 
             run_server(
@@ -976,9 +1057,12 @@ def _cmd_search(args: argparse.Namespace) -> int:
     from .retrieval.reactive import ReactiveRetriever
 
     retriever = ReactiveRetriever(store)
+    scope = _cli_scope(args)
     results = retriever.retrieve(
         cue=args.query,
-        agent_id=_resolve_agent_id(args),
+        agent_id=scope.agent_id,
+        person_id=scope.person_id,
+        project_scope=scope.project_scope,
         max_results=args.max_results,
     )
 
@@ -1013,7 +1097,11 @@ def _cmd_consolidate(args: argparse.Namespace) -> int:
     label = "deep" if args.deep else "shallow"
     print(f"Running {label} consolidation...")
 
-    stats = daemon.run_cycle(deep=args.deep, agent_id=_resolve_agent_id(args))
+    scope = _cli_scope(args)
+    stats = daemon.run_cycle(
+        deep=args.deep, agent_id=scope.agent_id, person_id=scope.person_id,
+        project_scope=scope.project_scope,
+    )
 
     print(f"Passes: {', '.join(stats.get('passes_run', []))}")
     if "decay" in stats:
@@ -1331,12 +1419,14 @@ def _print_background_status(scope) -> None:
             installed = sum(
                 1 for job in jobs
                 if scheduler.launchd_plist_path(scope.agent_id, job).exists()
+                and scheduler.launchd_job_active(scope.agent_id, job)
             )
         elif backend == "systemd":
             installed = sum(
                 1 for job in jobs
                 if (scheduler.systemd_unit_dir()
                     / scheduler.systemd_unit_names(scope.agent_id, job)[1]).exists()
+                and scheduler.systemd_timer_active(scope.agent_id, job)
             )
         else:
             crontab = scheduler.read_crontab()
@@ -1373,6 +1463,13 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     if args.mcp_command != "install":
         print("Usage: mnemos mcp install {claude|cursor|codex|generic}", file=sys.stderr)
         return 1
+    if args.mode == "advanced" and os.environ.get("MNEMOS_ENABLE_EXPERIMENTAL") != "1":
+        print(
+            "Refusing to install unsupported advanced mode. Use simple mode, or set "
+            "MNEMOS_ENABLE_EXPERIMENTAL=1 for explicit research use.",
+            file=sys.stderr,
+        )
+        return 1
 
     snippet = _mcp_server_snippet(
         name=args.name,
@@ -1382,17 +1479,24 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     )
 
     if args.write and args.client == "claude":
+        from .file_security import atomic_write_text
+
         path = _claude_desktop_config_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
-            with open(path) as f:
-                config = json.load(f)
+            try:
+                with open(path) as f:
+                    config = json.load(f)
+            except json.JSONDecodeError as exc:
+                print(f"Refusing to overwrite unparseable {path}: {exc}", file=sys.stderr)
+                return 1
         else:
             config = {}
         servers = config.setdefault("mcpServers", {})
         servers.update(snippet)
-        with open(path, "w") as f:
-            json.dump(config, f, indent=2)
+        atomic_write_text(
+            path, json.dumps(config, indent=2) + "\n", backup_existing=True
+        )
         print(f"Installed Mnemos MCP config at {path}")
         print("Restart Claude Desktop to expose the new tools.")
         return 0

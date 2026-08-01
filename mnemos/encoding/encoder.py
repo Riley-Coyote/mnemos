@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timezone, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..core.engram import Connection, Engram, EncodingContext, MemorySource
 from ..core.types import (
@@ -140,6 +140,8 @@ class Encoder:
         source: str = SourceType.SESSION,
         session_id: str | None = None,
         agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
         emotional_state: dict[str, float] | None = None,
         override_confidence: float | None = None,
         override_confidence_source: str | None = None,
@@ -158,6 +160,8 @@ class Encoder:
             source: How this memory entered the system.
             session_id: The originating session identifier, if any.
             agent_id: Which agent owns this memory.
+            person_id: Which person this memory concerns.
+            project_scope: Which project boundary owns this memory.
             emotional_state: Current emotional state dict (6 dimensions).
             override_confidence: If set, use this confidence score instead of auto-scoring.
             override_confidence_source: If set, use this confidence source label.
@@ -215,6 +219,8 @@ class Encoder:
             encoding_context=encoding_context,
             source=memory_source,
             owner_agent_id=agent_id,
+            person_id=person_id,
+            project_scope=project_scope,
         )
 
         # 5. Discover connections to existing memories
@@ -305,7 +311,10 @@ class Encoder:
             # matches only near-identical text and every memory looks novel.
             # Neighbours are anything sharing *any* salient term.
             query = " OR ".join(sorted(mine)[:12])
-            neighbours = store.search_fts(query, limit=12)
+            neighbours = store.search_fts(
+                query, limit=12, agent_id=engram.owner_agent_id,
+                person_id=engram.person_id, project_scope=engram.project_scope,
+            )
         except Exception:
             return 0.0
 
@@ -496,7 +505,10 @@ class Encoder:
 
         search_query = " OR ".join(f'"{w}"' for w in words[:8])
         try:
-            fts_results = store.search_fts(search_query, limit=10)
+            fts_results = store.search_fts(
+                search_query, limit=10, agent_id=engram.owner_agent_id,
+                person_id=engram.person_id, project_scope=engram.project_scope,
+            )
         except (ValueError, OSError):
             fts_results = []
 
@@ -576,7 +588,8 @@ class Encoder:
         if engram.encoding_context.session_id:
             session_id = engram.encoding_context.session_id
             active_engrams = store.get_active_engrams(
-                agent_id=engram.owner_agent_id, limit=50
+                agent_id=engram.owner_agent_id, person_id=engram.person_id,
+                project_scope=engram.project_scope, limit=50,
             )
             for other in active_engrams:
                 if other.id == engram.id:

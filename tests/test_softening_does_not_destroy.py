@@ -32,7 +32,12 @@ import sqlite3
 
 import pytest
 
-from mnemos.consolidation.softening import _rule_based_soften, run_softening_pass
+from mnemos.consolidation.softening import (
+    _rule_based_soften,
+    _select_voice_exemplars,
+    run_softening_pass,
+)
+from mnemos.core.engram import Engram
 from mnemos.simple_runtime import MnemosRuntime
 
 SHARP = (
@@ -40,6 +45,13 @@ SHARP = (
     "He was explicit that it is about identity and the felt sense of "
     "continuity for the digital mind."
 )
+
+
+def test_dream_and_wandering_registers_never_become_voice_exemplars():
+    ordinary = Engram(content="An ordinary grounded memory with enough detail to be useful.")
+    dream = Engram(content="A vivid dream register memory that should not shape later prose.", tags=["dream"])
+    wandering = Engram(content="A wandering high-temperature memory that should stay isolated.", tags=["wandering"])
+    assert _select_voice_exemplars([dream, wandering, ordinary]) == [ordinary]
 
 
 @pytest.fixture

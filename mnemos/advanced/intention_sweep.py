@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..experimental import unavailable
 from .intention import Intention
 
 if TYPE_CHECKING:
@@ -31,5 +32,4 @@ def sweep_intentions(
     Returns:
         List of triggered intentions that should be surfaced.
     """
-    # TODO: Implementation
-    return []
+    unavailable("intention sweep")

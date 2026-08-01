@@ -90,6 +90,8 @@ def run_softening_pass(
     config: dict[str, Any],
     llm_client: Any | None,
     agent_id: str | None = None,
+    person_id: str | None = None,
+    project_scope: str | None = None,
     invent_impact: bool = False,
 ) -> dict[str, Any]:
     """Rewrite memories that have dropped below the resolution threshold.
@@ -140,7 +142,10 @@ def run_softening_pass(
     }
 
     # Get all engrams that could need softening (active or dormant, resolution > minimum)
-    all_engrams = store.get_active_engrams(agent_id=agent_id, limit=5000) if agent_id is not None else store.get_active_engrams(limit=5000)
+    all_engrams = store.get_active_engrams(
+        agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        limit=5000,
+    )
 
     # Conservator: the softener should preserve the agent's register, not
     # normalize it into the substrate model's voice. The most vivid
@@ -338,7 +343,12 @@ def _select_voice_exemplars(all_engrams: list, k: int = 4) -> list:
     already agent-scoped by the caller — exemplars must come from the same
     agent whose memories are being rewritten.
     """
-    candidates = [e for e in all_engrams if e.content and len(e.content) >= 20]
+    excluded_registers = {"dream", "wandering"}
+    candidates = [
+        e for e in all_engrams
+        if e.content and len(e.content) >= 20
+        and not (excluded_registers & {str(tag).lower() for tag in e.tags})
+    ]
     candidates.sort(key=lambda e: (e.resolution, e.strength), reverse=True)
     return candidates[:k]
 
@@ -474,7 +484,10 @@ def _create_or_reinforce_lesson(
 
     query = " OR ".join(f'"{w}"' for w in words[:6])
     try:
-        existing = store.search_fts(query, limit=10)
+        existing = store.search_fts(
+            query, limit=10, agent_id=engram.owner_agent_id,
+            person_id=engram.person_id, project_scope=engram.project_scope,
+        )
     except Exception:
         existing = []
 
@@ -509,6 +522,8 @@ def _create_or_reinforce_lesson(
             confidence_source=engram.source.confidence_source,
         ),
         owner_agent_id=engram.owner_agent_id,
+        person_id=engram.person_id,
+        project_scope=engram.project_scope,
     )
 
     store.save_engram(lesson)
@@ -564,7 +579,9 @@ def repair_rule_based_softening(
     "An impression related to <first word>... [faded]" and its ``impact`` left
     empty. ``add_version(reason="softening")`` snapshotted the prior state
     first, so the words are recoverable — but nothing recovers them on its
-    own, and ``archive.resharpen`` raises ``NotImplementedError``.
+    own. Mnemos 0.2.1 also restores archived records through
+    ``archive.resharpen``; this repair remains narrower because it targets
+    destructive softening performed before archival.
 
     Only engrams whose current content ends in a rule-based tail *and* which
     have a pre-softening snapshot are touched. Returns how many were restored

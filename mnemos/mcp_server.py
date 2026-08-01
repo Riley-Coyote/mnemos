@@ -744,6 +744,8 @@ def mnemos_recall(
     query: str,
     max_results: int = 5,
     agent_id: str = "default",
+    person_id: str = "user",
+    project_scope: str = "global",
 ) -> str:
     """Retrieve memories relevant to a query.
 
@@ -763,12 +765,16 @@ def mnemos_recall(
     if gate:
         return gate
     _ensure_store()
-    agent_id = _effective_agent_id(agent_id)
+    agent_id, person_id, project_scope = _scoped(
+        agent_id, person_id, project_scope
+    )
     emotional_state = _store.get_latest_emotional_state(agent_id)  # type: ignore
 
     results = _retriever.retrieve(  # type: ignore
         cue=query,
         agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
         max_results=max_results,
         emotional_state=emotional_state,
     )

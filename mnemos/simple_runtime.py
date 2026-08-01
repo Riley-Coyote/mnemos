@@ -285,7 +285,10 @@ class MnemosRuntime:
     def _stats(self) -> dict[str, Any]:
         self._ensure_init()
         assert self._store is not None
-        return self._store.get_stats(self.scope.agent_id)
+        return self._store.get_stats(
+            self.scope.agent_id, person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+        )
 
     def _meta_key(self, name: str) -> str:
         return f"simple:{self.scope.agent_id}:{self.scope.person_id}:{self.scope.project_scope}:{name}"
@@ -1185,6 +1188,8 @@ class MnemosRuntime:
         )
         engrams = self._store.get_active_engrams(
             agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
             limit=max_nodes,
             load_connections=False,
         )
@@ -1337,6 +1342,8 @@ class MnemosRuntime:
             tags=tags,
             source=SourceType.SESSION,
             agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
             override_confidence=confidence,
             # Shift 3: the moment something does not fit what is already held
             # is the moment worth encoding deeply. This is now reachable
@@ -1513,8 +1520,20 @@ class MnemosRuntime:
                 )
                 return f"Updated continuity note {target}."
 
-            engram = self._store.get_engram(target)
+            engram = self._store.get_engram_in_scope(
+                target, agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+            )
             if engram is not None:
+                if action in {"forget", "archive", "remove", "delete"}:
+                    self._store.archive_hypomnema_for_engram(
+                        engram.id,
+                        reason=f"simple correction action={action}",
+                        agent_id=self.scope.agent_id,
+                        person_id=self.scope.person_id,
+                        project_scope=self.scope.project_scope,
+                    )
                 self._store.archive_engram(engram, reason=f"simple_correction_{action}")
                 if action in {"forget", "archive", "remove", "delete"} and not correction.strip():
                     return f"Archived memory {target}."
@@ -1526,6 +1545,8 @@ class MnemosRuntime:
                     tags=["continuity", "correction"],
                     source=SourceType.SESSION,
                     agent_id=self.scope.agent_id,
+                    person_id=self.scope.person_id,
+                    project_scope=self.scope.project_scope,
                     override_confidence=0.92,
                     skip_surprise_detection=True,
                 )
@@ -1602,6 +1623,8 @@ class MnemosRuntime:
                     tags=sorted(set(["continuity", "correction", *_simple_tags(correction)])),
                     source=SourceType.SESSION,
                     agent_id=self.scope.agent_id,
+                    person_id=self.scope.person_id,
+                    project_scope=self.scope.project_scope,
                     override_confidence=0.92,
                     skip_surprise_detection=True,
                 )
@@ -1618,6 +1641,13 @@ class MnemosRuntime:
             matches = self._retrieve(search_text, max_results=1)
             if matches:
                 engram = matches[0].engram
+                self._store.archive_hypomnema_for_engram(
+                    engram.id,
+                    reason=f"simple correction action={action}",
+                    agent_id=self.scope.agent_id,
+                    person_id=self.scope.person_id,
+                    project_scope=self.scope.project_scope,
+                )
                 self._store.archive_engram(engram, reason=f"simple_correction_{action}")
                 return f"Archived closest matching memory {engram.id}."
 
@@ -1655,6 +1685,8 @@ class MnemosRuntime:
         stats = daemon.run_cycle(
             deep=can_run_deep,
             agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
             respect_gate=auto,
         )
         if stats.get("skipped"):
@@ -1786,7 +1818,10 @@ class MnemosRuntime:
         size_bytes = db_path.stat().st_size if db_path.exists() else 0
 
         last_cycle: dict[str, Any] | None = None
-        runs = self._store.get_consolidation_runs("cycle", limit=1)
+        runs = self._store.get_consolidation_runs(
+            "cycle", limit=1, agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id, project_scope=self.scope.project_scope,
+        )
         if runs:
             row = runs[0]
             cycle_stats = row.get("stats") or {}
@@ -1870,6 +1905,8 @@ class MnemosRuntime:
         results = _filter_memories(query, self._retriever.retrieve(
             cue=query,
             agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
             max_results=max(1, max_results),
             emotional_state=emotional_state,
         ))
@@ -1916,6 +1953,8 @@ class MnemosRuntime:
                 tags=["continuity", "promoted", *entry.get("tags", [])],
                 source=SourceType.BACKGROUND,
                 agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
                 override_confidence=float(entry["confidence"]),
                 skip_surprise_detection=True,
             )
@@ -2100,4 +2139,3 @@ def format_health_card(data: dict[str, Any]) -> str:
         "",
         "Everything on this card is safe to relay to the human in plain words.",
     ])
-

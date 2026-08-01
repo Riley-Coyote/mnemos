@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..experimental import unavailable
 from .metamemory import MetamemoryState
 
 if TYPE_CHECKING:
@@ -40,5 +41,4 @@ def update_metamemory(
     Returns:
         Updated MetamemoryState.
     """
-    # TODO: Implementation
-    return state
+    unavailable("metamemory updates")

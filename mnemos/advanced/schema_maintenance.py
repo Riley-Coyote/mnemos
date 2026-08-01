@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..experimental import unavailable
+
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
 
@@ -35,10 +37,4 @@ def run_schema_maintenance(
             "slots_refined": int,
         }
     """
-    # TODO: Implementation
-    return {
-        "schemas_evaluated": 0,
-        "schemas_merged": 0,
-        "schemas_pruned": 0,
-        "slots_refined": 0,
-    }
+    unavailable("schema maintenance")

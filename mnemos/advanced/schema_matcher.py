@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..experimental import unavailable
 from .schema import CognitiveSchema
 
 
@@ -30,5 +31,4 @@ def match_schemas(
     Returns:
         List of (schema, match_score) tuples sorted by descending score.
     """
-    # TODO: Implementation
-    return []
+    unavailable("schema matching")

@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..experimental import unavailable
+
 
 @dataclass
 class SchemaSlot:
@@ -47,21 +49,17 @@ class CognitiveSchema:
 
     def match_score(self, content: str, tags: list[str]) -> float:
         """Score how well content matches this schema's activation cues."""
-        # TODO: Implementation
-        return 0.0
+        unavailable("cognitive schema matching")
 
     def fill_slot(self, slot_name: str, value: Any) -> bool:
         """Fill a schema slot with a value."""
-        # TODO: Implementation
-        return False
+        unavailable("cognitive schema slot filling")
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize schema to dict."""
-        # TODO: Implementation
-        return {}
+        unavailable("cognitive schema serialization")
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> CognitiveSchema:
         """Deserialize schema from dict."""
-        # TODO: Implementation
-        return cls()
+        unavailable("cognitive schema deserialization")

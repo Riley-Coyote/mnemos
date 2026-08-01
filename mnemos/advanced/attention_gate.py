@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..core.types import EncodingDepth
+from ..experimental import unavailable
 
 
 def gate_attention(
@@ -44,5 +45,4 @@ def gate_attention(
     Returns:
         EncodingDepth value (shallow, moderate, deep, or elaborative).
     """
-    # TODO: Implementation
-    return EncodingDepth.MODERATE
+    unavailable("attention-gated encoding")

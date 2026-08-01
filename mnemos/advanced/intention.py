@@ -18,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..experimental import unavailable
+
 
 @dataclass
 class TriggerCondition:
@@ -62,21 +64,17 @@ class Intention:
         Returns:
             True if all triggers are satisfied.
         """
-        # TODO: Implementation
-        return False
+        unavailable("prospective intention triggers")
 
     def fulfill(self) -> None:
         """Mark this intention as fulfilled."""
-        # TODO: Implementation
-        pass
+        unavailable("prospective intention fulfillment")
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize intention to dict."""
-        # TODO: Implementation
-        return {}
+        unavailable("prospective intention serialization")
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Intention:
         """Deserialize intention from dict."""
-        # TODO: Implementation
-        return cls()
+        unavailable("prospective intention deserialization")

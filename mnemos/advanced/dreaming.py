@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..experimental import unavailable
+
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
 
@@ -47,10 +49,4 @@ def run_dream_cycle(
             "dream_engrams_created": int,
         }
     """
-    # TODO: Implementation
-    return {
-        "seeds_selected": 0,
-        "associations_generated": 0,
-        "connections_created": 0,
-        "dream_engrams_created": 0,
-    }
+    unavailable("advanced dreaming")

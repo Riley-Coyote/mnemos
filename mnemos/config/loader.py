@@ -23,6 +23,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from ..file_security import atomic_write_text, secure_directory
+
 from .defaults import DEFAULT_CONFIG
 
 
@@ -79,7 +81,8 @@ def save_config(config: dict, config_path: str | Path | None = None) -> None:
     else:
         config_path = Path(config_path)
 
-    config_path.parent.mkdir(parents=True, exist_ok=True)
+    private_root = Path.home() / ".mnemos"
+    secure_directory(config_path.parent, force=config_path.parent == private_root)
 
     # Convert tuples to lists for JSON serialization
     def _prep(obj):
@@ -89,8 +92,7 @@ def save_config(config: dict, config_path: str | Path | None = None) -> None:
             return [_prep(v) for v in obj]
         return obj
 
-    with open(config_path, "w") as f:
-        json.dump(_prep(config), f, indent=2)
+    atomic_write_text(config_path, json.dumps(_prep(config), indent=2) + "\n")
 
 
 def _deep_merge(base: dict, override: dict) -> dict:

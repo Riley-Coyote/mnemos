@@ -13,12 +13,39 @@ import sys
 from typing import Any
 
 from mcp import types
-from mcp.server.fastmcp import Context
 from mcp.server.fastmcp import FastMCP
 
 from .simple_runtime import MnemosRuntime, SIMPLE_TOOL_NAMES, format_health_card
 
 logger = logging.getLogger("mnemos.simple_mcp")
+
+MAX_CAPTURE_CHARS = 65_536
+MAX_QUERY_CHARS = 4_096
+MAX_CONTEXT_CHARS = 32_768
+MAX_REFLECTION_CHARS = 16_384
+MAX_ID_CHARS = 256
+MAX_RESULTS = 20
+MAX_TOOL_OUTPUT_CHARS = 131_072
+
+
+def _text(name: str, value: str, limit: int, *, required: bool = False) -> str:
+    if required and not value.strip():
+        raise ValueError(f"{name} cannot be empty")
+    if len(value) > limit:
+        raise ValueError(f"{name} is too large (maximum {limit:,} characters)")
+    return value
+
+
+def _count(name: str, value: int, *, minimum: int, maximum: int) -> int:
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _output(value: str) -> str:
+    if len(value) <= MAX_TOOL_OUTPUT_CHARS:
+        return value
+    return value[:MAX_TOOL_OUTPUT_CHARS] + "\n\n[Output limited by Mnemos.]"
 
 SERVER_INSTRUCTIONS = """\
 Mnemos gives this agent memory that survives between sessions.
@@ -108,43 +135,6 @@ def _get_runtime() -> MnemosRuntime:
     return _runtime
 
 
-async def _sample_text(ctx: Context | None, prompt: str, *, max_tokens: int = 350) -> str:
-    """Ask the host MCP client model for optional in-band assistance."""
-
-    if ctx is None:
-        return ""
-    try:
-        result = await ctx.session.create_message(
-            messages=[
-                types.SamplingMessage(
-                    role="user",
-                    content=types.TextContent(type="text", text=prompt),
-                )
-            ],
-            max_tokens=max_tokens,
-            temperature=0.0,
-            system_prompt=(
-                "You help Mnemos distill durable AI-agent continuity. "
-                "Return concise plain text only. Do not invent facts."
-            ),
-            related_request_id=ctx.request_id,
-        )
-    except Exception as exc:
-        try:
-            await ctx.debug(f"Mnemos host-model sampling unavailable: {exc}")
-        except Exception:
-            pass
-        return ""
-
-    content = result.content
-    if isinstance(content, list):
-        text_parts = [part.text for part in content if getattr(part, "type", None) == "text"]
-        return "\n".join(part.strip() for part in text_parts if part.strip()).strip()
-    if getattr(content, "type", None) == "text":
-        return content.text.strip()
-    return ""
-
-
 def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> None:
     """Register the simple continuity tools on a FastMCP server.
 
@@ -187,13 +177,18 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         """
 
         runtime = _get_runtime()
-        packet = runtime.context(query=query, max_results=max_results)
+        packet = _output(runtime.context(
+            query=_text("query", query, MAX_QUERY_CHARS),
+            max_results=_count("max_results", max_results, minimum=1, maximum=MAX_RESULTS),
+        ))
         if not include_graph:
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=packet)]
             )
 
-        graph = runtime.identity_graph(max_nodes=graph_max_nodes)
+        graph = runtime.identity_graph(
+            max_nodes=_count("graph_max_nodes", graph_max_nodes, minimum=4, maximum=48)
+        )
         svg = graph.pop("svg")
         graph_text = (
             f"{packet}\n\n"
@@ -222,12 +217,11 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             idempotent=False,
         )
     )
-    async def mnemos_capture(
+    def mnemos_capture(
         content: str,
         context: str = "",
         importance: str | float = "auto",
         impact: str = "",
-        ctx: Context | None = None,
     ) -> str:
         """Capture durable continuity from the current conversation.
 
@@ -248,28 +242,12 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
                 memory will ask you later if it needs one.
         """
 
-        sampled = await _sample_text(
-            ctx,
-            (
-                "Distill this into one durable continuity note for a future AI-agent session. "
-                "Keep concrete names and preferences. Return an empty string if the original is already optimal.\n\n"
-                f"Content:\n{content}\n\nContext:\n{context}"
-            ),
-        )
-        capture_content = sampled or content
-        capture_context = context
-        if sampled:
-            capture_context = (context + "\n\n" if context else "") + f"Original capture: {content}"
-
-        result = _get_runtime().capture(
-            content=capture_content,
-            context=capture_context,
+        return _output(_get_runtime().capture(
+            content=_text("content", content, MAX_CAPTURE_CHARS, required=True),
+            context=_text("context", context, MAX_CONTEXT_CHARS),
             importance=importance,
-            impact=impact,
-        )
-        if sampled:
-            result += "\nHost model assistance: applied via MCP sampling."
-        return result
+            impact=_text("impact", impact, MAX_REFLECTION_CHARS),
+        ))
 
     if include_recall:
         @server.tool(
@@ -283,7 +261,10 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         def mnemos_recall(query: str, max_results: int = 5) -> str:
             """Recall relevant continuity and durable memories."""
 
-            return _get_runtime().recall(query=query, max_results=max_results)
+            return _output(_get_runtime().recall(
+                query=_text("query", query, MAX_QUERY_CHARS, required=True),
+                max_results=_count("max_results", max_results, minimum=1, maximum=MAX_RESULTS),
+            ))
 
     @server.tool(
         annotations=_annotations(
@@ -306,12 +287,12 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         to archive a target or closest query match.
         """
 
-        return _get_runtime().correct(
-            correction=correction,
-            target_id=target_id,
-            query=query,
-            action=action,
-        )
+        return _output(_get_runtime().correct(
+            correction=_text("correction", correction, MAX_CAPTURE_CHARS),
+            target_id=_text("target_id", target_id, MAX_ID_CHARS),
+            query=_text("query", query, MAX_QUERY_CHARS),
+            action=_text("action", action, 32),
+        ))
 
     @server.tool(
         annotations=_annotations(
@@ -323,47 +304,14 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             idempotent=False,
         )
     )
-    async def mnemos_maintain(deep: bool = False, ctx: Context | None = None) -> str:
+    def mnemos_maintain(deep: bool = False) -> str:
         """Run the best available maintenance without additional setup.
 
         Baseline maintenance is local and deterministic. If a dedicated model
         is configured, deep maintenance can also run model-mediated passes.
         """
 
-        runtime = _get_runtime()
-        result = runtime.maintain(deep=deep)
-        if deep and not runtime.has_dedicated_model:
-            sampled = await _sample_text(
-                ctx,
-                (
-                    "Mnemos just ran local maintenance without a dedicated provider. "
-                    "Write one brief maintenance reflection that could help future continuity. "
-                    "If there is nothing useful to add, return an empty string.\n\n"
-                    f"Maintenance result:\n{result}"
-                ),
-                max_tokens=220,
-            )
-            if sampled:
-                runtime.capture(
-                    f"Maintenance reflection: {sampled}",
-                    context="Generated by the host MCP client model during mnemos_maintain.",
-                    importance="low",
-                )
-                result += "\nHost model assistance: captured maintenance reflection via MCP sampling."
-        if runtime.last_dream_note_id and runtime.last_dream_narrative:
-            polished = await _sample_text(
-                ctx,
-                (
-                    "Rewrite this consolidation diary entry in a warmer first-person voice. "
-                    "Keep every number and fact exactly as stated. Do not add new claims. "
-                    "Keep it under 80 words. Return an empty string if the original is already good.\n\n"
-                    f"{runtime.last_dream_narrative}"
-                ),
-                max_tokens=220,
-            )
-            if polished and runtime.polish_dream(runtime.last_dream_note_id, polished):
-                result += "\nHost model assistance: polished the dream journal entry via MCP sampling."
-        return result
+        return _output(_get_runtime().maintain(deep=deep))
 
     @server.tool(
         annotations=_annotations(
@@ -386,7 +334,10 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             text: Your reflection. One or two honest sentences, not a summary.
         """
 
-        return _get_runtime().reflect(target_id=target_id, text=text)
+        return _output(_get_runtime().reflect(
+            target_id=_text("target_id", target_id, MAX_ID_CHARS, required=True),
+            text=_text("text", text, MAX_REFLECTION_CHARS, required=True),
+        ))
 
     @server.tool(
         annotations=_annotations(
@@ -404,7 +355,10 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         model so memory maintenance is performed by a kin model. An explicit
         MNEMOS_AGENT_MODEL environment setting always takes precedence.
         """
-        return _get_runtime().introduce(agent_model=agent_model, agent_name=agent_name)
+        return _output(_get_runtime().introduce(
+            agent_model=_text("agent_model", agent_model, 256, required=True),
+            agent_name=_text("agent_name", agent_name, 256),
+        ))
 
     @server.tool(
         annotations=_annotations(

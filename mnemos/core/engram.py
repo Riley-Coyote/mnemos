@@ -303,6 +303,8 @@ class Engram:
 
     # Multi-agent
     owner_agent_id: str = "default"
+    person_id: str = "user"
+    project_scope: str = "global"
     visibility: str = Visibility.PRIVATE
 
     # Lifecycle
@@ -380,6 +382,8 @@ class Engram:
             "source": json.dumps(self.source.to_dict()),
             "lineage": json.dumps(self.lineage.to_dict()),
             "owner_agent_id": self.owner_agent_id,
+            "person_id": self.person_id,
+            "project_scope": self.project_scope,
             "visibility": self.visibility,
             "state": self.state,
         }
@@ -429,6 +433,8 @@ class Engram:
             source=MemorySource.from_dict(source),
             lineage=Lineage.from_dict(lineage),
             owner_agent_id=d.get("owner_agent_id", "default"),
+            person_id=d.get("person_id", "") or "",
+            project_scope=d.get("project_scope", "") or "",
             visibility=d.get("visibility", Visibility.PRIVATE),
             state=d.get("state", EngramState.ACTIVE),
             connections=[],  # Loaded separately from connections table

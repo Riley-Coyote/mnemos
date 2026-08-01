@@ -8,6 +8,7 @@ is asserted directly rather than trusted.
 
 import json
 import plistlib
+import shlex
 
 import pytest
 
@@ -185,6 +186,18 @@ class TestSystemd:
         )
         assert "OnCalendar=*-*-* 03:00:00" in timer
 
+    def test_execstart_quotes_paths_and_scope_values(self):
+        job = scheduler.JOBS[0]
+        service, _timer = scheduler.systemd_units(
+            job, agent_id="nova", mnemos_command="/Users/Riley Coyote/bin/mnemos",
+            scope_args=("--db-path", "/Users/Riley Coyote/Mnemos data/nova.db"),
+        )
+        line = next(line for line in service.splitlines() if line.startswith("ExecStart="))
+        assert shlex.split(line.removeprefix("ExecStart=")) == [
+            "/Users/Riley Coyote/bin/mnemos", "--db-path",
+            "/Users/Riley Coyote/Mnemos data/nova.db", "consolidate",
+        ]
+
 
 class TestCrontab:
     def test_interval_and_daily_lines(self):
@@ -197,6 +210,18 @@ class TestCrontab:
         assert scheduler.cron_line(
             deep, agent_id="nova", mnemos_command="mnemos"
         ).startswith("0 3 * * *")
+
+    def test_paths_with_spaces_are_shell_quoted(self):
+        job = scheduler.JOBS[0]
+        line = scheduler.cron_line(
+            job, agent_id="nova", mnemos_command="/Users/Riley Coyote/bin/mnemos",
+            scope_args=("--db-path", "/Users/Riley Coyote/Mnemos data/nova.db"),
+        )
+        command = line.split(" >> ", 1)[0].split(" ", 5)[5]
+        assert shlex.split(command) == [
+            "/Users/Riley Coyote/bin/mnemos", "--db-path",
+            "/Users/Riley Coyote/Mnemos data/nova.db", "consolidate",
+        ]
 
     def test_merge_preserves_a_users_own_crontab(self):
         """A user's crontab is theirs; we only remove lines we wrote."""
@@ -337,3 +362,18 @@ class TestDaemonCli:
         out = capsys.readouterr().out
         assert "not scheduled" in out
         assert "mnemos daemon install --write" in out
+
+    def test_activation_failure_is_reported_as_failure(self, tmp_path, monkeypatch, capsys):
+        from mnemos.cli import _daemon_install
+
+        blueprint = scheduler.plan(
+            agent_id="nova", mnemos_command="mnemos", backend="launchd",
+        )
+        for entry in blueprint["entries"]:
+            entry["path"] = tmp_path / f"{entry['job'].name}.plist"
+        monkeypatch.setattr(
+            "mnemos.cli._launchctl",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("denied")),
+        )
+        assert _daemon_install(blueprint, write=True) == 1
+        assert "denied" in capsys.readouterr().err

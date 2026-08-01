@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..experimental import unavailable
+
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
 
@@ -37,5 +39,4 @@ def predict_needed(
     Returns:
         List of engram IDs predicted to be needed, sorted by likelihood.
     """
-    # TODO: Implementation
-    return []
+    unavailable("predictive retrieval")

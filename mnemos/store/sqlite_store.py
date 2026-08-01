@@ -559,6 +559,15 @@ class EngramStore:
             for name, add_ddl in columns:
                 if name not in existing:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {add_ddl}")
+                    # Some SQLite builds leave numeric defaults virtual after
+                    # ALTER TABLE and then report those legacy rows as NULL
+                    # during integrity_check. The column is brand new, so
+                    # materialize its declared default for every old row.
+                    _, marker, default_sql = add_ddl.partition(" DEFAULT ")
+                    if marker:
+                        conn.execute(
+                            f"UPDATE {table} SET {name} = {default_sql}"
+                        )
 
     def _get_conn(self) -> sqlite3.Connection:
         """Get or create SQLite connection with WAL mode."""

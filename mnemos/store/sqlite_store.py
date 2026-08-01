@@ -476,9 +476,14 @@ class EngramStore:
             ("schema_version", str(SCHEMA_VERSION)),
         )
         conn.commit()
-        result = conn.execute("PRAGMA integrity_check").fetchone()
-        if not result or result[0] != "ok":
-            raise RuntimeError("SQLite integrity check failed after migration")
+        integrity = [
+            row[0] for row in conn.execute("PRAGMA integrity_check").fetchall()
+        ]
+        if integrity != ["ok"]:
+            details = "; ".join(integrity[:10]) or "no result"
+            raise RuntimeError(
+                f"SQLite integrity check failed after migration: {details}"
+            )
 
     def _backup_before_migration(self, conn: sqlite3.Connection) -> None:
         """Create a verified recovery point before altering an older schema."""

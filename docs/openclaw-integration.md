@@ -102,12 +102,17 @@ mnemos setup-openclaw --agent nova
 | Cron | Schedule | What It Does |
 |------|----------|-------------|
 | observer-context-sync | Every 30 min | Updates active-context.md from recent sessions |
-| session-indexer | Every 30 min | Extracts memories from conversation transcripts |
 | substrate-tick | Every 4 hours | Runs memory consolidation (decay, dreaming, beliefs) |
 | memory-maintenance | Every 6 hours | Keeps MEMORY.md current |
 | cross-agent-bridge | Every 2 hours | Syncs context between agents |
 | morning-brief | Daily 10 AM | Generates morning summary and priorities |
 | daily-debrief | Daily 5 AM | End-of-day recap |
+
+**Transcript indexing is deliberately not scheduled**, by this installer or the
+turnkey one. On one live store it wrote roughly 7,058 engrams against 13
+deliberate captures and buried the continuity layer under harvested noise.
+Indexing remains available as an explicit `mnemos index` command, to be run when
+you actually want it.
 
 ### 4. Set Up Identity Files
 

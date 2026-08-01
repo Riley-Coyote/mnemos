@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
 
@@ -117,3 +119,41 @@ def test_maintenance_gate_is_scoped_per_person_and_project(tmp_path):
     assert not first.get("skipped")
     assert not other.get("skipped")
     assert repeated.get("skipped") is True
+
+
+def test_separate_process_style_writers_do_not_lose_memories(tmp_path):
+    """Independent runtime connections may write to one WAL database."""
+
+    path = tmp_path / "memory.db"
+    EngramStore(path).close()
+    writer_count = 4
+    writes_per_writer = 20
+    ready = Barrier(writer_count)
+
+    def write_batch(writer: int) -> None:
+        store = EngramStore(path)
+        try:
+            ready.wait()
+            for index in range(writes_per_writer):
+                store.save_engram(
+                    Engram(
+                        content=f"writer {writer} memory {index}",
+                        owner_agent_id="nova",
+                        person_id="riley",
+                        project_scope="concurrency",
+                    )
+                )
+        finally:
+            store.close()
+
+    with ThreadPoolExecutor(max_workers=writer_count) as pool:
+        list(pool.map(write_batch, range(writer_count)))
+
+    store = EngramStore(path)
+    try:
+        memories = store.get_active_engrams(
+            agent_id="nova", person_id="riley", project_scope="concurrency"
+        )
+        assert len(memories) == writer_count * writes_per_writer
+    finally:
+        store.close()

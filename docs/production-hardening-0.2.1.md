@@ -1,6 +1,6 @@
 # Mnemos 0.2.1 Production Hardening
 
-Status: in progress
+Status: release candidate; remote CI and trusted pilot pending
 Branch: `hotfix/0.2.1-production-hardening`
 Release rule: prepare the release candidate, but do not publish without Riley's approval.
 
@@ -84,3 +84,25 @@ Release rule: prepare the release candidate, but do not publish without Riley's 
 5. Experimental-feature quarantine and documentation.
 6. CI, security, and release workflow.
 7. Final release-candidate verification and a 24-hour trusted pilot.
+
+## Release-candidate verification
+
+Completed locally on 2026-08-01:
+
+- 378 tests pass on Python 3.10 with 81.1 percent supported-code coverage.
+- The wheel and source archive build successfully and pass metadata checks.
+- A fresh Python 3.13 environment installs the wheel and starts Mnemos.
+- The real MCP stdio connection exposes exactly eight simple tools.
+- Provider and Sidecar Hermes integration tests pass with scope isolation.
+- Two real CLI sessions carry continuity forward across a restart.
+- A background maintenance cycle completes without a model.
+- Backup, inspection, destructive-change, and verified restore rehearsal passes.
+- Repeated four-writer concurrency rehearsals preserve every memory.
+- Locked dependencies have no known vulnerabilities; lint, workflow syntax,
+  and the high-severity code-security gate pass.
+
+Still required before publication:
+
+- GitHub's Python 3.10-3.13 matrix, CodeQL, and release-hardening jobs must pass.
+- Complete the 24-hour trusted pilot.
+- Receive Riley's explicit approval before creating or pushing the `v0.2.1` tag.

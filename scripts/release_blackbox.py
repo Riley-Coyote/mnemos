@@ -246,12 +246,24 @@ def main() -> int:
     blocker.mkdir()
     (blocker / "sitecustomize.py").write_text(
         "import os, socket\n"
-        "def blocked(*args, **kwargs):\n"
+        "original_connect = socket.socket.connect\n"
+        "original_create_connection = socket.create_connection\n"
+        "def is_loopback(address):\n"
+        "    return isinstance(address, tuple) and address[0] in "
+        "{'127.0.0.1', '::1'}\n"
+        "def blocked(address):\n"
         "    with open(os.environ['MNEMOS_NETWORK_MARKER'], 'a') as f: "
-        "f.write(repr(args) + '\\\\n')\n"
+        "f.write(repr(address) + '\\\\n')\n"
         "    raise RuntimeError('network disabled by release audit')\n"
-        "socket.socket.connect = blocked\n"
-        "socket.create_connection = blocked\n",
+        "def guarded_connect(self, address):\n"
+        "    if is_loopback(address): return original_connect(self, address)\n"
+        "    return blocked(address)\n"
+        "def guarded_create_connection(address, *args, **kwargs):\n"
+        "    if is_loopback(address):\n"
+        "        return original_create_connection(address, *args, **kwargs)\n"
+        "    return blocked(address)\n"
+        "socket.socket.connect = guarded_connect\n"
+        "socket.create_connection = guarded_create_connection\n",
         encoding="utf-8",
     )
     env = {

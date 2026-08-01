@@ -178,4 +178,4 @@ jobs:
       - name: Publish signed release artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release/* --generate-notes --verify-tag
+        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag

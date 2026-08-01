@@ -1,6 +1,6 @@
 # Mnemos 0.2.1 Production Hardening
 
-Status: release candidate; remote CI and trusted pilot pending
+Status: release candidate; trusted pilot pending
 Branch: `hotfix/0.2.1-production-hardening`
 Release rule: prepare the release candidate, but do not publish without Riley's approval.
 
@@ -100,9 +100,9 @@ Completed locally on 2026-08-01:
 - Repeated four-writer concurrency rehearsals preserve every memory.
 - Locked dependencies have no known vulnerabilities; lint, workflow syntax,
   and the high-severity code-security gate pass.
+- GitHub's Python 3.10-3.13 matrix, CodeQL, and release-hardening jobs pass.
 
 Still required before publication:
 
-- GitHub's Python 3.10-3.13 matrix, CodeQL, and release-hardening jobs must pass.
 - Complete the 24-hour trusted pilot.
 - Receive Riley's explicit approval before creating or pushing the `v0.2.1` tag.

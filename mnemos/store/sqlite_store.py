@@ -1610,6 +1610,36 @@ class EngramStore:
         ).fetchone()
         return self._hydrate_hypomnema_row(dict(row)) if row else None
 
+    def archive_hypomnema_for_engram(
+        self,
+        engram_id: str,
+        *,
+        reason: str,
+        agent_id: str,
+        person_id: str,
+        project_scope: str,
+    ) -> int:
+        """Deactivate every scoped continuity note linked to an engram."""
+
+        rows = self._get_conn().execute(
+            """
+            SELECT id FROM hypomnema_entries
+            WHERE active = 1
+              AND agent_id = ? AND person_id = ? AND project_scope = ?
+              AND (related_engram_id = ? OR graduated_to_engram_id = ?)
+            """,
+            (agent_id, person_id, project_scope, engram_id, engram_id),
+        ).fetchall()
+        for row in rows:
+            self.archive_hypomnema_entry(
+                row["id"],
+                reason=reason,
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+            )
+        return len(rows)
+
     def search_hypomnema(
         self,
         query: str = "",

@@ -1526,6 +1526,14 @@ class MnemosRuntime:
                 project_scope=self.scope.project_scope,
             )
             if engram is not None:
+                if action in {"forget", "archive", "remove", "delete"}:
+                    self._store.archive_hypomnema_for_engram(
+                        engram.id,
+                        reason=f"simple correction action={action}",
+                        agent_id=self.scope.agent_id,
+                        person_id=self.scope.person_id,
+                        project_scope=self.scope.project_scope,
+                    )
                 self._store.archive_engram(engram, reason=f"simple_correction_{action}")
                 if action in {"forget", "archive", "remove", "delete"} and not correction.strip():
                     return f"Archived memory {target}."
@@ -1633,6 +1641,13 @@ class MnemosRuntime:
             matches = self._retrieve(search_text, max_results=1)
             if matches:
                 engram = matches[0].engram
+                self._store.archive_hypomnema_for_engram(
+                    engram.id,
+                    reason=f"simple correction action={action}",
+                    agent_id=self.scope.agent_id,
+                    person_id=self.scope.person_id,
+                    project_scope=self.scope.project_scope,
+                )
                 self._store.archive_engram(engram, reason=f"simple_correction_{action}")
                 return f"Archived closest matching memory {engram.id}."
 

@@ -136,7 +136,12 @@ class ClaudeCLIClient:
                 [
                     self._bin,
                     "--model", self._model,
-                    "--dangerously-skip-permissions",
+                    # Memory is untrusted input. A captured prompt can contain
+                    # instructions aimed at Claude Code, so a maintenance
+                    # process must never have filesystem, shell, or network
+                    # tools available.
+                    "--tools", "",
+                    "--disable-slash-commands",
                     "-p", prompt,
                 ],
                 capture_output=True,

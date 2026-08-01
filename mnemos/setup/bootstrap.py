@@ -20,6 +20,8 @@ from datetime import datetime
 from datetime import timezone as _utc_tz
 from pathlib import Path
 
+from ..file_security import atomic_write_text
+
 # Template files and their destination paths relative to workspace
 _TEMPLATE_MAP = {
     "SOUL.md": "SOUL.md",
@@ -263,7 +265,7 @@ def bootstrap(
             model=model,
             provider_api_key_line=provider_api_key_line,
         )
-        env_path.write_text(env_content)
+        atomic_write_text(env_path, env_content)
         result["files_created"].append(str(env_path))
     else:
         result["files_created"].append(f"{env_path} (skipped — already exists)")

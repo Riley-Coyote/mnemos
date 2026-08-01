@@ -254,7 +254,7 @@ Review generated commands before enabling them.
 1. Run `mnemos doctor`.
 2. Confirm the client config points to `mnemos serve`.
 3. Restart the client session or desktop app.
-4. For simple mode, expect exactly seven tools.
+4. For simple mode, expect exactly eight tools.
 5. For advanced mode, use `mnemos serve --mode advanced`.
 
 ### The agent has no prior memory

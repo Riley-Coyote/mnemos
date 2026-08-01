@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 (Unreleased)
+
+Production-hardening release. This release closes security, privacy, scope,
+recovery, and installation gaps found during the 0.2.0 release audit. The
+complete implementation and verification checklist lives in
+`docs/production-hardening-0.2.1.md`.
+
 ## 0.2.0 (2026-07-31)
 
 Two things happen in this release. Continuity starts arriving on its own —

@@ -529,6 +529,8 @@ class MnemosMemoryProviderCore:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             source="observed",
+            authored_by="agent",
+            author_id=self.scope.agent_id,
             domain=_domain_for(note),
             tags=_tags_for(note, "review", "inbox", "uncertain"),
             confidence=0.46,

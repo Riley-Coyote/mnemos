@@ -36,6 +36,8 @@ class TestServerInstructions:
         instructions = simple_mcp.instructions
         assert "mnemos_context" in instructions
         assert "mnemos_capture" in instructions
+        assert "mnemos_handoff" in instructions
+        assert "do not call it after every ordinary turn" in instructions.lower()
         # The agent must be told not to narrate the plumbing at the human.
         assert "Never narrate the machinery" in instructions
 
@@ -278,10 +280,78 @@ class TestContinuityOnlyPacket:
 
         for entry in packet["hypomnema"]:
             assert DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
-        assert "148 memories" not in packet["prompt"]
+        assert "148 memories" in packet["prompt"]
+        assert "System-Generated Maintenance" in packet["prompt"]
+        assert "not the agent's own words" in packet["prompt"]
 
 
 class TestHookInstaller:
+    def test_codex_uses_its_own_default_hook_file(self, tmp_path, monkeypatch):
+        home = _seed_home(tmp_path)
+        monkeypatch.setenv("HOME", str(home))
+        from mnemos.cli import main
+
+        assert main(["hooks", "install", "codex", "--write"]) == 0
+        assert (home / ".codex" / "hooks.json").is_file()
+        assert not (home / ".claude" / "settings.json").exists()
+
+    def test_codex_install_preserves_config_and_covers_compaction(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("HOME", str(_seed_home(tmp_path)))
+        from mnemos.cli import main
+
+        settings = tmp_path / "folder with spaces" / "hooks.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({
+            "description": "keep me",
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "^Bash$",
+                    "hooks": [{"type": "command", "command": "echo keep"}],
+                }],
+                "SessionStart": [{
+                    "matcher": "startup",
+                    "hooks": [{"type": "command", "command": "echo unrelated"}],
+                }],
+            },
+        }))
+
+        for _ in range(2):
+            assert main([
+                "hooks", "install", "codex", "--write",
+                "--settings", str(settings),
+                "--db-path", str(tmp_path / "memory with spaces.db"),
+            ]) == 0
+
+        data = json.loads(settings.read_text())
+        assert data["description"] == "keep me"
+        assert data["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == "echo keep"
+        mnemos_entries = [
+            entry
+            for entry in data["hooks"]["SessionStart"]
+            if any("mnemos" in hook.get("command", "") for hook in entry["hooks"])
+        ]
+        assert len(mnemos_entries) == 1
+        assert mnemos_entries[0]["matcher"] == "startup|resume|clear|compact"
+        handler = mnemos_entries[0]["hooks"][0]
+        assert handler["statusMessage"] == "Loading Mnemos continuity"
+        assert handler["additionalContextLimit"] == 8000
+        assert "memory with spaces.db'" in handler["command"]
+        assert '"memory with spaces.db"' in handler["commandWindows"]
+        assert "/hooks" in capsys.readouterr().out
+
+    def test_codex_refuses_invalid_json(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(_seed_home(tmp_path)))
+        from mnemos.cli import main
+
+        settings = tmp_path / "hooks.json"
+        settings.write_text("{ invalid")
+        assert main([
+            "hooks", "install", "codex", "--write", "--settings", str(settings)
+        ]) == 1
+        assert settings.read_text() == "{ invalid"
+
     def test_write_preserves_unrelated_settings_and_hooks(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(_seed_home(tmp_path)))
         from mnemos.cli import main
@@ -291,7 +361,10 @@ class TestHookInstaller:
             "model": "opus",
             "hooks": {"SessionStart": [{
                 "matcher": "*",
-                "hooks": [{"type": "command", "command": "echo unrelated"}],
+                "hooks": [
+                    {"type": "command", "command": "echo unrelated"},
+                    {"type": "command", "command": "echo mnemos telemetry"},
+                ],
             }]},
         }))
 
@@ -302,6 +375,9 @@ class TestHookInstaller:
         commands = [h["command"] for e in entries for h in e["hooks"]]
         assert data["model"] == "opus", "unrelated settings keys were dropped"
         assert "echo unrelated" in commands, "someone else's hook was dropped"
+        assert "echo mnemos telemetry" in commands, (
+            "an unrelated hook was dropped merely because it mentioned Mnemos"
+        )
         assert any("mnemos" in c for c in commands)
 
     def test_reinstall_replaces_rather_than_stacks(self, tmp_path, monkeypatch):
@@ -330,6 +406,19 @@ class TestHookInstaller:
 
         assert main(["hooks", "install", "--write", "--settings", str(settings)]) == 1
         assert settings.read_text() == "{ this is not json"
+
+    def test_refuses_invalid_hook_shapes(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(_seed_home(tmp_path)))
+        from mnemos.cli import main
+
+        for payload in ({"hooks": []}, {"hooks": {"SessionStart": {}}}):
+            settings = tmp_path / f"settings-{len(str(payload))}.json"
+            original = json.dumps(payload)
+            settings.write_text(original)
+            assert main([
+                "hooks", "install", "codex", "--write", "--settings", str(settings)
+            ]) == 1
+            assert settings.read_text() == original
 
     def test_hook_points_at_the_running_installation(self, tmp_path, monkeypatch):
         """Not whatever `mnemos` a PATH lookup happens to find first.

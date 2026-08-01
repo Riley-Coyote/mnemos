@@ -874,6 +874,14 @@ def mnemos_functional_update(
             needs_confirmation=needs_confirmation,
             pinned=pinned,
             source=source,
+            authored_by=(
+                "coauthored"
+                if source == "co-formed"
+                else "agent"
+                if source == "observed"
+                else "unknown"
+            ),
+            author_id=agent_id if source != "synthesized" else "",
             metadata={"tags": tag_list},
         )
     except ValueError as exc:

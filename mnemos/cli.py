@@ -30,6 +30,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from .config.loader import load_config
 
@@ -344,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
         "install", help="Print or write the SessionStart hook config"
     )
     p_hooks_install.add_argument(
-        "client", nargs="?", default="claude-code", choices=("claude-code",),
+        "client", nargs="?", default="claude-code", choices=("claude-code", "codex"),
         help="Agent harness to install the hook for",
     )
     p_hooks_install.add_argument("--agent-id", default=None, help="Agent identity")
@@ -353,7 +354,9 @@ def main(argv: list[str] | None = None) -> int:
     p_hooks_install.add_argument("--db-path", default=None, help="Database path")
     p_hooks_install.add_argument("--timeout", type=int, default=15, help="Hook timeout seconds")
     p_hooks_install.add_argument(
-        "--settings", default=None, help="Settings file to write (default ~/.claude/settings.json)"
+        "--settings",
+        default=None,
+        help="Settings file to write (default is selected for the client)",
     )
     p_hooks_install.add_argument(
         "--write", action="store_true", help="Write the settings file instead of printing it"
@@ -775,10 +778,17 @@ def _claude_code_settings_path() -> Path:
     return Path.home() / ".claude" / "settings.json"
 
 
+def _codex_hooks_path() -> Path:
+    return Path.home() / ".codex" / "hooks.json"
+
+
 def _cmd_hooks(args: argparse.Namespace) -> int:
     """Install the SessionStart hook that injects memory before turn one."""
     if getattr(args, "hooks_command", None) != "install":
-        print("Usage: mnemos hooks install [claude-code] [--write]", file=sys.stderr)
+        print(
+            "Usage: mnemos hooks install [claude-code|codex] [--write]",
+            file=sys.stderr,
+        )
         return 1
 
     command_parts = [_mnemos_command(), "hook", "session-start"]
@@ -794,16 +804,33 @@ def _cmd_hooks(args: argparse.Namespace) -> int:
         if value:
             command_parts.extend([flag, value])
 
-    entry = {
-        "matcher": "*",
-        "hooks": [{
+    handler = {
             "type": "command",
             "command": shlex.join(command_parts),
             "timeout": args.timeout,
-        }],
+        }
+    if args.client == "codex":
+        handler.update({
+            "statusMessage": "Loading Mnemos continuity",
+            # The hook command enforces a bounded packet, and handoffs must
+            # reach the next session whole rather than becoming a spill-file
+            # preview that the model may never read.
+            "additionalContextLimit": 8000,
+            "commandWindows": subprocess.list2cmdline(command_parts),
+        })
+    entry = {
+        "matcher": (
+            "startup|resume|clear|compact" if args.client == "codex" else "*"
+        ),
+        "hooks": [handler],
     }
 
-    path = Path(args.settings).expanduser() if args.settings else _claude_code_settings_path()
+    default_path = (
+        _codex_hooks_path()
+        if args.client == "codex"
+        else _claude_code_settings_path()
+    )
+    path = Path(args.settings).expanduser() if args.settings else default_path
 
     if not args.write:
         print(json.dumps({"hooks": {"SessionStart": [entry]}}, indent=2))
@@ -826,10 +853,45 @@ def _cmd_hooks(args: argparse.Namespace) -> int:
     else:
         settings = {}
 
-    session_start = settings.setdefault("hooks", {}).setdefault("SessionStart", [])
+    hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        print(
+            f"Refusing to overwrite {path}: top-level hooks must be an object",
+            file=sys.stderr,
+        )
+        return 1
+    session_start = hooks.setdefault("SessionStart", [])
+    if not isinstance(session_start, list):
+        print(
+            f"Refusing to overwrite {path}: hooks.SessionStart must be a list",
+            file=sys.stderr,
+        )
+        return 1
+
+    def is_mnemos_session_start(candidate: Any) -> bool:
+        if not isinstance(candidate, dict):
+            return False
+        for configured_hook in candidate.get("hooks", []):
+            if not isinstance(configured_hook, dict):
+                continue
+            command = configured_hook.get("command", "")
+            if not isinstance(command, str):
+                continue
+            try:
+                parts = shlex.split(command)
+            except ValueError:
+                continue
+            if (
+                len(parts) >= 3
+                and Path(parts[0]).stem.lower().startswith("mnemos")
+                and parts[1:3] == ["hook", "session-start"]
+            ):
+                return True
+        return False
+
     existing = [
         e for e in session_start
-        if any("mnemos" in h.get("command", "") for h in e.get("hooks", []))
+        if is_mnemos_session_start(e)
     ]
     for stale in existing:
         session_start.remove(stale)
@@ -842,7 +904,20 @@ def _cmd_hooks(args: argparse.Namespace) -> int:
     action = "Replaced" if existing else "Installed"
     print(f"{action} the Mnemos SessionStart hook in {path}")
     print(f"  Command: {entry['hooks'][0]['command']}")
-    print("Start a new session — memory is injected before the first turn.")
+    if args.client == "codex":
+        print(
+            "In Codex, open /hooks and complete the normal review before "
+            "trusting the new hook."
+        )
+        print(
+            "After review, continuity is injected at startup, resume, clear, "
+            "and after compaction."
+        )
+    else:
+        print(
+            "Start a new session — memory is injected before the first turn "
+            "and after compaction."
+        )
     return 0
 
 

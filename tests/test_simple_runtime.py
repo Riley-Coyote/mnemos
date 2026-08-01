@@ -597,6 +597,7 @@ def test_health_returns_structured_dict(tmp_path):
         "identity",
         "onboarding",
         "verification",
+        "handoff",
         "dream",
         # Evidence about whether continuity is reaching this agent at all.
         # A health card that can only ever say "fine" is worth nothing on
@@ -606,6 +607,22 @@ def test_health_returns_structured_dict(tmp_path):
     assert data["counts"]["continuity_notes_active"] >= 1
     assert data["store"]["size_bytes"] > 0
     assert data["store"]["db_path"].endswith(".db")
+
+
+def test_fresh_health_card_does_not_create_or_crash(tmp_path):
+    from mnemos.simple_runtime import format_health_card
+
+    runtime = _runtime(tmp_path)
+    db_path = runtime.db_path
+    try:
+        data = runtime.health()
+        card = format_health_card(data)
+    finally:
+        runtime.close()
+
+    assert "not created yet" in card
+    assert str(db_path) in card
+    assert not db_path.exists()
 
 
 def test_health_card_renders_expected_lines(tmp_path):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from ..dream_journal import DREAM_JOURNAL_TAG
@@ -55,8 +56,14 @@ def build_context_packet(
         project_scope=project_scope,
         limit=max_functional,
     )
-    # Fetch extra so dropping dream-journal notes still leaves a full section.
-    hypomnema = store.search_hypomnema(
+    handoff = store.get_latest_handoff(
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+    )
+    # Fetch extra so dedicated handoff and maintenance sections still leave a
+    # full ordinary continuity section.
+    all_hypomnema = store.search_hypomnema(
         query,
         agent_id=agent_id,
         person_id=person_id,
@@ -67,9 +74,15 @@ def build_context_packet(
     # that belong together"), not continuity about the human or the work.
     # runtime.context() renders them in their own section and excludes them
     # here; this path was showing them as ordinary continuity notes.
+    maintenance_reports = [
+        entry for entry in all_hypomnema
+        if entry.get("entry_kind") == "maintenance_report"
+        or DREAM_JOURNAL_TAG in (entry.get("tags") or [])
+    ][:3]
     hypomnema = [
-        entry for entry in hypomnema
-        if DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
+        entry for entry in all_hypomnema
+        if entry.get("entry_kind") not in {"handoff", "maintenance_report"}
+        and DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
     ][:max_hypomnema]
     review_functional = store.load_functional_memories(
         "",
@@ -129,6 +142,19 @@ def build_context_packet(
             # A packet must never fail because of the reflection queue.
             reflections = []
 
+    if mark_surfaced and handoff:
+        store.mark_handoff_surfaced(
+            handoff["id"],
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope=project_scope,
+        )
+    if mark_surfaced and (handoff or hypomnema):
+        store.set_meta(
+            f"simple:{agent_id}:{person_id}:{project_scope}:last_context_delivery_at",
+            datetime.now(timezone.utc).isoformat(),
+        )
+
     stats = store.get_stats(agent_id)
     packet: dict[str, Any] = {
         "include_engrams": include_engrams,
@@ -143,7 +169,9 @@ def build_context_packet(
         "identity": _serialize_identity(identity),
         "beliefs": [_serialize_belief(b) for b in beliefs[:8]],
         "functional_memory": functional,
+        "handoff": handoff,
         "hypomnema": hypomnema,
+        "maintenance_reports": maintenance_reports,
         "mnemos_engrams": engrams,
         "reflections": reflections,
         "review_queue": {
@@ -159,22 +187,52 @@ def build_context_packet(
 
 def format_context_packet(packet: dict[str, Any], *, token_budget: int = 3000) -> str:
     """Format a context packet as an agent-readable prompt section."""
-    sections = [
+    leading = [
         "## Mnemos Context Packet",
+        _format_handoff(packet),
+    ]
+    sections = [
         _format_scope(packet),
         _format_operating_instructions(),
         _format_identity(packet),
         _format_functional(packet),
         _format_hypomnema(packet),
+        _format_maintenance_reports(packet),
         _format_engrams(packet),
         _format_reflections(packet),
         _format_review(packet),
     ]
-    text = "\n\n".join(section for section in sections if section.strip())
+    leading_text = "\n\n".join(section for section in leading if section.strip())
+    remainder = "\n\n".join(section for section in sections if section.strip())
+    text = "\n\n".join(part for part in (leading_text, remainder) if part)
     max_chars = max(800, token_budget * _CHARS_PER_TOKEN)
     if len(text) <= max_chars:
         return text
+    # The handoff is the one piece that must survive verbatim. It is placed
+    # first and never cut; the budget applies to everything after it.
+    if packet.get("handoff"):
+        available = max_chars - len(leading_text) - 82
+        if available <= 0:
+            return leading_text
+        return (
+            leading_text
+            + "\n\n"
+            + remainder[:available].rstrip()
+            + "\n\n[context packet truncated to token budget]"
+        )
     return text[: max_chars - 80].rstrip() + "\n\n[context packet truncated to token budget]"
+
+
+def _format_handoff(packet: dict[str, Any]) -> str:
+    handoff = packet.get("handoff")
+    if not handoff:
+        return ""
+    return (
+        "### From your previous session, in your own words.\n"
+        f"Saved {_age_text(handoff.get('created_at'))}:\n"
+        f"{handoff['content']}\n\n"
+        "Continue naturally from this. Do not announce Mnemos or the memory system."
+    )
 
 
 def _format_scope(packet: dict[str, Any]) -> str:
@@ -272,6 +330,37 @@ def _format_hypomnema(packet: dict[str, Any]) -> str:
             f"salience {float(entry['salience']):.2f}]"
         )
     return "\n".join(lines)
+
+
+def _format_maintenance_reports(packet: dict[str, Any]) -> str:
+    entries = packet.get("maintenance_reports") or []
+    if not entries:
+        return ""
+    lines = ["### System-Generated Maintenance"]
+    for entry in entries:
+        lines.append(f"- Mnemos mechanically recorded: {_clip(entry['content'])}")
+    lines.append("This is system-generated material, not the agent's own words.")
+    return "\n".join(lines)
+
+
+def _age_text(timestamp: str | None) -> str:
+    try:
+        moment = datetime.fromisoformat(timestamp or "")
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        seconds = max(0, int((datetime.now(timezone.utc) - moment).total_seconds()))
+    except (TypeError, ValueError):
+        return "at an unknown time"
+    if seconds < 60:
+        return "just now"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    days = hours // 24
+    return f"{days} day{'s' if days != 1 else ''} ago"
 
 
 def _format_engrams(packet: dict[str, Any]) -> str:

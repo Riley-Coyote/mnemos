@@ -338,7 +338,8 @@ class TestHookInstaller:
         assert handler["statusMessage"] == "Loading Mnemos continuity"
         assert handler["additionalContextLimit"] == 8000
         assert "memory with spaces.db'" in handler["command"]
-        assert '"memory with spaces.db"' in handler["commandWindows"]
+        assert '--db-path "' in handler["commandWindows"]
+        assert handler["commandWindows"].endswith('memory with spaces.db"')
         assert "/hooks" in capsys.readouterr().out
 
     def test_codex_refuses_invalid_json(self, tmp_path, monkeypatch):

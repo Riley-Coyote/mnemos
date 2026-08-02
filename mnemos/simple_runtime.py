@@ -8,8 +8,10 @@ operations, including agent-written handoff and reflection.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -39,6 +41,20 @@ SIMPLE_TOOL_NAMES = (
     "mnemos_introduce",
     "mnemos_health",
 )
+
+HOST_MUTATION_PROTOCOL_VERSION = 1
+HOST_MUTATION_OPERATIONS = frozenset({
+    "capture",
+    "correct",
+    "maintain",
+    "reflect",
+    "introduce",
+})
+_MAX_HOST_MUTATION_REQUEST_BYTES = 1024 * 1024
+
+
+class HostMutationConflictError(ValueError):
+    """An idempotency key was reused for a different mutation request."""
 
 
 _ONBOARDING_RITUAL = """\
@@ -215,6 +231,7 @@ class MnemosRuntime:
         self._session_id: int | None = None
         self.last_dream_note_id: str | None = None
         self.last_dream_narrative: str | None = None
+        self._host_mutation_active = False
 
     @property
     def db_path(self) -> Path:
@@ -251,6 +268,146 @@ class MnemosRuntime:
         self._retriever = None
         self._embedding_index = None
         self._llm_client = None
+
+    def execute_host_mutation(
+        self,
+        operation: str,
+        arguments: Mapping[str, Any],
+        *,
+        host_namespace: str,
+        idempotency_key: str,
+        protocol_version: int = HOST_MUTATION_PROTOCOL_VERSION,
+    ) -> dict[str, Any]:
+        """Execute one durable host request with exactly-once Core effects.
+
+        The idempotency claim, all Core SQLite writes, and the serialized
+        result commit in one transaction. A retry with the same namespace/key
+        returns the original result. Reusing that key for different operation,
+        arguments, protocol, or runtime scope fails closed.
+
+        Embeddings are deliberately outside this guarantee: they are a
+        rebuildable retrieval cache stored through a separate connection.
+        Host mutations temporarily suppress embedding writes so they cannot
+        break or delay the atomic Core transaction.
+        """
+
+        if protocol_version != HOST_MUTATION_PROTOCOL_VERSION:
+            raise ValueError(
+                "Unsupported host mutation protocol version: "
+                f"{protocol_version}; expected {HOST_MUTATION_PROTOCOL_VERSION}"
+            )
+        operation = (operation or "").strip().lower()
+        if operation not in HOST_MUTATION_OPERATIONS:
+            supported = ", ".join(sorted(HOST_MUTATION_OPERATIONS))
+            raise ValueError(f"Unsupported host mutation operation: {operation!r}; {supported}")
+        namespace = (host_namespace or "").strip()
+        key = (idempotency_key or "").strip()
+        if not namespace or len(namespace) > 128:
+            raise ValueError("host_namespace must contain 1-128 characters")
+        if not key or len(key) > 256:
+            raise ValueError("idempotency_key must contain 1-256 characters")
+        if not isinstance(arguments, Mapping):
+            raise TypeError("arguments must be a mapping")
+
+        scope = {
+            "agent_id": self.scope.agent_id,
+            "person_id": self.scope.person_id,
+            "project_scope": self.scope.project_scope,
+        }
+        request = {
+            "protocol_version": protocol_version,
+            "operation": operation,
+            "scope": scope,
+            "arguments": dict(arguments),
+        }
+        try:
+            request_json = json.dumps(
+                request, ensure_ascii=True, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("host mutation arguments must be finite JSON values") from exc
+        if len(request_json.encode("utf-8")) > _MAX_HOST_MUTATION_REQUEST_BYTES:
+            raise ValueError("host mutation request exceeds 1 MiB")
+        request_sha256 = hashlib.sha256(request_json.encode("utf-8")).hexdigest()
+        scope_json = json.dumps(scope, sort_keys=True, separators=(",", ":"))
+
+        self._ensure_init()
+        assert self._store is not None
+        assert self._encoder is not None
+
+        # The embedding table shares the database file through another SQLite
+        # connection. It is a rebuildable cache, not canonical memory state.
+        encoder_embedding = self._encoder._embedding_index
+        runtime_embedding = self._embedding_index
+        runtime_state = (
+            self._session_id,
+            self._agent_model_hint,
+            self._llm_client,
+            self.last_dream_note_id,
+            self.last_dream_narrative,
+        )
+        self._encoder._embedding_index = None
+        self._embedding_index = None
+        prior_host_mutation_active = self._host_mutation_active
+        self._host_mutation_active = True
+        try:
+            with self._store.transaction():
+                prior = self._store.get_host_mutation(namespace, key)
+                if prior is not None:
+                    if prior["request_sha256"] != request_sha256:
+                        raise HostMutationConflictError(
+                            "idempotency key already belongs to a different request"
+                        )
+                    if not prior.get("completed_at") or prior.get("result_json") is None:
+                        raise RuntimeError("incomplete host mutation ledger row")
+                    result = json.loads(prior["result_json"])
+                    replayed = True
+                else:
+                    self._store.begin_host_mutation(
+                        host_namespace=namespace,
+                        idempotency_key=key,
+                        protocol_version=protocol_version,
+                        operation=operation,
+                        scope_json=scope_json,
+                        request_sha256=request_sha256,
+                    )
+                    handler = getattr(self, operation)
+                    result = handler(**dict(arguments))
+                    result_json = json.dumps(
+                        result, ensure_ascii=True, sort_keys=True,
+                        separators=(",", ":"), allow_nan=False,
+                    )
+                    if len(result_json.encode("utf-8")) > _MAX_HOST_MUTATION_REQUEST_BYTES:
+                        raise ValueError("host mutation result exceeds 1 MiB")
+                    self._store.complete_host_mutation(
+                        host_namespace=namespace,
+                        idempotency_key=key,
+                        result_json=result_json,
+                    )
+                    replayed = False
+        except Exception:
+            (
+                self._session_id,
+                self._agent_model_hint,
+                self._llm_client,
+                self.last_dream_note_id,
+                self.last_dream_narrative,
+            ) = runtime_state
+            self._encoder._llm_client = self._llm_client
+            raise
+        finally:
+            self._host_mutation_active = prior_host_mutation_active
+            self._encoder._embedding_index = encoder_embedding
+            self._embedding_index = runtime_embedding
+
+        return {
+            "protocol_version": protocol_version,
+            "operation": operation,
+            "idempotency_key": key,
+            "replayed": replayed,
+            "result": result,
+        }
 
     def _ensure_init(self) -> None:
         if self._store is not None:
@@ -467,7 +624,7 @@ class MnemosRuntime:
                 (engram_id, self.scope.agent_id, self.scope.person_id,
                  self.scope.project_scope),
             )
-            self._store._get_conn().commit()
+            self._store._commit()
             if self._store.enqueue_reflection(
                 "lesson",
                 engram_id,
@@ -882,6 +1039,8 @@ class MnemosRuntime:
                 project_scope=self.scope.project_scope,
             )
         except Exception:
+            if self._host_mutation_active:
+                raise
             # The impact write already succeeded. Losing the note update is
             # worth reporting as a partial success, never as a failed
             # reflection the agent might retype.
@@ -1095,8 +1254,21 @@ class MnemosRuntime:
         if name:
             self._set_meta("agent_name", name)
 
-        self.close()
-        self._ensure_init()
+        # Keep this runtime and any outer host transaction alive. Reopening the
+        # store here used to split introduction into multiple transactions.
+        self._agent_model_hint = model
+        try:
+            from .llm import create_client
+
+            self._llm_client = (
+                create_client(agent_model_hint=model)
+                if self._use_dedicated_model and _dedicated_model_requested()
+                else None
+            )
+        except Exception:
+            self._llm_client = None
+        if self._encoder is not None:
+            self._encoder._llm_client = self._llm_client
 
         lines = [
             "Introduction recorded.",
@@ -1793,6 +1965,10 @@ class MnemosRuntime:
             project_scope=self.scope.project_scope,
             respect_gate=auto,
         )
+        pass_errors = [key for key in stats if key.endswith("_error")]
+        if self._host_mutation_active and pass_errors:
+            summary = ", ".join(f"{key}={stats[key]}" for key in pass_errors)
+            raise RuntimeError(f"host maintenance failed: {summary}")
         if stats.get("skipped"):
             return "\n".join([
                 f"Requested: {'deep' if requested_deep else 'standard'}",
@@ -1815,7 +1991,8 @@ class MnemosRuntime:
             self._enqueue_belief_reflections(limit=1)
             self._enqueue_contradiction_reflections(limit=1)
         except Exception:
-            pass
+            if self._host_mutation_active:
+                raise
 
         # Dream journal: narrate the cycle when it did meaningful work. The
         # import stays local so a journal failure can never break maintenance.
@@ -1839,6 +2016,8 @@ class MnemosRuntime:
                 self._set_meta("dream_last_written_at", datetime.now(timezone.utc).isoformat())
                 dream_status = "updated"
         except Exception:
+            if self._host_mutation_active:
+                raise
             dream_status = "skipped (write failed)"
 
         if can_run_deep:

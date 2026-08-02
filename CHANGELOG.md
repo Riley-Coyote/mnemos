@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.1 (unreleased)
+
+Host adapters can now execute durable Core mutations through a versioned,
+host-neutral exactly-once contract. An idempotency claim, every canonical
+SQLite effect, and the serialized result commit atomically; a retry returns the
+original result, while reuse of a key for a different request fails closed.
+
+- Adds `MnemosRuntime.execute_host_mutation()` protocol v1 for `capture`,
+  `correct`, `maintain`, `reflect`, and `introduce`.
+- Adds the schema-v8 `host_mutations` replay ledger without changing the v7
+  handoff model or migration behavior.
+- Makes store commits transaction-aware so multi-table Core operations roll
+  back completely after exceptions or process interruption.
+- Treats embeddings as a rebuildable cache outside the canonical transaction;
+  host mutation execution suppresses embedding writes until the transaction is
+  complete.
+- Adds replay, conflict, concurrent-delivery, upgrade, and failure-injection
+  coverage, including crashes after each multi-table capture stage.
+
 ## 0.3.0 (2026-08-01)
 
 Agent-written session handoffs. The agent can now leave one exact, private note

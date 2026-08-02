@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mnemos-continuity"
-version = "0.3.0"
+version = "0.3.1"
 description = "Local-first continuity memory for AI agents"
 readme = "README.md"
 license = "MIT"

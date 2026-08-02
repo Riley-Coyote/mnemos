@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,7 @@ from ..core.identity import AgentIdentity
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -361,11 +362,28 @@ CREATE TABLE IF NOT EXISTS reflection_queue (
     answer TEXT
 );
 
+-- Host mutation replay ledger. The row is committed in the same SQLite
+-- transaction as the Core mutation it describes, so a host can safely retry
+-- after a timeout or process crash without applying the mutation twice.
+CREATE TABLE IF NOT EXISTS host_mutations (
+    host_namespace TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    protocol_version INTEGER NOT NULL,
+    operation TEXT NOT NULL,
+    scope_json TEXT NOT NULL,
+    request_sha256 TEXT NOT NULL,
+    result_json TEXT,
+    completed_at TEXT,
+    PRIMARY KEY (host_namespace, idempotency_key)
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_reflection_unique
     ON reflection_queue(agent_id, person_id, project_scope, kind, target_id);
 CREATE INDEX IF NOT EXISTS idx_reflection_pending
     ON reflection_queue(agent_id, person_id, project_scope, surfaced_count, created_at)
     WHERE answered_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_host_mutations_completed
+    ON host_mutations(completed_at DESC);
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS meta (
@@ -481,6 +499,7 @@ class EngramStore:
             owned_directory = str(self.db_path.parent).startswith(str(private_root))
         secure_directory(self.db_path.parent, force=owned_directory)
         self._conn: sqlite3.Connection | None = None
+        self._transaction_depth = 0
         self._init_db()
 
     def _secure_sqlite_files(self) -> None:
@@ -509,7 +528,7 @@ class EngramStore:
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
             ("schema_version", str(SCHEMA_VERSION)),
         )
-        conn.commit()
+        self._commit()
         integrity = [
             row[0] for row in conn.execute("PRAGMA integrity_check").fetchall()
         ]
@@ -650,6 +669,7 @@ class EngramStore:
                 check_same_thread=False,
             )
             self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
@@ -667,6 +687,117 @@ class EngramStore:
             self._conn.close()
             self._conn = None
         self._secure_sqlite_files()
+
+    @contextmanager
+    def transaction(self):
+        """Run all nested store writes in one immediate SQLite transaction.
+
+        Store methods historically committed their own small transactions.
+        While this context is active those commits are deferred to the outer
+        boundary. This is what lets a host mutation and its replay-ledger row
+        become durable together.
+        """
+
+        conn = self._get_conn()
+        outermost = self._transaction_depth == 0
+        if outermost:
+            self._begin_immediate()
+        self._transaction_depth += 1
+        try:
+            yield conn
+        except Exception:
+            self._transaction_depth -= 1
+            if outermost:
+                self._rollback()
+            raise
+        else:
+            self._transaction_depth -= 1
+            if outermost:
+                try:
+                    self._commit()
+                except Exception:
+                    self._rollback()
+                    raise
+
+    def _begin_immediate(self) -> None:
+        """Begin a method-local transaction unless one is already managed."""
+
+        if self._transaction_depth == 0:
+            self._get_conn().execute("BEGIN IMMEDIATE")
+
+    def _commit(self) -> None:
+        """Commit a method-local transaction, or defer to the managed one."""
+
+        if self._transaction_depth == 0:
+            self._get_conn().commit()
+
+    def _rollback(self) -> None:
+        """Roll back a method-local transaction, or let the outer owner do it."""
+
+        if self._transaction_depth == 0:
+            self._get_conn().rollback()
+
+    def get_host_mutation(
+        self, host_namespace: str, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        """Return one host replay-ledger row without changing it."""
+
+        row = self._get_conn().execute(
+            """SELECT * FROM host_mutations
+               WHERE host_namespace = ? AND idempotency_key = ?""",
+            (host_namespace, idempotency_key),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def begin_host_mutation(
+        self,
+        *,
+        host_namespace: str,
+        idempotency_key: str,
+        protocol_version: int,
+        operation: str,
+        scope_json: str,
+        request_sha256: str,
+    ) -> None:
+        """Claim an idempotency key inside the caller-owned transaction."""
+
+        if self._transaction_depth == 0:
+            raise RuntimeError("host mutation claims require a managed transaction")
+        self._get_conn().execute(
+            """INSERT INTO host_mutations(
+                   host_namespace, idempotency_key, protocol_version, operation,
+                   scope_json, request_sha256, result_json, completed_at
+               ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)""",
+            (
+                host_namespace,
+                idempotency_key,
+                protocol_version,
+                operation,
+                scope_json,
+                request_sha256,
+            ),
+        )
+
+    def complete_host_mutation(
+        self,
+        *,
+        host_namespace: str,
+        idempotency_key: str,
+        result_json: str,
+    ) -> None:
+        """Store a host result in the same transaction as its Core effects."""
+
+        if self._transaction_depth == 0:
+            raise RuntimeError("host mutation completion requires a managed transaction")
+        cursor = self._get_conn().execute(
+            """UPDATE host_mutations
+               SET result_json = ?, completed_at = ?
+               WHERE host_namespace = ? AND idempotency_key = ?
+                 AND completed_at IS NULL""",
+            (result_json, _utc_now(), host_namespace, idempotency_key),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("host mutation claim was not active")
 
     # ── Engram CRUD ──
 
@@ -686,7 +817,7 @@ class EngramStore:
         updates = ", ".join(f"{k}=excluded.{k}" for k in safe_data if k != "id")
 
         try:
-            conn.execute("BEGIN IMMEDIATE")
+            self._begin_immediate()
 
             conn.execute(
                 f"INSERT INTO engrams ({columns}) VALUES ({placeholders}) "
@@ -709,9 +840,9 @@ class EngramStore:
             for version in engram.versions:
                 self._save_version_no_commit(conn, engram.id, version)
 
-            conn.commit()
+            self._commit()
         except Exception:
-            conn.rollback()
+            self._rollback()
             raise
 
     def engram_visible_in_scope(
@@ -815,7 +946,7 @@ class EngramStore:
             (engram_id, engram_id),
         )
         conn.execute("DELETE FROM versions WHERE engram_id = ?", (engram_id,))
-        conn.commit()
+        self._commit()
 
     def count_engrams(self, agent_id: str | None = "default", state: str = "active") -> int:
         """Count engrams for an agent in a given state.
@@ -864,7 +995,7 @@ class EngramStore:
         """Save a typed connection (with auto-commit)."""
         conn = self._get_conn()
         self._save_connection_no_commit(conn, source_id, conn_obj)
-        conn.commit()
+        self._commit()
 
     def _save_connection_no_commit(
         self, conn: sqlite3.Connection, source_id: str, conn_obj: Connection
@@ -915,7 +1046,7 @@ class EngramStore:
                 connection.target_id,
             ),
         )
-        self._conn.commit()
+        self._commit()
 
     def remove_connection(self, source_id: str, target_id: str) -> None:
         """Remove a connection between two engrams."""
@@ -923,7 +1054,7 @@ class EngramStore:
             "DELETE FROM connections WHERE source_id = ? AND target_id = ?",
             (source_id, target_id),
         )
-        self._conn.commit()
+        self._commit()
 
     def get_recent_engrams(
         self,
@@ -1000,7 +1131,7 @@ class EngramStore:
         """Save a version snapshot (with auto-commit)."""
         conn = self._get_conn()
         self._save_version_no_commit(conn, engram_id, version)
-        conn.commit()
+        self._commit()
 
     def _save_version_no_commit(
         self, conn: sqlite3.Connection, engram_id: str, version: VersionRef
@@ -1062,7 +1193,7 @@ class EngramStore:
             "DELETE FROM reflection_queue WHERE target_id = ? AND answered_at IS NULL",
             (engram.id,),
         )
-        conn.commit()
+        self._commit()
 
     def search_archive(self, query: str, limit: int = 20) -> list[dict]:
         """Search archived engrams by content (for resharpen)."""
@@ -1092,7 +1223,7 @@ class EngramStore:
             f"ON CONFLICT(id) DO UPDATE SET {updates}",
             list(safe_data.values()),
         )
-        conn.commit()
+        self._commit()
 
     def get_beliefs(
         self,
@@ -1204,7 +1335,7 @@ class EngramStore:
                 now,
             ),
         )
-        conn.commit()
+        self._commit()
         session = self.get_memory_session(sid)
         if session is None:
             raise RuntimeError(f"Failed to start memory session: {sid}")
@@ -1238,7 +1369,7 @@ class EngramStore:
             """,
             (status, now, closed_at, session_id),
         )
-        conn.commit()
+        self._commit()
         return self.get_memory_session(session_id)
 
     def write_functional_memory(
@@ -1333,7 +1464,7 @@ class EngramStore:
                 "UPDATE memory_sessions SET updated_at = ? WHERE id = ?",
                 (now, session),
             )
-        conn.commit()
+        self._commit()
         row = conn.execute(
             "SELECT * FROM functional_memories WHERE id = ?",
             (fid,),
@@ -1499,7 +1630,7 @@ class EngramStore:
             """,
             (now, now, session_id),
         )
-        conn.commit()
+        self._commit()
         return {
             "session": self.get_memory_session(session_id),
             "hypomnema_id": hypomnema_id,
@@ -1639,7 +1770,7 @@ class EngramStore:
                 now,
             ),
         )
-        conn.commit()
+        self._commit()
         return entry_id
 
     def write_handoff(
@@ -1660,7 +1791,7 @@ class EngramStore:
         new_id = _new_id()
         now = _utc_now()
         try:
-            conn.execute("BEGIN IMMEDIATE")
+            self._begin_immediate()
             prior = conn.execute(
                 """
                 SELECT * FROM hypomnema_entries
@@ -1717,9 +1848,9 @@ class EngramStore:
                     "UPDATE hypomnema_entries SET superseded_by = ? WHERE id = ?",
                     (new_id, prior["id"]),
                 )
-            conn.commit()
+            self._commit()
         except Exception:
-            conn.rollback()
+            self._rollback()
             raise
         return new_id
 
@@ -1765,7 +1896,7 @@ class EngramStore:
             """,
             (_utc_now(), handoff_id, agent_id, person_id, project_scope),
         )
-        self._get_conn().commit()
+        self._commit()
         return cursor.rowcount == 1
 
     def get_hypomnema_entry(
@@ -1996,7 +2127,7 @@ class EngramStore:
                 entry_id,
             ),
         )
-        conn.commit()
+        self._commit()
         return entry_id
 
     def supersede_hypomnema_entry(
@@ -2061,7 +2192,7 @@ class EngramStore:
             """,
             (new_id, _encode_json(revisions), now, entry_id),
         )
-        conn.commit()
+        self._commit()
         return new_id
 
     def archive_hypomnema_entry(
@@ -2108,7 +2239,7 @@ class EngramStore:
             """,
             (_encode_json(revisions), now, entry_id),
         )
-        conn.commit()
+        self._commit()
         return entry_id
 
     def mark_hypomnema_promoted(self, entry_id: str, engram_id: str) -> None:
@@ -2118,7 +2249,7 @@ class EngramStore:
             "UPDATE hypomnema_entries SET graduated_to_engram_id = ? WHERE id = ?",
             (engram_id, entry_id),
         )
-        conn.commit()
+        self._commit()
 
     def get_hypomnema_promotion_candidates(
         self,
@@ -2228,7 +2359,7 @@ class EngramStore:
                 state.timestamp,
             ),
         )
-        conn.commit()
+        self._commit()
 
     def get_latest_emotional_state(
         self, agent_id: str = "default"
@@ -2292,13 +2423,13 @@ class EngramStore:
                 (entry_id, agent_id, person_id, project_scope, kind, target_id,
                  prompt, now.isoformat(), expires),
             )
-            conn.commit()
+            self._commit()
         except sqlite3.IntegrityError:
             # Already asked. The failed INSERT leaves an open transaction, so
             # it must be rolled back — otherwise the next write on this
             # connection dies with "cannot start a transaction within a
             # transaction", far from the cause.
-            conn.rollback()
+            self._rollback()
             return None
         return entry_id
 
@@ -2368,7 +2499,7 @@ class EngramStore:
               AND target_id NOT IN (SELECT id FROM engrams WHERE state != 'archived')
             """
         )
-        conn.commit()
+        self._commit()
         return cur.rowcount or 0
 
     def mark_reflections_surfaced(self, ids: list[str]) -> None:
@@ -2380,7 +2511,7 @@ class EngramStore:
             "UPDATE reflection_queue SET surfaced_count = surfaced_count + 1 WHERE id = ?",
             [(i,) for i in ids],
         )
-        conn.commit()
+        self._commit()
 
     def answer_reflection(
         self,
@@ -2408,7 +2539,7 @@ class EngramStore:
             "UPDATE reflection_queue SET answered_at = ?, answer = ? WHERE id = ?",
             (datetime.now(timezone.utc).isoformat(), answer, row["id"]),
         )
-        conn.commit()
+        self._commit()
         return dict(row)
 
     def reflection_stats(
@@ -2457,7 +2588,7 @@ class EngramStore:
             f"ON CONFLICT(agent_id) DO UPDATE SET {updates}",
             list(data.values()),
         )
-        conn.commit()
+        self._commit()
 
     @classmethod
     def _validate_identity_invariants(cls, old: Any, new: Any, path: str = "invariants") -> None:
@@ -2504,7 +2635,7 @@ class EngramStore:
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
             (key, value),
         )
-        conn.commit()
+        self._commit()
 
     # ── Consolidation Log ──
 
@@ -2528,7 +2659,7 @@ class EngramStore:
             (log_id, agent_id, person_id, project_scope, pass_name, started_at,
              completed_at, json.dumps(stats or {})),
         )
-        conn.commit()
+        self._commit()
 
     def get_consolidation_runs(
         self, pass_name: str, limit: int = 5, *, agent_id: str | None = None,

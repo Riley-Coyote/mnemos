@@ -51,6 +51,12 @@ from .retrieval.reactive import ReactiveRetriever
 from .consolidation.daemon import ConsolidationDaemon
 from .bridge import MnemosBridge
 from .config.loader import load_config, save_config
+from .simple_runtime import (
+    HOST_MUTATION_OPERATIONS,
+    HOST_MUTATION_PROTOCOL_VERSION,
+    HostMutationConflictError,
+    MnemosRuntime,
+)
 
 __all__ = [
     "EngramStore",
@@ -60,4 +66,8 @@ __all__ = [
     "MnemosBridge",
     "load_config",
     "save_config",
+    "HOST_MUTATION_OPERATIONS",
+    "HOST_MUTATION_PROTOCOL_VERSION",
+    "HostMutationConflictError",
+    "MnemosRuntime",
 ]

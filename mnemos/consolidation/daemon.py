@@ -266,8 +266,11 @@ class ConsolidationDaemon:
                 person_id=person_id,
                 project_scope=project_scope,
             )
-        except Exception:
-            pass  # Don't fail the cycle over a logging error
+        except Exception as exc:
+            # Ordinary maintenance remains best-effort. The host mutation
+            # envelope recognizes *_error keys and rolls its entire durable
+            # operation back instead of committing an unlogged partial cycle.
+            stats["consolidation_log_error"] = str(exc)
 
         return stats
 

@@ -629,6 +629,8 @@ See [docs/identity-model.md](docs/identity-model.md) for the identity stance
 See [docs/privacy-security.md](docs/privacy-security.md) for local-first
 privacy boundaries and [docs/release-hardening.md](docs/release-hardening.md)
 for release gates.
+Host integrations that need replay-safe durable writes should use the
+[host mutation protocol](docs/host-mutation-protocol.md).
 
 ---
 

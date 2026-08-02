@@ -258,7 +258,9 @@ def test_v6_migration_backs_up_and_classifies_without_rewriting(tmp_path):
     finally:
         migrated.close()
 
-    backups = list((tmp_path / "backups").glob("legacy.pre-v7-*.db"))
+    backups = list(
+        (tmp_path / "backups").glob(f"legacy.pre-v{SCHEMA_VERSION}-*.db")
+    )
     assert len(backups) == 1
     backup_conn = sqlite3.connect(backups[0])
     try:

@@ -52,7 +52,8 @@ Use this checklist before publishing Mnemos or opening a release PR.
 - Handoff text survives restart, supersession, correction, backup/restore, and
   startup injection exactly as written.
 - Concurrent handoff writers leave exactly one active row per scope.
-- Legacy migrations create a verified pre-v7 backup and never guess authorship.
+- Legacy migrations create a verified pre-current-schema backup and never
+  guess authorship.
 
 ## Verification Commands
 

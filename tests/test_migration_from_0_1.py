@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from mnemos.interface.context_packet import build_context_packet
-from mnemos.store.sqlite_store import EngramStore
+from mnemos.store.sqlite_store import EngramStore, SCHEMA_VERSION
 
 # A plausible early engrams table: the fundamentals only, none of the columns
 # added across 0.1 -> 0.2. This is what the reconciler must bring current.
@@ -84,7 +84,11 @@ class TestAnOldStoreUpgradesOnOpen:
     def test_upgrade_creates_a_verified_pre_migration_backup(self, old_store_path):
         store = EngramStore(old_store_path)
         store.close()
-        backups = list((Path(old_store_path).parent / "backups").glob("*.pre-v7-*.db"))
+        backups = list(
+            (Path(old_store_path).parent / "backups").glob(
+                f"*.pre-v{SCHEMA_VERSION}-*.db"
+            )
+        )
         assert len(backups) == 1
         from mnemos.backup import check_database
         assert check_database(backups[0])["integrity"] == "ok"

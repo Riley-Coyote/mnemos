@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
 
-from mnemos.backup import create_backup, restore_backup
+from mnemos.backup import check_database, create_backup, restore_backup
 from mnemos.dream_journal import write_dream_entry
 from mnemos.interface.context_packet import build_context_packet
 from mnemos.simple_runtime import MnemosRuntime
@@ -210,6 +210,46 @@ def test_health_reports_handoff_delivery_and_authorship(tmp_path):
         assert after["handoff"]["last_surfaced_at"] is not None
     finally:
         runtime.close()
+
+
+def test_concurrent_openers_leave_one_migration_backup(tmp_path):
+    """Several processes opening the same old store must not each copy it.
+
+    The real failure looked like five identical 146 MB files stamped three
+    seconds apart: every opener reached the backup step while the file was
+    still at the old version, so none of them saw the others' work.
+    """
+
+    db_path = tmp_path / "legacy.db"
+    store = EngramStore(db_path)
+    try:
+        store.write_hypomnema_entry("Something worth keeping.", **SCOPE)
+    finally:
+        store.close()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("UPDATE meta SET value='6' WHERE key='schema_version'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Stand in for concurrent openers: each still sees the pre-migration
+    # version, because none of them has committed a migration yet.
+    opener = EngramStore.__new__(EngramStore)
+    opener.db_path = db_path
+    for _ in range(5):
+        conn = sqlite3.connect(db_path)
+        try:
+            opener._backup_before_migration(conn)
+        finally:
+            conn.close()
+
+    backups = list(
+        (tmp_path / "backups").glob(f"legacy.pre-v{SCHEMA_VERSION}-*.db")
+    )
+    assert len(backups) == 1
+    assert check_database(backups[0])["schema_version"] == "6"
 
 
 def test_v6_migration_backs_up_and_classifies_without_rewriting(tmp_path):

@@ -2,6 +2,36 @@
 
 ## 0.3.1 (unreleased)
 
+### Signed notes
+
+One scope is often shared by several models. The same `claude-code` store is
+written by whichever model the human is running that day, and every handoff
+used to arrive as "From your previous session, in your own words", so each new
+model inherited the previous one's first person and carried on as if it had
+done that work. Every note is now signed with the model that wrote it.
+
+- Schema v9 adds `hypomnema_entries.author_model`. It is added in place on open
+  with one verified pre-migration backup; existing notes stay unsigned, and
+  nothing is backfilled or guessed.
+- Signatures come from `MNEMOS_AGENT_MODEL`, then `mnemos_introduce` in the
+  current session, then the harness. Claude Code is detected from the session
+  transcript (`CLAUDE_CODE_SESSION_ID`), reading only the tail of the file for
+  the latest assistant turn's model id. Otherwise the note is unsigned.
+- `mnemos_introduce` now signs the introducing session only. It used to be
+  stored once per scope, so the last model to introduce itself stood for all.
+- The handoff heading names its author: "Left by Fable 5.1 (claude-fable-5-1),
+  18 hours ago." When the reader is known (a `model` field in the SessionStart
+  payload, or detection in `mnemos_context`), the packet says whether it is the
+  same model. An unsigned handoff says so and asks the reader not to assume it
+  wrote it.
+- Continuity notes show `by <model>`, `unsigned`, `co-formed`, or `Mnemos`.
+  When a scope has notes from more than one model, the identity section says
+  it is shared.
+- Corrections re-sign the corrected note and record the prior signer. A
+  reflection keeps the note's signature and names its own author inline.
+- `mnemos_capture` and `mnemos_handoff` answer with the signature they wrote,
+  or with how to sign when they could not tell.
+
 Host adapters can now execute durable Core mutations through a versioned,
 host-neutral exactly-once contract. An idempotency claim, every canonical
 SQLite effect, and the serialized result commit atomically; a retry returns the

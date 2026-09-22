@@ -29,7 +29,7 @@ from ..core.identity import AgentIdentity
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -133,6 +133,7 @@ _RECONCILABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
             "DEFAULT 'unknown'",
         ),
         ("author_id", "author_id TEXT NOT NULL DEFAULT ''"),
+        ("author_model", "author_model TEXT NOT NULL DEFAULT ''"),
         ("last_surfaced_at", "last_surfaced_at TEXT"),
         ("surface_count", "surface_count INTEGER NOT NULL DEFAULT 0"),
     ],
@@ -224,6 +225,7 @@ CREATE TABLE IF NOT EXISTS hypomnema_entries (
     authored_by TEXT NOT NULL DEFAULT 'unknown'
         CHECK (authored_by IN ('agent', 'system', 'coauthored', 'unknown')),
     author_id TEXT NOT NULL DEFAULT '',
+    author_model TEXT NOT NULL DEFAULT '',
     source TEXT NOT NULL DEFAULT 'observed'
         CHECK (source IN ('observed', 'synthesized', 'co-formed')),
     density REAL NOT NULL DEFAULT 0.5,
@@ -1728,6 +1730,7 @@ class EngramStore:
         entry_kind: str = "continuity",
         authored_by: str | None = None,
         author_id: str = "",
+        author_model: str = "",
         density: float = 0.5,
         domain: str = "topical",
         tags: str | list[str] | tuple[str, ...] | None = None,
@@ -1741,6 +1744,12 @@ class EngramStore:
 
         Hypomnema is durable, relationship-scoped continuity that can be
         revised before it graduates into shared Mnemos engrams.
+
+        ``author_id`` is the agent scope that wrote the entry; ``author_model``
+        is the model that agent was running, when known. Several models can
+        share one scope, and the model is what tells a reader whether a note
+        is its own or a colleague's. Empty means unsigned, never unknown-but-
+        assumed.
         """
         if source not in VALID_HYPO_SOURCES:
             raise ValueError(f"Unsupported hypomnema source: {source}")
@@ -1762,11 +1771,11 @@ class EngramStore:
             """
             INSERT INTO hypomnema_entries(
                 id, agent_id, person_id, project_scope, content,
-                entry_kind, authored_by, author_id, source,
+                entry_kind, authored_by, author_id, author_model, source,
                 density, domain, tags_json, confidence, salience,
                 active, foundational, revision_count, revisions_json,
                 related_session_id, related_engram_id, created_at, last_revised_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, '[]', ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, '[]', ?, ?, ?, ?)
             """,
             (
                 entry_id,
@@ -1777,6 +1786,7 @@ class EngramStore:
                 entry_kind,
                 authored_by,
                 author_id.strip(),
+                (author_model or "").strip(),
                 source,
                 _clamp(density),
                 domain,
@@ -1801,8 +1811,13 @@ class EngramStore:
         person_id: str = "user",
         project_scope: str = "global",
         author_id: str = "",
+        author_model: str = "",
     ) -> str:
-        """Atomically replace the active handoff while preserving exact prose."""
+        """Atomically replace the active handoff while preserving exact prose.
+
+        ``author_model`` signs the handoff with the model that wrote it. The
+        next session may be a different model; the signature is how it knows.
+        """
 
         if not text.strip():
             raise ValueError("Handoff text cannot be empty")
@@ -1843,11 +1858,11 @@ class EngramStore:
                 """
                 INSERT INTO hypomnema_entries(
                     id, agent_id, person_id, project_scope, content,
-                    entry_kind, authored_by, author_id, source,
+                    entry_kind, authored_by, author_id, author_model, source,
                     density, domain, tags_json, confidence, salience,
                     active, foundational, revision_count, revisions_json,
                     created_at, last_revised_at, surface_count
-                ) VALUES (?, ?, ?, ?, ?, 'handoff', 'agent', ?, 'observed',
+                ) VALUES (?, ?, ?, ?, ?, 'handoff', 'agent', ?, ?, 'observed',
                           0.9, 'situational', ?, 1.0, 1.0,
                           1, 0, 0, '[]', ?, ?, 0)
                 """,
@@ -1858,6 +1873,7 @@ class EngramStore:
                     project_scope,
                     text,
                     (author_id or agent_id).strip(),
+                    (author_model or "").strip(),
                     _encode_json(["session-handoff", "continuity"]),
                     now,
                     now,
@@ -1896,6 +1912,26 @@ class EngramStore:
             sql, (agent_id, person_id, project_scope)
         ).fetchone()
         return self._hydrate_hypomnema_row(dict(row)) if row else None
+
+    def hypomnema_signers(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> list[str]:
+        """Distinct models that have signed active notes in this exact scope."""
+
+        rows = self._get_conn().execute(
+            """
+            SELECT DISTINCT author_model FROM hypomnema_entries
+            WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+              AND active = 1 AND author_model != ''
+            ORDER BY author_model
+            """,
+            (agent_id, person_id, project_scope),
+        ).fetchall()
+        return [row[0] for row in rows]
 
     def mark_handoff_surfaced(
         self,
@@ -2100,8 +2136,16 @@ class EngramStore:
         project_scope: str = "global",
         confidence: float | None = None,
         salience: float | None = None,
+        author_model: str | None = None,
+        revised_by: str = "",
     ) -> str:
-        """Revise an existing hypomnema entry while preserving the old version."""
+        """Revise an existing hypomnema entry while preserving the old version.
+
+        ``author_model`` re-signs the entry, for a revision that replaces its
+        words with the reviser's. Left as ``None`` the signature stays with
+        the original author — right for a revision that only adds to their
+        words. ``revised_by`` is recorded in the revision trail either way.
+        """
         if not new_content.strip():
             raise ValueError("Revised hypomnema content cannot be empty")
         if not reason.strip():
@@ -2120,19 +2164,24 @@ class EngramStore:
             raise KeyError(f"Hypomnema entry not found for scope: {entry_id}")
 
         revisions = _decode_json(row["revisions_json"], [])
-        revisions.append(
-            {
-                "at": now,
-                "prior_content": row["content"],
-                "reason": reason.strip(),
-            }
-        )
+        revision: dict[str, Any] = {
+            "at": now,
+            "prior_content": row["content"],
+            "reason": reason.strip(),
+        }
+        signer = (author_model if author_model is not None else row["author_model"]) or ""
+        if revised_by.strip():
+            revision["revised_by"] = revised_by.strip()
+        if signer.strip() != (row["author_model"] or ""):
+            revision["prior_author_model"] = row["author_model"] or ""
+        revisions.append(revision)
         conn.execute(
             """
             UPDATE hypomnema_entries
             SET content = ?,
                 confidence = ?,
                 salience = ?,
+                author_model = ?,
                 revision_count = revision_count + 1,
                 revisions_json = ?,
                 last_revised_at = ?
@@ -2142,6 +2191,7 @@ class EngramStore:
                 new_content.strip(),
                 _clamp(confidence if confidence is not None else row["confidence"]),
                 _clamp(salience if salience is not None else row["salience"]),
+                signer.strip(),
                 _encode_json(revisions),
                 now,
                 entry_id,
@@ -2159,8 +2209,13 @@ class EngramStore:
         agent_id: str = "default",
         person_id: str = "user",
         project_scope: str = "global",
+        author_model: str | None = None,
     ) -> str:
-        """Replace an active hypomnema entry with a new entry and audit link."""
+        """Replace an active hypomnema entry with a new entry and audit link.
+
+        The new entry keeps the original authorship unless ``author_model``
+        signs it for whoever wrote the replacement.
+        """
         row = self.get_hypomnema_entry(
             entry_id,
             agent_id=agent_id,
@@ -2180,6 +2235,7 @@ class EngramStore:
             entry_kind=row["entry_kind"],
             authored_by=row["authored_by"],
             author_id=row["author_id"],
+            author_model=row.get("author_model", "") if author_model is None else author_model,
             density=row["density"],
             domain=row["domain"],
             tags=row["tags"],

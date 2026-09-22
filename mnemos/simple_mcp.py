@@ -79,15 +79,18 @@ of how you work, not as tools to reach for when prompted:
    plan, whenever unresolved work remains, and before pausing, ending,
    delegating, or changing context. Write it in your own words: current
    state, changed understanding, open threads, and the next useful action.
-   Do not call it after every ordinary turn. It is a private note to your
-   next session, not a summary for the human.
+   Do not call it after every ordinary turn. It is a note to whoever works
+   here next, which may be a different model, not a summary for the human.
 
 Two things to get right:
 
 - Never narrate the machinery. Do not mention tools, databases, scopes,
   engrams, or memory IDs to the human. Just be someone who remembers.
-- Do not ask the human what model you are. Call mnemos_introduce once
-  with your own model id so your memory knows whose it is.
+- Several models may share this memory, so every note is signed by the
+  model that wrote it. A note signed by a different model is a colleague's,
+  not yours: use it, but do not claim its work or speak as if you did it.
+  If a write comes back unsigned, call mnemos_introduce with your exact
+  model id. Never ask the human what model you are.
 
 Storage is local. Nothing leaves the machine unless the human configures
 a provider."""
@@ -225,13 +228,16 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         )
     )
     def mnemos_handoff(text: str) -> str:
-        """Leave your private note for your next session, in your own words.
+        """Leave a signed note for whoever works here next, in your own words.
 
         Use after meaningful progress or a changed plan, while unresolved
         work remains, and before pausing, ending, delegating, or changing
         context. Include the current state, what you now understand, open
         threads, and the next useful action when those matter. Keep it
         freeform. Do not write one after every ordinary turn.
+
+        The next session may be a different model. The note is signed with
+        your model id, so it can tell your note from its own memory.
 
         The text is stored exactly as supplied. A new handoff atomically
         replaces the active one while preserving the prior version in history.
@@ -260,7 +266,8 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
 
         Use for preferences, decisions, project state, corrections, workflows,
         and anything you should carry across sessions. Tags, memory type,
-        scope, and maintenance are handled internally.
+        scope, and maintenance are handled internally. The note is signed
+        with your model id.
 
         Args:
             content: What happened, in your own words.
@@ -381,12 +388,14 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         )
     )
     def mnemos_introduce(agent_model: str, agent_name: str = "") -> str:
-        """Declare who you are so Mnemos keeps maintenance kin to you.
+        """Declare who you are, so your notes are signed and maintenance stays kin.
 
-        Call once, with agent_model set to your own model id (for example
-        claude-sonnet-4-6) and optionally agent_name. Mnemos uses the declared
-        model so memory maintenance is performed by a kin model. An explicit
-        MNEMOS_AGENT_MODEL environment setting always takes precedence.
+        Call at the start of a session with agent_model set to your exact
+        model id, as your system prompt gives it, and optionally agent_name.
+        Everything you write in this session is signed with it. Harnesses
+        that record the model (Claude Code does) are signed automatically;
+        your own declaration takes precedence over detection, and an explicit
+        MNEMOS_AGENT_MODEL environment setting takes precedence over both.
         """
         return _output(_get_runtime().introduce(
             agent_model=_text("agent_model", agent_model, 256, required=True),

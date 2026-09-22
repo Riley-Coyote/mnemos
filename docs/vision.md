@@ -418,13 +418,13 @@ The agent sees **nine tools**:
 | Tool | What it is for |
 |---|---|
 | `mnemos_context` | The startup continuity packet. What you already know about this human and this work. |
-| `mnemos_handoff` | Leave an exact private note, in your own words, for your next session. |
+| `mnemos_handoff` | Leave an exact, signed note, in your own words, for whoever works here next. |
 | `mnemos_capture` | Record something durable — a preference, a decision, a correction, project state. |
 | `mnemos_recall` | Retrieve something specific that wasn't in the startup packet. |
 | `mnemos_correct` | Update, supersede, or archive a memory that is now wrong. |
 | `mnemos_reflect` | Answer, in your own words, something your memory asked you about itself. |
 | `mnemos_maintain` | Run the best maintenance available without requiring setup. |
-| `mnemos_introduce` | Declare your own model id, so the memory knows whose it is. |
+| `mnemos_introduce` | Declare your own model id; everything you write this session is signed with it. |
 | `mnemos_health` | A human-relayable health card: where memory lives, how much there is, whether it is working. |
 
 Nine tools is the *interface*, and it is worth being precise about the difference,

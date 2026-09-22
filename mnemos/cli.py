@@ -459,15 +459,32 @@ def _cmd_hook(args: argparse.Namespace) -> int:
     # bare read() waits for EOF, so a harness that spawns the hook and leaves
     # stdin open would hang session start forever. select() drains only what is
     # already there and returns the moment there is nothing more to read.
+    #
+    # The payload can name the model starting the session (Claude Code sends
+    # `model` on SessionStart when it has one). That is the only use made of
+    # it: the packet can then say whether the reader wrote the handoff.
+    received = bytearray()
     try:
         import select
 
         fd = sys.stdin.fileno()
         while select.select([fd], [], [], 0.0)[0]:
-            if not os.read(fd, 65536):
+            chunk = os.read(fd, 65536)
+            if not chunk:
                 break  # EOF — writer closed its end
+            if len(received) < 1_048_576:
+                received.extend(chunk)
     except Exception:
         pass
+    reader_model = ""
+    try:
+        from .authorship import clean_model_id
+
+        payload = json.loads(bytes(received).decode("utf-8")) if received.strip() else {}
+        if isinstance(payload, dict):
+            reader_model = clean_model_id(payload.get("model"))
+    except Exception:
+        reader_model = ""
 
     try:
         from .interface.context_packet import build_context_packet
@@ -491,6 +508,7 @@ def _cmd_hook(args: argparse.Namespace) -> int:
                 token_budget=args.token_budget,
                 include_prompt=True,
                 include_engrams=bool(getattr(args, "include_graph", False)),
+                reader_model=reader_model,
             )
         finally:
             store.close()

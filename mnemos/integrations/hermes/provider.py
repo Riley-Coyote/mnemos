@@ -531,6 +531,7 @@ class MnemosMemoryProviderCore:
             source="observed",
             authored_by="agent",
             author_id=self.scope.agent_id,
+            author_model=self._runtime.author_model(),
             domain=_domain_for(note),
             tags=_tags_for(note, "review", "inbox", "uncertain"),
             confidence=0.46,

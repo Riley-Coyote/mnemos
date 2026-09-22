@@ -563,6 +563,26 @@ class EngramStore:
         from ..backup import create_backup
 
         backup_dir = self.db_path.parent / "backups"
+
+        # One recovery point per migration, not one per opener.
+        #
+        # Several processes can open the same store at once — the CLI, a
+        # session hook, a running agent — and each of them reaches this line
+        # while the file is still at the old version, because none of them has
+        # migrated it yet. Without this check each writes its own copy of the
+        # same bytes; one upgrade here left five identical 146 MB files stamped
+        # three seconds apart.
+        #
+        # An existing file at the final name is already a verified copy:
+        # `create_backup` writes to a temp name and only renames after
+        # `check_database` passes. So presence alone is enough, and a partly
+        # migrated database never overwrites the good pre-migration copy.
+        existing_backups = list(
+            backup_dir.glob(f"{self.db_path.stem}.pre-v{SCHEMA_VERSION}-*.db")
+        )
+        if any(path.is_file() and path.stat().st_size > 0 for path in existing_backups):
+            return
+
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         destination = backup_dir / f"{self.db_path.stem}.pre-v{SCHEMA_VERSION}-{stamp}.db"
         create_backup(self.db_path, destination, source_connection=conn)

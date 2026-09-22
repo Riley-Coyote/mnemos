@@ -43,6 +43,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from .authorship import resolve_author_model
 from .core.types import EngramKind, SourceType
 from .store.sqlite_store import EngramStore
 from .store.embedding_index import EmbeddingIndex
@@ -1125,6 +1126,7 @@ def mnemos_hypomnema_write(
             source=source,
             domain=domain,
             tags=tags,
+            author_model=resolve_author_model(),
             agent_id=agent_id,
             person_id=person_id,
             project_scope=project_scope,
@@ -1211,6 +1213,7 @@ def mnemos_hypomnema_revise(
     _ensure_store()
     agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
     try:
+        reviser = resolve_author_model()
         _store.revise_hypomnema_entry(  # type: ignore
             entry_id,
             content,
@@ -1220,6 +1223,8 @@ def mnemos_hypomnema_revise(
             project_scope=project_scope,
             confidence=confidence if confidence >= 0 else None,
             salience=salience if salience >= 0 else None,
+            author_model=reviser,
+            revised_by=reviser,
         )
     except (KeyError, ValueError) as exc:
         return f"Hypomnema revision failed: {exc}"
@@ -1254,6 +1259,7 @@ def mnemos_hypomnema_supersede(
             agent_id=agent_id,
             person_id=person_id,
             project_scope=project_scope,
+            author_model=resolve_author_model(),
         )
     except (KeyError, ValueError) as exc:
         return f"Hypomnema supersession failed: {exc}"

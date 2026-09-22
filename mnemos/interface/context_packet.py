@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from ..authorship import clean_model_id, display_name, handoff_framing, note_signature
 from ..dream_journal import DREAM_JOURNAL_TAG
 from ..retrieval.reactive import ReactiveRetriever, RetrievalResult
 
@@ -31,11 +32,15 @@ def build_context_packet(
     max_functional: int = 10,
     max_hypomnema: int = 8,
     max_engrams: int = 6,
+    reader_model: str = "",
 ) -> dict[str, Any]:
     """Build the complete memory packet an agent should read before acting.
 
     The packet orders memory from most immediately actionable to most durable:
     functional memory, hypomnema continuity, then Mnemos engrams and beliefs.
+
+    ``reader_model`` is the model about to read the packet, when the harness
+    says. It lets the handoff say plainly whether the reader wrote it.
 
     ``include_engrams=False`` returns continuity only. Mnemos is a continuity
     and identity layer, usually running alongside whatever memory system the
@@ -156,8 +161,16 @@ def build_context_packet(
         )
 
     stats = store.get_stats(agent_id)
+    try:
+        signers = store.hypomnema_signers(
+            agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        )
+    except Exception:
+        signers = []
     packet: dict[str, Any] = {
         "include_engrams": include_engrams,
+        "reader_model": clean_model_id(reader_model),
+        "signers": signers,
         "scope": {
             "agent_id": agent_id,
             "person_id": person_id,
@@ -227,12 +240,15 @@ def _format_handoff(packet: dict[str, Any]) -> str:
     handoff = packet.get("handoff")
     if not handoff:
         return ""
-    return (
-        "### From your previous session, in your own words.\n"
-        f"Saved {_age_text(handoff.get('created_at'))}:\n"
-        f"{handoff['content']}\n\n"
-        "Continue naturally from this. Do not announce Mnemos or the memory system."
+    # Several models can share one scope. A handoff is shown with the
+    # signature of the model that wrote it, never as the reader's own words
+    # unless the reader is known to be that same model.
+    heading, guidance = handoff_framing(
+        handoff.get("author_model") or "",
+        _age_text(handoff.get("created_at")),
+        packet.get("reader_model") or "",
     )
+    return f"### {heading}\n{handoff['content']}\n\n{guidance}"
 
 
 def _format_scope(packet: dict[str, Any]) -> str:
@@ -262,6 +278,12 @@ def _format_operating_instructions() -> str:
 
 def _format_identity(packet: dict[str, Any]) -> str:
     lines = ["### Identity And Beliefs"]
+    signers = packet.get("signers") or []
+    if len(signers) > 1:
+        # One scope written by several models: its identity is theirs
+        # together, and the reader should not take it as its own alone.
+        names = ", ".join(display_name(model) for model in signers)
+        lines.append(f"Shared: built from notes signed by {names}.")
     identity = packet.get("identity") or {}
     if identity.get("self_summary"):
         lines.append(identity["self_summary"])
@@ -270,7 +292,7 @@ def _format_identity(packet: dict[str, Any]) -> str:
         for belief in beliefs[:6]:
             pct = int(float(belief["confidence"]) * 100)
             lines.append(f"- {belief['content']} [{belief['domain']}, {pct}%]")
-    if len(lines) == 1:
+    if len(lines) == 1 or (len(lines) == 2 and len(signers) > 1):
         return ""
     return "\n".join(lines)
 
@@ -326,7 +348,8 @@ def _format_hypomnema(packet: dict[str, Any]) -> str:
         )
         lines.append(
             f"- {_clip(entry['content'])} "
-            f"[{marker}{entry['domain']}, confidence {float(entry['confidence']):.2f}, "
+            f"[{note_signature(entry)}, {marker}{entry['domain']}, "
+            f"confidence {float(entry['confidence']):.2f}, "
             f"salience {float(entry['salience']):.2f}]"
         )
     return "\n".join(lines)

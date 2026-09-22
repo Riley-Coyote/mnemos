@@ -16,6 +16,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .authorship import (
+    clean_model_id,
+    display_name,
+    handoff_framing,
+    note_signature,
+    resolve_author_model,
+    signature,
+)
 from .config.loader import load_config
 from .consolidation.daemon import ConsolidationDaemon
 from .core.types import SourceType
@@ -228,6 +236,10 @@ class MnemosRuntime:
         self._llm_client: Any | None = None
         self._use_dedicated_model = use_dedicated_model
         self._agent_model_hint: str | None = None
+        # The model that introduced itself in this session, if one did. Kept
+        # per runtime, not per scope: several models can share one scope, and
+        # the last introduction must not sign every other model's notes.
+        self._session_author = ""
         self._session_id: int | None = None
         self.last_dream_note_id: str | None = None
         self.last_dream_narrative: str | None = None
@@ -1030,13 +1042,18 @@ class MnemosRuntime:
             if not head:
                 return None
 
+            # The note stays signed by whoever wrote it; the reflection added
+            # to it names its own author, who may be a different model.
+            author = self.author_model()
+            by = f"({display_name(author)}) " if author else ""
             return self._store.revise_hypomnema_entry(
                 note["id"],
-                f"{head}\n\n{self._REFLECTION_MARKER} {answer.strip()}",
+                f"{head}\n\n{self._REFLECTION_MARKER} {by}{answer.strip()}",
                 reason="agent reflection",
                 agent_id=self.scope.agent_id,
                 person_id=self.scope.person_id,
                 project_scope=self.scope.project_scope,
+                revised_by=author,
             )
         except Exception:
             if self._host_mutation_active:
@@ -1239,17 +1256,35 @@ class MnemosRuntime:
             "(This check fires once and will not appear again.)"
         )
 
+    def author_model(self) -> str:
+        """The model signing what this session writes, or ``""`` if unknown."""
+
+        return resolve_author_model(self._session_author)
+
+    def _signed_line(self, author: str) -> str:
+        if author:
+            return f"Signed: {signature(author)}"
+        return (
+            "Unsigned: Mnemos couldn't tell which model you are. Call "
+            "mnemos_introduce with your exact model id so your notes carry "
+            "your name."
+        )
+
     def introduce(self, agent_model: str, agent_name: str = "") -> str:
-        """Record the agent's self-declared model so maintenance stays kin."""
+        """Record the agent's self-declared model so maintenance stays kin.
+
+        The declaration also signs everything this session writes.
+        """
 
         model = (agent_model or "").strip()
         if not model:
             return (
                 "Introduction needs agent_model: your own model id "
-                "(for example claude-sonnet-4-6)."
+                "(for example claude-opus-5-5), exactly as your system prompt gives it."
             )
 
         self._set_meta("agent_model", model)
+        self._session_author = clean_model_id(model)
         name = agent_name.strip()
         if name:
             self._set_meta("agent_name", name)
@@ -1283,7 +1318,13 @@ class MnemosRuntime:
                 f"Note: MNEMOS_AGENT_MODEL={env_model} is set in the environment "
                 "and takes precedence over this declaration."
             )
-        lines.append("You only need to introduce yourself once for this scope.")
+        signer = self.author_model()
+        if signer:
+            lines.append(f"Notes you write in this session are signed {signature(signer)}.")
+        else:
+            lines.append(
+                f"{model!r} doesn't look like a model id, so your notes stay unsigned."
+            )
         return "\n".join(lines)
 
     def context(self, query: str = "", max_results: int = 5) -> str:
@@ -1341,13 +1382,18 @@ class MnemosRuntime:
             "",
         ]
 
+        reader = self.author_model()
         if handoff:
+            heading, guidance = handoff_framing(
+                handoff.get("author_model") or "",
+                _age_text(handoff["created_at"]),
+                reader,
+            )
             lines.extend([
                 "",
-                "From your previous session, in your own words.",
-                f"Saved {_age_text(handoff['created_at'])}:",
+                heading,
                 handoff["content"],
-                "Continue naturally from this. Do not announce Mnemos or the memory system.",
+                guidance,
             ])
             self._store.mark_handoff_surfaced(
                 handoff["id"],
@@ -1371,8 +1417,20 @@ class MnemosRuntime:
         # memories is.
         identity_summary = self._identity_summary()
         if identity_summary:
-            lines.extend(["", "Who you have been, measured from what you keep returning to:",
-                          f"  {identity_summary}"])
+            signers = self._store.hypomnema_signers(
+                agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+            )
+            if len(signers) > 1:
+                names = ", ".join(display_name(model) for model in signers)
+                heading = (
+                    "What this shared memory keeps returning to, across notes "
+                    f"signed by {names}:"
+                )
+            else:
+                heading = "Who you have been, measured from what you keep returning to:"
+            lines.extend(["", heading, f"  {identity_summary}"])
 
         # Quiet and occasional by design: at most a couple of items, only when
         # something genuinely needs the agent's own judgement, and each one
@@ -1426,16 +1484,19 @@ class MnemosRuntime:
             return "Nothing saved: handoff text was empty."
         self._ensure_init()
         assert self._store is not None
+        author = self.author_model()
         handoff_id = self._store.write_handoff(
             text,
             agent_id=self.scope.agent_id,
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             author_id=self.scope.agent_id,
+            author_model=author,
         )
         return (
             "Session handoff saved exactly as written.\n"
             f"Handoff ID: {handoff_id}\n"
+            f"{self._signed_line(author)}\n"
             "It will be delivered first in the next session and will remain "
             "active until you replace or forget it."
         )
@@ -1599,6 +1660,7 @@ class MnemosRuntime:
         domain = _classify_domain(full_content)
         kind = _classify_kind(full_content)
         tags = _simple_tags(content, context)
+        author = self.author_model()
         confidence, salience = _importance_scores(importance, domain)
         # Shift 1: a trace is what the memory changed, and only the agent can
         # say that. When it does not, the field stays empty rather than being
@@ -1632,6 +1694,7 @@ class MnemosRuntime:
             entry_kind="continuity",
             authored_by="agent",
             author_id=self.scope.agent_id,
+            author_model=author,
             domain=domain,
             tags=tags,
             confidence=confidence,
@@ -1651,6 +1714,7 @@ class MnemosRuntime:
             f"Memory ID: {engram.id}\n"
             f"Continuity note ID: {note_id}\n"
             f"Scope: {self.scope.agent_id}/{self.scope.person_id}/{self.scope.project_scope}\n"
+            f"{self._signed_line(author)}\n"
             "Maintenance:\n"
             f"{_indent(maintenance)}"
         )
@@ -1784,6 +1848,7 @@ class MnemosRuntime:
                             self._store.archive_engram(related, reason=f"simple_correction_{action}")
                     return f"Archived continuity note {target}."
 
+                corrector = self.author_model()
                 self._store.revise_hypomnema_entry(
                     target,
                     correction,
@@ -1793,6 +1858,8 @@ class MnemosRuntime:
                     project_scope=self.scope.project_scope,
                     confidence=0.92,
                     salience=0.75,
+                    author_model=corrector,
+                    revised_by=corrector,
                 )
                 return f"Updated continuity note {target}."
 
@@ -1864,6 +1931,7 @@ class MnemosRuntime:
                     )
 
                 note_id = match["id"]
+                corrector = self.author_model()
                 if action in {"supersede", "replace"}:
                     note_id = self._store.supersede_hypomnema_entry(
                         match["id"],
@@ -1872,6 +1940,7 @@ class MnemosRuntime:
                         agent_id=self.scope.agent_id,
                         person_id=self.scope.person_id,
                         project_scope=self.scope.project_scope,
+                        author_model=corrector,
                     )
                 else:
                     self._store.revise_hypomnema_entry(
@@ -1883,6 +1952,8 @@ class MnemosRuntime:
                         project_scope=self.scope.project_scope,
                         confidence=0.92,
                         salience=0.75,
+                        author_model=corrector,
+                        revised_by=corrector,
                     )
 
                 related_engram_id = match.get("related_engram_id") or match.get("graduated_to_engram_id")
@@ -2159,6 +2230,7 @@ class MnemosRuntime:
             "delivery_count": int(latest_handoff.get("surface_count", 0)) if latest_handoff else 0,
             "authored_by": latest_handoff.get("authored_by") if latest_handoff else None,
             "author_id": latest_handoff.get("author_id") if latest_handoff else None,
+            "author_model": latest_handoff.get("author_model") if latest_handoff else None,
         }
 
         return {
@@ -2322,7 +2394,8 @@ def _format_continuity(entry: dict[str, Any]) -> str:
         content = content[:177] + "..."
     return (
         f"- [{score:.2f}] {content}\n"
-        f"  id={entry['id']} domain={entry['domain']} confidence={entry['confidence']:.2f}"
+        f"  id={entry['id']} domain={entry['domain']} confidence={entry['confidence']:.2f} "
+        f"{note_signature(entry)}"
     )
 
 
@@ -2433,8 +2506,9 @@ def format_health_card(data: dict[str, Any]) -> str:
         handoff_line = "none yet"
     else:
         state = "active" if handoff.get("active") else "removed"
+        signed = signature(handoff.get("author_model") or "") or "unsigned"
         handoff_line = (
-            f"{handoff['last_saved_at']} ({state}, {handoff.get('authored_by')}, "
+            f"{handoff['last_saved_at']} ({state}, {handoff.get('authored_by')}, {signed}, "
             f"delivered {handoff.get('delivery_count', 0)} time(s), "
             f"last {handoff.get('last_surfaced_at') or 'never'})"
         )

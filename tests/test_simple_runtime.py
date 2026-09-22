@@ -399,7 +399,7 @@ def test_introduce_rejects_empty_model(tmp_path):
 
     assert result == (
         "Introduction needs agent_model: your own model id "
-        "(for example claude-sonnet-4-6)."
+        "(for example claude-opus-5-5), exactly as your system prompt gives it."
     )
 
     store = EngramStore(db_path)

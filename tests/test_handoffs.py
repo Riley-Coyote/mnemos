@@ -50,7 +50,10 @@ def test_exact_handoff_survives_restart_context_correction_and_backup(tmp_path):
         packet = second.context()
         assert text in packet
         assert packet.count(text) == 1
-        assert packet.index("From your previous session, in your own words.") < packet.index(
+        # Nobody signed this handoff, so the packet must not hand it to the
+        # reader as its own words.
+        assert "From your previous session, in your own words" not in packet
+        assert packet.index("Left by an earlier session") < packet.index(
             "Continuity notes:"
         )
         surfaced = second._store.get_latest_handoff(**SCOPE)

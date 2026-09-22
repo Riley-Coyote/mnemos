@@ -112,13 +112,13 @@ Simple mode exposes nine user-facing tools:
 | Tool | Purpose |
 |---|---|
 | `mnemos_context` | Startup continuity packet. Auto-creates local storage, runs lightweight maintenance, and can optionally include an identity graph artifact. |
-| `mnemos_handoff` | Leave a private, exact note in the agent's own words for its next session. A new note atomically replaces the active one while preserving history; remove it with `mnemos_correct`. |
+| `mnemos_handoff` | Leave an exact, signed note in the agent's own words for whoever works in this scope next — possibly a different model. A new note atomically replaces the active one while preserving history; remove it with `mnemos_correct`. |
 | `mnemos_capture` | Capture durable preferences, decisions, project state, workflows, and context. |
 | `mnemos_recall` | Search scoped continuity and durable memory with natural language. |
 | `mnemos_correct` | Update, supersede, or archive stale memory. |
 | `mnemos_reflect` | Answer a reflection the packet raised — what a memory changed, or what a fading one taught — in the agent's own words. Mnemos never calls a model to write this; the agent's memory is maintained by its own mind or not at all. |
 | `mnemos_maintain` | Run the best available maintenance without requiring setup. |
-| `mnemos_introduce` | Let the agent declare its own model id and name, so its memory knows whose it is. |
+| `mnemos_introduce` | Let the agent declare its own model id and name. Everything it writes in the session is signed with it. |
 | `mnemos_health` | Human-relayable health card: store location and size, counts, delivery state, last handoff, maintenance, and onboarding. |
 
 Agents do not need to pass tags, memory kinds, confidence, source types, or
@@ -140,6 +140,15 @@ Every continuity record carries an authorship classification. New agent
 captures and handoffs are marked `agent`; jointly formed notes are
 `coauthored`; deterministic maintenance is `system`; ambiguous older writing
 stays `unknown`. Mnemos does not relabel legacy prose as the agent's own words.
+
+Agent writing is also **signed with the model that wrote it**. One scope is
+often shared by several models over time, and a note that reaches the next
+session as "your own words" makes each new model inherit the last one's first
+person. Signatures come from `MNEMOS_AGENT_MODEL`, the session's
+`mnemos_introduce`, or the harness (Claude Code is detected from its session
+transcript). The packet shows who left the handoff, marks each note
+`by <model>` or `unsigned`, and tells the reader that a note in another
+model's name is a colleague's, not its own. Nothing unsigned is guessed.
 
 ### Install Simple MCP Into Clients
 
@@ -249,7 +258,7 @@ instructions, or when you want the behaviour stated in the agent's own prompt:
 You have access to Mnemos MCP memory tools.
 
 At the start of this session, call mnemos_context.
-If Mnemos asks you to introduce yourself, call mnemos_introduce with your own model id and name.
+If a write comes back unsigned, call mnemos_introduce with your exact model id. Notes signed by a different model are a colleague's, not yours.
 Use mnemos_capture for stable preferences, decisions, project state, workflows, corrections, and context I should not have to repeat.
 Quietly refresh mnemos_handoff after meaningful progress or a changed plan, when unresolved work remains, and before pausing, ending, delegating, or changing context. Write it in your own words. Do not do this after every ordinary turn.
 Use mnemos_recall before relying on memory from prior sessions.

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..core.engram import Connection
 from ..core.types import ConnectionRelation, DEFAULT_AGENT_ID
+from ..store.fts import fts_words, or_query
 from ..encoding.llm_classifier import classify_connections
 
 if TYPE_CHECKING:
@@ -106,9 +107,9 @@ def run_connection_discovery(
                         stats["embedding_candidates"] += 1
 
         # 2. FTS5 candidates (supplement, catches keyword matches embeddings miss)
-        words = [w for w in engram.content.split() if len(w) > 2 and w.isalnum()]
+        words = fts_words(engram.content)
         if words:
-            query = " OR ".join(f'"{w}"' for w in words[:8])
+            query = or_query(words[:8])
             try:
                 fts_results = store.search_fts(
                     query, limit=10, agent_id=agent_id,

@@ -13,6 +13,7 @@ from datetime import datetime, timezone, timedelta
 from typing import TYPE_CHECKING, Any
 
 from ..core.engram import Connection, Engram, EncodingContext, MemorySource
+from ..store.fts import fts_words, or_query
 from ..core.types import (
     BOOTSTRAP_STABILITY,
     BOOTSTRAP_STRENGTH,
@@ -499,11 +500,11 @@ class Encoder:
         connections: list[Connection] = []
 
         # 1. FTS search for content similarity — find candidates
-        words = [w for w in engram.content.split() if len(w) > 2 and w.isalnum()]
+        words = fts_words(engram.content)
         if not words:
             return []
 
-        search_query = " OR ".join(f'"{w}"' for w in words[:8])
+        search_query = or_query(words[:8])
         try:
             fts_results = store.search_fts(
                 search_query, limit=10, agent_id=engram.owner_agent_id,

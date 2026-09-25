@@ -330,9 +330,11 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
     ) -> str:
         """Correct, supersede, or archive stale continuity.
 
-        If target_id is omitted, Mnemos captures the correction as fresh
-        high-confidence continuity. Set action to forget/archive/remove/delete
-        to archive a target or closest query match.
+        Name what to change by target_id, or by a query: the note or memory
+        must hold the query's meaningful words (half of them, and at least
+        two), or nothing is changed. Set action to forget/archive/remove/delete
+        to archive it. A correction that names nothing is captured as fresh
+        high-confidence continuity.
 
         Args:
             impact: What the corrected memory means now, in your own words.

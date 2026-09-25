@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from ..file_security import secure_directory, secure_file
+from .fts import is_common
 from ..core.engram import Connection, Engram, VersionRef
 from ..core.belief import Belief
 from ..core.emotional_state import EmotionalState
@@ -498,6 +499,10 @@ def _lexical_score(query: str, text: str) -> float:
     query_terms = _tokenize(query)
     if not query_terms:
         return 0.0
+    # Scored on the words that mean something in the query, as recall searches
+    # (#78). Counting "for" and "her", a note sharing only those tied with the
+    # note the query was about. A query of nothing but common words keeps them.
+    query_terms = {term for term in query_terms if not is_common(term)} or query_terms
     text_terms = _tokenize(text)
     if not text_terms:
         return 0.0

@@ -40,7 +40,7 @@ from .simple_scope import MnemosScope, resolve_scope  # noqa: F401
 from .store.embedding_index import EmbeddingIndex
 from .core.engram import Engram
 from .core.placeholders import TEMPLATED_IMPACTS, is_templated
-from .store.fts import distinctive_terms, fts_words, or_query
+from .store.fts import distinctive_terms, fts_words, meaningful_words, or_query
 from .store.sqlite_store import EngramStore
 
 
@@ -209,12 +209,47 @@ def _has_query_overlap(query: str, text: str) -> bool:
     return bool(terms & text_terms)
 
 
+def _named_terms(text: str) -> set[str]:
+    """What a query or a note names: its meaningful words, less the words every
+    note here shares ("memory", "note", "continuity")."""
+    return meaningful_words(text) - _STOPWORDS
+
+
+# Words that say what to do with a note, not which note it is: "forget the
+# zeppelin schedule" names the zeppelin schedule.
+_CORRECTION_VERBS = frozenset(
+    "forget archive remove delete update supersede replace correct correction".split()
+)
+
+
+def _named_by(query: str, text: str) -> int:
+    """How many of a correction query's meaningful words a note or memory holds,
+    when that is enough for the query to name it: at least half of them, and two
+    when the query has two or more. 0 when the query does not name it."""
+    wanted = _named_terms(query) - _CORRECTION_VERBS
+    if not wanted:
+        return 0
+    shared = len(wanted & _named_terms(text))
+    return shared if shared >= max(min(2, len(wanted)), (len(wanted) + 1) // 2) else 0
+
+
+def _named_matches(query: str, candidates: list[Any], text_of: Any) -> list[Any]:
+    """The candidates a correction query names, closest first: the most of its
+    words shared, then in the order the search ranked them."""
+    named = [(_named_by(query, text_of(item)), rank, item) for rank, item in enumerate(candidates)]
+    return [item for shared, _rank, item in sorted(named, key=lambda n: (-n[0], n[1])) if shared]
+
+
 def _filter_continuity(query: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not query.strip():
         return entries
+    # A note is shown when it shares a word that means something in the query;
+    # sharing "her" or "for" put unrelated notes beside the ones asked about.
+    terms = _named_terms(query)
     return [
         entry for entry in entries
-        if _has_query_overlap(query, entry.get("content", ""))
+        if (terms & _named_terms(entry.get("content", "")) if terms
+            else _has_query_overlap(query, entry.get("content", "")))
         or float(entry.get("score", 0.0)) >= 0.55
     ]
 
@@ -2021,7 +2056,9 @@ class MnemosRuntime:
         best, best_overlap = None, 0.0
         for belief in beliefs:
             bterms = _query_terms(belief.content)
-            if not bterms:
+            # Half the words in common is not enough when the half is "what"
+            # and "she": the belief must hold the words that mean something.
+            if not bterms or not _named_by(text, belief.content):
                 continue
             overlap = len(terms & bterms) / len(terms)
             if overlap > best_overlap:
@@ -2172,14 +2209,17 @@ class MnemosRuntime:
             # A handoff is replaced by writing a new one. A correction found
             # by searching must never land on one: it would overwrite the
             # agent's exact note with the correction text, or forget it.
-            matches = self._store.search_hypomnema(
+            # And it lands only on a note the query names. The closest note is
+            # not close when nothing is: "forget the zeppelin schedule"
+            # archived a note about a reading.
+            matches = _named_matches(query_text, self._store.search_hypomnema(
                 query_text,
                 agent_id=self.scope.agent_id,
                 person_id=self.scope.person_id,
                 project_scope=self.scope.project_scope,
-                limit=1,
+                limit=10,
                 exclude_kinds=("handoff",),
-            )
+            ), lambda note: note.get("content") or "")
             if matches:
                 match = matches[0]
                 if action in {"forget", "archive", "remove", "delete"}:
@@ -2273,8 +2313,12 @@ class MnemosRuntime:
                     + _indent(maintenance)
                 )
 
-        if action in {"forget", "archive", "remove", "delete"} and search_text:
-            matches = self._retrieve(search_text, max_results=1)
+        if action in {"forget", "archive", "remove", "delete"}:
+            matches = _named_matches(
+                search_text,
+                self._retrieve(search_text, max_results=1) if search_text else [],
+                lambda r: f"{r.engram.content or ''} {r.engram.impact or ''}",
+            )
             if matches:
                 engram = matches[0].engram
                 self._store.archive_hypomnema_for_engram(
@@ -2286,13 +2330,26 @@ class MnemosRuntime:
                 )
                 self._store.archive_engram(engram, reason=f"simple_correction_{action}")
                 return f"Archived closest matching memory {engram.id}."
+            # Forgetting acts only on what the words name, and never captures.
+            if not search_text:
+                return "Nothing was archived: give the ID as target_id, or a query that names it."
+            return (
+                f'Nothing was archived: no note or memory matched "{search_text}" '
+                "closely enough. To forget one, give its ID as target_id."
+            )
 
-        return self.capture(
+        captured = self.capture(
             correction.strip(),
             context=f"Correction supplied through mnemos_correct. Prior query: {query.strip()}",
             importance="high",
             impact=impact,
         )
+        if query_text:
+            return (
+                f'No continuity note matched "{query_text}" closely enough, so none was '
+                f"changed; the correction was captured as new continuity.\n{captured}"
+            )
+        return captured
 
     def maintain(self, deep: bool = False, auto: bool = False) -> str:
         """Run the best available maintenance without requiring setup."""

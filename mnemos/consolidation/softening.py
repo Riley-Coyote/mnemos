@@ -486,6 +486,11 @@ def _create_or_reinforce_lesson(
     impact_text = engram.impact
     if not impact_text or len(impact_text.strip()) < 10:
         return None
+    # A lesson is already what a memory taught. When one fades it fades like any
+    # memory, but it is not distilled again: its impact is its own words, so it
+    # would become a second copy of itself, linked to the first.
+    if "lesson" in engram.tags or "distilled" in engram.tags:
+        return None
     # A placeholder the server wrote ("Correction to earlier continuity.") says
     # nothing the memory taught. It must not become a lesson, or strengthen one:
     # every memory carrying the same placeholder reinforced the same "lesson".

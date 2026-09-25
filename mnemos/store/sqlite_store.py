@@ -1009,6 +1009,19 @@ class EngramStore:
         person_id: str | None = None, project_scope: str | None = None,
     ) -> list[Engram]:
         """Search engrams using FTS5 full-text search."""
+        return [e for e, _ in self.search_fts_ranked(
+            query, limit, agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        )]
+
+    def search_fts_ranked(
+        self, query: str, limit: int = 50, *, agent_id: str | None = None,
+        person_id: str | None = None, project_scope: str | None = None,
+    ) -> list[tuple[Engram, float]]:
+        """search_fts, with how well each engram matched: FTS5's bm25 rank.
+
+        Ranks are negative, and the better the match, the lower the rank. They are
+        comparable within one search, not across searches.
+        """
         conn = self._get_conn()
         scope_sql = ""
         params: list[Any] = [query]
@@ -1017,11 +1030,16 @@ class EngramStore:
             params.extend([agent_id, person_id, project_scope])
         params.append(limit)
         rows = conn.execute(
-            "SELECT e.* FROM engrams e JOIN engrams_fts f ON e.id = f.id "
+            "SELECT e.*, f.rank AS fts_rank FROM engrams e JOIN engrams_fts f ON e.id = f.id "
             "WHERE engrams_fts MATCH ? AND e.state = 'active'" + scope_sql +
             " ORDER BY rank LIMIT ?", params,
         ).fetchall()
-        return [Engram.from_dict(dict(r)) for r in rows]
+        ranked = []
+        for r in rows:
+            d = dict(r)
+            rank = d.pop("fts_rank")
+            ranked.append((Engram.from_dict(d), rank))
+        return ranked
 
     # ── Connections ──
 

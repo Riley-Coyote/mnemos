@@ -29,7 +29,7 @@ from ..core.identity import AgentIdentity
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -49,6 +49,18 @@ VALID_SESSION_STATUSES = {"active", "paused", "closed"}
 # above any healthy continuity store: this is a backstop against a
 # pathological store, not a relevance filter. See search_hypomnema.
 _MAX_HYPOMNEMA_CANDIDATES = 5000
+
+# Handoffs belong to the harness session that wrote them (``author_session``).
+# Several sessions often work one scope at once, and each keeps its own note
+# instead of replacing whatever another session left. At most this many
+# sessions' notes stay active per scope; beyond it the oldest is retired, with
+# its prose kept in history.
+HANDOFF_SESSIONS_KEPT = 8
+# A starting session is handed at most this many notes (its own or the newest
+# whole, the rest as short lines), and other sessions' notes only while they
+# are this recent. The continuity layer is scarce by design.
+PACKET_HANDOFFS = 3
+LIVE_HANDOFF_HOURS = 72
 
 VALID_HYPO_SOURCES = {"observed", "synthesized", "co-formed"}
 VALID_HYPO_ENTRY_KINDS = {
@@ -134,6 +146,7 @@ _RECONCILABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ),
         ("author_id", "author_id TEXT NOT NULL DEFAULT ''"),
         ("author_model", "author_model TEXT NOT NULL DEFAULT ''"),
+        ("author_session", "author_session TEXT NOT NULL DEFAULT ''"),
         ("last_surfaced_at", "last_surfaced_at TEXT"),
         ("surface_count", "surface_count INTEGER NOT NULL DEFAULT 0"),
     ],
@@ -226,6 +239,7 @@ CREATE TABLE IF NOT EXISTS hypomnema_entries (
         CHECK (authored_by IN ('agent', 'system', 'coauthored', 'unknown')),
     author_id TEXT NOT NULL DEFAULT '',
     author_model TEXT NOT NULL DEFAULT '',
+    author_session TEXT NOT NULL DEFAULT '',
     source TEXT NOT NULL DEFAULT 'observed'
         CHECK (source IN ('observed', 'synthesized', 'co-formed')),
     density REAL NOT NULL DEFAULT 0.5,
@@ -413,7 +427,7 @@ CREATE INDEX IF NOT EXISTS idx_hypomnema_promotion
     ON hypomnema_entries(agent_id, project_scope, created_at)
     WHERE active = 1 AND graduated_to_engram_id IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hypomnema_one_active_handoff
-    ON hypomnema_entries(agent_id, person_id, project_scope)
+    ON hypomnema_entries(agent_id, person_id, project_scope, author_session)
     WHERE active = 1 AND entry_kind = 'handoff';
 CREATE INDEX IF NOT EXISTS idx_memory_sessions_scope
     ON memory_sessions(agent_id, person_id, project_scope, status, updated_at DESC);
@@ -432,6 +446,18 @@ CREATE INDEX IF NOT EXISTS idx_emotional_history_agent ON emotional_state_histor
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _written_since(timestamp: str | None, cutoff: datetime) -> bool:
+    """Whether an ISO timestamp is at or after ``cutoff``; unreadable is not."""
+
+    try:
+        moment = datetime.fromisoformat(timestamp or "")
+    except (TypeError, ValueError):
+        return False
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment >= cutoff
 
 
 def _new_id() -> str:
@@ -523,6 +549,7 @@ class EngramStore:
         conn = self._get_conn()
         self._backup_before_migration(conn)
         self._reconcile_columns(conn)
+        self._rebuild_handoff_index(conn)
         conn.executescript(SQL_CREATE_TABLES)
         self._classify_legacy_hypomnema(conn)
         self._backfill_engram_scopes(conn)
@@ -588,6 +615,27 @@ class EngramStore:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         destination = backup_dir / f"{self.db_path.stem}.pre-v{SCHEMA_VERSION}-{stamp}.db"
         create_backup(self.db_path, destination, source_connection=conn)
+
+    @staticmethod
+    def _rebuild_handoff_index(conn: sqlite3.Connection) -> None:
+        """Allow one active handoff per session instead of one per scope.
+
+        Up to v9 the index kept a single active handoff per scope, so parallel
+        sessions replaced each other's notes. The index keeps its name on
+        purpose: an older Mnemos still running in a session opened before the
+        upgrade (or installed elsewhere) runs ``CREATE UNIQUE INDEX IF NOT
+        EXISTS`` under that name when it opens the store, which is a no-op
+        while the name exists. Under a new name it would try to build the old
+        per-scope index over several active handoffs and fail to open the
+        store at all. The schema script recreates it with the session column.
+        """
+
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'idx_hypomnema_one_active_handoff'"
+        ).fetchone()
+        if row is not None and "author_session" not in (row[0] or ""):
+            conn.execute("DROP INDEX IF EXISTS idx_hypomnema_one_active_handoff")
 
     @staticmethod
     def _classify_legacy_hypomnema(conn: sqlite3.Connection) -> None:
@@ -1964,16 +2012,26 @@ class EngramStore:
         project_scope: str = "global",
         author_id: str = "",
         author_model: str = "",
+        author_session: str = "",
     ) -> str:
-        """Atomically replace the active handoff while preserving exact prose.
+        """Atomically replace this session's handoff, preserving exact prose.
 
         ``author_model`` signs the handoff with the model that wrote it. The
         next session may be a different model; the signature is how it knows.
+
+        ``author_session`` is the harness session that wrote it. A handoff
+        replaces only the one its own session left before: several sessions
+        often work one scope at once, and each keeps its own note. Writers
+        that can't say which session they are share the empty session and
+        replace each other, as every writer did before sessions were told
+        apart. Beyond ``HANDOFF_SESSIONS_KEPT`` sessions' notes in a scope,
+        the oldest is retired; its prose stays in history.
         """
 
         if not text.strip():
             raise ValueError("Handoff text cannot be empty")
 
+        session = (author_session or "").strip()
         conn = self._get_conn()
         new_id = _new_id()
         now = _utc_now()
@@ -1984,9 +2042,10 @@ class EngramStore:
                 SELECT * FROM hypomnema_entries
                 WHERE agent_id = ? AND person_id = ? AND project_scope = ?
                   AND entry_kind = 'handoff' AND active = 1
+                  AND author_session = ?
                 LIMIT 1
                 """,
-                (agent_id, person_id, project_scope),
+                (agent_id, person_id, project_scope, session),
             ).fetchone()
             if prior is not None:
                 revisions = _decode_json(prior["revisions_json"], [])
@@ -2010,11 +2069,12 @@ class EngramStore:
                 """
                 INSERT INTO hypomnema_entries(
                     id, agent_id, person_id, project_scope, content,
-                    entry_kind, authored_by, author_id, author_model, source,
+                    entry_kind, authored_by, author_id, author_model,
+                    author_session, source,
                     density, domain, tags_json, confidence, salience,
                     active, foundational, revision_count, revisions_json,
                     created_at, last_revised_at, surface_count
-                ) VALUES (?, ?, ?, ?, ?, 'handoff', 'agent', ?, ?, 'observed',
+                ) VALUES (?, ?, ?, ?, ?, 'handoff', 'agent', ?, ?, ?, 'observed',
                           0.9, 'situational', ?, 1.0, 1.0,
                           1, 0, 0, '[]', ?, ?, 0)
                 """,
@@ -2026,6 +2086,7 @@ class EngramStore:
                     text,
                     (author_id or agent_id).strip(),
                     (author_model or "").strip(),
+                    session,
                     _encode_json(["session-handoff", "continuity"]),
                     now,
                     now,
@@ -2035,6 +2096,38 @@ class EngramStore:
                 conn.execute(
                     "UPDATE hypomnema_entries SET superseded_by = ? WHERE id = ?",
                     (new_id, prior["id"]),
+                )
+            # Bound how many sessions' notes stay active. A note pushed out
+            # here is retired, not superseded: nothing replaced its content.
+            crowded = conn.execute(
+                f"""
+                SELECT id, content, revisions_json FROM hypomnema_entries
+                WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+                  AND entry_kind = 'handoff' AND active = 1
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT -1 OFFSET {int(HANDOFF_SESSIONS_KEPT)}
+                """,
+                (agent_id, person_id, project_scope),
+            ).fetchall()
+            for row in crowded:
+                revisions = _decode_json(row["revisions_json"], [])
+                revisions.append({
+                    "at": now,
+                    "prior_content": row["content"],
+                    "reason": (
+                        f"retired: {HANDOFF_SESSIONS_KEPT} newer sessions have "
+                        "left handoffs since"
+                    ),
+                })
+                conn.execute(
+                    """
+                    UPDATE hypomnema_entries
+                    SET active = 0,
+                        revision_count = revision_count + 1,
+                        revisions_json = ?, last_revised_at = ?
+                    WHERE id = ?
+                    """,
+                    (_encode_json(revisions), now, row["id"]),
                 )
             self._commit()
         except Exception:
@@ -2064,6 +2157,50 @@ class EngramStore:
             sql, (agent_id, person_id, project_scope)
         ).fetchone()
         return self._hydrate_hypomnema_row(dict(row)) if row else None
+
+    def live_handoffs(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        reader_session: str = "",
+        limit: int = PACKET_HANDOFFS,
+        within_hours: float = LIVE_HANDOFF_HOURS,
+    ) -> list[dict[str, Any]]:
+        """The handoffs a starting session is handed, in the order it reads them.
+
+        First the note the reader's own session left, if it left one: a
+        session coming back from compaction or a resume gets its own thread
+        back before anyone else's. Otherwise the newest note, however old, as
+        before sessions were told apart. Then other sessions' notes, newest
+        first, while they are no older than ``within_hours``, up to ``limit``
+        notes in all.
+        """
+
+        rows = self._get_conn().execute(
+            """
+            SELECT * FROM hypomnema_entries
+            WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+              AND entry_kind = 'handoff' AND active = 1
+            ORDER BY created_at DESC, rowid DESC
+            """,
+            (agent_id, person_id, project_scope),
+        ).fetchall()
+        notes = [self._hydrate_hypomnema_row(dict(row)) for row in rows]
+        if not notes:
+            return []
+        reader = (reader_session or "").strip()
+        first = next(
+            (note for note in notes if reader and note.get("author_session") == reader),
+            notes[0],
+        )
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=within_hours)
+        others = [
+            note for note in notes
+            if note["id"] != first["id"] and _written_since(note.get("created_at"), cutoff)
+        ]
+        return [first, *others[: max(0, int(limit) - 1)]]
 
     def hypomnema_signers(
         self,
@@ -2202,8 +2339,15 @@ class EngramStore:
         project_scope: str = "global",
         limit: int = 8,
         include_inactive: bool = False,
+        exclude_kinds: tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
-        """Search scoped hypomnema entries by text, confidence, and salience."""
+        """Search scoped hypomnema entries by text, confidence, and salience.
+
+        ``exclude_kinds`` leaves out entry kinds a caller renders elsewhere or
+        must never touch. Handoffs rank near the top of every search (they are
+        stored at full confidence and salience), so a caller that filters them
+        out after ranking loses a slot to each one.
+        """
         conn = self._get_conn()
         sql = (
             "SELECT * FROM hypomnema_entries "
@@ -2212,6 +2356,10 @@ class EngramStore:
         params: list[Any] = [agent_id, person_id, project_scope]
         if not include_inactive:
             sql += " AND active = 1"
+        kinds = [kind for kind in exclude_kinds if kind in VALID_HYPO_ENTRY_KINDS]
+        if kinds:
+            sql += f" AND entry_kind NOT IN ({', '.join('?' for _ in kinds)})"
+            params.extend(kinds)
         # Every note in scope is scored. A cap applied *before* scoring is a
         # silent amnesia: at 200 notes the old `LIMIT 100` made half of an
         # agent's continuity unreachable no matter how relevant it was, and

@@ -19,7 +19,9 @@ from typing import Any
 from .authorship import (
     clean_model_id,
     display_name,
+    from_same_session,
     handoff_framing,
+    harness_session,
     note_signature,
     resolve_author_model,
     signature,
@@ -30,6 +32,7 @@ from .core.types import SourceType
 from .dream_journal import DREAM_JOURNAL_TAG, fetch_active_dream_entry
 from .encoding.encoder import Encoder
 from .identity_svg import build_timeline, render_identity_svg, short_label
+from .interface.context_packet import format_other_handoffs
 from .retrieval.reactive import ReactiveRetriever
 # Re-exported: MnemosScope and resolve_scope moved to simple_scope but
 # remain importable from here for existing consumers.
@@ -70,6 +73,11 @@ _MAX_HOST_MUTATION_REQUEST_BYTES = 1024 * 1024
 # every recall slot for some ordinary questions.
 LEGACY_CLASSES = ("lessons", "other", "indexer")
 LEGACY_DEFAULT_INCLUDE = ("lessons", "other")
+
+
+# Hypomnema ids are uuid4 strings. Recall treats a query of exactly this shape
+# as an id before it treats it as words.
+_ENTRY_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
 class HostMutationConflictError(ValueError):
@@ -1518,19 +1526,27 @@ class MnemosRuntime:
         self._current_session()
         maintenance = self.maintain(auto=True)
         stats = self._stats()
-        handoff = self._store.get_latest_handoff(
+        # Several sessions can work this scope at once, each with its own
+        # handoff. This session's own note comes first (after compaction it
+        # is the thread it was in), then other sessions' recent notes.
+        reader_session = harness_session()
+        handoffs = self._store.live_handoffs(
             agent_id=self.scope.agent_id,
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
+            reader_session=reader_session,
         )
-        # Fetch extras so dedicated handoff and maintenance sections never
-        # reduce the number of ordinary continuity notes.
+        handoff = handoffs[0] if handoffs else None
+        # Fetch extras so the dedicated maintenance section never reduces the
+        # number of ordinary continuity notes. Handoffs are excluded from the
+        # search itself; each one would otherwise cost a slot.
         all_continuity = self._store.search_hypomnema(
             query,
             agent_id=self.scope.agent_id,
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=max_results + 4,
+            exclude_kinds=("handoff",),
         )
         all_continuity = _filter_continuity(query, all_continuity)
         maintenance_reports = [
@@ -1567,6 +1583,7 @@ class MnemosRuntime:
                 handoff.get("author_model") or "",
                 _age_text(handoff["created_at"]),
                 reader,
+                same_session=from_same_session(reader_session, handoff.get("author_session")),
             )
             lines.extend([
                 "",
@@ -1574,12 +1591,18 @@ class MnemosRuntime:
                 handoff["content"],
                 guidance,
             ])
-            self._store.mark_handoff_surfaced(
-                handoff["id"],
-                agent_id=self.scope.agent_id,
-                person_id=self.scope.person_id,
-                project_scope=self.scope.project_scope,
+            others = format_other_handoffs(
+                handoffs[1:], reader_session=reader_session, heading_prefix="",
             )
+            if others:
+                lines.extend(["", *others.splitlines()])
+            for delivered in handoffs:
+                self._store.mark_handoff_surfaced(
+                    delivered["id"],
+                    agent_id=self.scope.agent_id,
+                    person_id=self.scope.person_id,
+                    project_scope=self.scope.project_scope,
+                )
 
         lines.extend([
             "",
@@ -1664,6 +1687,7 @@ class MnemosRuntime:
         self._ensure_init()
         assert self._store is not None
         author = self.author_model()
+        session = harness_session()
         handoff_id = self._store.write_handoff(
             text,
             agent_id=self.scope.agent_id,
@@ -1671,14 +1695,50 @@ class MnemosRuntime:
             project_scope=self.scope.project_scope,
             author_id=self.scope.agent_id,
             author_model=author,
+            author_session=session,
         )
+        if session:
+            lasts = (
+                "It replaces only the handoff this session left before; notes "
+                "other sessions left stay beside it. It remains active until "
+                "this session replaces it or you forget it."
+            )
+        else:
+            lasts = (
+                "It will be delivered first in the next session and will remain "
+                "active until you replace or forget it."
+            )
         return (
             "Session handoff saved exactly as written.\n"
             f"Handoff ID: {handoff_id}\n"
             f"{self._signed_line(author)}\n"
-            "It will be delivered first in the next session and will remain "
-            "active until you replace or forget it."
+            f"{lasts}"
         )
+
+    def _recall_handoff(self, handoff_id: str) -> str:
+        """A handoff read whole by its id, signed, or ``""`` if it isn't one."""
+
+        if not _ENTRY_ID.fullmatch(handoff_id):
+            return ""
+        assert self._store is not None
+        note = self._store.get_hypomnema_entry(
+            handoff_id,
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+        )
+        if not note or note.get("entry_kind") != "handoff":
+            return ""
+        heading, guidance = handoff_framing(
+            note.get("author_model") or "",
+            _age_text(note["created_at"]),
+            self.author_model(),
+            same_session=from_same_session(harness_session(), note.get("author_session")),
+        )
+        lines = [heading, note["content"], guidance]
+        if not note.get("active"):
+            lines.append("This note is no longer active: a newer one replaced it or it was forgotten.")
+        return "\n".join(lines)
 
     def identity_graph(self, max_nodes: int = 18) -> dict[str, Any]:
         """Build a portable identity graph snapshot for visual-capable clients."""
@@ -1907,12 +1967,19 @@ class MnemosRuntime:
         self._ensure_init()
         assert self._store is not None
 
+        # The packet shows other sessions' handoffs as short lines, each with
+        # its id. Recalling that id returns the note whole.
+        whole = self._recall_handoff(query.strip())
+        if whole:
+            return whole
+
         continuity = self._store.search_hypomnema(
             query,
             agent_id=self.scope.agent_id,
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=max_results,
+            exclude_kinds=("handoff",),
         )
         continuity = _filter_continuity(query, continuity)
         memories = self._retrieve(query, max_results=max_results)
@@ -2080,12 +2147,16 @@ class MnemosRuntime:
         search_text = query.strip() or correction.strip()
         query_text = query.strip()
         if query_text:
+            # A handoff is replaced by writing a new one. A correction found
+            # by searching must never land on one: it would overwrite the
+            # agent's exact note with the correction text, or forget it.
             matches = self._store.search_hypomnema(
                 query_text,
                 agent_id=self.scope.agent_id,
                 person_id=self.scope.person_id,
                 project_scope=self.scope.project_scope,
                 limit=1,
+                exclude_kinds=("handoff",),
             )
             if matches:
                 match = matches[0]

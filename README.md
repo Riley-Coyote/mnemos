@@ -112,7 +112,7 @@ Simple mode exposes nine user-facing tools:
 | Tool | Purpose |
 |---|---|
 | `mnemos_context` | Startup continuity packet. Auto-creates local storage, runs lightweight maintenance, and can optionally include an identity graph artifact. |
-| `mnemos_handoff` | Leave an exact, signed note in the agent's own words for whoever works in this scope next — possibly a different model. A new note atomically replaces the active one while preserving history; remove it with `mnemos_correct`. |
+| `mnemos_handoff` | Leave an exact, signed note in the agent's own words for whoever works in this scope next — possibly a different model. Each session keeps its own note: a new one replaces only what that session left before (history is kept), so parallel sessions no longer overwrite each other. Remove one with `mnemos_correct`. |
 | `mnemos_capture` | Capture durable preferences, decisions, project state, workflows, and context. |
 | `mnemos_recall` | Search scoped continuity and durable memory with natural language. |
 | `mnemos_correct` | Update, supersede, or archive stale memory. |

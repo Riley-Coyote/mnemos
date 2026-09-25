@@ -16,6 +16,10 @@ Signatures come from, in order:
 4. nothing. An unsigned note is recorded as unsigned, never guessed.
 
 Detection reads only the tail of the transcript and keeps only the model id.
+
+A handoff is also marked with the harness session that wrote it. Several
+sessions often run at once in one scope, and a note left by another session is
+a colleague's even when the same model wrote it.
 """
 
 from __future__ import annotations
@@ -93,6 +97,29 @@ def signature(model: str) -> str:
     return model if name == model else f"{name} ({model})"
 
 
+def clean_session_id(value: object) -> str:
+    """A harness session id if ``value`` looks like one, else ``""``."""
+
+    if not isinstance(value, str):
+        return ""
+    session = value.strip()
+    return session if _SESSION_ID.fullmatch(session) else ""
+
+
+def harness_session(environ: Mapping[str, str] | None = None) -> str:
+    """The Claude Code session this process serves, or ``""``.
+
+    Claude Code gives every MCP server it spawns ``CLAUDE_CODE_SESSION_ID``,
+    and its SessionStart hook receives the same id as ``session_id``, so a
+    handoff written here and the packet read at the next start agree on which
+    session is which without the agent saying anything. The id survives
+    compaction. Clients that don't set it get ``""``.
+    """
+
+    env = os.environ if environ is None else environ
+    return clean_session_id(env.get("CLAUDE_CODE_SESSION_ID"))
+
+
 def detect_harness_model(environ: Mapping[str, str] | None = None) -> str:
     """The model the current harness session is running, if it says so.
 
@@ -105,8 +132,8 @@ def detect_harness_model(environ: Mapping[str, str] | None = None) -> str:
     """
 
     env = os.environ if environ is None else environ
-    session_id = (env.get("CLAUDE_CODE_SESSION_ID") or "").strip()
-    if not _SESSION_ID.fullmatch(session_id):
+    session_id = harness_session(env)
+    if not session_id:
         return ""
     try:
         transcript = _claude_code_transcript(session_id, env)
@@ -179,17 +206,46 @@ def note_signature(entry: Mapping[str, object]) -> str:
     return "co-formed" if entry.get("authored_by") == "coauthored" else "unsigned"
 
 
-def handoff_framing(author_model: str, age: str, reader_model: str = "") -> tuple[str, str]:
+def from_same_session(reader_session: str, note_session: object) -> bool | None:
+    """Whether a note came from the reader's own session; ``None`` if unknown.
+
+    Both sides must be known. A note written before sessions were told apart,
+    or read by a client that can't say which session it is, is neither.
+    """
+
+    reader = clean_session_id(reader_session)
+    note = clean_session_id(note_session)
+    if not reader or not note:
+        return None
+    return reader == note
+
+
+def handoff_framing(
+    author_model: str,
+    age: str,
+    reader_model: str = "",
+    *,
+    same_session: bool | None = None,
+) -> tuple[str, str]:
     """Heading and guidance for a handoff, honest about who wrote it.
 
     The reader is named only when the harness has said which model it is;
     otherwise the guidance asks the reader to compare the signature itself.
     A handoff is never presented as the reader's own words unless it is.
+
+    ``same_session`` says whether the reader's own session left the note, when
+    both sessions are known. A note from another session is a colleague's even
+    when the same model wrote it: several sessions of one model often work in
+    parallel on different things.
     """
 
     quiet = "Don't narrate the memory system to the human."
     author = signature(author_model)
     reader = signature(reader_model)
+    if same_session is True:
+        return _own_session_framing(author_model, author, reader_model, reader, age, quiet)
+    if same_session is False:
+        return _other_session_framing(author_model, author, reader_model, reader, age, quiet)
     if not author:
         return (
             f"Left by an earlier session, {age}. It isn't signed.",
@@ -213,3 +269,59 @@ def handoff_framing(author_model: str, age: str, reader_model: str = "") -> tupl
         "that wrote it. If this signature isn't yours, it's a colleague's note, "
         f"not something you did: take what's useful and don't claim it. {quiet}",
     )
+
+
+def _own_session_framing(
+    author_model: str, author: str, reader_model: str, reader: str, age: str, quiet: str,
+) -> tuple[str, str]:
+    """A note this very session left, e.g. before it was compacted."""
+
+    if not author:
+        return (
+            f"Left earlier in this session, {age}. It isn't signed.",
+            f"It's this conversation's own note: carry on from it. {quiet}",
+        )
+    if reader and same_model(author_model, reader_model):
+        return (
+            f"Left earlier in this session by {author} — the same model as you — {age}.",
+            f"Carry on from it. {quiet}",
+        )
+    if reader:
+        return (
+            f"Left earlier in this session by {author}, {age}. "
+            f"You are {reader}, a different model.",
+            "The model changed during this session, so this is a colleague's "
+            f"note: take what's useful and don't claim their work as yours. {quiet}",
+        )
+    return (
+        f"Left earlier in this session by {author}, {age}.",
+        "Carry on from it. If that signature isn't yours, the model changed "
+        f"during this session and the work is a colleague's: don't claim it. {quiet}",
+    )
+
+
+def _other_session_framing(
+    author_model: str, author: str, reader_model: str, reader: str, age: str, quiet: str,
+) -> tuple[str, str]:
+    """A note another session left: a colleague's, whichever model wrote it."""
+
+    colleague = (
+        "Another session's note is a colleague's, not your memory of this "
+        f"conversation: take what's useful, and don't claim its work as yours. {quiet}"
+    )
+    if not author:
+        return (
+            f"Left by another session, {age}. It isn't signed.",
+            colleague,
+        )
+    if reader and same_model(author_model, reader_model):
+        return (
+            f"Left by {author} — the same model as you, in another session — {age}.",
+            colleague,
+        )
+    if reader:
+        return (
+            f"Left by {author} in another session, {age}. You are {reader}, a different model.",
+            colleague,
+        )
+    return (f"Left by {author} in another session, {age}.", colleague)

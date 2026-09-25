@@ -599,10 +599,18 @@ class MnemosRuntime:
         except Exception:
             self._llm_client = None
 
+        # The encoding section of ~/.mnemos/config.json, so what it sets (the
+        # bar for links made at save time) is applied rather than silently
+        # replaced by the defaults.
+        try:
+            encoding_config = load_config().get("encoding")
+        except Exception:
+            encoding_config = None
         self._encoder = Encoder(
             self._store,
             embedding_index=self._embedding_index,
             llm_client=self._llm_client,
+            config=encoding_config,
         )
         self._retriever = ReactiveRetriever(
             self._store,

@@ -211,6 +211,7 @@ def _init_store(db_path: str = "~/.mnemos/memory.db") -> None:
             embedding_index=_embedding_index,
             llm_client=_llm_client,
             shared_pool=_shared_pool,
+            config=_get_config().get("encoding"),
         )
         _retriever = ReactiveRetriever(
             _store,

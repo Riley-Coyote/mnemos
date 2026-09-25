@@ -196,6 +196,33 @@ def main(argv: list[str] | None = None) -> int:
         help="Report what would be restored without writing",
     )
 
+    # ── adopt-legacy ──
+    p_adopt = sub.add_parser(
+        "adopt-legacy",
+        help="Bring back memories the scope migration left unreachable "
+             "(dry run unless --write)",
+    )
+    p_adopt.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
+    p_adopt.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    # SUPPRESS rather than None: whether the target person was named is part
+    # of the safety check, so a flag given before the subcommand must survive
+    # and an absent one must stay absent.
+    p_adopt.add_argument("--person-id", default=argparse.SUPPRESS, help="Target person scope")
+    p_adopt.add_argument(
+        "--project-scope", default=argparse.SUPPRESS, help="Target project scope"
+    )
+    p_adopt.add_argument(
+        "--include",
+        default="lessons,other",
+        help="Comma-separated kinds to bring back: lessons, other, indexer "
+             "(default: lessons,other)",
+    )
+    p_adopt.add_argument(
+        "--write",
+        action="store_true",
+        help="Apply the change instead of printing what it would do",
+    )
+
     # ── hermes ──
     p_hermes = sub.add_parser("hermes", help="Hermes Agent identity-continuity integration")
     hermes_sub = p_hermes.add_subparsers(dest="hermes_command")
@@ -423,6 +450,7 @@ def main(argv: list[str] | None = None) -> int:
         "remember": _cmd_remember,
         "doctor": _cmd_doctor,
         "repair-softening": _cmd_repair_softening,
+        "adopt-legacy": _cmd_adopt_legacy,
         "hermes": _cmd_hermes,
         "identity": _cmd_identity,
         "mcp": _cmd_mcp,
@@ -1397,6 +1425,104 @@ def _cmd_repair_softening(args: argparse.Namespace) -> int:
         runtime.close()
 
 
+def _cmd_adopt_legacy(args: argparse.Namespace) -> int:
+    """Bring back memories the v6 scope migration left where no read reaches.
+
+    The migration gave each legacy engram a person and project only when one
+    continuity scope claimed it; the rest were quarantined, and on a real
+    store that was thousands of rows, lessons among them. This is the way
+    back out, and only a human runs it: a dry run unless --write, a verified
+    backup before anything moves, and no guessing between people.
+    """
+    from .simple_runtime import LEGACY_CLASSES, MnemosRuntime
+
+    include = tuple(dict.fromkeys(
+        part.strip() for part in args.include.split(",") if part.strip()
+    ))
+    if not include or any(part not in LEGACY_CLASSES for part in include):
+        print(
+            f"--include takes {', '.join(LEGACY_CLASSES)}; got {args.include!r}",
+            file=sys.stderr,
+        )
+        return 2
+
+    person = getattr(args, "person_id", None)
+    project = getattr(args, "project_scope", None)
+    runtime = MnemosRuntime(
+        db_path=getattr(args, "db_path", None),
+        agent_id=getattr(args, "agent_id", None),
+        person_id=person,
+        project_scope=project,
+    )
+    try:
+        plan = runtime.adopt_legacy(
+            include=include,
+            write=args.write,
+            scope_confirmed=person is not None and project is not None,
+        )
+    finally:
+        runtime.close()
+
+    if not plan["exists"]:
+        print(f"No store at {runtime.db_path}; nothing to bring back.")
+        return 0
+
+    agent, target_person, target_project = plan["target"]
+    counts = plan["counts"]
+    labels = {
+        "lessons": "lessons",
+        "other": "written some other way",
+        "indexer": "from the transcript indexer",
+    }
+    print(f"Legacy memories for {agent} in {runtime.db_path}")
+    print("They predate scoping, so recall and maintenance never reach them.")
+    print()
+    for name in LEGACY_CLASSES:
+        fate = "come back" if name in plan["include"] else "stay hidden"
+        print(f"  {counts[name]:>7,}  {labels[name]:<28} {fate}")
+    print(f"  {counts['archived']:>7,}  {'archived':<28} stay archived")
+    print()
+    print(f"Into:    {agent} / {target_person} / {target_project}")
+    if plan["other_scopes"]:
+        print("Also in use by this agent: " + ", ".join(
+            f"{p}/{s}" for p, s in plan["other_scopes"]
+        ))
+
+    if plan["refused"]:
+        print()
+        print(plan["refused"])
+        return 1
+    if not plan["selected"]:
+        print()
+        print("Nothing to bring back.")
+        return 0
+    if args.write:
+        print()
+        print(
+            f"Brought back {plan['adopted']:,} memories into "
+            f"{agent} / {target_person} / {target_project}."
+        )
+        print(f"Backup: {plan['backup']}")
+        return 0
+
+    print()
+    print("First of what comes back:")
+    for row in plan["selected"][:5]:
+        text = " ".join(str(row["content"]).split())
+        print(f"  - [{row['class']}] {text[:100]}{'...' if len(text) > 100 else ''}")
+    print()
+    print(
+        f"Dry run: nothing changed. Re-run with --write to bring back "
+        f"{len(plan['selected']):,} memories; a verified backup is made first."
+    )
+    if "indexer" not in plan["include"]:
+        print(
+            "Transcript-indexer output stays hidden unless named with "
+            "--include indexer: its volume is what buried continuity before."
+        )
+    return 0
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     """Check simple-mode readiness."""
     from .simple_runtime import MnemosRuntime, SIMPLE_TOOL_NAMES
@@ -1437,6 +1563,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         _print_semantic_status(runtime)
         print(f"Simple tools: {', '.join(SIMPLE_TOOL_NAMES)}")
         _print_continuity_status(runtime)
+        _print_legacy_status(runtime)
         print()
         print(runtime.context())
         return 0
@@ -1499,6 +1626,24 @@ def _print_continuity_status(runtime) -> None:
             f"  ATTENTION:  {damaged} memory(ies) were truncated by an earlier "
             "version and can be restored — run 'mnemos repair-softening'"
         )
+
+
+def _print_legacy_status(runtime) -> None:
+    """Report memory the scope migration left where no read reaches.
+
+    The store looks healthy from every other angle: its counts include only
+    what is scoped, and the rest never errors. It simply never comes back.
+    Transcript-indexer output left hidden is the recommended state, not a
+    fault, so it alone raises no ATTENTION; the health card still counts it.
+    """
+    from .simple_runtime import format_legacy_summary
+
+    try:
+        counts = runtime.legacy_counts()
+    except Exception:
+        return
+    if counts.get("lessons") or counts.get("other"):
+        print(f"  ATTENTION:  {format_legacy_summary(counts)}")
 
 
 def _print_background_status(scope) -> None:

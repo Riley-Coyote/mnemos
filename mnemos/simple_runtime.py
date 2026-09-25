@@ -61,6 +61,15 @@ HOST_MUTATION_OPERATIONS = frozenset({
 })
 _MAX_HOST_MUTATION_REQUEST_BYTES = 1024 * 1024
 
+# Legacy engrams the v6 scope migration could not place, by what they are
+# (see EngramStore.unscoped_engrams). `mnemos adopt-legacy` brings back lessons
+# and memories written some other way by default. Transcript-indexer output
+# stays out unless it is named: its volume is what buried continuity before
+# (docs/vision.md, section II), and on a real store adopting all of it took
+# every recall slot for some ordinary questions.
+LEGACY_CLASSES = ("lessons", "other", "indexer")
+LEGACY_DEFAULT_INCLUDE = ("lessons", "other")
+
 
 class HostMutationConflictError(ValueError):
     """An idempotency key was reused for a different mutation request."""
@@ -276,6 +285,93 @@ class MnemosRuntime:
         return repair_rule_based_softening(
             self._store, agent_id=self.scope.agent_id, dry_run=dry_run
         )
+
+    def legacy_counts(self) -> dict[str, int]:
+        """How much of this agent's memory the scope migration left unplaced.
+
+        Read-only, and never creates a store. Archived rows are counted
+        apart: recall would skip them anyway.
+        """
+        if not self.db_path.exists():
+            return _tally_legacy([])
+        self._ensure_init()
+        assert self._store is not None
+        return _tally_legacy(self._store.unscoped_engrams(self.scope.agent_id))
+
+    def adopt_legacy(
+        self,
+        *,
+        include: tuple[str, ...] = LEGACY_DEFAULT_INCLUDE,
+        write: bool = False,
+        scope_confirmed: bool = False,
+    ) -> dict[str, Any]:
+        """Plan, and with ``write`` apply, the return of quarantined memories.
+
+        The v6 migration left every legacy engram it could not tie to one
+        continuity scope without a person or project, where no scoped read
+        reaches it. That quarantine is the safe default and stays one: this
+        moves the chosen classes into the current scope only when a human
+        asks, after a verified backup.
+
+        It will not choose between people. When this agent holds memory for
+        anyone other than the target person, the caller must confirm the
+        target was named explicitly (``scope_confirmed``) or nothing moves.
+        A store that does not exist is reported, never created.
+        """
+        plan: dict[str, Any] = {
+            "target": (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
+            "exists": self.db_path.exists(),
+            "include": tuple(include),
+            "counts": {},
+            "selected": [],
+            "other_scopes": [],
+            "refused": None,
+            "adopted": 0,
+            "backup": None,
+        }
+        if not plan["exists"]:
+            return plan
+        self._ensure_init()
+        assert self._store is not None
+
+        rows = self._store.unscoped_engrams(self.scope.agent_id)
+        plan["counts"] = _tally_legacy(rows)
+        plan["selected"] = [
+            row for row in rows
+            if row["state"] != "archived" and row["class"] in include
+        ]
+        target = (self.scope.person_id, self.scope.project_scope)
+        scopes = self._store.engram_scopes_in_use(self.scope.agent_id)
+        plan["other_scopes"] = sorted(scope for scope in scopes if scope != target)
+        people = {person for person, _ in scopes} | {self.scope.person_id}
+        if not write or not plan["selected"]:
+            return plan
+        if len(people) > 1 and not scope_confirmed:
+            others = ", ".join(sorted(people - {self.scope.person_id}))
+            plan["refused"] = (
+                f"This agent also holds memory for: {others}. Mnemos will not guess "
+                "whose these are. Name the target with --person-id and --project-scope."
+            )
+            return plan
+
+        from .backup import create_backup
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        destination = (
+            self.db_path.parent / "backups"
+            / f"{self.db_path.stem}.pre-adopt-legacy-{stamp}.db"
+        )
+        backup = create_backup(
+            self.db_path, destination, source_connection=self._store._get_conn()
+        )
+        plan["backup"] = backup["path"]
+        plan["adopted"] = self._store.adopt_unscoped_engrams(
+            [row["id"] for row in plan["selected"]],
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+        )
+        return plan
 
     def close(self) -> None:
         if self._store is not None:
@@ -2289,6 +2385,10 @@ class MnemosRuntime:
             },
             "handoff": handoff_health,
             "continuity": self.continuity_signals(),
+            # Memory held in this file that no read path reaches. Without this
+            # the card counted only the scoped rows, and a store holding
+            # thousands of quarantined memories reported a healthy few hundred.
+            "legacy": self.legacy_counts(),
             "semantic": self.semantic_status(),
         }
 
@@ -2501,6 +2601,34 @@ def _human_size(num_bytes: int) -> str:
     return f"{size:.1f} {unit}"
 
 
+def _tally_legacy(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Count unscoped rows by kind; archived ones apart, as recall skips them."""
+
+    counts = {"hidden": 0, "archived": 0, **{name: 0 for name in LEGACY_CLASSES}}
+    for row in rows:
+        if row["state"] == "archived":
+            counts["archived"] += 1
+            continue
+        counts["hidden"] += 1
+        counts[row["class"]] += 1
+    return counts
+
+
+def format_legacy_summary(counts: Mapping[str, int] | None) -> str | None:
+    """One plain sentence about memory the scope migration hid, or None."""
+
+    if not counts or not counts.get("hidden"):
+        return None
+    lessons = counts.get("lessons", 0)
+    parts = [
+        f"{lessons:,} lesson{'' if lessons == 1 else 's'}" if lessons else "",
+        f"{counts['other']:,} other" if counts.get("other") else "",
+        f"{counts['indexer']:,} from the transcript indexer" if counts.get("indexer") else "",
+    ]
+    return (
+        f"{counts['hidden']:,} older memories from before scoping never reach recall "
+        f"({', '.join(part for part in parts if part)}); see 'mnemos adopt-legacy'"
+    )
 def describe_semantic(semantic: dict[str, Any]) -> tuple[str, list[str], list[str]]:
     """Say whether recall can seed by meaning, in plain words.
 
@@ -2630,6 +2758,8 @@ def format_health_card(data: dict[str, Any]) -> str:
             detail = f"carrying continuity (last capture {since} session(s) ago)"
         continuity_lines = ["", f"Continuity check: {detail}, {streak} empty packet(s) in a row."]
 
+    legacy = format_legacy_summary(data.get("legacy"))
+    legacy_lines = [line("Hidden", legacy)] if legacy else []
     semantic_headline, semantic_details, semantic_attention = describe_semantic(
         data.get("semantic") or {}
     )
@@ -2653,6 +2783,7 @@ def format_health_card(data: dict[str, Any]) -> str:
             f"{counts['memories_active']} active, "
             f"{counts['memories_archived']} archived",
         ),
+        *legacy_lines,
         line(
             "Continuity",
             f"{counts['continuity_notes_active']} notes "

@@ -907,6 +907,109 @@ class EngramStore:
             return None
         return self.get_engram(engram_id)
 
+    # ── Legacy rows without a scope ──
+
+    def unscoped_engrams(self, agent_id: str) -> list[dict[str, Any]]:
+        """This agent's engrams that the v6 scope migration could not place.
+
+        ``_backfill_engram_scopes`` leaves them without a person or project,
+        so every scoped read and every scoped maintenance pass skips them.
+        Each row is classified so a human can decide what comes back:
+
+        - ``lessons``: what softening distilled from a fading memory — the
+          target of a ``distilled_into`` edge, or tagged ``distilled``. A
+          lesson inherits its source's tags, so it may also carry the
+          indexer's; it is still a lesson.
+        - ``indexer``: transcript-indexer output (tagged ``session-indexed``),
+          including rows the indexer itself labelled "lesson".
+        - ``other``: anything written through another path.
+        """
+        rows = self._get_conn().execute(
+            """
+            SELECT e.id, e.state, e.tags, e.content,
+                   EXISTS (
+                       SELECT 1 FROM connections c
+                       WHERE c.target_id = e.id AND c.relation = 'distilled_into'
+                   ) AS distilled
+            FROM engrams e
+            WHERE e.owner_agent_id = ?
+              AND (e.person_id IS NULL OR e.person_id = ''
+                   OR e.project_scope IS NULL OR e.project_scope = '')
+            ORDER BY e.created_at
+            """,
+            (agent_id,),
+        ).fetchall()
+        classified = []
+        for row in rows:
+            try:
+                tags = set(json.loads(row["tags"] or "[]"))
+            except (TypeError, ValueError):
+                tags = set()
+            if row["distilled"] or "distilled" in tags:
+                kind = "lessons"
+            elif "session-indexed" in tags:
+                kind = "indexer"
+            else:
+                kind = "other"
+            classified.append({
+                "id": row["id"],
+                "state": row["state"],
+                "class": kind,
+                "content": row["content"],
+            })
+        return classified
+
+    def engram_scopes_in_use(self, agent_id: str) -> set[tuple[str, str]]:
+        """Every person/project pair this agent holds scoped memory under."""
+        conn = self._get_conn()
+        scopes = {
+            (row[0], row[1])
+            for row in conn.execute(
+                "SELECT DISTINCT person_id, project_scope FROM engrams "
+                "WHERE owner_agent_id = ? AND person_id <> '' AND project_scope <> ''",
+                (agent_id,),
+            )
+        }
+        scopes.update(
+            (row[0], row[1])
+            for row in conn.execute(
+                "SELECT DISTINCT person_id, project_scope FROM hypomnema_entries "
+                "WHERE agent_id = ?",
+                (agent_id,),
+            )
+        )
+        return scopes
+
+    def adopt_unscoped_engrams(
+        self,
+        engram_ids: list[str],
+        *,
+        agent_id: str,
+        person_id: str,
+        project_scope: str,
+    ) -> int:
+        """Give quarantined legacy engrams one explicit scope, all or nothing.
+
+        Whatever ids are passed, only rows that are still unscoped, owned by
+        ``agent_id`` and not archived are touched. Returns how many moved.
+        """
+        ids = list(dict.fromkeys(engram_ids))
+        adopted = 0
+        with self.transaction() as conn:
+            for start in range(0, len(ids), 500):
+                chunk = ids[start:start + 500]
+                marks = ",".join("?" * len(chunk))
+                cursor = conn.execute(
+                    "UPDATE engrams SET person_id = ?, project_scope = ? "
+                    "WHERE owner_agent_id = ? AND state != 'archived' "
+                    "AND (person_id IS NULL OR person_id = '' "
+                    "     OR project_scope IS NULL OR project_scope = '') "
+                    f"AND id IN ({marks})",
+                    (person_id, project_scope, agent_id, *chunk),
+                )
+                adopted += cursor.rowcount
+        return adopted
+
     def get_engram(self, engram_id: str) -> Engram | None:
         """Load an engram by ID, including connections and versions."""
         conn = self._get_conn()

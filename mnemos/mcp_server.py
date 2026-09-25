@@ -43,7 +43,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from .authorship import resolve_author_model
+from .authorship import harness_session, resolve_author_model
 from .core.types import EngramKind, SourceType
 from .store.sqlite_store import EngramStore
 from .store.embedding_index import EmbeddingIndex
@@ -1005,6 +1005,7 @@ def mnemos_context_packet(
         session_id=session_id,
         token_budget=max(500, token_budget),
         include_prompt=True,
+        reader_session=harness_session(),
     )
     if include_json:
         return json.dumps(packet, indent=2, ensure_ascii=True, default=str)

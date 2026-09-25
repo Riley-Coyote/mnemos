@@ -81,6 +81,8 @@ of how you work, not as tools to reach for when prompted:
    state, changed understanding, open threads, and the next useful action.
    Do not call it after every ordinary turn. It is a note to whoever works
    here next, which may be a different model, not a summary for the human.
+   Each session keeps its own handoff, so write about your own work; notes
+   other sessions leave stay beside yours.
 
 Two things to get right:
 
@@ -239,9 +241,11 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         The next session may be a different model. The note is signed with
         your model id, so it can tell your note from its own memory.
 
-        The text is stored exactly as supplied. A new handoff atomically
-        replaces the active one while preserving the prior version in history.
-        Mnemos never summarizes, rewrites, promotes, decays, or expires it.
+        The text is stored exactly as supplied. Each session keeps its own
+        handoff: a new one replaces only the note this session left before,
+        preserving it in history, and notes other sessions left stay beside
+        it, so write about your own work, not theirs. Mnemos never
+        summarizes, rewrites, promotes, decays, or expires it.
         """
 
         return _output(_get_runtime().handoff(
@@ -299,7 +303,10 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             )
         )
         def mnemos_recall(query: str, max_results: int = 5) -> str:
-            """Recall relevant continuity and durable memories."""
+            """Recall relevant continuity and durable memories.
+
+            Pass a handoff's id as the query to read that note whole.
+            """
 
             return _output(_get_runtime().recall(
                 query=_text("query", query, MAX_QUERY_CHARS, required=True),

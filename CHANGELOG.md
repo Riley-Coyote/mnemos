@@ -2,6 +2,44 @@
 
 ## 0.3.1 (unreleased)
 
+### Parallel sessions keep their own handoffs
+
+There was one handoff slot per scope, so when several sessions worked the same
+scope at once, each session's handoff replaced whatever another session had
+left, and the next session in either thread was handed the other thread's note
+first. On one real store, 61 of 208 handoff replacements came from a different
+session, and 18 of those replaced a note no session had read. Agents had
+started writing combined handoffs to carry each other's threads.
+
+- A handoff now belongs to the session that wrote it. Claude Code gives every
+  MCP server `CLAUDE_CODE_SESSION_ID` and gives the SessionStart hook the same
+  id, so nothing is asked of the agent or the human. A new handoff replaces
+  only the note its own session left before; other sessions' notes stay.
+  Clients that don't identify their session keep one shared note, as before.
+- The packet hands a session its own note first (after compaction or a resume
+  it gets its own thread back), otherwise the newest note, whole. Up to two
+  other sessions' notes from the last three days follow as one short, signed
+  line each, with the id to read one whole through `mnemos_recall`.
+- A note from another session is framed as a colleague's even when the same
+  model wrote it, and "the same model as you… Carry on from it" is said only of
+  a note this session left.
+- At most eight sessions' notes stay active per scope; beyond that the oldest
+  is retired, with its prose kept in history.
+- Handoffs no longer take continuity slots: the packet, `mnemos_context` and
+  `mnemos_recall` leave them out of the ranked continuity search.
+- Fixed: `mnemos_correct` with a `query` could land on the active handoff and
+  overwrite its exact text with the correction, or forget it. A correction
+  found by searching now never touches a handoff.
+
+Schema v10 adds `hypomnema_entries.author_session` and lets the handoff index
+hold one active note per session. The store upgrades itself on open, after a
+verified backup (`backups/<db>.pre-v10-<stamp>.db`); on a 162 MB real store
+that took two seconds. Existing notes keep an empty session and stay as they
+are. An older Mnemos can still open a v10 store: the index keeps its name, and
+while an unidentified note is active an older writer replaces that one rather
+than a session's. A session opened before the upgrade runs the older code until
+it restarts.
+
 ### Memories the scope migration hid
 
 Schema v6 (0.2.1) gave every engram a person and a project. A legacy engram

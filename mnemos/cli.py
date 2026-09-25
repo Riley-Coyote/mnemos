@@ -506,8 +506,11 @@ def _cmd_hook(args: argparse.Namespace) -> int:
     # already there and returns the moment there is nothing more to read.
     #
     # The payload can name the model starting the session (Claude Code sends
-    # `model` on SessionStart when it has one). That is the only use made of
-    # it: the packet can then say whether the reader wrote the handoff.
+    # `model` on SessionStart when it has one) and always names the session
+    # (`session_id`, the same id its MCP servers get as CLAUDE_CODE_SESSION_ID,
+    # kept across compaction). Those are the only uses made of it: the packet
+    # can then say whether the reader wrote the handoff, and hand a session
+    # its own note before other sessions' notes.
     received = bytearray()
     try:
         import select
@@ -522,14 +525,17 @@ def _cmd_hook(args: argparse.Namespace) -> int:
     except Exception:
         pass
     reader_model = ""
+    reader_session = ""
     try:
-        from .authorship import clean_model_id
+        from .authorship import clean_model_id, clean_session_id
 
         payload = json.loads(bytes(received).decode("utf-8")) if received.strip() else {}
         if isinstance(payload, dict):
             reader_model = clean_model_id(payload.get("model"))
+            reader_session = clean_session_id(payload.get("session_id"))
     except Exception:
         reader_model = ""
+        reader_session = ""
 
     try:
         from .interface.context_packet import build_context_packet
@@ -554,6 +560,7 @@ def _cmd_hook(args: argparse.Namespace) -> int:
                 include_prompt=True,
                 include_engrams=bool(getattr(args, "include_graph", False)),
                 reader_model=reader_model,
+                reader_session=reader_session,
             )
         finally:
             store.close()

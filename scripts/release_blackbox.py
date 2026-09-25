@@ -293,12 +293,17 @@ def main() -> int:
         "socket.create_connection = guarded_create_connection\n",
         encoding="utf-8",
     )
+    # The audited sessions are separate sessions. Run from inside a Claude
+    # Code session, every server would otherwise inherit that one session's
+    # id (and read its transcript), so each would take the others' handoffs
+    # for its own.
     env = {
         key: value
         for key, value in os.environ.items()
         if not key.endswith("_API_KEY")
         and not key.startswith("MNEMOS_")
         and key not in {"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"}
+        and key not in {"CLAUDE_CODE_SESSION_ID", "CLAUDE_CONFIG_DIR"}
     }
     env.update(
         {

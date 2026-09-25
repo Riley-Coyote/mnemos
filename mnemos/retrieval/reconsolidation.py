@@ -39,6 +39,11 @@ def reconsolidate(
     becomes temporarily labile and is re-stored with updates based on
     the current retrieval context.
 
+    The update is applied to the engram as ``store`` holds it, reloaded by
+    ID, not to the object passed in: callers may hold a partial engram (FTS
+    results carry no connections or versions), and re-storing one of those
+    would overwrite the links and history it is missing.
+
     Effects:
     1. Access metadata updated (count, timestamp)
     2. Strength increased (retrieval strengthens storage)
@@ -58,8 +63,15 @@ def reconsolidate(
         accessibility_floor: Minimum accessibility after retrieval.
 
     Returns:
-        The updated engram after reconsolidation.
+        The updated engram after reconsolidation — the reloaded object when
+        the store has it, so not necessarily the one passed in.
     """
+    # 0. Reload. An FTS seed arrives without connections or versions, and
+    # re-storing it reset reinforced links to 0.3 and overwrote version 1.
+    stored = store.get_engram(engram.id)
+    if stored is not None:
+        engram = stored
+
     # 1. Access metadata
     engram.record_access()
     engram.reconsolidation_count += 1

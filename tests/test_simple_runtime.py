@@ -603,7 +603,10 @@ def test_health_returns_structured_dict(tmp_path):
         # A health card that can only ever say "fine" is worth nothing on
         # the day it isn't.
         "continuity",
+        # Memory held in the file that no scoped read reaches.
+        "legacy",
     }
+    assert data["legacy"]["hidden"] == 0
     assert data["counts"]["continuity_notes_active"] >= 1
     assert data["store"]["size_bytes"] > 0
     assert data["store"]["db_path"].endswith(".db")

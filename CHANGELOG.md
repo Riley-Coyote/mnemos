@@ -2,6 +2,37 @@
 
 ## 0.3.1 (unreleased)
 
+### Memories the scope migration hid
+
+Schema v6 (0.2.1) gave every engram a person and a project. A legacy engram
+linked to exactly one continuity scope was backfilled into it; every other one
+was left unscoped and quarantined from scoped reads, so it could never be shown
+to the wrong person. The quarantine is right and stays the default. What was
+missing was any sign of it and any way out. Unscoped rows never reach recall,
+never seed or carry spreading activation, and are skipped by scoped maintenance,
+while every count reported only the scoped rows. On one real store the health
+card read "186 active" over a file holding about 7,000 engrams, 105 of them
+lessons distilled from experience.
+
+- `mnemos_health` and `mnemos doctor` now say how many older memories never
+  reach recall, split into lessons, other memories, and transcript-indexer
+  output. Doctor raises ATTENTION only while lessons or other memories remain
+  hidden; indexer output left out is the recommended state.
+- `mnemos adopt-legacy` brings them back, and only a human runs it. It is a dry
+  run unless `--write`, shows what would return, makes a verified backup
+  (`backups/<db>.pre-adopt-legacy-<stamp>.db`) before anything moves, and
+  adopts into the resolved scope. By default it brings back lessons and other
+  memories, never archived rows, and never transcript-indexer output unless
+  named with `--include indexer`. On a copy of the real store, adopting
+  everything took all five recall slots for three of eight ordinary questions,
+  while lessons and other memories changed two of sixty.
+- It will not choose between people: when the agent holds memory for anyone
+  other than the target person, it refuses until `--person-id` and
+  `--project-scope` are given explicitly.
+
+To recover an older store: `mnemos adopt-legacy --agent-id <agent>` to review,
+then the same command with `--write`.
+
 ### Signed notes
 
 One scope is often shared by several models. The same `claude-code` store is

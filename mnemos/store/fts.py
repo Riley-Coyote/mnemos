@@ -35,7 +35,10 @@ def or_query(words: list[str]) -> str:
 
 
 # Words of four letters or more that say nothing about what a text is about.
-# Shorter words are already too short to count.
+# Shorter words are already too short to count. The second group was found
+# winning belief themes on real stores: reporting verbs, connectives, numbers,
+# the halves of contractions ("didn't" splits into "didn" and "t") and URL
+# schemes. A word that can name a subject stays out, however often it comes up.
 _COMMON = frozenset("""
     about above after again against also although always another anything around away back been before
     being below between both came come could does doing done down during each even ever every from have
@@ -43,6 +46,12 @@ _COMMON = frozenset("""
     other ought over same should since some still such take than that their them then there these they
     thing things this those though through till together under until upon very want were what whatever
     when where whether which while will with within without would your yours
+""".split() + """
+    asked asks said says told wants
+    actually already because currently either else exactly instead rather unless
+    anyone everything none nothing someone theirs
+    first second third three four five seven zero
+    didn doesn http https
 """.split())
 
 

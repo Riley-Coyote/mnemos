@@ -36,7 +36,7 @@ from .retrieval.reactive import ReactiveRetriever
 from .simple_scope import MnemosScope, resolve_scope  # noqa: F401
 from .store.embedding_index import EmbeddingIndex
 from .core.placeholders import TEMPLATED_IMPACTS
-from .store.fts import fts_words, or_query
+from .store.fts import distinctive_terms, fts_words, or_query
 from .store.sqlite_store import EngramStore
 
 
@@ -865,14 +865,16 @@ class MnemosRuntime:
         # A theme is a salient content term recurring across several memories.
         # Tags from a simple capture are all bookkeeping, so cluster on content
         # instead — the agent then judges whether the recurrence is a belief.
+        # Salient means distinctive, as for links and lessons: counted over
+        # every word, the ask went to "only", "asked", "first" and "into".
         term_engrams: dict[str, list[str]] = {}
         for row in rows:  # newest first
-            for term in _query_terms(row["content"] or ""):
+            for term in distinctive_terms(row["content"] or "") - _STOPWORDS:
                 # Nearly every note starts with a date, and the tokenizer splits
                 # dates and times into digit-led runs ("2026", "24t22", "11pm"),
                 # so a year outranked every real theme. A number is not a theme;
                 # words, even ones carrying digits like "a11y", lead with a letter.
-                if len(term) <= 3 or term[0].isdigit():
+                if term[0].isdigit():
                     continue
                 ids = term_engrams.setdefault(term, [])
                 if row["id"] not in ids:

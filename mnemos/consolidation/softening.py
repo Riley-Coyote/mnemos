@@ -463,11 +463,35 @@ def _rule_based_impact(content: str) -> str:
 
 
 # Two lessons are the same lesson when they share at least half of the smaller
-# one's distinctive words. Measured on a real store's 631 distilled_into links:
-# a lesson and the impact it was drawn from share all of them (164 links);
-# rewordings of one lesson share 0.49 to 0.71; links the old any-word match made
-# share 0.3 at most, and 451 of them 0.2 or less.
+# one's distinctive words, and at least two of them (_same_lesson). Measured on
+# a real store's 631 distilled_into links: a lesson and the impact it was drawn
+# from share all of them (164 links); rewordings of one lesson share 0.49 to
+# 0.71; links the old any-word match made share 0.3 at most, and 451 of them
+# 0.2 or less.
 _SAME_LESSON = 0.5
+
+
+def _same_lesson(mine: set[str], theirs: set[str]) -> bool:
+    """Whether two texts teach the same lesson, by their distinctive words.
+
+    Half of the smaller set is not enough on its own: when a lesson has two
+    distinctive words, one shared word is half. #75 made many lessons that
+    short ("everything", "else" and "first" became common), and fading
+    memories were filed under lessons they share one word with: "Weather is
+    the book's clock." under "This book is what we're here for; everything
+    else bends around it." So they must also share two words, the rule #74
+    set for links made without a model. A false merge loses a lesson; a
+    missed one only leaves a near-duplicate.
+
+    A lesson with one distinctive word ("Always verify.") shares only one with
+    anything, so it is the same only as a text with exactly that word.
+    Otherwise the memory it was drawn from would stop recognising it and
+    distil a copy every cycle.
+    """
+    shared = len(mine & theirs)
+    if shared >= 2:
+        return overlap(mine, theirs) >= _SAME_LESSON
+    return bool(mine) and mine == theirs
 
 
 def _create_or_reinforce_lesson(
@@ -507,7 +531,7 @@ def _create_or_reinforce_lesson(
     for conn in engram.connections:
         if conn.relation == ConnectionRelation.DISTILLED_INTO:
             lesson = store.get_engram(conn.target_id)
-            if lesson is not None and overlap(mine, distinctive_terms(lesson.content)) >= _SAME_LESSON:
+            if lesson is not None and _same_lesson(mine, distinctive_terms(lesson.content)):
                 return lesson.id
 
     # Look for a lesson that already says the same thing, by the impact's own
@@ -530,8 +554,8 @@ def _create_or_reinforce_lesson(
     for candidate in existing:
         if candidate.id == engram.id:
             continue
-        if ("lesson" in candidate.tags or "distilled" in candidate.tags) and (
-            overlap(mine, distinctive_terms(candidate.content)) >= _SAME_LESSON
+        if ("lesson" in candidate.tags or "distilled" in candidate.tags) and _same_lesson(
+            mine, distinctive_terms(candidate.content)
         ):
             # Reinforce existing lesson
             candidate.strength = min(1.0, candidate.strength + 0.1)
@@ -685,11 +709,11 @@ def find_misfiled_distillations(
     """distilled_into links from this scope's memories that do not hold what they claim.
 
     A link is misfiled when the memory's impact is a placeholder the server
-    wrote, or when the lesson says something else: less than half of the
-    smaller one's distinctive words shared, the bar _create_or_reinforce_lesson
-    now applies before filing anything. Links made before that bar existed were
-    filed on any shared word, and still carry recall's light at the weight of
-    real evidence.
+    wrote, or when the lesson says something else: not the same lesson by
+    _same_lesson, the bar _create_or_reinforce_lesson applies before filing
+    anything. Links made before that bar existed were filed on any shared
+    word, and those made after #75 on one, and still carry recall's light at
+    the weight of real evidence.
     """
     rows = store._get_conn().execute(
         """
@@ -708,10 +732,10 @@ def find_misfiled_distillations(
     for row in rows:
         if is_templated(row["impact"], row["impact_source"]):
             reason = "placeholder"
-        elif overlap(
+        elif not _same_lesson(
             distinctive_terms(row["impact"] or row["source_content"] or ""),
             distinctive_terms(row["lesson"] or ""),
-        ) < _SAME_LESSON:
+        ):
             reason = "unrelated"
         else:
             continue

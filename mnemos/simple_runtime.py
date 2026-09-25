@@ -2270,7 +2270,36 @@ class MnemosRuntime:
             },
             "handoff": handoff_health,
             "continuity": self.continuity_signals(),
+            "semantic": self.semantic_status(),
         }
+
+    def semantic_status(self, verify: bool = False) -> dict[str, Any]:
+        """Whether recall can seed by meaning in this process, and why not.
+
+        Semantic recall is optional, so an install silently has it or not,
+        and a failed import used to look exactly like a missing package.
+        This is the one answer both the health card and `mnemos doctor`
+        print. ``verify`` embeds a probe first (a model load on first use), so
+        "on" reflects a real embedding rather than a successful import.
+        """
+        self._ensure_init()
+        assert self._store is not None
+        index = self._embedding_index
+        if index is None:
+            return {
+                "active": False, "backend": None, "model": None,
+                "reason": "this runtime has no embedding index",
+                "verified": False, "last_error": None,
+                "embeddings_stored": 0, "embeddings_usable": 0,
+                "embeddings_by_model": {},
+            }
+        if verify:
+            index.verify()
+        return index.status(candidate_ids=self._store.active_engram_ids(
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+        ))
 
     def _retrieve(self, query: str, max_results: int = 5) -> list[Any]:
         assert self._store is not None
@@ -2453,6 +2482,57 @@ def _human_size(num_bytes: int) -> str:
     return f"{size:.1f} {unit}"
 
 
+def describe_semantic(semantic: dict[str, Any]) -> tuple[str, list[str], list[str]]:
+    """Say whether recall can seed by meaning, in plain words.
+
+    Returns a headline, detail lines, and warnings. Shared by the health card
+    and `mnemos doctor`, so the two can never disagree about it.
+    """
+    if not semantic:
+        return "unknown", [], []
+    details: list[str] = []
+    attention: list[str] = []
+    model = semantic.get("model")
+    if semantic.get("active"):
+        headline = f"on — {semantic.get('backend')} model {model}"
+        if "memories" in semantic:
+            headline += (
+                f", {semantic.get('memories_searchable', 0)} of {semantic['memories']} "
+                "active memories searchable by meaning"
+            )
+        if not semantic.get("verified"):
+            details.append(
+                "nothing embedded in this process yet; the model loads on first recall or capture"
+            )
+        others = {
+            name: count
+            for name, count in (semantic.get("embeddings_by_model") or {}).items()
+            if name != model
+        }
+        if others:
+            listed = ", ".join(
+                f"{name} ({count:,})"
+                for name, count in sorted(others.items(), key=lambda item: -item[1])
+            )
+            details.append(
+                f"{sum(others.values()):,} stored embeddings come from other models and "
+                f"are skipped: {listed}"
+            )
+        if semantic.get("last_error"):
+            details.append(f"last embedding attempt failed: {semantic['last_error']}")
+    else:
+        headline = "OFF — recall finds memories by keyword only"
+        reason = semantic.get("reason") or "unknown"
+        details.append(f"why: {reason}")
+        stored = int(semantic.get("embeddings_stored") or 0)
+        if stored:
+            attention.append(
+                f"semantic recall is off, but this store holds {stored:,} embeddings "
+                "it cannot use (why: see Semantic)."
+            )
+    return headline, details, attention
+
+
 def format_health_card(data: dict[str, Any]) -> str:
     """Render a health() snapshot as a human-relayable card."""
 
@@ -2531,6 +2611,16 @@ def format_health_card(data: dict[str, Any]) -> str:
             detail = f"carrying continuity (last capture {since} session(s) ago)"
         continuity_lines = ["", f"Continuity check: {detail}, {streak} empty packet(s) in a row."]
 
+    semantic_headline, semantic_details, semantic_attention = describe_semantic(
+        data.get("semantic") or {}
+    )
+    semantic_lines = [line("Semantic", semantic_headline)]
+    semantic_lines += [f"{'':<15}{detail}" for detail in semantic_details]
+    if semantic_attention:
+        continuity_lines = [
+            "", f"ATTENTION — {semantic_attention[0]}", *continuity_lines,
+        ]
+
     return "\n".join([
         "Mnemos health card",
         line(
@@ -2551,6 +2641,7 @@ def format_health_card(data: dict[str, Any]) -> str:
         ),
         line("Connections", counts["connections"]),
         line("Beliefs", f"{counts['beliefs_active']} active"),
+        *semantic_lines,
         line("Last cycle", cycle_line),
         line(
             "Onboarding",

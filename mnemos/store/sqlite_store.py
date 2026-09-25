@@ -884,6 +884,18 @@ class EngramStore:
         ).fetchone()
         return row is not None
 
+    def active_engram_ids(
+        self, *, agent_id: str, person_id: str, project_scope: str
+    ) -> set[str]:
+        """IDs of the active engrams in one exact scope: what recall may seed from."""
+        rows = self._get_conn().execute(
+            """SELECT id FROM engrams
+               WHERE state = 'active' AND owner_agent_id = ?
+                 AND person_id = ? AND project_scope = ?""",
+            (agent_id, person_id, project_scope),
+        ).fetchall()
+        return {row[0] for row in rows}
+
     def get_engram_in_scope(
         self, engram_id: str, *, agent_id: str, person_id: str, project_scope: str
     ) -> Engram | None:

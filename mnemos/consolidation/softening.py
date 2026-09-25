@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 import ulid as _ulid_mod
 
 from ..core.types import ConnectionRelation, EngramKind, SourceType
-from ..store.fts import fts_words, or_query
+from ..store.fts import distinctive_terms, fts_words, or_query, overlap
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -461,6 +461,14 @@ def _rule_based_impact(content: str) -> str:
     return content[:100] if content else ""
 
 
+# Two lessons are the same lesson when they share at least half of the smaller
+# one's distinctive words. Measured on a real store's 631 distilled_into links:
+# a lesson and the impact it was drawn from share all of them (164 links);
+# rewordings of one lesson share 0.49 to 0.71; links the old any-word match made
+# share 0.3 at most, and 451 of them 0.2 or less.
+_SAME_LESSON = 0.5
+
+
 def _create_or_reinforce_lesson(
     engram: Any,
     store: EngramStore,
@@ -477,13 +485,33 @@ def _create_or_reinforce_lesson(
     impact_text = engram.impact
     if not impact_text or len(impact_text.strip()) < 10:
         return None
+    # A placeholder the server wrote ("Correction to earlier continuity.") says
+    # nothing the memory taught. It must not become a lesson, or strengthen one:
+    # every memory carrying the same placeholder reinforced the same "lesson".
+    if getattr(engram, "impact_source", "") == "template":
+        return None
 
-    # Search for existing similar lessons
-    words = fts_words(impact_text)
+    mine = distinctive_terms(impact_text)
+
+    # Already distilled, on an earlier cycle, into a lesson that says this. With
+    # no model, a fading memory's wording is never compressed, so it qualifies
+    # again every cycle; reinforcing its lesson each time grew the same lessons
+    # without end (143 reinforcements a cycle on a real store) and kept them the
+    # most-accessed memories in the graph.
+    for conn in engram.connections:
+        if conn.relation == ConnectionRelation.DISTILLED_INTO:
+            lesson = store.get_engram(conn.target_id)
+            if lesson is not None and overlap(mine, distinctive_terms(lesson.content)) >= _SAME_LESSON:
+                return lesson.id
+
+    # Look for a lesson that already says the same thing, by the impact's own
+    # distinctive words. Its first six words, common ones included, matched
+    # nearly every lesson, and the first lesson found was taken as the same one.
+    words = [w for w in fts_words(impact_text) if w.lower() in mine] or fts_words(impact_text)
     if not words:
         return None
 
-    query = or_query(words[:6])
+    query = or_query(words[:8])
     try:
         existing = store.search_fts(
             query, limit=10, agent_id=engram.owner_agent_id,
@@ -492,11 +520,13 @@ def _create_or_reinforce_lesson(
     except Exception:
         existing = []
 
-    # Check if any existing engram is a lesson with similar content
+    # Check if any existing engram is a lesson that says the same thing
     for candidate in existing:
         if candidate.id == engram.id:
             continue
-        if "lesson" in candidate.tags or "distilled" in candidate.tags:
+        if ("lesson" in candidate.tags or "distilled" in candidate.tags) and (
+            overlap(mine, distinctive_terms(candidate.content)) >= _SAME_LESSON
+        ):
             # Reinforce existing lesson
             candidate.strength = min(1.0, candidate.strength + 0.1)
             candidate.stability = min(1.0, candidate.stability + 0.05)

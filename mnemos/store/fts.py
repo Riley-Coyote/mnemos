@@ -32,3 +32,29 @@ def fts_words(text: str, min_len: int = 3) -> list[str]:
 def or_query(words: list[str]) -> str:
     """An FTS5 query matching any of ``words``, each quoted as a phrase."""
     return " OR ".join(f'"{w}"' for w in words)
+
+
+# Words of four letters or more that say nothing about what a text is about.
+# Shorter words are already too short to count.
+_COMMON = frozenset("""
+    about above after again against also although always another anything around away back been before
+    being below between both came come could does doing done down during each even ever every from have
+    having here into just keep kept know like made make many more most much must never next once only onto
+    other ought over same should since some still such take than that their them then there these they
+    thing things this those though through till together under until upon very want were what whatever
+    when where whether which while will with within without would your yours
+""".split())
+
+
+def distinctive_terms(text: str) -> set[str]:
+    """What a text is about, as a set: its words of four letters or more, lower-cased,
+    without the common ones."""
+    return {w.lower() for w in fts_words(text, min_len=4) if w.lower() not in _COMMON}
+
+
+def overlap(a: set[str], b: set[str]) -> float:
+    """How much of the smaller set the larger one shares (the overlap coefficient):
+    saying the same thing at greater length still reads as the same thing."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / min(len(a), len(b))

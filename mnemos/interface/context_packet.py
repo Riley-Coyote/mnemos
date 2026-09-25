@@ -5,7 +5,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from ..authorship import clean_model_id, display_name, handoff_framing, note_signature
+from ..authorship import (
+    clean_model_id,
+    clean_session_id,
+    display_name,
+    from_same_session,
+    handoff_framing,
+    note_signature,
+    signature,
+)
 from ..dream_journal import DREAM_JOURNAL_TAG
 from ..retrieval.reactive import ReactiveRetriever, RetrievalResult
 
@@ -33,6 +41,7 @@ def build_context_packet(
     max_hypomnema: int = 8,
     max_engrams: int = 6,
     reader_model: str = "",
+    reader_session: str = "",
 ) -> dict[str, Any]:
     """Build the complete memory packet an agent should read before acting.
 
@@ -41,6 +50,11 @@ def build_context_packet(
 
     ``reader_model`` is the model about to read the packet, when the harness
     says. It lets the handoff say plainly whether the reader wrote it.
+
+    ``reader_session`` is the harness session about to read it, when the
+    harness says. Several sessions can work one scope at once and each keeps
+    its own handoff: the reader's own note comes first, then other sessions'
+    recent notes as short signed lines (see ``EngramStore.live_handoffs``).
 
     ``include_engrams=False`` returns continuity only. Mnemos is a continuity
     and identity layer, usually running alongside whatever memory system the
@@ -61,19 +75,26 @@ def build_context_packet(
         project_scope=project_scope,
         limit=max_functional,
     )
-    handoff = store.get_latest_handoff(
+    reader_session = clean_session_id(reader_session)
+    handoffs = store.live_handoffs(
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
+        reader_session=reader_session,
     )
-    # Fetch extra so dedicated handoff and maintenance sections still leave a
-    # full ordinary continuity section.
+    handoff = handoffs[0] if handoffs else None
+    other_handoffs = handoffs[1:]
+    # Fetch extra so the dedicated maintenance section still leaves a full
+    # ordinary continuity section. Handoffs are left out of the search
+    # itself: they rank near the top of it, and one slot lost to each would
+    # empty the section once several sessions have left notes.
     all_hypomnema = store.search_hypomnema(
         query,
         agent_id=agent_id,
         person_id=person_id,
         project_scope=project_scope,
         limit=max_hypomnema + 4,
+        exclude_kinds=("handoff",),
     )
     # Dream-journal entries are consolidation diary ("I connected 148 memories
     # that belong together"), not continuity about the human or the work.
@@ -147,13 +168,14 @@ def build_context_packet(
             # A packet must never fail because of the reflection queue.
             reflections = []
 
-    if mark_surfaced and handoff:
-        store.mark_handoff_surfaced(
-            handoff["id"],
-            agent_id=agent_id,
-            person_id=person_id,
-            project_scope=project_scope,
-        )
+    if mark_surfaced:
+        for delivered in handoffs:
+            store.mark_handoff_surfaced(
+                delivered["id"],
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+            )
     if mark_surfaced and (handoff or hypomnema):
         store.set_meta(
             f"simple:{agent_id}:{person_id}:{project_scope}:last_context_delivery_at",
@@ -170,6 +192,7 @@ def build_context_packet(
     packet: dict[str, Any] = {
         "include_engrams": include_engrams,
         "reader_model": clean_model_id(reader_model),
+        "reader_session": reader_session,
         "signers": signers,
         "scope": {
             "agent_id": agent_id,
@@ -183,6 +206,7 @@ def build_context_packet(
         "beliefs": [_serialize_belief(b) for b in beliefs[:8]],
         "functional_memory": functional,
         "handoff": handoff,
+        "other_handoffs": other_handoffs,
         "hypomnema": hypomnema,
         "maintenance_reports": maintenance_reports,
         "mnemos_engrams": engrams,
@@ -240,15 +264,67 @@ def _format_handoff(packet: dict[str, Any]) -> str:
     handoff = packet.get("handoff")
     if not handoff:
         return ""
-    # Several models can share one scope. A handoff is shown with the
-    # signature of the model that wrote it, never as the reader's own words
-    # unless the reader is known to be that same model.
+    # Several models and sessions can share one scope. A handoff is shown
+    # with the signature of the model that wrote it and whether this session
+    # wrote it, never as the reader's own words unless it is.
+    reader_session = packet.get("reader_session") or ""
     heading, guidance = handoff_framing(
         handoff.get("author_model") or "",
         _age_text(handoff.get("created_at")),
         packet.get("reader_model") or "",
+        same_session=from_same_session(reader_session, handoff.get("author_session")),
     )
-    return f"### {heading}\n{handoff['content']}\n\n{guidance}"
+    text = f"### {heading}\n{handoff['content']}\n\n{guidance}"
+    others = format_other_handoffs(
+        packet.get("other_handoffs") or [], reader_session=reader_session,
+    )
+    return f"{text}\n\n{others}" if others else text
+
+
+# Other sessions' notes are one short line each: enough to tell which thread
+# it is and who left it, with the way to read the whole note. Shown whole,
+# three handoffs would fill most of the packet (a typical one is about 2,000
+# characters), and the packet is scarce on purpose.
+_OTHER_HANDOFF_CHARS = 280
+
+
+def format_other_handoffs(
+    entries: list[dict[str, Any]],
+    *,
+    reader_session: str = "",
+    heading_prefix: str = "### ",
+) -> str:
+    """Other sessions' live handoffs as short signed lines, or ``""``."""
+
+    if not entries:
+        return ""
+    # "Other sessions" is said only when it is known for every line. A note
+    # written before sessions were told apart, or by a client that can't say
+    # which session it is, might be the reader's own.
+    all_others = all(
+        from_same_session(reader_session, entry.get("author_session")) is False
+        for entry in entries
+    )
+    heading = "Also live, from other sessions" if all_others else "Also live"
+    lines = [f"{heading_prefix}{heading}"]
+    for entry in entries:
+        who = signature(entry.get("author_model") or "") or "Unsigned"
+        lines.append(
+            f"- {who}, {_age_text(entry.get('created_at'))}: "
+            f"{_clip(entry['content'], _OTHER_HANDOFF_CHARS)} "
+            f'Whole note: mnemos_recall("{entry["id"]}")'
+        )
+    if all_others:
+        lines.append(
+            "Colleagues' notes from parallel work, each kept for its own "
+            "session: take what's useful and don't claim their work."
+        )
+    else:
+        lines.append(
+            "Each was left by the session that wrote it. One that isn't yours "
+            "is a colleague's: take what's useful and don't claim its work."
+        )
+    return "\n".join(lines)
 
 
 def _format_scope(packet: dict[str, Any]) -> str:

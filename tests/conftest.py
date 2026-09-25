@@ -19,6 +19,8 @@ def _isolate_mnemos_env(monkeypatch):
         "MNEMOS_PROJECT_SCOPE", "MNEMOS_DB_PATH", "MNEMOS_ENV_PATHS",
         "MNEMOS_WORKSPACE", "MNEMOS_MODE",
         "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY",
+        # A real key would send every captured test memory to the Gemini API.
+        "GEMINI_API_KEY", "MNEMOS_EMBEDDING_MODEL",
         # A test run inside a Claude Code session inherits its session id, and
         # signing would then read that real transcript: notes written in the
         # suite would be signed by whatever model is running the developer's

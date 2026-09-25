@@ -18,6 +18,7 @@ Pipeline:
 
 from __future__ import annotations
 
+import logging
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -32,10 +33,29 @@ from .reconsolidation import reconsolidate
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
 
+log = logging.getLogger(__name__)
+_EMBEDDING_SEED_FAILURE_LOGGED = False
+
+
+def _log_seed_failure_once(exc: Exception) -> None:
+    global _EMBEDDING_SEED_FAILURE_LOGGED
+    if _EMBEDDING_SEED_FAILURE_LOGGED:
+        return
+    _EMBEDDING_SEED_FAILURE_LOGGED = True
+    log.warning(
+        "Embedding seeding failed; recall continues on keywords: %s: %s",
+        type(exc).__name__, exc,
+    )
+
 
 @dataclass
 class RetrievalResult:
-    """A scored retrieval result wrapping an engram."""
+    """A scored retrieval result wrapping an engram.
+
+    ``retrieval_path`` says how the engram was reached: "fts" for a keyword
+    seed, "embedding" for a seed found by meaning alone, "resonance" for one
+    reached through connections.
+    """
 
     engram: Engram
     score: float = 0.0
@@ -140,7 +160,11 @@ class ReactiveRetriever:
             except Exception:
                 pass  # Shared store is optional
 
-        # Embedding seeds (meaning matching — finds what FTS misses)
+        # Embedding seeds (meaning matching — finds what FTS misses). Kept
+        # apart so results can say which seeds came from meaning alone:
+        # labelled "fts" like the rest, nothing could show whether
+        # embeddings contributed anything at all.
+        embedding_similarity: dict[str, float] = {}
         if self._embedding_index and hasattr(self._embedding_index, 'search'):
             try:
                 embedding_hits = self._embedding_index.search(
@@ -154,8 +178,12 @@ class ReactiveRetriever:
                         )
                         if engram and engram.state == "active":
                             seeds[eid] = engram
-            except Exception:
-                pass  # Embeddings are optional — FTS still works
+                            embedding_similarity[eid] = similarity
+            except Exception as exc:
+                # Embeddings are optional — FTS still works — but a failure
+                # here is a bug, not a missing backend (the index reports
+                # those itself), so say it once instead of hiding it.
+                _log_seed_failure_once(exc)
 
         if not seeds:
             return []
@@ -239,15 +267,21 @@ class ReactiveRetriever:
             if engram.source.confidence < self._confidence_floor:
                 continue
 
-            path = "fts" if eid in seeds else "resonance"
+            if eid in embedding_similarity:
+                path = "embedding"
+            else:
+                path = "fts" if eid in seeds else "resonance"
+            breakdown = {
+                "activation": round(act_level, 4),
+                "is_seed": eid in seeds,
+            }
+            if eid in embedding_similarity:
+                breakdown["similarity"] = embedding_similarity[eid]
             results.append(
                 RetrievalResult(
                     engram=engram,
                     score=round(act_level, 4),
-                    score_breakdown={
-                        "activation": round(act_level, 4),
-                        "is_seed": eid in seeds,
-                    },
+                    score_breakdown=breakdown,
                     retrieval_path=path,
                 )
             )

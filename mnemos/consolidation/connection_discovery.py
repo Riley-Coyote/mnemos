@@ -113,7 +113,12 @@ def run_connection_discovery(
                         if person_id is not None and project_scope is not None
                         else store.get_engram(eid)
                     )
-                    if candidate:
+                    # Only a live memory takes a new link, as with keyword
+                    # candidates and recall's seeds. The index still holds the
+                    # vectors of archived and dormant memories, and a correction
+                    # reads almost like the memory it retired: linking the two
+                    # let recall carry light back into what was retired.
+                    if candidate and candidate.state == "active":
                         candidates.append(candidate)
                         stats["embedding_candidates"] += 1
 

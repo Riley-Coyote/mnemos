@@ -326,12 +326,20 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         target_id: str = "",
         query: str = "",
         action: str = "update",
+        impact: str = "",
     ) -> str:
         """Correct, supersede, or archive stale continuity.
 
         If target_id is omitted, Mnemos captures the correction as fresh
         high-confidence continuity. Set action to forget/archive/remove/delete
         to archive a target or closest query match.
+
+        Args:
+            impact: What the corrected memory means now, in your own words.
+                Leave it empty to keep what the memory it replaces meant: a
+                correction usually fixes a detail, not the meaning. The
+                result shows what was kept, so you can give a new one if it
+                no longer holds.
         """
 
         return _output(_get_runtime().correct(
@@ -339,6 +347,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             target_id=_text("target_id", target_id, MAX_ID_CHARS),
             query=_text("query", query, MAX_QUERY_CHARS),
             action=_text("action", action, 32),
+            impact=_text("impact", impact, MAX_REFLECTION_CHARS),
         ))
 
     @server.tool(

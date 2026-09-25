@@ -55,10 +55,27 @@ _COMMON = frozenset("""
 """.split())
 
 
+# Three-letter words that say nothing about what a cue is after. Words this short
+# never count as distinctive, so only a search made from a cue needs them.
+_COMMON_SHORT = frozenset("""
+    all and any are but can did don for get got had has her him his how its let nor not now off one our
+    out own per say she the too via was who why yet you
+""".split())
+
+
 def distinctive_terms(text: str) -> set[str]:
     """What a text is about, as a set: its words of four letters or more, lower-cased,
     without the common ones."""
     return {w.lower() for w in fts_words(text, min_len=4) if w.lower() not in _COMMON}
+
+
+def search_words(cue: str) -> list[str]:
+    """The words of a cue worth searching for, in order: its words as the index sees
+    them, less the common ones. A cue made only of common words keeps them all, so
+    there is always something to search for."""
+    words = fts_words(cue)
+    meaningful = [w for w in words if w.lower() not in _COMMON and w.lower() not in _COMMON_SHORT]
+    return meaningful or words
 
 
 def overlap(a: set[str], b: set[str]) -> float:

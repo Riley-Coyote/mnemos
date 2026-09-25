@@ -29,7 +29,7 @@ from ..core.engram import Engram
 from ..core.emotional_state import EmotionalState
 from ..core.types import ConnectionRelation
 from .reconsolidation import reconsolidate
-from ..store.fts import fts_words, or_query
+from ..store.fts import or_query, search_words
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -140,11 +140,12 @@ class ReactiveRetriever:
 
         # 1. SEED: Find entry points via FTS + embeddings
         seeds: dict[str, Engram] = {}
-        # Each seed starts as bright as it matched the cue. Every word of the cue
-        # is a way in, so a memory that shares only a common word with it ("the",
-        # "what") is found too; it starts faint, and the best match starts at 1.0.
-        # Starting them all at 1.0 let common words light most of the graph and
-        # let the most-linked memories answer almost every cue.
+        # Each seed starts as bright as it matched the cue: the best match at 1.0,
+        # the rest in proportion. Starting them all at 1.0 let common words light
+        # most of the graph and let the most-linked memories answer almost every
+        # cue. The cue's common words are not searched at all (_to_fts_query): in
+        # a small store bm25 barely discounts them, and a short memory holding
+        # "for" was the best match for "getting ready for her reading".
         seed_activation: dict[str, float] = {}
 
         # FTS seeds (keyword matching), with FTS5's bm25 rank for each
@@ -346,12 +347,17 @@ def _add_ranked_seeds(
 
 
 def _to_fts_query(cue: str) -> str:
-    """Convert a natural language cue to an FTS5 OR query.
+    """Convert a natural language cue to an FTS5 OR query of the words that
+    mean something in it.
+
+    Every word used to be ORed in, so "getting ready for her reading" made
+    every memory holding "for" or "her" a seed, and those came back above the
+    ones about the reading. A cue made only of common words keeps them.
 
     Words are quoted for FTS5 safety (prevents operators like hyphens
     from causing errors).
     """
-    words = fts_words(cue)
+    words = search_words(cue)
     if not words:
         clean = "".join(c for c in cue if c.isalnum() or c == " ").strip()
         return f'"{clean}"' if clean else '""'

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..core.engram import Connection
 from ..core.types import ConnectionRelation, DEFAULT_AGENT_ID
-from ..store.fts import fts_words, or_query
+from ..store.fts import distinctive_terms, fts_words, or_query, overlap
 from ..encoding.llm_classifier import classify_connections
 
 if TYPE_CHECKING:
@@ -58,6 +58,17 @@ def run_connection_discovery(
     config = config or {}
     max_per_pass = config.get("max_engrams_per_discovery_pass", 50)
     max_per_engram = config.get("max_connections_per_engram", 10)
+    # A link says two memories belong together. By meaning, that is the
+    # configured similarity (0.7 in the defaults and in users' config files; the
+    # pass read nothing and took anything above 0.3). By words, it is sharing a
+    # good part of what they are about: at least this much of the smaller
+    # memory's distinctive words (lessons need 0.5, the same thing said again;
+    # related memories need less). A memory with nothing that close gets no new
+    # link, rather than being topped up with whatever shares "the" or "every".
+    # Over a simulated week on a real store this cut the links the pass made
+    # from 1,491 to 265, and recall found as much or more (see the PR).
+    similarity_threshold = config.get("similarity_threshold", 0.7)
+    keyword_overlap = config.get("discovery_keyword_overlap", 0.3)
     reclassify_batch = config.get("reclassify_batch_size", 20)
 
     stats = {
@@ -93,7 +104,7 @@ def run_connection_discovery(
                 engram.content, k=10, exclude_ids={engram.id},
             )
             for eid, score in emb_results:
-                if eid not in existing_target_ids and score > 0.3:
+                if eid not in existing_target_ids and score >= similarity_threshold:
                     candidate = (
                         store.get_engram_in_scope(
                             eid, agent_id=agent_id, person_id=person_id,
@@ -107,7 +118,8 @@ def run_connection_discovery(
                         stats["embedding_candidates"] += 1
 
         # 2. FTS5 candidates (supplement, catches keyword matches embeddings miss)
-        words = fts_words(engram.content)
+        mine = distinctive_terms(engram.content)
+        words = [w for w in fts_words(engram.content) if w.lower() in mine]
         if words:
             query = or_query(words[:8])
             try:
@@ -116,7 +128,10 @@ def run_connection_discovery(
                     person_id=person_id, project_scope=project_scope,
                 )
                 for match in fts_results:
-                    if match.id != engram.id and match.id not in existing_target_ids:
+                    if (
+                        match.id != engram.id and match.id not in existing_target_ids
+                        and overlap(mine, distinctive_terms(match.content)) >= keyword_overlap
+                    ):
                         # Don't duplicate embedding candidates
                         if not any(c.id == match.id for c in candidates):
                             candidates.append(match)

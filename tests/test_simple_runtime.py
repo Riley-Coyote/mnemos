@@ -605,6 +605,8 @@ def test_health_returns_structured_dict(tmp_path):
         "continuity",
         # Memory held in the file that no scoped read reaches.
         "legacy",
+        # Whether recall can seed by meaning here, and why not if not.
+        "semantic",
     }
     assert data["legacy"]["hidden"] == 0
     assert data["counts"]["continuity_notes_active"] >= 1

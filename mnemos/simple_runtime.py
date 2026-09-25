@@ -152,6 +152,10 @@ def _simple_tags(content: str, context: str = "") -> list[str]:
 # single mention.
 _BELIEF_MIN_MEMORIES = 4
 
+# The marker a belief ask carries, so the answer can be filed under its theme
+# and a theme already asked is not asked again.
+_THEME_MARKER = re.compile(r"\[theme:([^\]]+)\]")
+
 # Only captures whose encoding registered real surprise (they did not fit what
 # was already held) are offered as contradiction candidates. Keeps the ask rare
 # and tied to genuine tension, not mere topical overlap.
@@ -762,13 +766,23 @@ class MnemosRuntime:
         assert self._store is not None
         from collections import Counter
 
-        already = {
-            r[0] for r in self._store._get_conn().execute(
-                "SELECT target_id FROM reflection_queue WHERE agent_id = ? "
-                "AND person_id = ? AND project_scope = ? AND answered_at IS NULL",
-                (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
-            ).fetchall()
-        }
+        unanswered = self._store._get_conn().execute(
+            "SELECT target_id, kind, prompt FROM reflection_queue WHERE agent_id = ? "
+            "AND person_id = ? AND project_scope = ? AND answered_at IS NULL",
+            (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
+        ).fetchall()
+        already = {r["target_id"] for r in unanswered}
+        # A theme is asked once. Leaving the ask is how the agent declines, and
+        # an ask that was shown out or expired still records that it was put.
+        # Deduping by target alone let a declined theme return every cycle
+        # against a fresh memory — one more row per cycle, without end.
+        asked_themes = set()
+        for r in unanswered:
+            if r["kind"] != "belief":
+                continue
+            m = _THEME_MARKER.search(r["prompt"] or "")
+            if m:
+                asked_themes.add(m.group(1).strip())
 
         rows = self._store._get_conn().execute(
             """
@@ -789,7 +803,11 @@ class MnemosRuntime:
         term_engrams: dict[str, list[str]] = {}
         for row in rows:  # newest first
             for term in _query_terms(row["content"] or ""):
-                if len(term) <= 3:
+                # Nearly every note starts with a date, and the tokenizer splits
+                # dates and times into digit-led runs ("2026", "24t22", "11pm"),
+                # so a year outranked every real theme. A number is not a theme;
+                # words, even ones carrying digits like "a11y", lead with a letter.
+                if len(term) <= 3 or term[0].isdigit():
                     continue
                 ids = term_engrams.setdefault(term, [])
                 if row["id"] not in ids:
@@ -804,7 +822,7 @@ class MnemosRuntime:
         for theme, ids in ranked:
             if len(ids) < _BELIEF_MIN_MEMORIES:
                 break  # descending — nothing else clears the bar
-            if theme.lower() in existing:
+            if theme in asked_themes or theme.lower() in existing:
                 continue
             # A belief ask must not share a target with another pending
             # reflection: the tool answers by target_id alone, so a collision
@@ -1036,7 +1054,7 @@ class MnemosRuntime:
 
         # Formation. A themed prompt carries the domain; the target is evidence.
         theme = ""
-        tm = re.search(r"\[theme:([^\]]+)\]", prompt)
+        tm = _THEME_MARKER.search(prompt)
         if tm:
             theme = tm.group(1).strip()
         belief = Belief(
@@ -2370,7 +2388,36 @@ class MnemosRuntime:
             # the card counted only the scoped rows, and a store holding
             # thousands of quarantined memories reported a healthy few hundred.
             "legacy": self.legacy_counts(),
+            "semantic": self.semantic_status(),
         }
+
+    def semantic_status(self, verify: bool = False) -> dict[str, Any]:
+        """Whether recall can seed by meaning in this process, and why not.
+
+        Semantic recall is optional, so an install silently has it or not,
+        and a failed import used to look exactly like a missing package.
+        This is the one answer both the health card and `mnemos doctor`
+        print. ``verify`` embeds a probe first (a model load on first use), so
+        "on" reflects a real embedding rather than a successful import.
+        """
+        self._ensure_init()
+        assert self._store is not None
+        index = self._embedding_index
+        if index is None:
+            return {
+                "active": False, "backend": None, "model": None,
+                "reason": "this runtime has no embedding index",
+                "verified": False, "last_error": None,
+                "embeddings_stored": 0, "embeddings_usable": 0,
+                "embeddings_by_model": {},
+            }
+        if verify:
+            index.verify()
+        return index.status(candidate_ids=self._store.active_engram_ids(
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+        ))
 
     def _retrieve(self, query: str, max_results: int = 5) -> list[Any]:
         assert self._store is not None
@@ -2581,6 +2628,55 @@ def format_legacy_summary(counts: Mapping[str, int] | None) -> str | None:
         f"{counts['hidden']:,} older memories from before scoping never reach recall "
         f"({', '.join(part for part in parts if part)}); see 'mnemos adopt-legacy'"
     )
+def describe_semantic(semantic: dict[str, Any]) -> tuple[str, list[str], list[str]]:
+    """Say whether recall can seed by meaning, in plain words.
+
+    Returns a headline, detail lines, and warnings. Shared by the health card
+    and `mnemos doctor`, so the two can never disagree about it.
+    """
+    if not semantic:
+        return "unknown", [], []
+    details: list[str] = []
+    attention: list[str] = []
+    model = semantic.get("model")
+    if semantic.get("active"):
+        headline = f"on — {semantic.get('backend')} model {model}"
+        if "memories" in semantic:
+            headline += (
+                f", {semantic.get('memories_searchable', 0)} of {semantic['memories']} "
+                "active memories searchable by meaning"
+            )
+        if not semantic.get("verified"):
+            details.append(
+                "nothing embedded in this process yet; the model loads on first recall or capture"
+            )
+        others = {
+            name: count
+            for name, count in (semantic.get("embeddings_by_model") or {}).items()
+            if name != model
+        }
+        if others:
+            listed = ", ".join(
+                f"{name} ({count:,})"
+                for name, count in sorted(others.items(), key=lambda item: -item[1])
+            )
+            details.append(
+                f"{sum(others.values()):,} stored embeddings come from other models and "
+                f"are skipped: {listed}"
+            )
+        if semantic.get("last_error"):
+            details.append(f"last embedding attempt failed: {semantic['last_error']}")
+    else:
+        headline = "OFF — recall finds memories by keyword only"
+        reason = semantic.get("reason") or "unknown"
+        details.append(f"why: {reason}")
+        stored = int(semantic.get("embeddings_stored") or 0)
+        if stored:
+            attention.append(
+                f"semantic recall is off, but this store holds {stored:,} embeddings "
+                "it cannot use (why: see Semantic)."
+            )
+    return headline, details, attention
 
 
 def format_health_card(data: dict[str, Any]) -> str:
@@ -2663,6 +2759,15 @@ def format_health_card(data: dict[str, Any]) -> str:
 
     legacy = format_legacy_summary(data.get("legacy"))
     legacy_lines = [line("Hidden", legacy)] if legacy else []
+    semantic_headline, semantic_details, semantic_attention = describe_semantic(
+        data.get("semantic") or {}
+    )
+    semantic_lines = [line("Semantic", semantic_headline)]
+    semantic_lines += [f"{'':<15}{detail}" for detail in semantic_details]
+    if semantic_attention:
+        continuity_lines = [
+            "", f"ATTENTION — {semantic_attention[0]}", *continuity_lines,
+        ]
 
     return "\n".join([
         "Mnemos health card",
@@ -2685,6 +2790,7 @@ def format_health_card(data: dict[str, Any]) -> str:
         ),
         line("Connections", counts["connections"]),
         line("Beliefs", f"{counts['beliefs_active']} active"),
+        *semantic_lines,
         line("Last cycle", cycle_line),
         line(
             "Onboarding",

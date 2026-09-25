@@ -13,7 +13,7 @@ from datetime import datetime, timezone, timedelta
 from typing import TYPE_CHECKING, Any
 
 from ..core.engram import Connection, Engram, EncodingContext, MemorySource
-from ..store.fts import fts_words, or_query
+from ..store.fts import distinctive_terms, fts_words, or_query, overlap
 from ..core.types import (
     BOOTSTRAP_STABILITY,
     BOOTSTRAP_STRENGTH,
@@ -125,12 +125,18 @@ class Encoder:
         embedding_index: Any | None = None,
         llm_client: LLMClient | None = None,
         shared_pool: Any | None = None,
+        config: dict[str, Any] | None = None,
     ) -> None:
         self._store = store
         self._max_connections = max_connections
         self._embedding_index = embedding_index
         self._llm_client = llm_client
         self._shared_pool = shared_pool
+        # The "encoding" section of the config. keyword_overlap is how much of
+        # what two memories are about they must share before saving one links it
+        # to the other without a model (see _discover_connections).
+        config = config if isinstance(config, dict) else {}
+        self._keyword_overlap = config.get("keyword_overlap", 0.2)
 
     def encode(
         self,
@@ -488,10 +494,11 @@ class Encoder:
         """Find related engrams and create typed connections.
 
         Strategy:
-        1. FTS5 search for content overlap → find candidate engrams
+        1. FTS5 search for the memory's distinctive words → find candidate engrams
         2. LLM classifier → classify each candidate relationship type
            (supports, contradicts, causes, extends, parallels, synthesizes, grounds)
-           Falls back to SUPPORTS if no LLM client available.
+           Without an LLM client, a candidate that shares enough distinctive
+           words becomes CO_ACTIVATED.
         3. Same session → TEMPORAL_AFTER connections (unchanged)
         4. NONE results from LLM → filter out FTS5 false positives
 
@@ -504,19 +511,28 @@ class Encoder:
         if not words:
             return []
 
-        search_query = or_query(words[:8])
-        try:
-            fts_results = store.search_fts(
-                search_query, limit=10, agent_id=engram.owner_agent_id,
-                person_id=engram.person_id, project_scope=engram.project_scope,
-            )
-        except (ValueError, OSError):
-            fts_results = []
+        # Search by what the memory is about: its distinctive words (four
+        # letters or more, without common ones). The search used its first
+        # eight words, which included "for", "with" and "every" and so matched
+        # nearly everything. The classifier gets better candidates from this
+        # too. A memory made only of common words has nothing to search for;
+        # its same-session links below still form.
+        mine = distinctive_terms(engram.content)
+        about = [w for w in words if w.lower() in mine]
+        fts_results = []
+        if about:
+            try:
+                fts_results = store.search_fts(
+                    or_query(about[:8]), limit=10, agent_id=engram.owner_agent_id,
+                    person_id=engram.person_id, project_scope=engram.project_scope,
+                )
+            except (ValueError, OSError):
+                fts_results = []
 
         # Filter out self
         fts_candidates = [r for r in fts_results if r.id != engram.id]
 
-        # 2. Classify relationships via LLM (or fallback to SUPPORTS)
+        # 2. Classify relationships via LLM (or, without one, keyword overlap)
         if self._llm_client and fts_candidates:
             # LLM-based classification — batched single call
             classifications = classify_connections(
@@ -570,7 +586,22 @@ class Encoder:
             # The same fix landed for connection_discovery in #4; this is the
             # other, larger source. formed_by distinguishes these so a later
             # pass can reclassify or strip them.
+            #
+            # A link also says the two belong together, and shared words only
+            # suggest that when there are enough of them. So a candidate must
+            # share at least two distinctive words (one is incidental), making
+            # up at least keyword_overlap (0.2) of the smaller memory's. When the
+            # smaller has ten or fewer, that is simply two shared words, and a
+            # new memory is often short: "Rule for visits: every invitation to a
+            # resident comes with a real way to decline." shares two of its
+            # seven with the rule it restates, 0.29, which maintenance's bar of
+            # 0.3 (#71) would drop. Replaying a real store's saves, this cut the
+            # links saving made from 775 to 260, and after a simulated week
+            # recall found as much as before (see the PR).
             for result in fts_candidates:
+                theirs = distinctive_terms(result.content)
+                if len(mine & theirs) < 2 or overlap(mine, theirs) < self._keyword_overlap:
+                    continue
                 tag_overlap = len(set(engram.tags) & set(result.tags))
                 base_strength = 0.3
                 if tag_overlap >= 2:

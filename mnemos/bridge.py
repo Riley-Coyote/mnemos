@@ -68,11 +68,17 @@ class MnemosBridge:
         except Exception:
             self._shared_pool = None
 
+        try:
+            from .config.loader import load_config
+            encoding_config = load_config().get("encoding")
+        except Exception:
+            encoding_config = None
         self._encoder = Encoder(
             self._store,
             embedding_index=self._embedding_index,
             llm_client=self._llm_client,
             shared_pool=self._shared_pool,
+            config=encoding_config,
         )
         self._retriever = ReactiveRetriever(
             self._store,

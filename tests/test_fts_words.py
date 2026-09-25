@@ -42,8 +42,9 @@ def test_a_question_mark_does_not_hide_the_word_it_follows(store):
 
 def test_a_new_memory_links_through_its_last_word(store, encoder):
     """Encoding links a new memory to what shares its words; the word before a
-    full stop counts too."""
-    earlier = encoder.encode(content="Residents may decline", kind="semantic",
+    full stop counts too. A link needs two shared words, and here one of the two
+    is that last word."""
+    earlier = encoder.encode(content="Residents may decline an invitation", kind="semantic",
                              person_id="user", project_scope="global")
     new = encoder.encode(content="Every invitation lets a visitor decline.", kind="semantic",
                          person_id="user", project_scope="global")

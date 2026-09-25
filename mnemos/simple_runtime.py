@@ -38,7 +38,8 @@ from .retrieval.reactive import ReactiveRetriever
 # remain importable from here for existing consumers.
 from .simple_scope import MnemosScope, resolve_scope  # noqa: F401
 from .store.embedding_index import EmbeddingIndex
-from .core.placeholders import TEMPLATED_IMPACTS
+from .core.engram import Engram
+from .core.placeholders import TEMPLATED_IMPACTS, is_templated
 from .store.fts import distinctive_terms, fts_words, or_query
 from .store.sqlite_store import EngramStore
 
@@ -2049,8 +2050,14 @@ class MnemosRuntime:
         target_id: str = "",
         query: str = "",
         action: str = "update",
+        impact: str = "",
     ) -> str:
-        """Correct, supersede, or archive stale memory."""
+        """Correct, supersede, or archive stale memory.
+
+        ``impact`` is what the corrected memory means now, in the agent's own
+        words. Left empty, the replacement keeps what the memory it replaces
+        meant, and the result says so.
+        """
 
         if not correction.strip() and action not in {"forget", "archive", "remove", "delete"}:
             return "Correction needs replacement text or a forget/archive action."
@@ -2109,6 +2116,15 @@ class MnemosRuntime:
                     author_model=corrector,
                     revised_by=corrector,
                 )
+                if (impact or "").strip():
+                    # A note is revised in place and has no impact of its own,
+                    # so a meaning given here would otherwise vanish silently.
+                    return (
+                        f"Updated continuity note {target}.\n"
+                        "The impact was not saved: a continuity note does not "
+                        "hold one. To change what a memory means, correct it "
+                        "by its memory ID."
+                    )
                 return f"Updated continuity note {target}."
 
             engram = self._store.get_engram_in_scope(
@@ -2128,10 +2144,13 @@ class MnemosRuntime:
                 self._store.archive_engram(engram, reason=f"simple_correction_{action}")
                 if action in {"forget", "archive", "remove", "delete"} and not correction.strip():
                     return f"Archived memory {target}."
+                meaning, meaning_source, kept = _replacement_impact(
+                    impact, "Correction to earlier continuity.", engram
+                )
                 replacement = self._encoder.encode(
                     content=correction.strip(),
-                    impact="Correction to earlier continuity.",
-                    impact_source="template",
+                    impact=meaning,
+                    impact_source=meaning_source,
                     kind=_classify_kind(correction),
                     tags=["continuity", "correction"],
                     source=SourceType.SESSION,
@@ -2144,6 +2163,7 @@ class MnemosRuntime:
                 return (
                     f"Archived memory {target} and captured correction {replacement.id}.\n"
                     f"Correction: {correction.strip()}"
+                    + (f"\n{kept}" if kept else "")
                 )
 
         search_text = query.strip() or correction.strip()
@@ -2208,6 +2228,22 @@ class MnemosRuntime:
                         revised_by=corrector,
                     )
 
+                # The note's memories, newest first: each correction points
+                # graduated_to_engram_id at its replacement, while
+                # related_engram_id stays on the memory first captured.
+                meaning, meaning_source, kept = _replacement_impact(
+                    impact,
+                    "Corrected continuity for future interactions.",
+                    *(
+                        self._store.get_engram(engram_id)
+                        for engram_id in (
+                            match.get("graduated_to_engram_id"),
+                            match.get("related_engram_id"),
+                        )
+                        if engram_id
+                    ),
+                )
+
                 related_engram_id = match.get("related_engram_id") or match.get("graduated_to_engram_id")
                 if related_engram_id:
                     related = self._store.get_engram(related_engram_id)
@@ -2216,8 +2252,8 @@ class MnemosRuntime:
 
                 replacement = self._encoder.encode(
                     content=correction.strip(),
-                    impact="Corrected continuity for future interactions.",
-                    impact_source="template",
+                    impact=meaning,
+                    impact_source=meaning_source,
                     kind=_classify_kind(correction),
                     tags=sorted(set(["continuity", "correction", *_simple_tags(correction)])),
                     source=SourceType.SESSION,
@@ -2232,8 +2268,9 @@ class MnemosRuntime:
                 return (
                     f"Updated closest continuity note {note_id}.\n"
                     f"Memory ID: {replacement.id}\n"
-                    "Maintenance:\n"
-                    f"{_indent(maintenance)}"
+                    + (f"{kept}\n" if kept else "")
+                    + "Maintenance:\n"
+                    + _indent(maintenance)
                 )
 
         if action in {"forget", "archive", "remove", "delete"} and search_text:
@@ -2254,6 +2291,7 @@ class MnemosRuntime:
             correction.strip(),
             context=f"Correction supplied through mnemos_correct. Prior query: {query.strip()}",
             importance="high",
+            impact=impact,
         )
 
     def maintain(self, deep: bool = False, auto: bool = False) -> str:
@@ -2645,6 +2683,38 @@ def _importance_scores(importance: str | float, domain: str) -> tuple[float, flo
 # They fill the column but are not traces of how understanding changed, so an
 # engram carrying only one of these still needs the agent's own words.
 _TEMPLATED_IMPACTS = TEMPLATED_IMPACTS
+
+
+def _replacement_impact(
+    impact: str, placeholder: str, *replaced: Engram | None
+) -> tuple[str, str, str]:
+    """What a correction's replacement means: (impact, impact_source, note).
+
+    An impact given with the correction is the agent's own words, labelled as
+    capture labels them. Without one, the replacement keeps what the memory
+    it replaces meant (``replaced`` is newest first), with that meaning's own
+    source: a correction usually fixes a detail, not the meaning, and a
+    placeholder in its place means no lesson can ever come from it. A
+    placeholder is never carried as meaning, so only when there is nothing
+    true to carry does the replacement get one. ``note`` is the result line
+    saying what was kept, so the agent can notice a meaning that no longer
+    holds.
+    """
+    given = (impact or "").strip()
+    if given:
+        return given, "agent", ""
+    for engram in replaced:
+        if engram is None:
+            continue
+        kept = (engram.impact or "").strip()
+        if kept and not is_templated(kept, engram.impact_source):
+            shown = " ".join(kept.split())
+            end = "" if shown.endswith((".", "!", "?")) else "."
+            return kept, engram.impact_source, (
+                f'Kept what it meant: "{shown}"{end} '
+                "If that has changed, correct it with a new impact."
+            )
+    return placeholder, "template", ""
 
 
 def _impact_for(content: str, domain: str) -> str:

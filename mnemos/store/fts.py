@@ -69,12 +69,24 @@ def distinctive_terms(text: str) -> set[str]:
     return {w.lower() for w in fts_words(text, min_len=4) if w.lower() not in _COMMON}
 
 
+def is_common(word: str) -> bool:
+    """Whether a word says nothing about what a text or a cue is about."""
+    word = word.lower()
+    return word in _COMMON or word in _COMMON_SHORT
+
+
+def meaningful_words(text: str) -> set[str]:
+    """The words that say what a text or a cue is about, as a set: its words of three
+    letters or more, lower-cased, without the common ones."""
+    return {w.lower() for w in fts_words(text) if not is_common(w)}
+
+
 def search_words(cue: str) -> list[str]:
     """The words of a cue worth searching for, in order: its words as the index sees
     them, less the common ones. A cue made only of common words keeps them all, so
     there is always something to search for."""
     words = fts_words(cue)
-    meaningful = [w for w in words if w.lower() not in _COMMON and w.lower() not in _COMMON_SHORT]
+    meaningful = [w for w in words if not is_common(w)]
     return meaningful or words
 
 

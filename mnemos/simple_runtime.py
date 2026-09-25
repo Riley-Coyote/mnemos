@@ -35,6 +35,7 @@ from .retrieval.reactive import ReactiveRetriever
 # remain importable from here for existing consumers.
 from .simple_scope import MnemosScope, resolve_scope  # noqa: F401
 from .store.embedding_index import EmbeddingIndex
+from .core.placeholders import TEMPLATED_IMPACTS
 from .store.fts import fts_words, or_query
 from .store.sqlite_store import EngramStore
 
@@ -371,6 +372,61 @@ class MnemosRuntime:
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
         )
+        return plan
+
+    def repair_lessons(self, *, write: bool = False) -> dict[str, Any]:
+        """Plan, and with ``write`` apply, the removal of lesson links filed wrong.
+
+        Until softening checked that a lesson says what a memory taught, the
+        first lesson sharing any word was taken as the same lesson, and
+        memories carrying placeholder impacts were filed under placeholder
+        lessons. On a real store that was 451 of 631 distilled_into links.
+        They still carry recall's light at the weight of real evidence.
+
+        This lists them. It removes them only when a human asks, after a
+        verified backup. Lessons themselves are left alone. A memory whose link
+        goes is filed again, correctly, the next time it fades.
+        """
+        plan: dict[str, Any] = {
+            "target": (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
+            "exists": self.db_path.exists(),
+            "links": 0,
+            "misfiled": [],
+            "removed": 0,
+            "backup": None,
+        }
+        if not plan["exists"]:
+            return plan
+        self._ensure_init()
+        assert self._store is not None
+        from .consolidation.softening import find_misfiled_distillations
+
+        plan["links"] = self._store._get_conn().execute(
+            "SELECT count(*) FROM connections c JOIN engrams s ON s.id = c.source_id "
+            "WHERE c.relation = 'distilled_into' AND s.owner_agent_id = ? "
+            "AND s.person_id = ? AND s.project_scope = ?",
+            (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
+        ).fetchone()[0]
+        plan["misfiled"] = find_misfiled_distillations(
+            self._store, self.scope.agent_id, self.scope.person_id, self.scope.project_scope,
+        )
+        if not write or not plan["misfiled"]:
+            return plan
+
+        from .backup import create_backup
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        destination = (
+            self.db_path.parent / "backups"
+            / f"{self.db_path.stem}.pre-repair-lessons-{stamp}.db"
+        )
+        backup = create_backup(
+            self.db_path, destination, source_connection=self._store._get_conn()
+        )
+        plan["backup"] = backup["path"]
+        plan["removed"] = self._store.remove_connections([
+            (item["source_id"], item["target_id"], "distilled_into") for item in plan["misfiled"]
+        ])
         return plan
 
     def close(self) -> None:
@@ -2504,21 +2560,10 @@ def _importance_scores(importance: str | float, domain: str) -> tuple[float, flo
     return 0.82, 0.66
 
 
-# Phrases the server itself writes into `impact`. They fill the column but
-# they are not traces of how understanding changed, so an engram carrying
-# only one of these still needs the agent's own words.
-_TEMPLATED_IMPACTS = frozenset({
-    "Foundational continuity for future interactions.",
-    "Recurring pattern worth carrying across sessions.",
-    "Long-arc context that should shape future work.",
-    "Current working context for continuity.",
-    "Preference to respect in future decisions.",
-    "Durable continuity captured from the session.",
-    "Stable scoped continuity promoted from hypomnema.",
-    "Stable continuity promoted during simple maintenance.",
-    "Correction to earlier continuity.",
-    "Corrected continuity for future interactions.",
-})
+# Phrases the server itself writes into `impact` (mnemos/core/placeholders.py).
+# They fill the column but are not traces of how understanding changed, so an
+# engram carrying only one of these still needs the agent's own words.
+_TEMPLATED_IMPACTS = TEMPLATED_IMPACTS
 
 
 def _impact_for(content: str, domain: str) -> str:

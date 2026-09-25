@@ -1203,6 +1203,25 @@ class EngramStore:
         )
         self._commit()
 
+    def remove_connections(self, keys: list[tuple[str, str, str]]) -> int:
+        """Remove exactly these connections, each named by (source, target, relation),
+        in one transaction. Other relations between the same two engrams stay.
+        Returns how many rows went."""
+        conn = self._get_conn()
+        removed = 0
+        self._begin_immediate()
+        try:
+            for source_id, target_id, relation in keys:
+                removed += conn.execute(
+                    "DELETE FROM connections WHERE source_id = ? AND target_id = ? AND relation = ?",
+                    (source_id, target_id, relation),
+                ).rowcount
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
+        return removed
+
     def remove_connection(self, source_id: str, target_id: str) -> None:
         """Remove a connection between two engrams."""
         self._conn.execute(

@@ -32,6 +32,42 @@ def _pending(rt, kind):
     ]
 
 
+def _asked_themes(rt):
+    """Every theme ever put to the agent — answered or not, shown or not."""
+    rows = rt._store._get_conn().execute(
+        "SELECT prompt FROM reflection_queue WHERE kind = 'belief' ORDER BY created_at"
+    ).fetchall()
+    themes = []
+    for row in rows:
+        m = re.search(r"\[theme:([^\]]+)\]", row[0])
+        if m:
+            themes.append(m.group(1))
+    return themes
+
+
+# One word recurs across these; nothing else does.
+_VEKTOR_NOTES = [
+    "vektor render queue stalled overnight",
+    "vektor shader cache rebuilt following a crash",
+    "vektor timeline scrubbing feels sluggish",
+    "vektor export finally matches preview",
+    "vektor audio drifted during playback",
+    "vektor autosave corrupted twice",
+    "vektor installer signed properly",
+    "vektor plugin loading improved",
+]
+_TESSERA_NOTES = [
+    "tessera mosaic grout cured",
+    "tessera glaze samples arrived cracked",
+    "tessera kiln schedule moved earlier",
+    "tessera commission deposit cleared",
+]
+_ELSEWHERE_NOTES = [
+    "groceries restocked and the kitchen tidied",
+    "walked along the river at sunset",
+]
+
+
 class TestBeliefFormation:
     def test_a_recurring_theme_is_offered_as_a_belief(self, db):
         rt = _runtime(db)
@@ -65,6 +101,86 @@ class TestBeliefFormation:
         before = len(rt._store.get_beliefs("t"))
         rt.reflect(item["target_id"], "   ")
         assert len(rt._store.get_beliefs("t")) == before
+
+
+class TestAThemeIsAskedOnce:
+    """A live store held 103 unanswered copies of one question:
+    'You keep returning to "2026"'. Nearly every note starts with a date,
+    so the year outranked every real theme, and a theme the agent left
+    unanswered was asked again the next cycle against a fresh memory.
+    Leaving it is how the packet tells the agent to decline, so silence
+    has to be what lets a theme fade.
+    """
+
+    @pytest.mark.parametrize("stamp", [
+        "2026-09-2{i}: ",
+        "2026-09-24T22:1{i}:07Z ",
+        "11pm: ",
+        "the 24th: ",
+    ], ids=["iso-date", "iso-timestamp", "clock-time", "day-ordinal"])
+    def test_a_date_on_every_note_is_not_a_theme(self, db, stamp):
+        rt = _runtime(db)
+        for i, note in enumerate(_VEKTOR_NOTES[:4] + _ELSEWHERE_NOTES):
+            rt.capture(content=stamp.format(i=i) + note)
+        rt.maintain()
+
+        themes = _asked_themes(rt)
+        assert not [t for t in themes if any(c.isdigit() for c in t)], (
+            f"a date or time was offered as a belief: {themes}"
+        )
+        assert "vektor" in themes, "the real theme under the dates was never offered"
+
+    def test_a_theme_already_waiting_is_not_asked_again(self, db):
+        rt = _runtime(db)
+        notes = iter(_VEKTOR_NOTES)
+        for _ in range(4):
+            rt.capture(content=next(notes), impact="kept for the test")
+        rt.maintain()
+        assert _asked_themes(rt) == ["vektor"]
+
+        for _ in range(3):  # later sessions keep mentioning it
+            rt.capture(content=next(notes), impact="kept for the test")
+            rt.maintain()
+
+        assert _asked_themes(rt) == ["vektor"], "the same theme was put to the agent again"
+
+    @pytest.mark.parametrize("lapse", ["left unanswered", "expired"])
+    def test_a_theme_left_to_fade_does_not_come_back(self, db, lapse):
+        rt = _runtime(db)
+        notes = iter(_VEKTOR_NOTES)
+        for _ in range(4):
+            rt.capture(content=next(notes), impact="kept for the test")
+        rt.maintain()
+        assert _asked_themes(rt) == ["vektor"]
+
+        if lapse == "left unanswered":
+            # Shown in every packet it was allowed, and never answered.
+            for _ in range(rt._store.MAX_SURFACINGS):
+                rt._reflection_block(limit=10)
+        else:
+            rt._store._get_conn().execute(
+                "UPDATE reflection_queue SET expires_at = '2000-01-01T00:00:00+00:00'"
+            )
+            rt._store._commit()
+        assert not _pending(rt, "belief"), "the ask never faded"
+
+        for _ in range(3):
+            rt.capture(content=next(notes), impact="kept for the test")
+            rt.maintain()
+
+        assert _asked_themes(rt) == ["vektor"], "a declined theme came back"
+        assert not _pending(rt, "belief")
+
+    def test_a_new_theme_is_still_offered(self, db):
+        rt = _runtime(db)
+        for note in _VEKTOR_NOTES[:4]:
+            rt.capture(content=note, impact="kept for the test")
+        rt.maintain()
+        for note in _TESSERA_NOTES:
+            rt.capture(content=note, impact="kept for the test")
+        rt.maintain()
+
+        assert _asked_themes(rt) == ["vektor", "tessera"]
 
 
 class TestBeliefReaffirmation:

@@ -1445,26 +1445,35 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def _print_semantic_status(runtime) -> None:
-    """Say which retrieval this install actually has.
+    """Say whether recall can seed by meaning here, and why not if not.
 
     `sentence-transformers` is an optional extra, so retrieval is either
     semantic or keyword-only depending on what happens to be installed —
     and nothing told the user which. Two very different qualities of
     recall, silently selected, is the failure pattern this project keeps
-    producing.
+    producing. This used to say only whether the import had succeeded, and
+    told a user whose installed package failed to import to go install it.
+    Now it embeds a probe, and names the root cause when that fails.
     """
+    import platform
+
+    from .simple_runtime import describe_semantic
+
     try:
-        index = getattr(runtime, "_embedding_index", None)
-        if index is not None and getattr(index, "_available", False):
-            embedder = type(index._embedder).__name__.strip("_")
-            print(f"Retrieval:    semantic + keyword ({embedder})")
-        else:
-            print(
-                "Retrieval:    keyword only — "
-                "pip install 'mnemos-continuity[embeddings]' for semantic recall"
-            )
-    except Exception:
-        print("Retrieval:    unknown")
+        headline, details, attention = describe_semantic(
+            runtime.semantic_status(verify=True)
+        )
+    except Exception as exc:
+        print(f"Semantic:     unknown ({type(exc).__name__}: {exc})")
+        return
+    print(f"Semantic:     {headline}")
+    for detail in details:
+        print(f"              {detail}")
+    # Whether an import works depends on the interpreter, so say which one
+    # answered. The MCP server reports its own answer in mnemos_health.
+    print(f"              checked in Python {platform.python_version()} ({sys.executable})")
+    for warning in attention:
+        print(f"  ATTENTION:  {warning}")
 
 
 def _print_continuity_status(runtime) -> None:

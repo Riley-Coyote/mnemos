@@ -603,6 +603,8 @@ def test_health_returns_structured_dict(tmp_path):
         # A health card that can only ever say "fine" is worth nothing on
         # the day it isn't.
         "continuity",
+        # Whether recall can seed by meaning here, and why not if not.
+        "semantic",
     }
     assert data["counts"]["continuity_notes_active"] >= 1
     assert data["store"]["size_bytes"] > 0

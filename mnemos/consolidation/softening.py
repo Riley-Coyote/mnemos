@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 import ulid as _ulid_mod
 
 from ..core.types import ConnectionRelation, EngramKind, SourceType
+from ..store.fts import fts_words, or_query
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -478,11 +479,11 @@ def _create_or_reinforce_lesson(
         return None
 
     # Search for existing similar lessons
-    words = [w for w in impact_text.split() if len(w) > 2 and w.isalnum()]
+    words = fts_words(impact_text)
     if not words:
         return None
 
-    query = " OR ".join(f'"{w}"' for w in words[:6])
+    query = or_query(words[:6])
     try:
         existing = store.search_fts(
             query, limit=10, agent_id=engram.owner_agent_id,

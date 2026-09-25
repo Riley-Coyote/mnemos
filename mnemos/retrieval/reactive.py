@@ -139,24 +139,35 @@ class ReactiveRetriever:
 
         # 1. SEED: Find entry points via FTS + embeddings
         seeds: dict[str, Engram] = {}
+        # Each seed starts as bright as it matched the cue. Every word of the cue
+        # is a way in, so a memory that shares only a common word with it ("the",
+        # "what") is found too; it starts faint, and the best match starts at 1.0.
+        # Starting them all at 1.0 let common words light most of the graph and
+        # let the most-linked memories answer almost every cue.
+        seed_activation: dict[str, float] = {}
 
-        # FTS seeds (keyword matching)
+        # FTS seeds (keyword matching), with FTS5's bm25 rank for each
         fts_query = _to_fts_query(cue)
-        fts_results = self._store.search_fts(
+        fts_results = self._store.search_fts_ranked(
             fts_query, limit=30, agent_id=agent_id, person_id=person_id,
             project_scope=project_scope,
         )
-        for engram in fts_results:
-            if engram.owner_agent_id == agent_id:
-                seeds[engram.id] = engram
+        _add_ranked_seeds(
+            seeds, seed_activation,
+            [(e, rank) for e, rank in fts_results if e.owner_agent_id == agent_id],
+        )
 
-        # Shared DB seeds (cross-agent shared memories)
+        # Shared DB seeds (cross-agent shared memories), ranked within their own search
         if self._shared_store:
             try:
-                shared_fts = self._shared_store.search_fts(fts_query, limit=20)
-                for engram in shared_fts:
-                    if engram.visibility in ("shared", "public") and engram.id not in seeds:
-                        seeds[engram.id] = engram
+                if hasattr(self._shared_store, "search_fts_ranked"):
+                    shared_fts = self._shared_store.search_fts_ranked(fts_query, limit=20)
+                else:
+                    shared_fts = [(e, -1.0) for e in self._shared_store.search_fts(fts_query, limit=20)]
+                _add_ranked_seeds(
+                    seeds, seed_activation,
+                    [(e, rank) for e, rank in shared_fts if e.visibility in ("shared", "public")],
+                )
             except Exception:
                 pass  # Shared store is optional
 
@@ -179,6 +190,8 @@ class ReactiveRetriever:
                         if engram and engram.state == "active":
                             seeds[eid] = engram
                             embedding_similarity[eid] = similarity
+                            # a meaning match starts as bright as it matched, too
+                            seed_activation[eid] = min(1.0, similarity)
             except Exception as exc:
                 # Embeddings are optional — FTS still works — but a failure
                 # here is a bug, not a missing backend (the index reports
@@ -191,9 +204,9 @@ class ReactiveRetriever:
         # 2. PROPAGATE: Spreading activation through connection graph
         activation: dict[str, float] = {}
 
-        # Seeds start at activation 1.0
+        # Seeds start as bright as they matched
         for seed_id in seeds:
-            activation[seed_id] = 1.0
+            activation[seed_id] = seed_activation.get(seed_id, 1.0)
 
         # Spread through connections
         for hop in range(1, self._depth + 1):
@@ -311,6 +324,24 @@ class ReactiveRetriever:
                 )
 
         return top_results
+
+
+def _add_ranked_seeds(
+    seeds: dict[str, Engram],
+    seed_activation: dict[str, float],
+    ranked: list[tuple[Engram, float]],
+) -> None:
+    """Add one search's results as seeds, each starting at its bm25 rank relative
+    to that search's best (FTS5 ranks are negative; lower is a better match).
+    An engram already seeded keeps its first, stronger start."""
+    best = None
+    for engram, rank in ranked:
+        if engram.id in seeds:
+            continue
+        if best is None:
+            best = rank
+        seeds[engram.id] = engram
+        seed_activation[engram.id] = rank / best if best < 0 else 1.0
 
 
 def _to_fts_query(cue: str) -> str:

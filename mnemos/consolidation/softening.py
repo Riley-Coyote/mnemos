@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 import ulid as _ulid_mod
 
+from ..core.placeholders import is_templated
 from ..core.types import ConnectionRelation, EngramKind, SourceType
 from ..store.fts import distinctive_terms, fts_words, or_query, overlap
 
@@ -488,7 +489,7 @@ def _create_or_reinforce_lesson(
     # A placeholder the server wrote ("Correction to earlier continuity.") says
     # nothing the memory taught. It must not become a lesson, or strengthen one:
     # every memory carrying the same placeholder reinforced the same "lesson".
-    if getattr(engram, "impact_source", "") == "template":
+    if is_templated(impact_text, getattr(engram, "impact_source", "")):
         return None
 
     mine = distinctive_terms(impact_text)
@@ -668,3 +669,46 @@ def _rule_based_soften(content: str, target_resolution: float) -> str:
         words = content.split()
         key_word = words[0] if words else "something"
         return f"An impression related to {key_word}... [faded]"
+
+
+def find_misfiled_distillations(
+    store: EngramStore,
+    agent_id: str,
+    person_id: str,
+    project_scope: str,
+) -> list[dict[str, Any]]:
+    """distilled_into links from this scope's memories that do not hold what they claim.
+
+    A link is misfiled when the memory's impact is a placeholder the server
+    wrote, or when the lesson says something else: less than half of the
+    smaller one's distinctive words shared, the bar _create_or_reinforce_lesson
+    now applies before filing anything. Links made before that bar existed were
+    filed on any shared word, and still carry recall's light at the weight of
+    real evidence.
+    """
+    rows = store._get_conn().execute(
+        """
+        SELECT c.source_id, c.target_id, s.impact, s.impact_source,
+               s.content AS source_content, l.content AS lesson
+        FROM connections c
+        JOIN engrams s ON s.id = c.source_id
+        JOIN engrams l ON l.id = c.target_id
+        WHERE c.relation = 'distilled_into'
+          AND s.owner_agent_id = ? AND s.person_id = ? AND s.project_scope = ?
+        ORDER BY c.source_id, c.target_id
+        """,
+        (agent_id, person_id, project_scope),
+    ).fetchall()
+    misfiled = []
+    for row in rows:
+        if is_templated(row["impact"], row["impact_source"]):
+            reason = "placeholder"
+        elif overlap(
+            distinctive_terms(row["impact"] or row["source_content"] or ""),
+            distinctive_terms(row["lesson"] or ""),
+        ) < _SAME_LESSON:
+            reason = "unrelated"
+        else:
+            continue
+        misfiled.append({"source_id": row["source_id"], "target_id": row["target_id"], "reason": reason})
+    return misfiled

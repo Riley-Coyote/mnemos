@@ -223,6 +223,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Apply the change instead of printing what it would do",
     )
 
+    # ── repair-lessons ──
+    p_repair = sub.add_parser(
+        "repair-lessons",
+        help="Remove lesson links filed on a shared word or a placeholder "
+             "(dry run unless --write)",
+    )
+    p_repair.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
+    p_repair.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_repair.add_argument("--person-id", default=argparse.SUPPRESS, help="Person scope")
+    p_repair.add_argument("--project-scope", default=argparse.SUPPRESS, help="Project scope")
+    p_repair.add_argument(
+        "--write",
+        action="store_true",
+        help="Remove them instead of printing what would go",
+    )
+
     # ── hermes ──
     p_hermes = sub.add_parser("hermes", help="Hermes Agent identity-continuity integration")
     hermes_sub = p_hermes.add_subparsers(dest="hermes_command")
@@ -451,6 +467,7 @@ def main(argv: list[str] | None = None) -> int:
         "doctor": _cmd_doctor,
         "repair-softening": _cmd_repair_softening,
         "adopt-legacy": _cmd_adopt_legacy,
+        "repair-lessons": _cmd_repair_lessons,
         "hermes": _cmd_hermes,
         "identity": _cmd_identity,
         "mcp": _cmd_mcp,
@@ -1423,6 +1440,56 @@ def _cmd_repair_softening(args: argparse.Namespace) -> int:
         return 0
     finally:
         runtime.close()
+
+
+def _cmd_repair_lessons(args: argparse.Namespace) -> int:
+    """Remove the lesson links that were filed wrong, and only those.
+
+    Softening used to take the first lesson sharing any word with a fading
+    memory's impact as the lesson it taught, and to file placeholder impacts
+    under placeholder lessons. A human runs this: a dry run unless --write,
+    and a verified backup before anything is removed.
+    """
+    from .simple_runtime import MnemosRuntime
+
+    runtime = MnemosRuntime(
+        db_path=getattr(args, "db_path", None),
+        agent_id=getattr(args, "agent_id", None),
+        person_id=getattr(args, "person_id", None),
+        project_scope=getattr(args, "project_scope", None),
+    )
+    try:
+        plan = runtime.repair_lessons(write=args.write)
+    finally:
+        runtime.close()
+
+    if not plan["exists"]:
+        print(f"No store at {runtime.db_path}; nothing to repair.")
+        return 0
+
+    agent, person, project = plan["target"]
+    reasons = {"unrelated": 0, "placeholder": 0}
+    for item in plan["misfiled"]:
+        reasons[item["reason"]] += 1
+    kept = plan["links"] - len(plan["misfiled"])
+    print(f"Lesson links for {agent} / {person} / {project} in {runtime.db_path}")
+    print()
+    print(f"  {plan['links']:>7,}  links from a memory to the lesson it taught")
+    print(f"  {reasons['unrelated']:>7,}  to a lesson that says something else    go")
+    print(f"  {reasons['placeholder']:>7,}  from a placeholder impact               go")
+    print(f"  {kept:>7,}  that hold                                stay")
+    if not plan["misfiled"]:
+        print()
+        print("Nothing to repair.")
+        return 0
+    print()
+    if args.write:
+        print(f"Removed {plan['removed']:,} links. Backup: {plan['backup']}")
+        print("A memory whose link went is filed again, correctly, the next time it fades.")
+    else:
+        print("Dry run: nothing changed. Run again with --write to remove them")
+        print("(a verified backup is made first).")
+    return 0
 
 
 def _cmd_adopt_legacy(args: argparse.Namespace) -> int:

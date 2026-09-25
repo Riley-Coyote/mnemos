@@ -206,11 +206,17 @@ def test_simple_stdio_server_lists_and_calls_context(tmp_path):
                 assert not health.isError
                 assert health.structuredContent is not None
                 assert health.structuredContent["scope"]["agent_id"] == "smoke"
+                # The server answers for its own process: whether its recall
+                # can seed by meaning, and why not if not.
+                semantic = health.structuredContent["semantic"]
+                assert isinstance(semantic["active"], bool)
+                assert semantic["active"] or semantic["reason"]
                 health_text = "\n".join(
                     block.text for block in health.content
                     if getattr(block, "type", None) == "text"
                 )
                 assert "Mnemos health card" in health_text
+                assert "Semantic:" in health_text
 
     anyio.run(run_smoke)
 

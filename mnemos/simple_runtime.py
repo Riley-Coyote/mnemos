@@ -143,6 +143,10 @@ def _simple_tags(content: str, context: str = "") -> list[str]:
 # single mention.
 _BELIEF_MIN_MEMORIES = 4
 
+# The marker a belief ask carries, so the answer can be filed under its theme
+# and a theme already asked is not asked again.
+_THEME_MARKER = re.compile(r"\[theme:([^\]]+)\]")
+
 # Only captures whose encoding registered real surprise (they did not fit what
 # was already held) are offered as contradiction candidates. Keeps the ask rare
 # and tied to genuine tension, not mere topical overlap.
@@ -666,13 +670,23 @@ class MnemosRuntime:
         assert self._store is not None
         from collections import Counter
 
-        already = {
-            r[0] for r in self._store._get_conn().execute(
-                "SELECT target_id FROM reflection_queue WHERE agent_id = ? "
-                "AND person_id = ? AND project_scope = ? AND answered_at IS NULL",
-                (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
-            ).fetchall()
-        }
+        unanswered = self._store._get_conn().execute(
+            "SELECT target_id, kind, prompt FROM reflection_queue WHERE agent_id = ? "
+            "AND person_id = ? AND project_scope = ? AND answered_at IS NULL",
+            (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
+        ).fetchall()
+        already = {r["target_id"] for r in unanswered}
+        # A theme is asked once. Leaving the ask is how the agent declines, and
+        # an ask that was shown out or expired still records that it was put.
+        # Deduping by target alone let a declined theme return every cycle
+        # against a fresh memory — one more row per cycle, without end.
+        asked_themes = set()
+        for r in unanswered:
+            if r["kind"] != "belief":
+                continue
+            m = _THEME_MARKER.search(r["prompt"] or "")
+            if m:
+                asked_themes.add(m.group(1).strip())
 
         rows = self._store._get_conn().execute(
             """
@@ -693,7 +707,11 @@ class MnemosRuntime:
         term_engrams: dict[str, list[str]] = {}
         for row in rows:  # newest first
             for term in _query_terms(row["content"] or ""):
-                if len(term) <= 3:
+                # Nearly every note starts with a date, and the tokenizer splits
+                # dates and times into digit-led runs ("2026", "24t22", "11pm"),
+                # so a year outranked every real theme. A number is not a theme;
+                # words, even ones carrying digits like "a11y", lead with a letter.
+                if len(term) <= 3 or term[0].isdigit():
                     continue
                 ids = term_engrams.setdefault(term, [])
                 if row["id"] not in ids:
@@ -708,7 +726,7 @@ class MnemosRuntime:
         for theme, ids in ranked:
             if len(ids) < _BELIEF_MIN_MEMORIES:
                 break  # descending — nothing else clears the bar
-            if theme.lower() in existing:
+            if theme in asked_themes or theme.lower() in existing:
                 continue
             # A belief ask must not share a target with another pending
             # reflection: the tool answers by target_id alone, so a collision
@@ -940,7 +958,7 @@ class MnemosRuntime:
 
         # Formation. A themed prompt carries the domain; the target is evidence.
         theme = ""
-        tm = re.search(r"\[theme:([^\]]+)\]", prompt)
+        tm = _THEME_MARKER.search(prompt)
         if tm:
             theme = tm.group(1).strip()
         belief = Belief(

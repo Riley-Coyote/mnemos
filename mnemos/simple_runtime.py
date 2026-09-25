@@ -35,6 +35,7 @@ from .retrieval.reactive import ReactiveRetriever
 # remain importable from here for existing consumers.
 from .simple_scope import MnemosScope, resolve_scope  # noqa: F401
 from .store.embedding_index import EmbeddingIndex
+from .store.fts import fts_words, or_query
 from .store.sqlite_store import EngramStore
 
 
@@ -931,10 +932,10 @@ class MnemosRuntime:
         contradiction candidate is found the same cheap way connections are.
         """
         assert self._store is not None
-        words = [w for w in (engram.content or "").split() if len(w) > 3 and w.isalnum()]
+        words = fts_words(engram.content or "", min_len=4)
         if not words:
             return None
-        query = " OR ".join(f'"{w}"' for w in words[:8])
+        query = or_query(words[:8])
         try:
             results = self._store.search_fts(query, limit=5)
         except (ValueError, OSError):

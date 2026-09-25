@@ -29,6 +29,7 @@ from ..core.engram import Engram
 from ..core.emotional_state import EmotionalState
 from ..core.types import ConnectionRelation
 from .reconsolidation import reconsolidate
+from ..store.fts import fts_words, or_query
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -350,8 +351,8 @@ def _to_fts_query(cue: str) -> str:
     Words are quoted for FTS5 safety (prevents operators like hyphens
     from causing errors).
     """
-    words = [w for w in cue.split() if len(w) > 2 and w.isalnum()]
+    words = fts_words(cue)
     if not words:
         clean = "".join(c for c in cue if c.isalnum() or c == " ").strip()
         return f'"{clean}"' if clean else '""'
-    return " OR ".join(f'"{w}"' for w in words)
+    return or_query(words)

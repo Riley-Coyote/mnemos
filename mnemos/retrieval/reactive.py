@@ -122,6 +122,8 @@ class ReactiveRetriever:
         project_scope: str = "global",
         max_results: int = 10,
         emotional_state: EmotionalState | None = None,
+        *,
+        reconsolidate_results: bool = True,
     ) -> list[RetrievalResult]:
         """Retrieve memories via resonance — spreading activation through the graph.
 
@@ -130,7 +132,11 @@ class ReactiveRetriever:
         2. Spreading activation (3 hops, decay per hop, weighted by relation)
         3. Emotional bias (multiplicative boost for congruent tags)
         4. Filter by threshold + confidence floor
-        5. Reconsolidate returned engrams
+        5. Reconsolidate returned engrams, unless ``reconsolidate_results`` is
+           False: then the results come back and nothing is written (no access
+           count, strength, version row or co-activation link). Code older than
+           the store retrieves this way, because how a return changes a memory
+           is a rule newer code may have replaced.
 
         Returns:
             List of RetrievalResult sorted by activation level (descending).
@@ -306,7 +312,7 @@ class ReactiveRetriever:
         top_results = results[:max_results]
 
         # 5. RECONSOLIDATE returned engrams
-        if self._reconsolidation_enabled and top_results:
+        if self._reconsolidation_enabled and reconsolidate_results and top_results:
             co_retrieved_ids = [r.engram.id for r in top_results]
             for result in top_results:
                 # Reconsolidate in the engram's home store

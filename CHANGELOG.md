@@ -2,6 +2,71 @@
 
 ## 0.3.1 (unreleased)
 
+### Old sessions stop maintaining a memory newer code has moved on from
+
+A Claude Code session keeps the Mnemos code it imported when it started, and a
+session can run for days. Every server started before an upgrade went on
+maintaining the same store by the old rules (decay, linking, softening,
+lessons, questions, beliefs, identity) after newer code had replaced them, and
+nothing in the store could tell it to stop. `mnemos doctor` also wrote to the
+store it was checking: it built a context packet, which ran maintenance and
+used up the showings of pending questions. On a copy of a real store, one
+doctor run logged a maintenance cycle, used two question showings and moved
+the session counter.
+
+- Each store records the newest maintenance code version that has opened it
+  (`min_code_version` in its meta table). A server raises it when it starts
+  and never lowers it.
+- Code older than the store records the agent's words and applies no rules
+  to them. It takes the agent's own captures, handoffs, reflections and
+  corrections, because refusing those would lose memories, but:
+  - it runs no maintenance, whether through a session or `mnemos consolidate`;
+  - recall and the context packet still return what they find, but a return
+    changes nothing: no access count, strength, version row or co-activation
+    link;
+  - a capture or a correction is saved in its own shape (classification,
+    full-text index, vector) with no links to other memories and no weighing
+    against beliefs. Maintenance under current code links it later: on a copy
+    of a real store, one pass linked five such captures;
+  - a correction lands on the memory it names, but never lowers or retires a
+    belief, and gets no placeholder where its meaning would go;
+  - questions wait for a current session. The packet shows none and spends
+    no showings. Only an answer about what a memory changed or taught is
+    taken: it lands on that memory, and filing it as a lesson waits for
+    current code. Any other answer, to a belief or contradiction question or
+    to a kind of question newer code added that this code has never heard
+    of, is kept as a signed continuity note that names the question, which
+    stays open;
+  - a handoff replaces only its own session's note and retires no other
+    session's.
+
+  Old code never moves a belief by any path.
+- A store's `schema_version`, like its `min_code_version`, only ever rises.
+  Every open used to stamp the opener's own version, so older code lowered
+  what newer code had recorded. Opening a store that is already up to date
+  no longer changes the file at all.
+- Every result it returns (capture, recall, context, reflect, correct, handoff,
+  introduce) ends with one line: "This session runs older Mnemos code than
+  the store expects. Restart the session." The agent inside a stale session
+  is the only one who can see it. With current code nothing changes.
+- `mnemos_health` and `mnemos doctor` show the running version and the
+  store's minimum. When a session is older they say so, and what to do:
+  restart the session, and if it still says so, update Mnemos or reset the
+  minimum.
+- `mnemos repair min-code-version` shows both versions and, with
+  `--set N --write`, lowers or raises the minimum. It first makes a verified
+  backup of the store exactly as it found it
+  (`backups/<db>.pre-repair-min-code-version-<stamp>.db`). It refuses N below
+  1, and only a human runs it.
+- `mnemos doctor` now opens the store read-only and changes nothing. It no
+  longer prints a context packet.
+
+Servers started before this change have no gate: they keep maintaining by
+their old rules until they are restarted. The gate protects every later bump.
+Each change to how memory is written or maintained raises
+`MAINTENANCE_CODE_VERSION` in `mnemos/code_version.py`, and from then on an
+older server stops maintaining any store the newer code has opened.
+
 ### Parallel sessions keep their own handoffs
 
 There was one handoff slot per scope, so when several sessions worked the same

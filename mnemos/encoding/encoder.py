@@ -154,6 +154,7 @@ class Encoder:
         override_confidence_source: str | None = None,
         skip_surprise_detection: bool = False,
         impact_source: str = "",
+        discover_connections: bool = True,
     ) -> Engram:
         """Create a new engram from raw content.
 
@@ -172,6 +173,11 @@ class Encoder:
             emotional_state: Current emotional state dict (6 dimensions).
             override_confidence: If set, use this confidence score instead of auto-scoring.
             override_confidence_source: If set, use this confidence source label.
+            discover_connections: Link the new memory to existing ones as it is
+                saved. False saves it with its own shape only (classification,
+                full-text index, vector) and no links; code older than the store
+                saves this way, and maintenance's connection discovery links it
+                later.
 
         Returns:
             The fully-formed, persisted Engram with connections attached.
@@ -231,7 +237,9 @@ class Encoder:
         )
 
         # 5. Discover connections to existing memories
-        connections = self._discover_connections(engram, self._store)
+        connections = (
+            self._discover_connections(engram, self._store) if discover_connections else []
+        )
         for conn in connections:
             engram.add_connection(
                 conn.target_id, conn.relation, conn.strength, conn.formed_by

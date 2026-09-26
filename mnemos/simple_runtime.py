@@ -7,10 +7,12 @@ operations, including agent-written handoff and reflection.
 
 from __future__ import annotations
 
+import functools
 import json
 import hashlib
 import os
 import re
+import sqlite3
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +28,7 @@ from .authorship import (
     resolve_author_model,
     signature,
 )
+from .code_version import MAINTENANCE_CODE_VERSION, OLDER_CODE_FIX, OLDER_CODE_MESSAGE
 from .config.loader import load_config
 from .consolidation.daemon import ConsolidationDaemon
 from .core.types import SourceType
@@ -41,7 +44,7 @@ from .store.embedding_index import EmbeddingIndex
 from .core.engram import Engram
 from .core.placeholders import TEMPLATED_IMPACTS, is_templated
 from .store.fts import distinctive_terms, fts_words, meaningful_words, or_query
-from .store.sqlite_store import EngramStore
+from .store.sqlite_store import EngramStore, ReadOnlyEngramStore
 
 
 SIMPLE_TOOL_NAMES = (
@@ -79,6 +82,11 @@ LEGACY_DEFAULT_INCLUDE = ("lessons", "other")
 # Hypomnema ids are uuid4 strings. Recall treats a query of exactly this shape
 # as an id before it treats it as words.
 _ENTRY_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+# The only questions code older than the store answers: the agent's words
+# about what one memory changed or taught, which land on that memory. A
+# whitelist, so a kind newer code adds is left open, never spent.
+_OLDER_CODE_ANSWERS = frozenset({"impact", "lesson"})
 
 
 class HostMutationConflictError(ValueError):
@@ -270,6 +278,30 @@ def _filter_memories(query: str, results: list[Any]) -> list[Any]:
     return filtered
 
 
+def _notice_when_older(method: Any) -> Any:
+    """End a tool's result with OLDER_CODE_MESSAGE while this code is older
+    than the store.
+
+    The agent inside a stale session is the only one who can see it is stale,
+    and it reads tool results, not the health card. Only the outermost call
+    adds the line (correct can capture), and when the code is current the
+    result is returned exactly as the method built it.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self: "MnemosRuntime", *args: Any, **kwargs: Any) -> Any:
+        self._notice_depth += 1
+        try:
+            result = method(self, *args, **kwargs)
+        finally:
+            self._notice_depth -= 1
+        if self._notice_depth == 0 and isinstance(result, str) and self._stale():
+            result = f"{result}\n{OLDER_CODE_MESSAGE}"
+        return result
+
+    return wrapper
+
+
 class MnemosRuntime:
     """High-level continuity interface used by simple MCP mode and tests."""
 
@@ -281,6 +313,7 @@ class MnemosRuntime:
         person_id: str | None = None,
         project_scope: str | None = None,
         use_dedicated_model: bool = True,
+        read_only: bool = False,
     ) -> None:
         self.scope = resolve_scope(
             db_path=db_path,
@@ -288,6 +321,9 @@ class MnemosRuntime:
             person_id=person_id,
             project_scope=project_scope,
         )
+        # A read-only runtime inspects an existing store and cannot change it
+        # (`mnemos doctor`). Anything that would write raises instead.
+        self._read_only = read_only
         self._store: EngramStore | None = None
         self._encoder: Encoder | None = None
         self._retriever: ReactiveRetriever | None = None
@@ -303,6 +339,9 @@ class MnemosRuntime:
         self.last_dream_note_id: str | None = None
         self.last_dream_narrative: str | None = None
         self._host_mutation_active = False
+        # How deep this runtime is in tool calls, so only the outermost one
+        # ends its result with the older-code notice.
+        self._notice_depth = 0
 
     @property
     def db_path(self) -> Path:
@@ -473,6 +512,65 @@ class MnemosRuntime:
         ])
         return plan
 
+    def repair_min_code_version(
+        self, *, set_to: int | None = None, write: bool = False
+    ) -> dict[str, Any]:
+        """Show, and with ``set_to`` and ``write`` change, the store's minimum.
+
+        Opening a store only ever raises its minimum code version. When code
+        newer than what is installed raised it (an unmerged checkout, another
+        install), every session here stops maintaining the store and
+        restarting does not help. This is the way back, and only a human runs
+        it: without ``write`` nothing changes, and a verified backup comes
+        before any change. It never sets the minimum below 1.
+        """
+        if set_to is not None and set_to < 1:
+            raise ValueError("The minimum code version is 1 or more.")
+        plan: dict[str, Any] = {
+            "db_path": str(self.db_path),
+            "exists": self.db_path.exists(),
+            "running": MAINTENANCE_CODE_VERSION,
+            "store_minimum": None,
+            "set_to": set_to,
+            "changed": False,
+            "backup": None,
+        }
+        if not plan["exists"]:
+            return plan
+        # Read it as the store holds it now. Opening the store for writing
+        # records this code's version first, which would hide the value a
+        # human is deciding about.
+        peek = ReadOnlyEngramStore(self.db_path)
+        try:
+            plan["store_minimum"] = peek.min_code_version()
+        finally:
+            peek.close()
+        if not write or set_to is None or set_to == plan["store_minimum"]:
+            return plan
+
+        from .backup import create_backup
+
+        # The backup comes first, read through a read-only connection, so it
+        # is the store exactly as the human found it. Opening the store for
+        # writing records this code's version and can migrate the schema.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        destination = (
+            self.db_path.parent / "backups"
+            / f"{self.db_path.stem}.pre-repair-min-code-version-{stamp}.db"
+        )
+        source = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            backup = create_backup(self.db_path, destination, source_connection=source)
+        finally:
+            source.close()
+        plan["backup"] = backup["path"]
+
+        self._ensure_init()
+        assert self._store is not None
+        self._store.set_min_code_version(set_to)
+        plan["changed"] = True
+        return plan
+
     def close(self) -> None:
         if self._store is not None:
             self._store.close()
@@ -626,8 +724,21 @@ class MnemosRuntime:
         if self._store is not None:
             return
 
-        self._store = EngramStore(self.scope.db_path)
-        self._embedding_index = EmbeddingIndex(db_path=self.scope.db_path)
+        if self._read_only:
+            self._store = ReadOnlyEngramStore(self.scope.db_path)
+            # The index creates its table when it opens a store without one,
+            # so it only gets the path when the table is already there. With
+            # no table there are no stored vectors to count anyway.
+            has_vectors = self._store._get_conn().execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'embeddings'"
+            ).fetchone() is not None
+            self._embedding_index = EmbeddingIndex(
+                db_path=self.scope.db_path if has_vectors else None
+            )
+        else:
+            self._store = EngramStore(self.scope.db_path)
+            self._announce_code_version()
+            self._embedding_index = EmbeddingIndex(db_path=self.scope.db_path)
         # The agent's self-declared model, recorded for the record rather
         # than to gate anything. Read straight from the freshly created
         # store: _get_meta would re-enter init.
@@ -660,6 +771,72 @@ class MnemosRuntime:
             self._store,
             embedding_index=self._embedding_index,
         )
+
+    def _announce_code_version(self) -> None:
+        """Raise the store's minimum code version to this code's, at startup.
+
+        From then on, a server still running older code stops maintaining the
+        store (see ``maintain``). The raise never lowers the value. If another
+        process holds the write lock right now, this server still starts; the
+        next one to open the store raises it.
+        """
+        assert self._store is not None
+        try:
+            self._store.raise_min_code_version(MAINTENANCE_CODE_VERSION)
+        except sqlite3.OperationalError:
+            pass
+
+    def _older_than_store(self) -> int | None:
+        """The store's minimum when this code is older than it, else None.
+
+        Read on every call, not only at startup: a server that has run for
+        days learns here that a newer Mnemos has opened the store since.
+        """
+        assert self._store is not None
+        minimum = self._store.min_code_version()
+        if minimum is not None and minimum > MAINTENANCE_CODE_VERSION:
+            return minimum
+        return None
+
+    def _stale(self) -> bool:
+        """Whether this code is older than the store, asked by a tool result.
+
+        A tool can return before it opens the store (an empty capture, say).
+        Then the store is looked at read-only, and a store that does not exist
+        is not brought into being by asking.
+        """
+        if self._store is not None:
+            return self._older_than_store() is not None
+        if not self.db_path.exists():
+            return False
+        peek = ReadOnlyEngramStore(self.db_path)
+        try:
+            minimum = peek.min_code_version()
+        except sqlite3.Error:
+            return False
+        finally:
+            peek.close()
+        return minimum is not None and minimum > MAINTENANCE_CODE_VERSION
+
+    def code_versions(self) -> dict[str, Any]:
+        """The maintenance code version running here, and the store's minimum.
+
+        Read-only, and never creates a store. ``older_than_store`` is true once
+        a newer Mnemos has opened this store, which is when this process stops
+        maintaining it.
+        """
+        store_minimum = None
+        if self.db_path.exists():
+            self._ensure_init()
+            assert self._store is not None
+            store_minimum = self._store.min_code_version()
+        return {
+            "running": MAINTENANCE_CODE_VERSION,
+            "store_minimum": store_minimum,
+            "older_than_store": (
+                store_minimum is not None and store_minimum > MAINTENANCE_CODE_VERSION
+            ),
+        }
 
     def _stats(self) -> dict[str, Any]:
         self._ensure_init()
@@ -1068,6 +1245,7 @@ class MnemosRuntime:
             limit=limit,
         )
 
+    @_notice_when_older
     def reflect(self, target_id: str, text: str) -> str:
         """Record the agent's own reflection on one of its memories."""
         answer = (text or "").strip()
@@ -1077,13 +1255,32 @@ class MnemosRuntime:
         self._ensure_init()
         assert self._store is not None
 
-        item = self._store.answer_reflection(
-            target_id.strip(),
-            answer,
-            agent_id=self.scope.agent_id,
-            person_id=self.scope.person_id,
-            project_scope=self.scope.project_scope,
-        )
+        scope = {
+            "agent_id": self.scope.agent_id,
+            "person_id": self.scope.person_id,
+            "project_scope": self.scope.project_scope,
+        }
+        # Code older than the store keeps the agent's words and applies none
+        # of its rules to them. It answers only what an answer can simply
+        # land on: what a memory changed or taught (impact, lesson). Any other
+        # question stays open for a current session, whether it is one this
+        # code knows (belief, contradiction: it cannot take the verdict
+        # current code reads from those) or a kind newer code added that this
+        # code has never heard of. Answering either here would spend it.
+        older = self._older_than_store() is not None
+        if older:
+            waiting = self._store.pending_reflection_for(target_id.strip(), **scope)
+            if waiting is not None and waiting["kind"] not in _OLDER_CODE_ANSWERS:
+                return self._keep_answer_open(waiting, answer)
+            item = (
+                self._store.answer_reflection(
+                    target_id.strip(), answer, reflection_id=waiting["id"], **scope
+                )
+                if waiting is not None
+                else None
+            )
+        else:
+            item = self._store.answer_reflection(target_id.strip(), answer, **scope)
         if item is None:
             return (
                 f"Nothing was pending for {target_id}. It may already have been "
@@ -1113,6 +1310,17 @@ class MnemosRuntime:
             engram.impact_source = "agent"
             self._store.save_engram(engram)
             self._carry_reflection_into_note(engram.id, answer)
+            if older:
+                # Filing a lesson matches it against the lessons already held,
+                # by rules newer code may have replaced. The memory keeps the
+                # words; softening under current code files the lesson from
+                # them the next time it reaches this memory.
+                return (
+                    "Reflection recorded.\n"
+                    f"  Memory: {' '.join((engram.content or '').split())[:80]}\n"
+                    f"  Now carries: {answer}\n"
+                    "Filing it as a lesson waits for current Mnemos."
+                )
 
             # Shift 2: the distilled insight becomes its own durable memory,
             # linked back to the experience it came from. This edge has been
@@ -1135,6 +1343,40 @@ class MnemosRuntime:
             return self._apply_contradiction_reflection(item, answer)
 
         return f"Reflection recorded for {item['target_id']} ({item['kind']})."
+
+    def _keep_answer_open(self, ask: dict[str, Any], answer: str) -> str:
+        """Keep an answer older code cannot apply, without spending its question.
+
+        The words become a signed continuity note that names the question
+        (its id and its text), so they are neither lost nor spent. The ask
+        itself is left exactly as it was: pending, its showings unchanged.
+        """
+        assert self._store is not None
+        author = self.author_model()
+        domain = _classify_domain(answer)
+        confidence, salience = _importance_scores("auto", domain)
+        note_id = self._store.write_hypomnema_entry(
+            f'{answer}\n\nIn answer to open question {ask["id"]}: "{ask["prompt"]}"',
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+            source="observed",
+            entry_kind="continuity",
+            authored_by="agent",
+            author_id=self.scope.agent_id,
+            author_model=author,
+            domain=domain,
+            tags=sorted({"reflection", "open-question", *_simple_tags(answer)}),
+            confidence=confidence,
+            salience=salience,
+        )
+        return (
+            "Kept your answer as a continuity note; the question stays open "
+            "for a current session.\n"
+            f"  {answer}\n"
+            f"Continuity note ID: {note_id}\n"
+            f"{self._signed_line(author)}"
+        )
 
     def _apply_belief_reflection(self, item: dict[str, Any], answer: str) -> str:
         """Form a belief the agent stated, or retire one it disavowed.
@@ -1495,6 +1737,7 @@ class MnemosRuntime:
             "your name."
         )
 
+    @_notice_when_older
     def introduce(self, agent_model: str, agent_name: str = "") -> str:
         """Record the agent's self-declared model so maintenance stays kin.
 
@@ -1552,6 +1795,7 @@ class MnemosRuntime:
             )
         return "\n".join(lines)
 
+    @_notice_when_older
     def context(self, query: str = "", max_results: int = 5) -> str:
         """Return the startup continuity packet for an agent."""
 
@@ -1676,7 +1920,11 @@ class MnemosRuntime:
         # something genuinely needs the agent's own judgement, and each one
         # stops being shown after a few sessions. A packet that asks for work
         # every time becomes a chore list appended to every conversation.
-        reflection = self._reflection_block()
+        #
+        # Code older than the store shows none and spends no showings: the
+        # questions wait for a current session, which can take the answer as
+        # current rules need it.
+        reflection = self._reflection_block() if self._older_than_store() is None else None
         if reflection:
             lines.extend(["", reflection])
 
@@ -1717,6 +1965,7 @@ class MnemosRuntime:
 
         return "\n".join(lines)
 
+    @_notice_when_older
     def handoff(self, text: str) -> str:
         """Save the agent's exact private note for the next session."""
 
@@ -1734,6 +1983,10 @@ class MnemosRuntime:
             author_id=self.scope.agent_id,
             author_model=author,
             author_session=session,
+            # Code older than the store replaces only this session's own note.
+            # Retiring other sessions' notes by count is a rule; they stay
+            # active until current code retires them.
+            retire_crowded=self._older_than_store() is None,
         )
         if session:
             lasts = (
@@ -1900,6 +2153,7 @@ class MnemosRuntime:
         snapshot["svg"] = render_identity_svg(snapshot)
         return snapshot
 
+    @_notice_when_older
     def capture(
         self,
         content: str,
@@ -1945,6 +2199,10 @@ class MnemosRuntime:
         # while carrying nothing, which is how a store ends up 76% records.
         # Empty is honest, and the reflection queue asks about it later.
         impact = (impact or "").strip()
+        # Code older than the store saves the capture in its own shape
+        # (classification, index, vector) and applies no rules that reach
+        # other memories: no weighing against beliefs, no links.
+        older = self._older_than_store() is not None
 
         engram = self._encoder.encode(
             content=full_content,
@@ -1960,7 +2218,14 @@ class MnemosRuntime:
             # Shift 3: the moment something does not fit what is already held
             # is the moment worth encoding deeply. This is now reachable
             # without beliefs or a model, so it no longer has to be skipped.
-            skip_surprise_detection=False,
+            # Code older than the store skips it all the same: this step also
+            # weighs the capture as evidence for or against beliefs, by rules
+            # newer code may have replaced, and older code must never move a
+            # belief. The capture itself still lands.
+            skip_surprise_detection=older,
+            # Links to other memories follow rules newer code may have
+            # replaced; maintenance's connection discovery makes them later.
+            discover_connections=not older,
         )
         note_id = self._store.write_hypomnema_entry(
             content.strip(),
@@ -1996,6 +2261,7 @@ class MnemosRuntime:
             f"{_indent(maintenance)}"
         )
 
+    @_notice_when_older
     def recall(self, query: str, max_results: int = 5) -> str:
         """Recall relevant continuity and durable memories."""
 
@@ -2081,6 +2347,7 @@ class MnemosRuntime:
             f"to {int(new_conf * 100)}%."
         )
 
+    @_notice_when_older
     def correct(
         self,
         correction: str,
@@ -2112,7 +2379,14 @@ class MnemosRuntime:
         # source=='agent' so a seed or model belief can't be erased by mistake.
         # This is one of the few deliberate downward moves in a graph whose
         # stability otherwise only ratchets up.
-        if not target:
+        #
+        # Code older than the store skips it: which belief a correction names
+        # is decided by token overlap, a rule newer code may have replaced, and
+        # older code never moves a belief by any path. The correction still
+        # lands on the memory it names, below, saved without links to other
+        # memories and without a placeholder where its meaning would go.
+        older = self._older_than_store() is not None
+        if not target and not older:
             belief_note = self._maybe_correct_belief(correction, query, action)
             if belief_note:
                 return belief_note
@@ -2182,7 +2456,7 @@ class MnemosRuntime:
                 if action in {"forget", "archive", "remove", "delete"} and not correction.strip():
                     return f"Archived memory {target}."
                 meaning, meaning_source, kept = _replacement_impact(
-                    impact, "Correction to earlier continuity.", engram
+                    impact, "" if older else "Correction to earlier continuity.", engram
                 )
                 replacement = self._encoder.encode(
                     content=correction.strip(),
@@ -2196,6 +2470,7 @@ class MnemosRuntime:
                     project_scope=self.scope.project_scope,
                     override_confidence=0.92,
                     skip_surprise_detection=True,
+                    discover_connections=not older,
                 )
                 return (
                     f"Archived memory {target} and captured correction {replacement.id}.\n"
@@ -2273,7 +2548,7 @@ class MnemosRuntime:
                 # related_engram_id stays on the memory first captured.
                 meaning, meaning_source, kept = _replacement_impact(
                     impact,
-                    "Corrected continuity for future interactions.",
+                    "" if older else "Corrected continuity for future interactions.",
                     *(
                         self._store.get_engram(engram_id)
                         for engram_id in (
@@ -2302,6 +2577,7 @@ class MnemosRuntime:
                     project_scope=self.scope.project_scope,
                     override_confidence=0.92,
                     skip_surprise_detection=True,
+                    discover_connections=not older,
                 )
                 self._store.mark_hypomnema_promoted(note_id, replacement.id)
                 maintenance = self.maintain(auto=True)
@@ -2358,6 +2634,27 @@ class MnemosRuntime:
         assert self._store is not None
 
         requested_deep = bool(deep)
+        # Code older than the store runs none of the passes (decay, linking,
+        # softening, lessons, questions, beliefs, identity), whose rules the
+        # newer code has replaced. The agent's own writes do not come through
+        # here and still land.
+        store_minimum = self._older_than_store()
+        if store_minimum is not None:
+            # Automatic maintenance is reported inside another tool's result,
+            # which ends with the notice itself; say it once, there.
+            completed = (
+                "no maintenance; this code is older than the store"
+                if auto
+                else f"no maintenance. {OLDER_CODE_MESSAGE}"
+            )
+            return "\n".join([
+                f"Requested: {'deep' if requested_deep else 'standard'}",
+                "Cycle: skipped",
+                f"Completed: {completed}",
+                f"Code: version {MAINTENANCE_CODE_VERSION}; the store needs {store_minimum} or newer",
+                "Passes: none",
+            ])
+
         can_run_deep = requested_deep and self._llm_client is not None
         # config={} meant the whole consolidation block in ~/.mnemos/config.json
         # was never applied — decay_rate, thresholds and min_idle_minutes all
@@ -2505,6 +2802,7 @@ class MnemosRuntime:
                     "exists": False,
                     "size_bytes": 0,
                 },
+                "code": self.code_versions(),
                 "note": (
                     "No memory store exists for this scope yet. It is created "
                     "on first capture, not by reading health."
@@ -2590,6 +2888,10 @@ class MnemosRuntime:
                 "db_path": str(db_path),
                 "size_bytes": int(size_bytes),
             },
+            # Which rules this process maintains memory by, and the newest
+            # version that has opened the store. A long-running session can
+            # be older than the store, and then it no longer maintains it.
+            "code": self.code_versions(),
             "counts": {
                 "memories_active": stats.get("engrams_active", 0),
                 "memories_archived": stats.get("archived", 0),
@@ -2663,6 +2965,9 @@ class MnemosRuntime:
             project_scope=self.scope.project_scope,
             max_results=max(1, max_results),
             emotional_state=emotional_state,
+            # Code older than the store returns what it finds and changes
+            # none of it: how a return strengthens a memory is a rule.
+            reconsolidate_results=self._older_than_store() is None,
         ))
         return [
             result for result in results
@@ -2933,6 +3238,24 @@ def describe_semantic(semantic: dict[str, Any]) -> tuple[str, list[str], list[st
     return headline, details, attention
 
 
+def describe_code(code: Mapping[str, Any] | None) -> tuple[str, str | None]:
+    """The code line of the health card and `mnemos doctor`, and its warning.
+
+    Returns the line, plus the plain fix when this process runs older code
+    than the store expects (None otherwise): restart first, and if that does
+    not clear it, update or reset.
+    """
+    code = code or {}
+    running = code.get("running", MAINTENANCE_CODE_VERSION)
+    minimum = code.get("store_minimum")
+    if minimum is None:
+        return f"version {running} (the store sets no minimum yet)", None
+    headline = f"version {running} (the store needs {minimum} or newer)"
+    if not code.get("older_than_store"):
+        return headline, None
+    return headline, f"{OLDER_CODE_MESSAGE} {OLDER_CODE_FIX}"
+
+
 def format_health_card(data: dict[str, Any]) -> str:
     """Render a health() snapshot as a human-relayable card."""
 
@@ -3022,6 +3345,11 @@ def format_health_card(data: dict[str, Any]) -> str:
         continuity_lines = [
             "", f"ATTENTION — {semantic_attention[0]}", *continuity_lines,
         ]
+    # First, because it is the one with a fix the human can apply right now,
+    # and because while it holds, nothing else on the card is being maintained.
+    code_headline, code_attention = describe_code(data.get("code"))
+    if code_attention:
+        continuity_lines = ["", f"ATTENTION — {code_attention}", *continuity_lines]
 
     return "\n".join([
         "Mnemos health card",
@@ -3031,6 +3359,7 @@ def format_health_card(data: dict[str, Any]) -> str:
             f"project={scope['project_scope']}",
         ),
         line("Store", f"{store['db_path']} ({_human_size(store['size_bytes'])})"),
+        line("Code", code_headline),
         line(
             "Memories",
             f"{counts['memories_active']} active, "

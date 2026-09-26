@@ -32,6 +32,10 @@ from ..core.identity import AgentIdentity
 # Schema version — increment when tables change
 SCHEMA_VERSION = 10
 
+# The lowest maintenance code version still allowed to maintain this store,
+# raised by each newer version that opens it (see mnemos/code_version.py).
+MIN_CODE_VERSION_KEY = "min_code_version"
+
 VALID_FUNCTIONAL_TYPES = {
     "working",
     "preference",
@@ -558,9 +562,18 @@ class EngramStore:
         conn.executescript(SQL_CREATE_TABLES)
         self._classify_legacy_hypomnema(conn)
         self._backfill_engram_scopes(conn)
+        # Only ever raised. A store newer code has stamped keeps its version
+        # when older code opens it, as min_code_version does: stamping this
+        # code's version over it would tell the newer code its own migration
+        # never ran.
         conn.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-            ("schema_version", str(SCHEMA_VERSION)),
+            "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
+            (str(SCHEMA_VERSION),),
+        )
+        conn.execute(
+            "UPDATE meta SET value = ? "
+            "WHERE key = 'schema_version' AND CAST(value AS INTEGER) < ?",
+            (str(SCHEMA_VERSION), SCHEMA_VERSION),
         )
         self._commit()
         integrity = [
@@ -2018,6 +2031,7 @@ class EngramStore:
         author_id: str = "",
         author_model: str = "",
         author_session: str = "",
+        retire_crowded: bool = True,
     ) -> str:
         """Atomically replace this session's handoff, preserving exact prose.
 
@@ -2030,7 +2044,10 @@ class EngramStore:
         that can't say which session they are share the empty session and
         replace each other, as every writer did before sessions were told
         apart. Beyond ``HANDOFF_SESSIONS_KEPT`` sessions' notes in a scope,
-        the oldest is retired; its prose stays in history.
+        the oldest is retired; its prose stays in history. With
+        ``retire_crowded`` False (code older than the store), no other
+        session's note is retired: they stay active until current code
+        retires them.
         """
 
         if not text.strip():
@@ -2104,7 +2121,7 @@ class EngramStore:
                 )
             # Bound how many sessions' notes stay active. A note pushed out
             # here is retired, not superseded: nothing replaced its content.
-            crowded = conn.execute(
+            crowded = [] if not retire_crowded else conn.execute(
                 f"""
                 SELECT id, content, revisions_json FROM hypomnema_entries
                 WHERE agent_id = ? AND person_id = ? AND project_scope = ?
@@ -2902,18 +2919,28 @@ class EngramStore:
         agent_id: str = "default",
         person_id: str = "user",
         project_scope: str = "global",
+        reflection_id: str | None = None,
     ) -> dict[str, Any] | None:
-        """Record the agent's answer. Returns the item, or None if not pending."""
+        """Record the agent's answer. Returns the item, or None if not pending.
+
+        Answers the oldest pending ask about ``target_id``, or exactly the ask
+        ``reflection_id`` names when given.
+        """
         conn = self._get_conn()
-        row = conn.execute(
-            """
-            SELECT * FROM reflection_queue
-            WHERE agent_id = ? AND person_id = ? AND project_scope = ?
-              AND target_id = ? AND answered_at IS NULL
-            ORDER BY created_at ASC LIMIT 1
-            """,
-            (agent_id, person_id, project_scope, target_id),
-        ).fetchone()
+        if reflection_id is not None:
+            row = conn.execute(
+                """
+                SELECT * FROM reflection_queue
+                WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+                  AND target_id = ? AND id = ? AND answered_at IS NULL
+                """,
+                (agent_id, person_id, project_scope, target_id, reflection_id),
+            ).fetchone()
+        else:
+            row = self.pending_reflection_for(
+                target_id, agent_id=agent_id, person_id=person_id,
+                project_scope=project_scope,
+            )
         if row is None:
             return None
         conn.execute(
@@ -2922,6 +2949,29 @@ class EngramStore:
         )
         self._commit()
         return dict(row)
+
+    def pending_reflection_for(
+        self,
+        target_id: str,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> dict[str, Any] | None:
+        """The ask ``answer_reflection`` would answer about ``target_id``.
+
+        Reads only: the ask stays pending and its showings are unchanged.
+        """
+        row = self._get_conn().execute(
+            """
+            SELECT * FROM reflection_queue
+            WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+              AND target_id = ? AND answered_at IS NULL
+            ORDER BY created_at ASC LIMIT 1
+            """,
+            (agent_id, person_id, project_scope, target_id),
+        ).fetchone()
+        return dict(row) if row is not None else None
 
     def reflection_stats(
         self,
@@ -3017,6 +3067,52 @@ class EngramStore:
             (key, value),
         )
         self._commit()
+
+    def min_code_version(self) -> int | None:
+        """The lowest maintenance code version allowed to maintain this store.
+
+        None when no version has recorded itself yet, or the value is not a
+        number (the next raise overwrites it).
+        """
+        value = self.get_meta(MIN_CODE_VERSION_KEY)
+        try:
+            return int(value) if value is not None else None
+        except ValueError:
+            return None
+
+    def raise_min_code_version(self, version: int) -> int:
+        """Record that code at ``version`` has opened this store.
+
+        Only ever raises the value: code older than the stored minimum leaves
+        it alone. Both statements run in one immediate transaction, so two
+        servers starting together cannot interleave a read and a write and
+        lower what the newer one set. Returns the minimum now stored.
+        """
+        conn = self._get_conn()
+        self._begin_immediate()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)",
+                (MIN_CODE_VERSION_KEY, str(int(version))),
+            )
+            conn.execute(
+                "UPDATE meta SET value = ? WHERE key = ? AND CAST(value AS INTEGER) < ?",
+                (str(int(version)), MIN_CODE_VERSION_KEY, int(version)),
+            )
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
+        stored = self.min_code_version()
+        return stored if stored is not None else int(version)
+
+    def set_min_code_version(self, version: int) -> None:
+        """Set the minimum outright, lower or higher. Only a human's reset
+        (`mnemos repair min-code-version`) does this; code opening the store
+        only ever raises it."""
+        if int(version) < 1:
+            raise ValueError("The minimum code version is 1 or more.")
+        self.set_meta(MIN_CODE_VERSION_KEY, str(int(version)))
 
     # ── Consolidation Log ──
 
@@ -3155,3 +3251,34 @@ class EngramStore:
             stats["accessibility_max"] = round(rows["max_acc"], 3)
 
         return stats
+
+
+class ReadOnlyEngramStore(EngramStore):
+    """An existing store opened so that nothing can change it.
+
+    Opening an ``EngramStore`` is itself a write: it migrates the schema and
+    stamps ``schema_version`` on every open, which rewrites the file even when
+    nothing else happens. A diagnostic has to leave the store exactly as it
+    found it, so this skips all of that and asks SQLite for a read-only
+    connection. Every read works as usual; any write raises
+    ``sqlite3.OperationalError`` instead of landing. The store must exist:
+    looking at memory never brings a store into being.
+    """
+
+    def __init__(self, db_path: str | Path):
+        self.db_path = Path(db_path).expanduser()
+        if not self.db_path.is_file():
+            raise FileNotFoundError(f"No Mnemos store at {self.db_path}")
+        self._conn: sqlite3.Connection | None = None
+        self._transaction_depth = 0
+
+    def _get_conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self._conn = sqlite3.connect(
+                f"{self.db_path.resolve().as_uri()}?mode=ro",
+                uri=True,
+                check_same_thread=False,
+            )
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA busy_timeout=5000")
+        return self._conn

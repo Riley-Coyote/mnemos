@@ -264,6 +264,22 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Change it instead of printing what would change",
     )
+    p_keyword = repair_sub.add_parser(
+        "keyword-contradictions",
+        help="Undo the contradiction links and belief revisions the removed "
+             "no-model keyword-and-negation check wrote (dry run unless --write)",
+    )
+    p_keyword.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
+    p_keyword.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_keyword.add_argument("--person-id", default=argparse.SUPPRESS, help="Person scope")
+    p_keyword.add_argument(
+        "--project-scope", default=argparse.SUPPRESS, help="Project scope"
+    )
+    p_keyword.add_argument(
+        "--write",
+        action="store_true",
+        help="Undo them instead of printing what would change",
+    )
 
     # ── hermes ──
     p_hermes = sub.add_parser("hermes", help="Hermes Agent identity-continuity integration")
@@ -1544,8 +1560,104 @@ def _cmd_repair(args: argparse.Namespace) -> int:
     """Guarded repairs named by what they repair: `mnemos repair <what>`."""
     if getattr(args, "repair_command", None) == "min-code-version":
         return _cmd_repair_min_code_version(args)
-    print("Usage: mnemos repair min-code-version [--set N] [--write]", file=sys.stderr)
+    if getattr(args, "repair_command", None) == "keyword-contradictions":
+        return _cmd_repair_keyword_contradictions(args)
+    print(
+        "Usage: mnemos repair min-code-version [--set N] [--write]\n"
+        "       mnemos repair keyword-contradictions [--write]",
+        file=sys.stderr,
+    )
     return 1
+
+
+def _cmd_repair_keyword_contradictions(args: argparse.Namespace) -> int:
+    """Undo what the removed no-model keyword-and-negation check wrote.
+
+    Without a model, encoding lowered a belief and linked the new memory as
+    contradicting it whenever the two shared a word and the memory held a
+    negation. A human runs this: a dry run unless --write, and a verified
+    backup before anything changes. Beliefs belong to the agent, so it covers
+    the agent's memories in every scope.
+    """
+    from .simple_runtime import MnemosRuntime
+
+    runtime = MnemosRuntime(
+        db_path=getattr(args, "db_path", None),
+        agent_id=getattr(args, "agent_id", None),
+        person_id=getattr(args, "person_id", None),
+        project_scope=getattr(args, "project_scope", None),
+    )
+    try:
+        plan = runtime.repair_keyword_contradictions(write=args.write)
+    finally:
+        runtime.close()
+
+    if not plan["exists"]:
+        print(f"No store at {runtime.db_path}; nothing to repair.")
+        return 0
+
+    found = plan["found"]
+    links = found["links"]
+
+    def row(count: int, what: str, action: str) -> None:
+        print(f"  {count:>7,}  {what:<52} {action}")
+
+    print(f"Keyword contradictions for agent {plan['agent_id']} in {runtime.db_path}")
+    print()
+    print("Contradiction links")
+    row(len(links), "the check's: from notes saved without a model", "go")
+    row(len(found["model_links"]), "of its shape, from notes a model weighed", "stay")
+    row(len(found["ambiguous_links"]), "of its shape, but nothing shows how they were saved", "stay")
+    row(found["other_links"], "not of its shape", "stay")
+    if links:
+        notes = len({link["source_id"] for link in links})
+        by_link = sum(1 for link in links if link["no_model_link"])
+        by_revision = sum(1 for link in links if link["revision"])
+        print(
+            f"           ({notes:,} notes; {by_link:,} links shown by a no-model link, "
+            f"{by_revision:,} by a revision the check wrote)"
+        )
+    print("Belief revisions")
+    row(found["revisions"], "the check's, lowering an active belief by 0.05", "undone")
+    if found["retired_revisions"]:
+        row(found["retired_revisions"], "the check's, on retired beliefs", "stay")
+    if found["ambiguous_revisions"]:
+        row(found["ambiguous_revisions"], "with its reason but not its step", "stay")
+    if found["beliefs"]:
+        print("Beliefs")
+        for item in found["beliefs"]:
+            content = " ".join((item["content"] or "").split())
+            if len(content) > 56:
+                content = content[:55].rstrip() + "…"
+            count = item["revisions"]
+            print(
+                f"  {item['before']:.2f} -> {item['after']:.2f}  {item['belief_id']}  "
+                f"{count} revision{'s' if count != 1 else ''}  \"{content}\""
+            )
+    if found["ambiguous_links"]:
+        print("Ambiguous links, left alone")
+        for link in found["ambiguous_links"]:
+            print(f"  {link['source_id']} -> {link['target_id']}  {link['formed_at']}")
+
+    print()
+    if plan["older_than_store"]:
+        print(
+            "This code is older than the store expects, so it changes nothing. "
+            "Run the repair with current Mnemos."
+        )
+        return 1 if args.write else 0
+    if not (links or found["beliefs"]):
+        print("Nothing to repair.")
+        return 0
+    if args.write:
+        print(
+            f"Removed {plan['removed']:,} links and restored {plan['restored']:,} "
+            f"beliefs. Backup: {plan['backup']}"
+        )
+    else:
+        print("Dry run: nothing changed. Run again with --write to undo them")
+        print("(a verified backup is made first).")
+    return 0
 
 
 def _cmd_repair_min_code_version(args: argparse.Namespace) -> int:

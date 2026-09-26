@@ -86,7 +86,9 @@ class TestBeliefFormation:
             rt.capture(content=f"The vektor project needs another perf pass, note {i}")
         rt.maintain()
         item = _pending(rt, "belief")[0]
-        out = rt.reflect(item["target_id"], "Vektor's performance is never quite finished.")
+        out = rt.reflect(
+            item["target_id"], "Vektor's performance is never quite finished.", verdict="hold",
+        )
         assert "Belief recorded" in out, out
         beliefs = rt._store.get_beliefs("t", active_only=True)
         mine = [b for b in beliefs if b.source == "agent"]
@@ -184,7 +186,7 @@ class TestAThemeIsAskedOnce:
 
 
 class TestBeliefReaffirmation:
-    def test_no_retires_a_belief(self, db):
+    def test_retire_retires_a_belief(self, db):
         rt = _runtime(db)
         rt._ensure_init()
         # Capture with an impact so no impact reflection is queued on this
@@ -203,7 +205,7 @@ class TestBeliefReaffirmation:
             agent_id="t", person_id="p", project_scope="g",
         )
         item = _pending(rt, "belief")[0]
-        out = rt.reflect(item["target_id"], "no")
+        out = rt.reflect(item["target_id"], "No, not any more.", verdict="retire")
         assert "Retired" in out
         assert rt._store.get_beliefs("t", active_only=True) == []
 
@@ -231,15 +233,15 @@ class TestContradiction:
         assert cand, "no contradiction candidate surfaced for a surprising conflicting capture"
         assert re.search(r"\[ref:engram_", cand[0]["prompt"])
 
-    def test_yes_writes_a_contradicts_edge_and_downweights(self, db):
+    def test_contradicts_writes_a_contradicts_edge_and_weakens_nothing(self, db):
         rt = _runtime(db)
         eng = self._surprising_pair(rt)
         rt.maintain()
         item = _pending(rt, "contradiction")[0]
         other_id = re.search(r"\[ref:(engram_[A-Za-z0-9]+)\]", item["prompt"]).group(1)
-        before = rt._store.get_engram(other_id).strength
+        before = {i: rt._store.get_engram(i).strength for i in (other_id, item["target_id"])}
 
-        out = rt.reflect(item["target_id"], "yes, he changed his workflow")
+        out = rt.reflect(item["target_id"], "yes, he changed his workflow", verdict="contradicts")
         assert "Contradiction recorded" in out, out
 
         edges = rt._store.get_connections(item["target_id"])
@@ -249,19 +251,25 @@ class TestContradiction:
             and c.formed_by == "agent_reflection"
             for c in edges
         ), "no agent-authored CONTRADICTS edge was written"
-        # The older memory was downweighted — the deliberate downward move.
-        assert rt._store.get_engram(other_id).strength < before
+        # The verdict says the two conflict, not which one is wrong.
+        assert {i: rt._store.get_engram(i).strength for i in before} == before
 
-    def test_no_records_no_conflict(self, db):
+    def test_compatible_records_no_conflict(self, db):
         rt = _runtime(db)
         self._surprising_pair(rt)
         rt.maintain()
         item = _pending(rt, "contradiction")[0]
         other_id = re.search(r"\[ref:(engram_[A-Za-z0-9]+)\]", item["prompt"]).group(1)
-        out = rt.reflect(item["target_id"], "no, those are about different things")
+        out = rt.reflect(
+            item["target_id"], "no, those are about different things", verdict="compatible",
+        )
         assert "not a contradiction" in out.lower()
         edges = rt._store.get_connections(item["target_id"])
-        assert not any(c.target_id == other_id for c in edges)
+        assert not any(
+            c.target_id == other_id
+            and str(getattr(c.relation, "value", c.relation)) == "contradicts"
+            for c in edges
+        )
 
 
 class TestRestraintHolds:

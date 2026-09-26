@@ -2,6 +2,76 @@
 
 ## 0.3.1 (unreleased)
 
+### Beliefs change only for real reasons
+
+A belief is something the agent said yes to. Mnemos guessed instead: any
+answer to a belief question formed a belief, a declined one included; the
+answer's first letters decided the rest, so "Now more than ever" retired a
+belief and "No, they don't contradict" recorded a contradiction; a "no" to a
+contradiction question deleted every link from one memory to the other; and
+without a model, a capture sharing one word with a belief and containing
+"not" (which also matches "note") lowered it by 0.05 and linked the capture as
+contradicting it. Nothing could raise a belief: a reaffirmation question could
+never be asked, because the answered question that formed the belief held its
+place in the queue.
+
+- `mnemos_reflect` takes a `verdict`, and the verdict alone decides what
+  happens. The words are kept as written and never read for a yes or a no.
+  - "Is that a belief you hold?": `hold` forms it from the agent's words at
+    0.4; `decline` forms nothing; `not_now` leaves the question open.
+  - "Still true?": `hold` raises it by 0.05 (never past 0.99); `retire` sets
+    it to 0 and stops it shaping context, keeping the belief; each is a
+    revision entry carrying the agent's words. `decline` leaves it as it is;
+    `not_now` leaves the question open. Nothing is deleted.
+  - A contradiction: `contradicts` leaves exactly one CONTRADICTS link between
+    the two memories and changes nothing else. It no longer lowers the
+    earlier memory's strength: the verdict says the two conflict, not which
+    one is wrong. `compatible` removes only a contradiction link from this
+    memory to the other, and every other link stays; `unsure` changes
+    nothing.
+  - A lesson or what a memory changed: `answer`, or `skip` to close the
+    question and leave the memory as it is.
+- Without a verdict, a belief or contradiction answer is kept on its
+  question, which stays open, and nothing is formed, retired or linked. The
+  result says which verdicts the question takes, and both packets (the
+  session's and the session-start hook's) show the call for such a question
+  with `verdict="…"` and a line naming its verdicts. A lesson or impact answer
+  without one is still its answer. Hosts calling `reflect` through the host
+  mutation protocol pass `verdict` in its arguments to act on belief and
+  contradiction questions.
+- Without a model, a capture never lowers a belief and never writes a
+  CONTRADICTS link. The model-configured path is unchanged.
+- `mnemos repair keyword-contradictions` undoes what that check wrote, for
+  one agent across its scopes. It is a dry run unless `--write`, and reads
+  the store read-only until then. Its revisions are found by their reason
+  ("Contradicted by new evidence: ", where the model path writes "... (impact
+  0.60): ...") and their 0.05 step. Its links (CONTRADICTS, formed at
+  encoding, strength 0.7, to the memory a belief rested on) have the model
+  path's exact shape, so one counts only when its note shows it was saved
+  without a model: a link formed by keyword overlap at encoding, or a
+  revision of the check that names it. Links whose note a model weighed, and
+  links nothing explains, are listed and left. With `--write`, after a
+  verified backup (`backups/<db>.pre-repair-keyword-contradictions-<stamp>.db`),
+  the check's links go and each active belief it lowered gets back what those
+  revisions took, as a new revision that says so. No history is deleted, other
+  revisions stand, retired beliefs keep their confidence, and a second run
+  finds nothing. On a copy of a real store: 32 links from 16 notes and 4
+  revisions; both beliefs 0.30 -> 0.40; 4 links of the shape left as
+  ambiguous.
+- A belief the agent has not formed or reaffirmed for 30 days may be asked
+  about again ("Still true?"), at most once a month, as its own kind of
+  question (`reaffirm`), under the packet's usual two-question cap. A theme
+  the agent declined is not asked about again.
+- Schema v11. SQLite cannot widen a CHECK in place, so opening a v10 store
+  rebuilds its reflection queue with every row kept, after a verified backup
+  (`backups/<db>.pre-v11-<stamp>.db`). The queue's unique index keeps its
+  name, so an older Mnemos still opens the store.
+- `MAINTENANCE_CODE_VERSION` is 2. Code older than the store answers only
+  impact and lesson questions, as before. Every other question (belief,
+  reaffirmation, contradiction, or a kind it does not know) stays open
+  whatever the verdict, and the agent's words and verdict are kept as a
+  signed note. It asks no reaffirmation.
+
 ### Old sessions stop maintaining a memory newer code has moved on from
 
 A Claude Code session keeps the Mnemos code it imported when it started, and a

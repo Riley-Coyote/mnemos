@@ -379,22 +379,44 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             idempotent=False,
         )
     )
-    def mnemos_reflect(target_id: str, text: str) -> str:
+    def mnemos_reflect(target_id: str, text: str, verdict: str = "") -> str:
         """Answer something your memory asked you about itself.
 
         Mnemos never calls a model on your behalf. When a memory needs
         judgement — what a fading experience taught, what a capture actually
-        changed — it asks you, in the context packet, and you answer here in
-        your own words. This is your own mind maintaining your own memory.
+        changed, whether a pattern is a belief you hold — it asks you, in the
+        context packet, and you answer here in your own words. This is your
+        own mind maintaining your own memory.
+
+        Pass a verdict with your answer. The verdict alone decides what
+        happens; your words are kept exactly as written and are never read
+        for a yes or a no.
+        - Is that a belief you hold? hold (your words become the belief),
+          decline (it is not one; nothing is formed), not_now (ask later).
+        - A belief you hold, still true? hold (it stands a little more
+          firmly), retire (you no longer hold it: it stops shaping your
+          context and is kept, with your words, in its history), decline
+          (leave it as it is), not_now.
+        - Does it contradict an earlier memory? contradicts (the two are
+          linked as contradicting, and nothing else changes: neither memory
+          is weakened), compatible (they are not; only a contradiction link
+          from this memory to that one is removed), unsure (nothing changes).
+        - What did it change, or teach? answer (your words become what the
+          memory means), skip (nothing true comes; the memory is left as it
+          is). Without a verdict, these words are taken as the answer.
+        A belief or contradiction question answered without a verdict keeps
+        your words and stays open, and nothing is formed, retired or linked.
 
         Args:
             target_id: The memory id from the request in your context packet.
             text: Your reflection. One or two honest sentences, not a summary.
+            verdict: Your decision, from the list above for this question.
         """
 
         return _output(_get_runtime().reflect(
             target_id=_text("target_id", target_id, MAX_ID_CHARS, required=True),
             text=_text("text", text, MAX_REFLECTION_CHARS, required=True),
+            verdict=_text("verdict", verdict, 32),
         ))
 
     @server.tool(

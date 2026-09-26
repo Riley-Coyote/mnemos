@@ -30,7 +30,7 @@ from ..core.identity import AgentIdentity
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # The lowest maintenance code version still allowed to maintain this store,
 # raised by each newer version that opens it (see mnemos/code_version.py).
@@ -157,6 +157,51 @@ _RECONCILABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+
+# What the reflection queue can ask. 'reaffirm' (schema v11) asks whether a
+# belief the agent holds is still true; before it, a reaffirmation was filed as
+# 'belief' and the unique index below, which counts answered asks, blocked it
+# for good behind the answered ask that formed the belief.
+REFLECTION_KINDS = ("impact", "lesson", "belief", "contradiction", "reaffirm")
+
+# The reflection queue's table, kept apart from the schema script so that a
+# queue from before v11 can be rebuilt from it: SQLite cannot widen a CHECK in
+# place (see EngramStore._allow_reaffirm_asks). Must match REFLECTION_KINDS.
+_REFLECTION_QUEUE_TABLE = """CREATE TABLE IF NOT EXISTS reflection_queue (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL DEFAULT 'default',
+    person_id TEXT NOT NULL DEFAULT 'user',
+    project_scope TEXT NOT NULL DEFAULT 'global',
+    kind TEXT NOT NULL
+        CHECK (kind IN ('impact', 'lesson', 'belief', 'contradiction', 'reaffirm')),
+    target_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    excerpt TEXT NOT NULL DEFAULT '',
+    -- How many times this has been shown. An agent that has declined to
+    -- answer three times is answering; stop asking.
+    surfaced_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    expires_at TEXT,
+    answered_at TEXT,
+    answer TEXT
+)"""
+_REFLECTION_QUEUE_COLUMNS = (
+    "id, agent_id, person_id, project_scope, kind, target_id, prompt, excerpt, "
+    "surfaced_count, created_at, expires_at, answered_at, answer"
+)
+# Its indexes. The unique one allows one ask per memory and kind, answered or
+# not: asking again is nagging. A reaffirmation is asked again about the same
+# belief (a month after the last one), so only a waiting one counts for it.
+# Both keep their names: an older Mnemos runs CREATE ... IF NOT EXISTS under
+# them when it opens a store, which leaves these alone.
+_REFLECTION_QUEUE_INDEXES = (
+    """CREATE UNIQUE INDEX IF NOT EXISTS idx_reflection_unique
+    ON reflection_queue(agent_id, person_id, project_scope, kind, target_id)
+    WHERE kind != 'reaffirm' OR answered_at IS NULL""",
+    """CREATE INDEX IF NOT EXISTS idx_reflection_pending
+    ON reflection_queue(agent_id, person_id, project_scope, surfaced_count, created_at)
+    WHERE answered_at IS NULL""",
+)
 
 SQL_CREATE_TABLES = """
 -- Core engram storage
@@ -364,24 +409,7 @@ CREATE TABLE IF NOT EXISTS consolidation_log (
 -- here by maintenance and performed by the agent itself, in its own turn and
 -- its own words, through mnemos_reflect. The server proposes; it never
 -- invents the answer.
-CREATE TABLE IF NOT EXISTS reflection_queue (
-    id TEXT PRIMARY KEY,
-    agent_id TEXT NOT NULL DEFAULT 'default',
-    person_id TEXT NOT NULL DEFAULT 'user',
-    project_scope TEXT NOT NULL DEFAULT 'global',
-    kind TEXT NOT NULL
-        CHECK (kind IN ('impact', 'lesson', 'belief', 'contradiction')),
-    target_id TEXT NOT NULL,
-    prompt TEXT NOT NULL,
-    excerpt TEXT NOT NULL DEFAULT '',
-    -- How many times this has been shown. An agent that has declined to
-    -- answer three times is answering; stop asking.
-    surfaced_count INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL,
-    expires_at TEXT,
-    answered_at TEXT,
-    answer TEXT
-);
+""" + _REFLECTION_QUEUE_TABLE + """;
 
 -- Host mutation replay ledger. The row is committed in the same SQLite
 -- transaction as the Core mutation it describes, so a host can safely retry
@@ -398,11 +426,7 @@ CREATE TABLE IF NOT EXISTS host_mutations (
     PRIMARY KEY (host_namespace, idempotency_key)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_reflection_unique
-    ON reflection_queue(agent_id, person_id, project_scope, kind, target_id);
-CREATE INDEX IF NOT EXISTS idx_reflection_pending
-    ON reflection_queue(agent_id, person_id, project_scope, surfaced_count, created_at)
-    WHERE answered_at IS NULL;
+""" + ";\n".join(_REFLECTION_QUEUE_INDEXES) + """;
 CREATE INDEX IF NOT EXISTS idx_host_mutations_completed
     ON host_mutations(completed_at DESC);
 
@@ -559,6 +583,7 @@ class EngramStore:
         self._backup_before_migration(conn)
         self._reconcile_columns(conn)
         self._rebuild_handoff_index(conn)
+        self._allow_reaffirm_asks(conn)
         conn.executescript(SQL_CREATE_TABLES)
         self._classify_legacy_hypomnema(conn)
         self._backfill_engram_scopes(conn)
@@ -654,6 +679,65 @@ class EngramStore:
         ).fetchone()
         if row is not None and "author_session" not in (row[0] or ""):
             conn.execute("DROP INDEX IF EXISTS idx_hypomnema_one_active_handoff")
+
+    @staticmethod
+    def _allow_reaffirm_asks(conn: sqlite3.Connection) -> None:
+        """Let the reflection queue hold reaffirmation asks (schema v11).
+
+        Up to v10 the queue's CHECK allowed four kinds, and SQLite cannot widen
+        a CHECK in place, so the table is rebuilt from
+        ``_REFLECTION_QUEUE_TABLE`` with every row kept. The old table goes
+        with its indexes, and they are made again under their old names in
+        the same transaction, the unique one now counting only a waiting
+        reaffirmation: no other process ever sees the queue without it, so
+        none can slip in a duplicate that would stop the index being built.
+        Nothing references the queue (no foreign key, trigger or view), so
+        renaming the old table first rewrites nothing else.
+
+        An older Mnemos opening a v11 store finds the table and the indexes by
+        name and leaves them alone. A unique index still in the old shape
+        (dropped and remade by hand, say) is rebuilt the same way; that shape
+        allows no duplicate the new one would refuse.
+        """
+
+        def outdated() -> tuple[bool, bool]:
+            table = conn.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'reflection_queue'"
+            ).fetchone()
+            index = conn.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'index' AND name = 'idx_reflection_unique'"
+            ).fetchone()
+            return (
+                table is not None and "'reaffirm'" not in (table[0] or ""),
+                index is not None and "reaffirm" not in (index[0] or ""),
+            )
+
+        if not any(outdated()):
+            return
+        if conn.in_transaction:
+            conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Another process may have rebuilt it while this one waited.
+            table_is_old, index_is_old = outdated()
+            if table_is_old:
+                conn.execute("ALTER TABLE reflection_queue RENAME TO reflection_queue_v10")
+                conn.execute(_REFLECTION_QUEUE_TABLE)
+                conn.execute(
+                    f"INSERT INTO reflection_queue ({_REFLECTION_QUEUE_COLUMNS}) "
+                    f"SELECT {_REFLECTION_QUEUE_COLUMNS} FROM reflection_queue_v10"
+                )
+                conn.execute("DROP TABLE reflection_queue_v10")
+            if table_is_old or index_is_old:
+                conn.execute("DROP INDEX IF EXISTS idx_reflection_unique")
+                for statement in _REFLECTION_QUEUE_INDEXES:
+                    conn.execute(statement)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
 
     @staticmethod
     def _classify_legacy_hypomnema(conn: sqlite3.Connection) -> None:
@@ -2797,13 +2881,15 @@ class EngramStore:
         """Propose a reflection. Returns None if this was already asked.
 
         Asking twice about the same memory is nagging, so the unique index
-        makes a repeat enqueue a no-op rather than a duplicate.
+        makes a repeat enqueue a no-op rather than a duplicate. A
+        reaffirmation only collides with one still waiting: it is asked
+        again about the same belief once the last one is answered.
 
         No excerpt is stored. The queue holds a ``target_id`` and nothing else
         quotable, so ``pending_reflections`` resolves the text live and a
         forgotten memory has no second copy here to leak from.
         """
-        if kind not in {"impact", "lesson", "belief", "contradiction"}:
+        if kind not in REFLECTION_KINDS:
             raise ValueError(f"Unsupported reflection kind: {kind}")
 
         now = datetime.now(timezone.utc)

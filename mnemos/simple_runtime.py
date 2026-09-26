@@ -236,6 +236,26 @@ def _question_kind(ask: Mapping[str, Any]) -> str:
     return kind
 
 
+def verdict_call_lines(ask: Mapping[str, Any]) -> list[str] | None:
+    """How to answer a question that takes a verdict: the call, then its verdicts.
+
+    Both packet builders show these (the runtime's and the session-start
+    hook's), so an agent copying the call gives the verdict that decides the
+    question: answered without one, a belief or contradiction question forms
+    nothing. None for a question whose words are the answer (impact, lesson)
+    or of a kind this code does not know; those keep their own template.
+    """
+    kind = _question_kind(ask)
+    verdicts = _VERDICTS.get(kind)
+    if verdicts is None or kind in _ANSWERED_BY_WORDS:
+        return None
+    named = ", ".join(verdicts[:-1]) + f" or {verdicts[-1]}"
+    return [
+        f'mnemos_reflect(target_id="{ask["target_id"]}", text="…", verdict="…")',
+        f"verdict: {named}",
+    ]
+
+
 def _moment(timestamp: str | None) -> datetime | None:
     """An ISO timestamp as an aware datetime, or None when unreadable."""
     try:
@@ -1872,7 +1892,11 @@ class MnemosRuntime:
         for item in items:
             lines.append(f'  "{item["excerpt"]}"')
             lines.append(f"    {item['prompt']}")
-            lines.append(f"    mnemos_reflect(target_id=\"{item['target_id']}\", ...)")
+            call = verdict_call_lines(item)
+            if call is None:
+                lines.append(f"    mnemos_reflect(target_id=\"{item['target_id']}\", ...)")
+            else:
+                lines.extend(f"    {line}" for line in call)
         lines.append(
             "  Answer in your own words if one comes. If nothing does, leave it — "
             "this fades on its own."

@@ -312,6 +312,54 @@ def test_no_verdict_changes_nothing(tmp_path, kind, words):
     assert "answer again with a verdict" in said
 
 
+@pytest.mark.parametrize("builder", ["runtime", "hook"])
+@pytest.mark.parametrize("kind,verdicts", [
+    ("belief", "hold, decline or not_now"),
+    ("reaffirm", "hold, decline, retire or not_now"),
+    ("contradiction", "contradicts, compatible or unsure"),
+    ("impact", None),
+])
+def test_the_packet_shows_the_verdict_a_question_takes(tmp_path, builder, kind, verdicts):
+    """An agent copies the call the packet shows. Without a verdict a belief
+    or contradiction answer forms nothing, so both builders (the runtime's
+    and the session-start hook's) show it, with the verdicts that kind takes.
+    An impact question's words are its answer, and its call stays as it was."""
+    from mnemos.interface.context_packet import build_context_packet
+
+    db = tmp_path / "memory.db"
+    rt = _runtime(db)
+    try:
+        target = _memory(rt, "Riley plans every trip around the ferry timetable.")
+        other = _memory(rt, "Riley now avoids the ferry in winter.")
+        belief_id = _belief(rt, target, "Riley's trips bend to the ferry.")
+        _clear_asks(rt)
+        _ask(rt, kind, target, {
+            "belief": THEME_ASK,
+            "reaffirm": f"Still true? [belief:{belief_id}]",
+            "contradiction": f"Do these contradict? [ref:{other}]",
+            "impact": "What did this change in how you understand things? One sentence.",
+        }[kind])
+        if builder == "runtime":
+            shown = rt._reflection_block()
+        else:
+            shown = build_context_packet(rt._store, "", include_engrams=False, **SCOPE)["prompt"]
+    finally:
+        rt.close()
+
+    lines = [line.strip() for line in shown.splitlines()]
+    call = f'mnemos_reflect(target_id="{target}", text="…", verdict="…")'
+    if verdicts is None:
+        assert call not in lines
+        assert [line for line in lines if line.startswith("mnemos_reflect(")] == [
+            f'mnemos_reflect(target_id="{target}", ...)' if builder == "runtime"
+            else f'mnemos_reflect(target_id="{target}", text="…")'
+        ]
+        assert not [line for line in lines if line.startswith("verdict:")]
+        return
+    assert call in lines, f"the {builder} packet shows no verdict:\n{shown}"
+    assert lines[lines.index(call) + 1] == f"verdict: {verdicts}"
+
+
 def test_a_verdict_that_does_not_fit_the_question_changes_nothing(tmp_path):
     db = tmp_path / "memory.db"
     rt = _runtime(db)

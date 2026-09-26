@@ -33,7 +33,9 @@ place in the queue.
     question and leave the memory as it is.
 - Without a verdict, a belief or contradiction answer is kept on its
   question, which stays open, and nothing is formed, retired or linked. The
-  result says which verdicts the question takes. A lesson or impact answer
+  result says which verdicts the question takes, and both packets (the
+  session's and the session-start hook's) show the call for such a question
+  with `verdict="…"` and a line naming its verdicts. A lesson or impact answer
   without one is still its answer. Hosts calling `reflect` through the host
   mutation protocol pass `verdict` in its arguments to act on belief and
   contradiction questions.

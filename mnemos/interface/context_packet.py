@@ -491,11 +491,19 @@ def _format_reflections(packet: dict[str, Any]) -> str:
     items = packet.get("reflections") or []
     if not items:
         return ""
+    # The verdicts live with the runtime that applies them. Imported here, not
+    # at the top: the runtime imports this module.
+    from ..simple_runtime import verdict_call_lines
+
     lines = ["### Waiting On You"]
     for item in items:
         lines.append(f'- "{item["excerpt"]}"')
         lines.append(f"  {item['prompt']}")
-        lines.append(f'  mnemos_reflect(target_id="{item["target_id"]}", text="…")')
+        call = verdict_call_lines(item)
+        if call is None:
+            lines.append(f'  mnemos_reflect(target_id="{item["target_id"]}", text="…")')
+        else:
+            lines.extend(f"  {line}" for line in call)
     lines.append(
         "Answer in your own words if one comes. If nothing true does, leave it — "
         "these fade on their own."

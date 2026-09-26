@@ -455,6 +455,33 @@ def test_contradicts_leaves_exactly_one_contradiction_between_the_pair(tmp_path,
     assert (a, b, "co_activated", "encoding_no_llm") in _between(db, a, b)
 
 
+def test_contradicts_changes_nothing_but_the_link(tmp_path):
+    """The verdict says the two conflict, not which one is wrong. Lowering
+    the earlier memory's strength assumed the newer one wins."""
+    db = tmp_path / "memory.db"
+    rt = _runtime(db)
+    try:
+        earlier = _memory(rt, "Riley ships every change through a pull request.")
+        later = _memory(rt, "Riley pushed a one-line fix straight to main last night.")
+        _link(rt, later, earlier, "co_activated", "encoding_no_llm")
+        _clear_asks(rt)
+        _ask(rt, "contradiction", later, f"Do these contradict? [ref:{earlier}]")
+        graph, beliefs = _graph(db), _beliefs(db)
+        memories = _all(db, "SELECT * FROM engrams ORDER BY id")
+        said = rt.reflect(later, "Yes: he changed how he ships.", verdict="contradicts")
+    finally:
+        rt.close()
+
+    after = _graph(db)
+    assert after["strengths"] == graph["strengths"], "a memory was weakened"
+    assert _all(db, "SELECT * FROM engrams ORDER BY id") == memories
+    assert "neither is weakened" in said
+    assert _beliefs(db) == beliefs
+    added = [edge for edge in after["connections"] if edge not in graph["connections"]]
+    assert added == [(later, earlier, "contradicts", 0.7, "agent_reflection")]
+    assert [edge for edge in graph["connections"] if edge not in after["connections"]] == []
+
+
 def test_unsure_changes_nothing(tmp_path):
     db = tmp_path / "memory.db"
     rt = _runtime(db)

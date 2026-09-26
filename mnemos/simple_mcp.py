@@ -398,9 +398,9 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
           context and is kept, with your words, in its history), decline
           (leave it as it is), not_now.
         - Does it contradict an earlier memory? contradicts (the two are
-          linked as contradicting, and the earlier one carries a little less
-          weight), compatible (they are not; only a contradiction link from
-          this memory to that one is removed), unsure (nothing changes).
+          linked as contradicting, and nothing else changes: neither memory
+          is weakened), compatible (they are not; only a contradiction link
+          from this memory to that one is removed), unsure (nothing changes).
         - What did it change, or teach? answer (your words become what the
           memory means), skip (nothing true comes; the memory is left as it
           is). Without a verdict, these words are taken as the answer.

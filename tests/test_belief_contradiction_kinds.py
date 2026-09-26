@@ -233,13 +233,13 @@ class TestContradiction:
         assert cand, "no contradiction candidate surfaced for a surprising conflicting capture"
         assert re.search(r"\[ref:engram_", cand[0]["prompt"])
 
-    def test_contradicts_writes_a_contradicts_edge_and_downweights(self, db):
+    def test_contradicts_writes_a_contradicts_edge_and_weakens_nothing(self, db):
         rt = _runtime(db)
         eng = self._surprising_pair(rt)
         rt.maintain()
         item = _pending(rt, "contradiction")[0]
         other_id = re.search(r"\[ref:(engram_[A-Za-z0-9]+)\]", item["prompt"]).group(1)
-        before = rt._store.get_engram(other_id).strength
+        before = {i: rt._store.get_engram(i).strength for i in (other_id, item["target_id"])}
 
         out = rt.reflect(item["target_id"], "yes, he changed his workflow", verdict="contradicts")
         assert "Contradiction recorded" in out, out
@@ -251,8 +251,8 @@ class TestContradiction:
             and c.formed_by == "agent_reflection"
             for c in edges
         ), "no agent-authored CONTRADICTS edge was written"
-        # The older memory was downweighted — the deliberate downward move.
-        assert rt._store.get_engram(other_id).strength < before
+        # The verdict says the two conflict, not which one is wrong.
+        assert {i: rt._store.get_engram(i).strength for i in before} == before
 
     def test_compatible_records_no_conflict(self, db):
         rt = _runtime(db)

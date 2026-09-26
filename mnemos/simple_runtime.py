@@ -210,8 +210,8 @@ _VERDICT_HELP = {
         "(leave it as it is) or not_now (ask again later)"
     ),
     "contradiction": (
-        "contradicts (they conflict), compatible (they do not) or unsure "
-        "(you cannot tell)"
+        "contradicts (they conflict: one link says so, and nothing else "
+        "changes), compatible (they do not) or unsure (you cannot tell)"
     ),
     "impact": "answer (your words become what it meant) or skip (nothing true comes)",
     "lesson": "answer (your words become what it taught) or skip (nothing true comes)",
@@ -1646,15 +1646,14 @@ class MnemosRuntime:
     def _apply_contradiction_reflection(self, item: dict[str, Any], answer: str, verdict: str) -> str:
         """Record the agent's judgement of a candidate contradiction.
 
-        contradicts leaves exactly one CONTRADICTS edge between the pair: it
-        writes one from this memory to the other, marked `agent_reflection` so
-        it is distinguishable and correctable, unless the pair already has one
-        either way. It also applies a bounded, floored decrement to the older
-        memory's strength, the first deliberate downward move in a graph whose
-        stability otherwise only ratchets up. compatible removes only the edge
-        the question proposes, a CONTRADICTS edge from this memory to the
-        other, if one was written; every other link between them stays.
-        unsure changes nothing.
+        contradicts leaves exactly one CONTRADICTS edge between the pair, and
+        does nothing else: it writes one from this memory to the other, marked
+        `agent_reflection` so it is distinguishable and correctable, unless the
+        pair already has one either way. The verdict says the two conflict,
+        not which one is wrong, so neither memory is weakened. compatible
+        removes only the edge the question proposes, a CONTRADICTS edge from
+        this memory to the other, if one was written; every other link between
+        them stays. unsure changes nothing.
         """
         assert self._store is not None
         from .core.engram import Connection
@@ -1698,15 +1697,11 @@ class MnemosRuntime:
                     formed_by="agent_reflection",
                 ),
             )
-        # Erode the older memory — new evidence usually corrects the prior.
-        older = other if other.created_at <= source.created_at else source
-        older.strength = max(0.1, older.strength - 0.15)
-        self._store.save_engram(older)
         return (
             "Contradiction recorded.\n"
             f"  {' '.join((source.content or '').split())[:70]}\n"
             f"  vs {' '.join((other.content or '').split())[:70]}\n"
-            "The earlier memory carries a little less weight now."
+            "They are linked as contradicting; neither is weakened."
         )
 
     #: How a reflection is labelled inside a continuity note. Stable, because

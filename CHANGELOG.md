@@ -24,9 +24,11 @@ place in the queue.
     revision entry carrying the agent's words. `decline` leaves it as it is;
     `not_now` leaves the question open. Nothing is deleted.
   - A contradiction: `contradicts` leaves exactly one CONTRADICTS link between
-    the two memories (and the earlier one still loses a little strength);
-    `compatible` removes only a contradiction link from this memory to the
-    other, and every other link stays; `unsure` changes nothing.
+    the two memories and changes nothing else. It no longer lowers the
+    earlier memory's strength: the verdict says the two conflict, not which
+    one is wrong. `compatible` removes only a contradiction link from this
+    memory to the other, and every other link stays; `unsure` changes
+    nothing.
   - A lesson or what a memory changed: `answer`, or `skip` to close the
     question and leave the memory as it is.
 - Without a verdict, a belief or contradiction answer is kept on its

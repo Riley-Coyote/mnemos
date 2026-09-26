@@ -435,53 +435,14 @@ class Encoder:
                 if cooldown_ok:
                     apply_belief_update(belief, evaluation, engram.id, store)
 
-        else:
-            # Fallback: old heuristic (kept for when no LLM is available)
-            content_lower = engram.content.lower()
-            for belief in beliefs:
-                belief_words = {
-                    w.lower() for w in belief.content.split() if len(w) > 3
-                }
-                content_words = {
-                    w.lower() for w in engram.content.split() if len(w) > 3
-                }
-                overlap = belief_words & content_words
-                if not overlap:
-                    continue
-
-                negation_signals = [
-                    "not", "never", "wrong", "incorrect", "false",
-                    "failed", "doesn't", "didn't", "isn't", "wasn't",
-                    "no longer", "contrary", "opposite", "instead",
-                ]
-                has_negation = any(neg in content_lower for neg in negation_signals)
-
-                if has_negation and overlap:
-                    contradiction_surprise = belief.confidence * 0.8
-                    surprise = max(surprise, contradiction_surprise)
-                    for supporting_id in belief.supporting_engram_ids[:3]:
-                        engram.add_connection(
-                            target_id=supporting_id,
-                            relation=ConnectionRelation.CONTRADICTS,
-                            strength=0.7,
-                            formed_by="encoding",
-                        )
-                    cooldown_ok = True
-                    try:
-                        last_rev = datetime.fromisoformat(belief.last_revised)
-                        if last_rev.tzinfo is None:
-                            last_rev = last_rev.replace(tzinfo=timezone.utc)
-                        if (datetime.now(timezone.utc) - last_rev) < timedelta(hours=6):
-                            cooldown_ok = False
-                    except (ValueError, TypeError, AttributeError):
-                        pass
-                    if cooldown_ok:
-                        belief.revise(
-                            belief.confidence - 0.05,
-                            f"Contradicted by new evidence: {engram.content[:50]}...",
-                            trigger_engram_id=engram.id,
-                        )
-                        store.save_belief(belief)
+        # Without a model nothing here weighs the memory against beliefs. The
+        # keyword-and-negation check that stood in lowered a belief by 0.05 and
+        # linked the memory as contradicting the belief's evidence whenever
+        # the two shared any word of four or more characters and the memory
+        # held a negation anywhere: "not" also matched "note", and "instead"
+        # or "no longer" said nothing about the belief. Whether a memory
+        # contradicts what is held is asked of the agent (mnemos_reflect), and
+        # a belief changes only by its verdict.
 
         # 3. Fire emotional event if surprised
         if surprise > 0.1:

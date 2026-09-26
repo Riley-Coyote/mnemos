@@ -14,7 +14,7 @@ import os
 import re
 import sqlite3
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -174,6 +174,72 @@ _THEME_MARKER = re.compile(r"\[theme:([^\]]+)\]")
 # was already held) are offered as contradiction candidates. Keeps the ask rare
 # and tied to genuine tension, not mere topical overlap.
 _CONTRADICTION_MIN_SURPRISE = 0.4
+
+# The marker a reaffirmation carries: which belief it asks about.
+_BELIEF_MARKER = re.compile(r"\[belief:(belief_[A-Za-z0-9]+)\]")
+
+# A belief the agent has not held to (formed or reaffirmed) for this long may
+# be put to it again: still true? Never more often than that.
+_REAFFIRM_AFTER_DAYS = 30
+
+# What the agent can decide about each kind of question: mnemos_reflect's
+# verdict. The verdict alone decides what happens. The words are kept as
+# written and never read for a yes or a no: "Now more than ever" once retired
+# a belief because it starts with "no".
+_VERDICTS: dict[str, tuple[str, ...]] = {
+    "belief": ("hold", "decline", "not_now"),
+    "reaffirm": ("hold", "decline", "retire", "not_now"),
+    "contradiction": ("contradicts", "compatible", "unsure"),
+    "impact": ("answer", "skip"),
+    "lesson": ("answer", "skip"),
+}
+VERDICTS = frozenset(v for verdicts in _VERDICTS.values() for v in verdicts)
+
+# Where a question must stay open without a verdict: every kind but these,
+# whose words are themselves the answer asked for.
+_ANSWERED_BY_WORDS = frozenset({"impact", "lesson"})
+
+# What each verdict does, told back to the agent when a question needs one.
+_VERDICT_HELP = {
+    "belief": (
+        "hold (your words become a belief you hold), decline (it is not one) "
+        "or not_now (ask again later)"
+    ),
+    "reaffirm": (
+        "hold (it still holds), retire (you no longer hold it), decline "
+        "(leave it as it is) or not_now (ask again later)"
+    ),
+    "contradiction": (
+        "contradicts (they conflict), compatible (they do not) or unsure "
+        "(you cannot tell)"
+    ),
+    "impact": "answer (your words become what it meant) or skip (nothing true comes)",
+    "lesson": "answer (your words become what it taught) or skip (nothing true comes)",
+}
+_VERDICT_GUIDE = (
+    "Is it a belief you hold: hold, decline or not_now. Still true: hold, "
+    "retire, decline or not_now. A contradiction: contradicts, compatible or "
+    "unsure. A lesson or what a memory changed: answer or skip."
+)
+
+
+def _question_kind(ask: Mapping[str, Any]) -> str:
+    """What an ask asks. A belief ask naming a belief it asks about again
+    (``[belief:<id>]``) is a reaffirmation, whatever kind it was filed under:
+    until the queue had its own kind for them, reaffirmations were 'belief'."""
+    kind = str(ask.get("kind") or "")
+    if kind == "belief" and _BELIEF_MARKER.search(ask.get("prompt") or ""):
+        return "reaffirm"
+    return kind
+
+
+def _moment(timestamp: str | None) -> datetime | None:
+    """An ISO timestamp as an aware datetime, or None when unreadable."""
+    try:
+        moment = datetime.fromisoformat(timestamp or "")
+    except (TypeError, ValueError):
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
 _STOPWORDS = {
@@ -1038,10 +1104,11 @@ class MnemosRuntime:
         yet) and ask; the agent states the belief in its own words through
         mnemos_reflect, or leaves it. The server never writes a belief itself.
 
-        If nothing new emerges, it may instead re-surface one existing
-        agent-authored belief for reaffirmation — the automatic
-        belief-correction loop: a "no" retires it. Conservative by design
-        (limit 1), and the packet's own ≤2 cap keeps it from ever nagging.
+        Beside it, one belief the agent holds may be due to be put to it
+        again (see ``_enqueue_belief_reaffirmation``): the agent keeps or
+        retires it by its verdict. Conservative by design (one of each per
+        cycle at most), and the packet's own ≤2 cap keeps it from ever
+        nagging.
         """
         self._ensure_init()
         assert self._store is not None
@@ -1056,11 +1123,14 @@ class MnemosRuntime:
         # A theme is asked once. Leaving the ask is how the agent declines, and
         # an ask that was shown out or expired still records that it was put.
         # Deduping by target alone let a declined theme return every cycle
-        # against a fresh memory — one more row per cycle, without end.
+        # against a fresh memory — one more row per cycle, without end. An
+        # answered ask counts too: a theme the agent declined stays declined.
         asked_themes = set()
-        for r in unanswered:
-            if r["kind"] != "belief":
-                continue
+        for r in self._store._get_conn().execute(
+            "SELECT prompt FROM reflection_queue WHERE agent_id = ? "
+            "AND person_id = ? AND project_scope = ? AND kind = 'belief'",
+            (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
+        ).fetchall():
             m = _THEME_MARKER.search(r["prompt"] or "")
             if m:
                 asked_themes.add(m.group(1).strip())
@@ -1102,6 +1172,7 @@ class MnemosRuntime:
         )
 
         ranked = sorted(term_engrams.items(), key=lambda kv: len(kv[1]), reverse=True)
+        asked = 0
         for theme, ids in ranked:
             if len(ids) < _BELIEF_MIN_MEMORIES:
                 break  # descending — nothing else clears the bar
@@ -1117,38 +1188,116 @@ class MnemosRuntime:
                 "belief",
                 target,
                 f'You keep returning to "{theme}" ({len(ids)} memories). Is that a '
-                f"belief you now hold? State it in one line, or leave it. [theme:{theme}]",
+                "belief you now hold? If it is, state it in one line with verdict "
+                f"hold; if it is not, decline. Or leave it. [theme:{theme}]",
                 agent_id=self.scope.agent_id,
                 person_id=self.scope.person_id,
                 project_scope=self.scope.project_scope,
             ):
-                return 1  # one belief ask per cycle, never more
+                already.add(target)
+                asked = 1
+                break  # one belief ask per cycle, never more
 
-        return self._enqueue_belief_reaffirmation(already)
+        # A reaffirmation is not left for a cycle with no new theme: on a
+        # real store every cycle found one (14 cycles, 14 theme asks in a
+        # day), so a belief waiting for a quiet cycle was never asked again.
+        return asked + self._enqueue_belief_reaffirmation(already)
 
     def _enqueue_belief_reaffirmation(self, already: set[str]) -> int:
-        """Re-surface one stale agent-authored belief to confirm it still holds."""
+        """Put one belief the agent holds to it again: still true?
+
+        A belief the agent stated may be asked about again once it has gone
+        ``_REAFFIRM_AFTER_DAYS`` without being formed or reaffirmed, and no
+        sooner than that after it was last asked. The ask has its own kind,
+        so the answered ask that formed the belief no longer blocks it. One
+        left unanswered is put again the same way once it has expired, if
+        nothing else waits on its memory. ``already`` holds the memories that
+        other questions wait on.
+        """
         assert self._store is not None
+        conn = self._store._get_conn()
+        scope = (self.scope.agent_id, self.scope.person_id, self.scope.project_scope)
+        now = datetime.now(timezone.utc)
+        month = now - timedelta(days=_REAFFIRM_AFTER_DAYS)
+
+        def within_month(timestamp: str | None) -> bool:
+            moment = _moment(timestamp)
+            return moment is not None and moment > month
+
         beliefs = [
             b for b in self._store.get_beliefs(self.scope.agent_id, active_only=True)
             if b.source == "agent" and b.supporting_engram_ids
         ]
-        beliefs.sort(key=lambda b: b.last_challenged)  # least-recently-checked first
+        beliefs.sort(key=lambda b: b.last_challenged)  # least recently held to first
         for belief in beliefs:
+            if within_month(belief.last_challenged):
+                continue  # formed or reaffirmed this month
             target = belief.supporting_engram_ids[0]
+            # Beliefs belong to the agent, not to a scope: ask about one only
+            # where the memory it rests on lives, or the packet would show
+            # another person's or project's memory.
+            if not self._engram_visible_in_current_scope(target):
+                continue
+            engram = self._store.get_engram(target)
+            if engram is None or str(getattr(engram.state, "value", engram.state)) == "archived":
+                continue
+            content = " ".join((belief.content or "").split())
+            if len(content) > 160:
+                content = content[:159].rstrip() + "…"
+            prompt = (
+                f'You hold this belief: "{content}". Still true? Verdict hold if it '
+                f"is, retire if you no longer hold it, or leave it. [belief:{belief.id}]"
+            )
+            asked = conn.execute(
+                "SELECT id, prompt, created_at, expires_at, answered_at "
+                "FROM reflection_queue WHERE agent_id = ? AND person_id = ? "
+                "AND project_scope = ? AND kind = 'reaffirm' AND target_id = ?",
+                (*scope, target),
+            ).fetchall()
+            waiting = next((r for r in asked if r["answered_at"] is None), None)
+            if waiting is not None:
+                # One reaffirmation waits per memory. It is put again only
+                # once it has expired, when it asks about this belief, and
+                # when no other question waits on the memory.
+                expires = _moment(waiting["expires_at"])
+                if expires is None or expires > now:
+                    continue
+                if f"[belief:{belief.id}]" not in (waiting["prompt"] or ""):
+                    continue
+                others = conn.execute(
+                    "SELECT COUNT(*) FROM reflection_queue WHERE agent_id = ? "
+                    "AND person_id = ? AND project_scope = ? AND target_id = ? "
+                    "AND answered_at IS NULL AND id != ?",
+                    (*scope, target, waiting["id"]),
+                ).fetchone()[0]
+                if others:
+                    continue
+                conn.execute(
+                    "UPDATE reflection_queue SET prompt = ?, created_at = ?, "
+                    "expires_at = ?, surfaced_count = 0 "
+                    "WHERE id = ? AND answered_at IS NULL",
+                    (prompt, now.isoformat(),
+                     (now + timedelta(days=_REAFFIRM_AFTER_DAYS)).isoformat(),
+                     waiting["id"]),
+                )
+                self._store._commit()
+                return 1
             if target in already:
-                continue
-            if self._store.get_engram(target) is None:
-                continue
+                continue  # another question waits on this memory
+            if any(
+                within_month(r["answered_at"] or r["created_at"])
+                for r in asked
+                if f"[belief:{belief.id}]" in (r["prompt"] or "")
+            ):
+                continue  # asked this month, and answered
             if self._store.enqueue_reflection(
-                "belief",
+                "reaffirm",
                 target,
-                f'You hold this belief: "{belief.content[:100]}". Still true? '
-                f"Reply 'no' to retire it, or anything else to keep it. "
-                f"[belief:{belief.id}]",
+                prompt,
                 agent_id=self.scope.agent_id,
                 person_id=self.scope.person_id,
                 project_scope=self.scope.project_scope,
+                expires_in_days=_REAFFIRM_AFTER_DAYS,
             ):
                 return 1
         return 0
@@ -1199,7 +1348,8 @@ class MnemosRuntime:
                 "contradiction",
                 engram.id,
                 f'This memory surprised you. Does it contradict an earlier one: '
-                f'"{excerpt}"? Reply yes (and why) or no. [ref:{neighbor.id}]',
+                f'"{excerpt}"? Verdict contradicts, compatible or unsure, and say '
+                f"why. [ref:{neighbor.id}]",
                 agent_id=self.scope.agent_id,
                 person_id=self.scope.person_id,
                 project_scope=self.scope.project_scope,
@@ -1241,11 +1391,22 @@ class MnemosRuntime:
         )
 
     @_notice_when_older
-    def reflect(self, target_id: str, text: str) -> str:
-        """Record the agent's own reflection on one of its memories."""
+    def reflect(self, target_id: str, text: str, verdict: str = "") -> str:
+        """Record the agent's own reflection on one of its memories.
+
+        ``verdict`` is what the agent decided (see ``_VERDICTS``), and it alone
+        decides what happens. The words are kept exactly as written and never
+        read for a yes or a no. A lesson or impact question asks for the words
+        themselves, so without a verdict they are its answer, as before. A
+        belief or contradiction question answered without one keeps the words
+        and stays open, and nothing is formed, retired or linked.
+        """
         answer = (text or "").strip()
         if not answer:
             return "Nothing recorded: the reflection was empty."
+        decided = (verdict or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if decided and decided not in VERDICTS:
+            return f"Nothing recorded: {verdict.strip()!r} is not a verdict. {_VERDICT_GUIDE}"
 
         self._ensure_init()
         assert self._store is not None
@@ -1255,28 +1416,59 @@ class MnemosRuntime:
             "person_id": self.scope.person_id,
             "project_scope": self.scope.project_scope,
         }
-        # Code older than the store keeps the agent's words and applies none
-        # of its rules to them. It cannot take the verdict current code reads
-        # from a belief or contradiction answer, so answering one here would
-        # spend the question: it stays open for a current session instead.
-        older = self._older_than_store() is not None
-        if older:
-            waiting = self._store.pending_reflection_for(target_id.strip(), **scope)
-            if waiting is not None and waiting["kind"] in {"belief", "contradiction"}:
-                return self._keep_answer_open(waiting, answer)
-            item = (
-                self._store.answer_reflection(
-                    target_id.strip(), answer, reflection_id=waiting["id"], **scope
-                )
-                if waiting is not None
-                else None
+        target = target_id.strip()
+        ask = self._store.pending_reflection_for(target, **scope)
+        if ask is None:
+            return (
+                f"Nothing was pending for {target_id}. It may already have been "
+                "reflected on, or the id may be wrong."
             )
-        else:
-            item = self._store.answer_reflection(target_id.strip(), answer, **scope)
+        kind = _question_kind(ask)
+        allowed = _VERDICTS.get(kind)
+        if decided and allowed is not None and decided not in allowed:
+            return (
+                f"Nothing recorded: {decided} does not answer this question. "
+                f"It takes {_VERDICT_HELP[kind]}."
+            )
+
+        # Code older than the store keeps the agent's words and applies none
+        # of its rules to them. What a verdict does to a belief or a link may
+        # have changed since, so answering here would spend the question: it
+        # stays open for a current session instead. So does a question of a
+        # kind this code does not know.
+        older = self._older_than_store() is not None
+        if kind not in _ANSWERED_BY_WORDS and (older or allowed is None):
+            return self._keep_answer_open(ask, answer, decided)
+        if kind not in _ANSWERED_BY_WORDS and decided in ("", "not_now"):
+            self._keep_on_question(ask, answer)
+            if decided:
+                return "Left open for later. Your words are kept on the question."
+            return (
+                "Recorded your words on the question; it stays open. Nothing was "
+                "formed, retired or linked, because no verdict was given.\n"
+                f"To decide it, answer again with a verdict: {_VERDICT_HELP[kind]}."
+            )
+
+        item = self._store.answer_reflection(
+            target, answer, reflection_id=ask["id"], **scope
+        )
         if item is None:
             return (
                 f"Nothing was pending for {target_id}. It may already have been "
                 "reflected on, or the id may be wrong."
+            )
+
+        if kind == "belief":
+            return self._apply_belief_reflection(item, answer, decided)
+        if kind == "reaffirm":
+            return self._apply_reaffirmation(item, answer, decided)
+        if kind == "contradiction":
+            return self._apply_contradiction_reflection(item, answer, decided)
+
+        if decided == "skip":
+            return (
+                "Skipped. The question is closed and the memory is left as it was. "
+                "Your words are kept on the question."
             )
 
         if item["kind"] == "impact":
@@ -1328,27 +1520,38 @@ class MnemosRuntime:
                 + "The details can fade now. This is what stays."
             )
 
-        if item["kind"] == "belief":
-            return self._apply_belief_reflection(item, answer)
-
-        if item["kind"] == "contradiction":
-            return self._apply_contradiction_reflection(item, answer)
-
         return f"Reflection recorded for {item['target_id']} ({item['kind']})."
 
-    def _keep_answer_open(self, ask: dict[str, Any], answer: str) -> str:
+    def _keep_on_question(self, ask: dict[str, Any], answer: str) -> None:
+        """Keep the agent's words on a question that stays open.
+
+        The words sit on the ask as its answer so far. It stays pending, its
+        showings unchanged, and an answer with a verdict later replaces them.
+        """
+        assert self._store is not None
+        self._store._get_conn().execute(
+            "UPDATE reflection_queue SET answer = ? WHERE id = ? AND answered_at IS NULL",
+            (answer, ask["id"]),
+        )
+        self._store._commit()
+
+    def _keep_answer_open(self, ask: dict[str, Any], answer: str, verdict: str = "") -> str:
         """Keep an answer older code cannot apply, without spending its question.
 
         The words become a signed continuity note that names the question
-        (its id and its text), so they are neither lost nor spent. The ask
-        itself is left exactly as it was: pending, its showings unchanged.
+        (its id and its text) and the verdict given, if any, so they are
+        neither lost nor spent. The ask itself is left exactly as it was:
+        pending, its showings unchanged.
         """
         assert self._store is not None
         author = self.author_model()
         domain = _classify_domain(answer)
         confidence, salience = _importance_scores("auto", domain)
+        note = f'{answer}\n\nIn answer to open question {ask["id"]}: "{ask["prompt"]}"'
+        if verdict:
+            note += f"\nVerdict: {verdict}"
         note_id = self._store.write_hypomnema_entry(
-            f'{answer}\n\nIn answer to open question {ask["id"]}: "{ask["prompt"]}"',
+            note,
             agent_id=self.scope.agent_id,
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
@@ -1370,36 +1573,21 @@ class MnemosRuntime:
             f"{self._signed_line(author)}"
         )
 
-    def _apply_belief_reflection(self, item: dict[str, Any], answer: str) -> str:
-        """Form a belief the agent stated, or retire one it disavowed.
+    def _apply_belief_reflection(self, item: dict[str, Any], answer: str, verdict: str) -> str:
+        """Form the belief the agent stated, or record that it declined.
 
-        The queue row carries the context in its prompt: a `[belief:<id>]`
-        marker means this was a reaffirmation (a 'no' retires it); otherwise
-        it is a fresh belief the agent is stating in its own words. The server
-        never invents the content — an empty answer just clears the ask.
+        hold forms it from the agent's words, at 0.4, with the asked-about
+        memory as its first evidence and the ask's theme as its domain.
+        decline forms nothing: the words stay on the answered ask.
         """
         assert self._store is not None
         from .core.belief import Belief
 
-        prompt = item.get("prompt") or ""
+        if verdict == "decline":
+            return "Declined. No belief was formed; your words are kept on the question."
 
-        m = re.search(r"\[belief:(belief_[A-Za-z0-9]+)\]", prompt)
-        if m:  # reaffirmation of an existing belief
-            belief_id = m.group(1)
-            if answer.strip().lower().startswith("no") or "no longer" in answer.lower():
-                self._store.supersede_belief(belief_id, reason="agent no longer holds it")
-                return "Retired. That belief no longer shapes your context."
-            belief = self._store.get_belief(belief_id)
-            if belief is not None:
-                self._store.revise_belief(
-                    belief_id, min(0.95, belief.confidence + 0.05),
-                    reason="reaffirmed by the agent",
-                )
-            return "Kept. The belief stands, a little more firmly."
-
-        # Formation. A themed prompt carries the domain; the target is evidence.
         theme = ""
-        tm = _THEME_MARKER.search(prompt)
+        tm = _THEME_MARKER.search(item.get("prompt") or "")
         if tm:
             theme = tm.group(1).strip()
         belief = Belief(
@@ -1417,20 +1605,62 @@ class MnemosRuntime:
             "It will shape what you notice and can be revised as you learn."
         )
 
-    def _apply_contradiction_reflection(self, item: dict[str, Any], answer: str) -> str:
-        """Record the agent's judgement of a candidate contradiction.
+    def _apply_reaffirmation(self, item: dict[str, Any], answer: str, verdict: str) -> str:
+        """Keep, retire, or leave as it is a belief the agent was asked about again.
 
-        On 'yes', write a CONTRADICTS edge (marked `agent_reflection` so it is
-        distinguishable and correctable) and apply a bounded, floored decrement
-        to the older memory's strength — the first deliberate downward move in
-        a graph whose stability otherwise only ratchets up. On 'no', clear the
-        ask and remove any stale agent-typed contradiction between the pair.
+        hold raises its confidence by 0.05, never past 0.99, and restarts the
+        month before it is asked again. retire sets its confidence to 0 and
+        stops it shaping context; the belief and its history are kept. Each
+        is a revision entry carrying the agent's words. decline changes
+        nothing. Nothing is deleted.
         """
         assert self._store is not None
+        if verdict == "decline":
+            return "Left as it is. The belief is unchanged; your words are kept on the question."
+
+        marker = _BELIEF_MARKER.search(item.get("prompt") or "")
+        belief = self._store.get_belief(marker.group(1)) if marker else None
+        if belief is None:
+            return "Recorded, but that belief is no longer there."
+        if belief.superseded_by:
+            return "Recorded. That belief was already retired, and it stays retired."
+
+        before = belief.confidence
+        if verdict == "hold":
+            belief.revise(min(0.99, round(before + 0.05, 4)), f"reaffirmed by the agent: {answer}")
+            belief.challenge()
+            self._store.save_belief(belief)
+            return (
+                "Kept. The belief stands a little more firmly "
+                f"({before:.0%} to {belief.confidence:.0%})."
+            )
+
+        belief.revise(0.0, f"retired by the agent: {answer}")
+        belief.superseded_by = "retired"
+        self._store.save_belief(belief)
+        return (
+            "Retired. That belief no longer shapes your context. It is kept, "
+            "with your words, in its history."
+        )
+
+    def _apply_contradiction_reflection(self, item: dict[str, Any], answer: str, verdict: str) -> str:
+        """Record the agent's judgement of a candidate contradiction.
+
+        contradicts leaves exactly one CONTRADICTS edge between the pair: it
+        writes one from this memory to the other, marked `agent_reflection` so
+        it is distinguishable and correctable, unless the pair already has one
+        either way. It also applies a bounded, floored decrement to the older
+        memory's strength, the first deliberate downward move in a graph whose
+        stability otherwise only ratchets up. compatible removes only the edge
+        the question proposes, a CONTRADICTS edge from this memory to the
+        other, if one was written; every other link between them stays.
+        unsure changes nothing.
+        """
+        assert self._store is not None
+        from .core.engram import Connection
         from .core.types import ConnectionRelation
 
-        prompt = item.get("prompt") or ""
-        m = re.search(r"\[ref:(engram_[A-Za-z0-9]+)\]", prompt)
+        m = re.search(r"\[ref:(engram_[A-Za-z0-9]+)\]", item.get("prompt") or "")
         if not m:
             return "Recorded."
         other_id = m.group(1)
@@ -1438,20 +1668,36 @@ class MnemosRuntime:
         other = self._store.get_engram(other_id)
         if source is None or other is None:
             return "Recorded, but one of the memories is no longer there."
+        if verdict == "unsure":
+            return "Noted as unsure. Nothing was changed."
 
-        said_yes = answer.strip().lower().startswith("y") or "contradict" in answer.lower()
-        if not said_yes:
-            # The agent judged them compatible — undo any agent-typed edge.
-            self._store.remove_connection(source.id, other.id)
-            return "Noted — not a contradiction. No conflict recorded."
+        contradicts = ConnectionRelation.CONTRADICTS.value
+        if verdict == "compatible":
+            removed = self._store.remove_connections([(source.id, other.id, contradicts)])
+            if removed:
+                return (
+                    "Noted: not a contradiction. The contradiction link between "
+                    "them was removed; every other link stays."
+                )
+            return "Noted: not a contradiction. No conflict recorded."
 
-        source.add_connection(
-            target_id=other.id,
-            relation=ConnectionRelation.CONTRADICTS,
-            strength=0.7,
-            formed_by="agent_reflection",
+        linked = any(
+            c.target_id == other.id and str(getattr(c.relation, "value", c.relation)) == contradicts
+            for c in self._store.get_connections(source.id)
+        ) or any(
+            c.target_id == source.id and str(getattr(c.relation, "value", c.relation)) == contradicts
+            for c in self._store.get_connections(other.id)
         )
-        self._store.save_engram(source)
+        if not linked:
+            self._store.save_connection(
+                source.id,
+                Connection(
+                    target_id=other.id,
+                    relation=contradicts,
+                    strength=0.7,
+                    formed_by="agent_reflection",
+                ),
+            )
         # Erode the older memory — new evidence usually corrects the prior.
         older = other if other.created_at <= source.created_at else source
         older.strength = max(0.1, older.strength - 0.15)

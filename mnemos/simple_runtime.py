@@ -632,6 +632,99 @@ class MnemosRuntime:
         plan["changed"] = True
         return plan
 
+    def repair_keyword_contradictions(self, *, write: bool = False) -> dict[str, Any]:
+        """Show, and with ``write`` undo, what the removed keyword check wrote.
+
+        Without a model, encoding used to lower a belief by 0.05 and link the
+        new memory as contradicting the belief's evidence whenever the two
+        shared a word and the memory held a negation ("not" also matched
+        "note"). Nothing had judged those. This finds them by the check's own
+        signatures (see ``find_keyword_contradictions``), for this agent,
+        across its scopes.
+
+        A dry run reads the store read-only and changes nothing. With
+        ``write``, a verified backup of the store as found comes first; then,
+        in one transaction, the check's links go and each active belief it
+        lowered gets back exactly what those revisions took, recorded as a
+        new revision that says so. History is never deleted, and revisions
+        with any other reason stand. A second run finds nothing. Code older
+        than the store refuses to write.
+        """
+        plan: dict[str, Any] = {
+            "agent_id": self.scope.agent_id,
+            "db_path": str(self.db_path),
+            "exists": self.db_path.exists(),
+            "older_than_store": False,
+            "found": None,
+            "removed": 0,
+            "restored": 0,
+            "backup": None,
+        }
+        if not plan["exists"]:
+            return plan
+        from .encoding.encoder import (
+            KEYWORD_CONTRADICTIONS_RESTORED,
+            find_keyword_contradictions,
+        )
+
+        peek = ReadOnlyEngramStore(self.db_path)
+        try:
+            minimum = peek.min_code_version()
+            plan["found"] = find_keyword_contradictions(peek, self.scope.agent_id)
+        finally:
+            peek.close()
+        plan["older_than_store"] = minimum is not None and minimum > MAINTENANCE_CODE_VERSION
+        found = plan["found"]
+        if not write or plan["older_than_store"] or not (found["links"] or found["beliefs"]):
+            return plan
+
+        from .backup import create_backup
+
+        # The backup is the store exactly as the human found it: read through
+        # a read-only connection, before opening for writing migrates the
+        # schema or records this code's version.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        destination = (
+            self.db_path.parent / "backups"
+            / f"{self.db_path.stem}.pre-repair-keyword-contradictions-{stamp}.db"
+        )
+        source = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            backup = create_backup(self.db_path, destination, source_connection=source)
+        finally:
+            source.close()
+        plan["backup"] = backup["path"]
+
+        self._ensure_init()
+        assert self._store is not None
+        if self._older_than_store() is not None:
+            plan["older_than_store"] = True
+            return plan
+        # Found again under the writer: the store may have moved on since.
+        found = plan["found"] = find_keyword_contradictions(self._store, self.scope.agent_id)
+        with self._store.transaction():
+            plan["removed"] = self._store.remove_connections([
+                (link["source_id"], link["target_id"], "contradicts")
+                for link in found["links"]
+            ])
+            for item in found["beliefs"]:
+                belief = self._store.get_belief(item["belief_id"])
+                if belief is None:
+                    continue
+                count = item["revisions"]
+                belief.revise(
+                    item["after"],
+                    f"{KEYWORD_CONTRADICTIONS_RESTORED}undid {count} "
+                    f"revision{'s' if count != 1 else ''} "
+                    f"(-{item['lowered']:.2f} in all) written by the no-model "
+                    "keyword-and-negation check, which lowered a belief whenever "
+                    "a note shared a word with it and held a negation. Nothing "
+                    "had judged them.",
+                )
+                self._store.save_belief(belief)
+                plan["restored"] += 1
+        return plan
+
     def close(self) -> None:
         if self._store is not None:
             self._store.close()

@@ -612,3 +612,167 @@ class Encoder:
         # 4. Sort by strength descending, cap at max_connections
         connections.sort(key=lambda c: c.strength, reverse=True)
         return connections[: self._max_connections]
+
+
+# ── What the removed no-model check wrote ──
+#
+# Without a model, encoding once weighed a memory against beliefs by keyword
+# and negation (removed; see _detect_surprise). `mnemos repair
+# keyword-contradictions` finds what it wrote by its signatures, and only by
+# them.
+#
+# Its revisions lowered the belief by 0.05 (to no less than 0), with a reason
+# of this prefix and the memory's first 50 characters. The model path writes
+# "Contradicted by new evidence (impact 0.60): <its reasoning>" or "Supported
+# by new evidence (impact ...)", so the colon right after "evidence" tells
+# them apart.
+KEYWORD_CONTRADICTION_REASON = "Contradicted by new evidence: "
+KEYWORD_CONTRADICTION_STEP = 0.05
+MODEL_BELIEF_REASONS = (
+    "Contradicted by new evidence (impact ",
+    "Supported by new evidence (impact ",
+)
+# Its links: CONTRADICTS, formed at encoding, strength 0.7, from the memory to
+# the first three memories each belief it held rested on.
+KEYWORD_CONTRADICTION_STRENGTH = 0.7
+# The revision a repair appends. Revisions of the check before it are undone.
+KEYWORD_CONTRADICTIONS_RESTORED = "Restored by mnemos repair keyword-contradictions: "
+
+
+def _moment(timestamp: str | None) -> datetime | None:
+    try:
+        moment = datetime.fromisoformat(timestamp or "")
+    except (TypeError, ValueError):
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def find_keyword_contradictions(store: Any, agent_id: str) -> dict[str, Any]:
+    """What the removed no-model keyword-and-negation check wrote for an agent.
+
+    Reads only. Beliefs belong to the agent, so every scope's memories count.
+
+    Links. The model path writes links of exactly the check's shape, so shape
+    alone decides nothing. A link counts as the check's only when its memory
+    shows it was saved without a model: it has a link formed at encoding by
+    keyword overlap ('encoding_no_llm', which encoding with a model never
+    writes), or it triggered one of the check's revisions. One whose memory
+    triggered a model-path revision is the model's. Any other is ambiguous.
+    The model's and the ambiguous are only reported. So is every other
+    CONTRADICTS link, which lacks the shape: another strength, or not to the
+    memory a belief rested on when the link formed.
+
+    Revisions. Only those after the last restoration a repair appended count,
+    so a repaired belief is found clean. A revision with the check's reason
+    that did not lower the belief by exactly its step is ambiguous and left.
+    A retired belief is left as it is: its confidence no longer shapes
+    anything, and the agent may have set it on purpose.
+    """
+    beliefs = store.get_beliefs(agent_id, active_only=False)
+    conn = store._get_conn()
+
+    keyword_triggers: set[str] = set()
+    model_triggers: set[str] = set()
+    for belief in beliefs:
+        for revision in belief.revision_history:
+            if revision.reason.startswith(KEYWORD_CONTRADICTION_REASON):
+                keyword_triggers.add(revision.trigger_engram_id or "")
+            elif revision.reason.startswith(MODEL_BELIEF_REASONS):
+                model_triggers.add(revision.trigger_engram_id or "")
+
+    rested_on: dict[str, list[Any]] = {}
+    for belief in beliefs:
+        for engram_id in belief.supporting_engram_ids[:3]:
+            rested_on.setdefault(engram_id, []).append(belief)
+
+    no_model = {
+        row[0] for row in conn.execute(
+            "SELECT DISTINCT c.source_id FROM connections c "
+            "JOIN engrams e ON e.id = c.source_id "
+            "WHERE c.formed_by = 'encoding_no_llm' AND e.owner_agent_id = ?",
+            (agent_id,),
+        ).fetchall()
+    }
+
+    links: list[dict[str, Any]] = []
+    model_links: list[dict[str, Any]] = []
+    ambiguous_links: list[dict[str, Any]] = []
+    other_links = 0
+    for row in conn.execute(
+        "SELECT c.source_id, c.target_id, c.strength, c.formed_at FROM connections c "
+        "JOIN engrams e ON e.id = c.source_id "
+        "WHERE c.relation = 'contradicts' AND c.formed_by = 'encoding' "
+        "AND e.owner_agent_id = ? ORDER BY c.formed_at, c.source_id, c.target_id",
+        (agent_id,),
+    ).fetchall():
+        source_id, target_id, strength, formed_at = tuple(row)
+        formed = _moment(formed_at)
+        held = [
+            belief for belief in rested_on.get(target_id, [])
+            if formed is not None
+            and (_moment(belief.created_at) or formed) <= formed
+        ]
+        if abs(float(strength) - KEYWORD_CONTRADICTION_STRENGTH) > 1e-6 or not held:
+            other_links += 1
+            continue
+        link = {
+            "source_id": source_id,
+            "target_id": target_id,
+            "formed_at": formed_at,
+            "belief_ids": [belief.id for belief in held],
+        }
+        link["no_model_link"] = source_id in no_model
+        link["revision"] = source_id in keyword_triggers
+        if source_id in model_triggers:
+            model_links.append(link)
+        elif link["no_model_link"] or link["revision"]:
+            links.append(link)
+        else:
+            ambiguous_links.append(link)
+
+    restored: list[dict[str, Any]] = []
+    retired_revisions = 0
+    ambiguous_revisions = 0
+    for belief in beliefs:
+        history = belief.revision_history
+        start = max(
+            (
+                i + 1 for i, revision in enumerate(history)
+                if revision.reason.startswith(KEYWORD_CONTRADICTIONS_RESTORED)
+            ),
+            default=0,
+        )
+        found = []
+        for revision in history[start:]:
+            if not revision.reason.startswith(KEYWORD_CONTRADICTION_REASON):
+                continue
+            expected = max(0.0, revision.old_confidence - KEYWORD_CONTRADICTION_STEP)
+            if abs(revision.new_confidence - expected) > 1e-6:
+                ambiguous_revisions += 1
+                continue
+            found.append(revision)
+        if not found:
+            continue
+        if belief.superseded_by:
+            retired_revisions += len(found)
+            continue
+        lowered = sum(r.old_confidence - r.new_confidence for r in found)
+        restored.append({
+            "belief_id": belief.id,
+            "content": belief.content,
+            "revisions": len(found),
+            "lowered": lowered,
+            "before": belief.confidence,
+            "after": round(min(0.99, max(0.0, belief.confidence + lowered)), 6),
+        })
+
+    return {
+        "links": links,
+        "model_links": model_links,
+        "ambiguous_links": ambiguous_links,
+        "other_links": other_links,
+        "beliefs": restored,
+        "revisions": sum(item["revisions"] for item in restored),
+        "retired_revisions": retired_revisions,
+        "ambiguous_revisions": ambiguous_revisions,
+    }

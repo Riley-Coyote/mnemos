@@ -39,6 +39,23 @@ place in the queue.
   contradiction questions.
 - Without a model, a capture never lowers a belief and never writes a
   CONTRADICTS link. The model-configured path is unchanged.
+- `mnemos repair keyword-contradictions` undoes what that check wrote, for
+  one agent across its scopes. It is a dry run unless `--write`, and reads
+  the store read-only until then. Its revisions are found by their reason
+  ("Contradicted by new evidence: ", where the model path writes "... (impact
+  0.60): ...") and their 0.05 step. Its links (CONTRADICTS, formed at
+  encoding, strength 0.7, to the memory a belief rested on) have the model
+  path's exact shape, so one counts only when its note shows it was saved
+  without a model: a link formed by keyword overlap at encoding, or a
+  revision of the check that names it. Links whose note a model weighed, and
+  links nothing explains, are listed and left. With `--write`, after a
+  verified backup (`backups/<db>.pre-repair-keyword-contradictions-<stamp>.db`),
+  the check's links go and each active belief it lowered gets back what those
+  revisions took, as a new revision that says so. No history is deleted, other
+  revisions stand, retired beliefs keep their confidence, and a second run
+  finds nothing. On a copy of a real store: 32 links from 16 notes and 4
+  revisions; both beliefs 0.30 -> 0.40; 4 links of the shape left as
+  ambiguous.
 - A belief the agent has not formed or reaffirmed for 30 days may be asked
   about again ("Still true?"), at most once a month, as its own kind of
   question (`reaffirm`), under the packet's usual two-question cap. A theme

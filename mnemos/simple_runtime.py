@@ -195,8 +195,11 @@ _VERDICTS: dict[str, tuple[str, ...]] = {
 }
 VERDICTS = frozenset(v for verdicts in _VERDICTS.values() for v in verdicts)
 
-# Where a question must stay open without a verdict: every kind but these,
-# whose words are themselves the answer asked for.
+# The questions whose words are themselves the answer asked for: what one
+# memory changed or taught, which land on that memory. Without a verdict these
+# are answered, and every other kind stays open. Code older than the store
+# answers only these: a whitelist, so a kind newer code adds is left open,
+# never spent.
 _ANSWERED_BY_WORDS = frozenset({"impact", "lesson"})
 
 # What each verdict does, told back to the agent when a question needs one.

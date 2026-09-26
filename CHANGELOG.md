@@ -30,11 +30,13 @@ the session counter.
     of a real store, one pass linked five such captures;
   - a correction lands on the memory it names, but never lowers or retires a
     belief, and gets no placeholder where its meaning would go;
-  - belief and contradiction questions wait for a current session. The packet
-    shows none and spends no showings. An answer given anyway is kept as a
-    signed continuity note that names the question, which stays open. An
-    answer about what a memory taught still lands on that memory; filing it
-    as a lesson waits for current code;
+  - questions wait for a current session. The packet shows none and spends
+    no showings. Only an answer about what a memory changed or taught is
+    taken: it lands on that memory, and filing it as a lesson waits for
+    current code. Any other answer, to a belief or contradiction question or
+    to a kind of question newer code added that this code has never heard
+    of, is kept as a signed continuity note that names the question, which
+    stays open;
   - a handoff replaces only its own session's note and retires no other
     session's.
 

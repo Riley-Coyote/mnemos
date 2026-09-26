@@ -83,6 +83,11 @@ LEGACY_DEFAULT_INCLUDE = ("lessons", "other")
 # as an id before it treats it as words.
 _ENTRY_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
+# The only questions code older than the store answers: the agent's words
+# about what one memory changed or taught, which land on that memory. A
+# whitelist, so a kind newer code adds is left open, never spent.
+_OLDER_CODE_ANSWERS = frozenset({"impact", "lesson"})
+
 
 class HostMutationConflictError(ValueError):
     """An idempotency key was reused for a different mutation request."""
@@ -1256,13 +1261,16 @@ class MnemosRuntime:
             "project_scope": self.scope.project_scope,
         }
         # Code older than the store keeps the agent's words and applies none
-        # of its rules to them. It cannot take the verdict current code reads
-        # from a belief or contradiction answer, so answering one here would
-        # spend the question: it stays open for a current session instead.
+        # of its rules to them. It answers only what an answer can simply
+        # land on: what a memory changed or taught (impact, lesson). Any other
+        # question stays open for a current session, whether it is one this
+        # code knows (belief, contradiction: it cannot take the verdict
+        # current code reads from those) or a kind newer code added that this
+        # code has never heard of. Answering either here would spend it.
         older = self._older_than_store() is not None
         if older:
             waiting = self._store.pending_reflection_for(target_id.strip(), **scope)
-            if waiting is not None and waiting["kind"] in {"belief", "contradiction"}:
+            if waiting is not None and waiting["kind"] not in _OLDER_CODE_ANSWERS:
                 return self._keep_answer_open(waiting, answer)
             item = (
                 self._store.answer_reflection(

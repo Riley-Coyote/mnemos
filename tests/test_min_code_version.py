@@ -1138,3 +1138,80 @@ def test_schema_version_only_ever_rises(tmp_path):
     stamp(SCHEMA_VERSION - 1)
     EngramStore(str(db)).close()
     assert stamp() == str(SCHEMA_VERSION)
+
+
+def test_older_reflect_leaves_a_question_of_an_unknown_kind_open(tmp_path):
+    """Newer code can add a kind of question this code has never heard of, and
+    a session running this code can still be handed one (a newer session-start
+    packet, after compaction or a resume). Answering it here would spend it
+    with nothing applied, so it stays open and the words are kept as a note."""
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        runtime.capture("Riley still walks the harbour at dawn.", impact="Dawn walks steady him.")
+    finally:
+        runtime.close()
+    [(memory,)] = _all(db, "SELECT id FROM engrams")
+    prompt = "You said this a month ago. Is it still true?"
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("DELETE FROM reflection_queue")
+        conn.commit()
+        # This code's schema lets the queue hold only the kinds it knows. A
+        # newer schema widens that, and SQLite cannot alter a CHECK in place,
+        # so do what its migration must: rebuild the table (SQLite's documented
+        # create, copy, drop, rename), then write the row as newer code would.
+        # A row written around the old CHECK instead fails the integrity check
+        # this code runs on every open, and the store would not open at all.
+        (table_sql,) = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'reflection_queue'"
+        ).fetchone()
+        index_sql = [
+            sql for (sql,) in conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' "
+                "AND tbl_name = 'reflection_queue' AND sql IS NOT NULL"
+            )
+        ]
+        widened = table_sql.replace("'contradiction')", "'contradiction', 'reaffirm')", 1)
+        widened = widened.replace("reflection_queue", "reflection_queue_widened", 1)
+        assert widened != table_sql and "'reaffirm'" in widened, "premise: the CHECK was found"
+        conn.executescript(
+            "BEGIN;"
+            f"{widened};"
+            "INSERT INTO reflection_queue_widened SELECT * FROM reflection_queue;"
+            "DROP TABLE reflection_queue;"
+            "ALTER TABLE reflection_queue_widened RENAME TO reflection_queue;"
+            + "".join(f"{sql};" for sql in index_sql)
+            + "COMMIT;"
+        )
+        conn.execute(
+            "INSERT INTO reflection_queue (id, agent_id, person_id, project_scope, kind, "
+            "target_id, prompt, excerpt, surfaced_count, created_at) "
+            "VALUES ('ask-from-newer-code', 'nova', 'riley', 'demo', 'reaffirm', ?, ?, '', 1, ?)",
+            (memory, prompt, "2026-09-26T00:00:00+00:00"),
+        )
+        conn.commit()
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        conn.close()
+    _claim_for_newer_code(db)
+    asks = _asks(db)
+    assert [ask[1] for ask in asks] == ["reaffirm"], "premise"
+
+    answer = "Yes, still true: the dawn walks are how he starts the day."
+    runtime = _runtime(db)
+    try:
+        runtime.introduce("claude-opus-5-5")
+        said = runtime.reflect(memory, answer)
+    finally:
+        runtime.close()
+
+    assert _asks(db) == asks, "older code answered a question of a kind it does not know"
+    assert "the question stays open for a current session" in said
+    [(content, authored_by, author_model)] = _all(
+        db,
+        "SELECT content, authored_by, author_model FROM hypomnema_entries WHERE content LIKE ?",
+        (f"{answer}%",),
+    )
+    assert "ask-from-newer-code" in content and prompt in content, "the note does not name its question"
+    assert (authored_by, author_model) == ("agent", "claude-opus-5-5")

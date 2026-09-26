@@ -1598,7 +1598,13 @@ def _cmd_adopt_legacy(args: argparse.Namespace) -> int:
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
-    """Check simple-mode readiness."""
+    """Check simple-mode readiness without changing anything.
+
+    Doctor opens the store read-only and never builds a context packet:
+    building one runs maintenance and uses up the showings of pending
+    questions, and even a plain open migrates the schema and rewrites the
+    file. A check that changes what it checks reports on itself.
+    """
     from .simple_runtime import MnemosRuntime, SIMPLE_TOOL_NAMES
 
     runtime = MnemosRuntime(
@@ -1606,6 +1612,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         agent_id=getattr(args, "agent_id", None),
         person_id=getattr(args, "person_id", None),
         project_scope=getattr(args, "project_scope", None),
+        read_only=True,
     )
     try:
         print("Mnemos Doctor")
@@ -1616,12 +1623,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print(f"Database:    {runtime.db_path}")
         print(f"MCP SDK:      {'yes' if _mcp_available() else 'no'}")
 
-        # A diagnostic must not create the thing it inspects. `context()` opens
-        # the store (building its schema) and runs maintenance, so on a fresh or
-        # mistyped scope it would mint a phantom empty database and then report
-        # it healthy — the exact side effect health() and the hook avoid. When
-        # there is no store yet, report the store-free readiness fields and
-        # stop, without calling anything that would init.
+        # A diagnostic must not create the thing it inspects: on a fresh or
+        # mistyped scope that would mint a phantom empty database and then
+        # report it healthy. When there is no store yet, report the store-free
+        # readiness fields and stop.
         if not runtime.db_path.exists():
             print("DB exists:    no")
             _print_background_status(runtime.scope)
@@ -1632,17 +1637,35 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             return 0
 
         print("DB exists:    yes")
+        _print_code_status(runtime)
         print(f"Model:        {'dedicated provider configured' if runtime.has_dedicated_model else 'local baseline only'}")
         _print_background_status(runtime.scope)
         _print_semantic_status(runtime)
         print(f"Simple tools: {', '.join(SIMPLE_TOOL_NAMES)}")
         _print_continuity_status(runtime)
         _print_legacy_status(runtime)
-        print()
-        print(runtime.context())
         return 0
     finally:
         runtime.close()
+
+
+def _print_code_status(runtime) -> None:
+    """Say which code version runs here and what the store expects.
+
+    A session keeps the code it started with. Once a newer Mnemos has opened
+    the store, an older process stops maintaining it, which is correct, and
+    otherwise invisible.
+    """
+    from .simple_runtime import describe_code
+
+    try:
+        headline, attention = describe_code(runtime.code_versions())
+    except Exception as exc:
+        print(f"Code:         unknown ({type(exc).__name__}: {exc})")
+        return
+    print(f"Code:         {headline}")
+    if attention:
+        print(f"  ATTENTION:  {attention}")
 
 
 def _print_semantic_status(runtime) -> None:

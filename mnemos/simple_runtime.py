@@ -11,6 +11,7 @@ import json
 import hashlib
 import os
 import re
+import sqlite3
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,7 @@ from .authorship import (
     resolve_author_model,
     signature,
 )
+from .code_version import MAINTENANCE_CODE_VERSION, OLDER_CODE_MESSAGE
 from .config.loader import load_config
 from .consolidation.daemon import ConsolidationDaemon
 from .core.types import SourceType
@@ -41,7 +43,7 @@ from .store.embedding_index import EmbeddingIndex
 from .core.engram import Engram
 from .core.placeholders import TEMPLATED_IMPACTS, is_templated
 from .store.fts import distinctive_terms, fts_words, meaningful_words, or_query
-from .store.sqlite_store import EngramStore
+from .store.sqlite_store import EngramStore, ReadOnlyEngramStore
 
 
 SIMPLE_TOOL_NAMES = (
@@ -281,6 +283,7 @@ class MnemosRuntime:
         person_id: str | None = None,
         project_scope: str | None = None,
         use_dedicated_model: bool = True,
+        read_only: bool = False,
     ) -> None:
         self.scope = resolve_scope(
             db_path=db_path,
@@ -288,6 +291,9 @@ class MnemosRuntime:
             person_id=person_id,
             project_scope=project_scope,
         )
+        # A read-only runtime inspects an existing store and cannot change it
+        # (`mnemos doctor`). Anything that would write raises instead.
+        self._read_only = read_only
         self._store: EngramStore | None = None
         self._encoder: Encoder | None = None
         self._retriever: ReactiveRetriever | None = None
@@ -626,8 +632,21 @@ class MnemosRuntime:
         if self._store is not None:
             return
 
-        self._store = EngramStore(self.scope.db_path)
-        self._embedding_index = EmbeddingIndex(db_path=self.scope.db_path)
+        if self._read_only:
+            self._store = ReadOnlyEngramStore(self.scope.db_path)
+            # The index creates its table when it opens a store without one,
+            # so it only gets the path when the table is already there. With
+            # no table there are no stored vectors to count anyway.
+            has_vectors = self._store._get_conn().execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'embeddings'"
+            ).fetchone() is not None
+            self._embedding_index = EmbeddingIndex(
+                db_path=self.scope.db_path if has_vectors else None
+            )
+        else:
+            self._store = EngramStore(self.scope.db_path)
+            self._announce_code_version()
+            self._embedding_index = EmbeddingIndex(db_path=self.scope.db_path)
         # The agent's self-declared model, recorded for the record rather
         # than to gate anything. Read straight from the freshly created
         # store: _get_meta would re-enter init.
@@ -660,6 +679,40 @@ class MnemosRuntime:
             self._store,
             embedding_index=self._embedding_index,
         )
+
+    def _announce_code_version(self) -> None:
+        """Raise the store's minimum code version to this code's, at startup.
+
+        From then on, a server still running older code stops maintaining the
+        store (see ``maintain``). The raise never lowers the value. If another
+        process holds the write lock right now, this server still starts; the
+        next one to open the store raises it.
+        """
+        assert self._store is not None
+        try:
+            self._store.raise_min_code_version(MAINTENANCE_CODE_VERSION)
+        except sqlite3.OperationalError:
+            pass
+
+    def code_versions(self) -> dict[str, Any]:
+        """The maintenance code version running here, and the store's minimum.
+
+        Read-only, and never creates a store. ``older_than_store`` is true once
+        a newer Mnemos has opened this store, which is when this process stops
+        maintaining it.
+        """
+        store_minimum = None
+        if self.db_path.exists():
+            self._ensure_init()
+            assert self._store is not None
+            store_minimum = self._store.min_code_version()
+        return {
+            "running": MAINTENANCE_CODE_VERSION,
+            "store_minimum": store_minimum,
+            "older_than_store": (
+                store_minimum is not None and store_minimum > MAINTENANCE_CODE_VERSION
+            ),
+        }
 
     def _stats(self) -> dict[str, Any]:
         self._ensure_init()
@@ -2358,6 +2411,22 @@ class MnemosRuntime:
         assert self._store is not None
 
         requested_deep = bool(deep)
+        # Checked on every call, not only at startup: a server that has run
+        # for days learns here that a newer Mnemos has opened the store since.
+        # From then on it runs none of the passes (decay, linking, softening,
+        # lessons, questions, beliefs, identity), whose rules the newer code
+        # has replaced. The agent's own writes do not come through here and
+        # still land.
+        store_minimum = self._store.min_code_version()
+        if store_minimum is not None and store_minimum > MAINTENANCE_CODE_VERSION:
+            return "\n".join([
+                f"Requested: {'deep' if requested_deep else 'standard'}",
+                "Cycle: skipped",
+                f"Completed: no maintenance. {OLDER_CODE_MESSAGE}",
+                f"Code: version {MAINTENANCE_CODE_VERSION}; the store needs {store_minimum} or newer",
+                "Passes: none",
+            ])
+
         can_run_deep = requested_deep and self._llm_client is not None
         # config={} meant the whole consolidation block in ~/.mnemos/config.json
         # was never applied — decay_rate, thresholds and min_idle_minutes all
@@ -2505,6 +2574,7 @@ class MnemosRuntime:
                     "exists": False,
                     "size_bytes": 0,
                 },
+                "code": self.code_versions(),
                 "note": (
                     "No memory store exists for this scope yet. It is created "
                     "on first capture, not by reading health."
@@ -2590,6 +2660,10 @@ class MnemosRuntime:
                 "db_path": str(db_path),
                 "size_bytes": int(size_bytes),
             },
+            # Which rules this process maintains memory by, and the newest
+            # version that has opened the store. A long-running session can
+            # be older than the store, and then it no longer maintains it.
+            "code": self.code_versions(),
             "counts": {
                 "memories_active": stats.get("engrams_active", 0),
                 "memories_archived": stats.get("archived", 0),
@@ -2933,6 +3007,21 @@ def describe_semantic(semantic: dict[str, Any]) -> tuple[str, list[str], list[st
     return headline, details, attention
 
 
+def describe_code(code: Mapping[str, Any] | None) -> tuple[str, str | None]:
+    """The code line of the health card and `mnemos doctor`, and its warning.
+
+    Returns the line, plus the plain fix when this process runs older code
+    than the store expects (None otherwise).
+    """
+    code = code or {}
+    running = code.get("running", MAINTENANCE_CODE_VERSION)
+    minimum = code.get("store_minimum")
+    if minimum is None:
+        return f"version {running} (the store sets no minimum yet)", None
+    headline = f"version {running} (the store needs {minimum} or newer)"
+    return headline, OLDER_CODE_MESSAGE if code.get("older_than_store") else None
+
+
 def format_health_card(data: dict[str, Any]) -> str:
     """Render a health() snapshot as a human-relayable card."""
 
@@ -3022,6 +3111,11 @@ def format_health_card(data: dict[str, Any]) -> str:
         continuity_lines = [
             "", f"ATTENTION — {semantic_attention[0]}", *continuity_lines,
         ]
+    # First, because it is the one with a fix the human can apply right now,
+    # and because while it holds, nothing else on the card is being maintained.
+    code_headline, code_attention = describe_code(data.get("code"))
+    if code_attention:
+        continuity_lines = ["", f"ATTENTION — {code_attention}", *continuity_lines]
 
     return "\n".join([
         "Mnemos health card",
@@ -3031,6 +3125,7 @@ def format_health_card(data: dict[str, Any]) -> str:
             f"project={scope['project_scope']}",
         ),
         line("Store", f"{store['db_path']} ({_human_size(store['size_bytes'])})"),
+        line("Code", code_headline),
         line(
             "Memories",
             f"{counts['memories_active']} active, "

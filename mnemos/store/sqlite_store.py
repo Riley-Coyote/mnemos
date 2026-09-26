@@ -32,6 +32,10 @@ from ..core.identity import AgentIdentity
 # Schema version — increment when tables change
 SCHEMA_VERSION = 10
 
+# The lowest maintenance code version still allowed to maintain this store,
+# raised by each newer version that opens it (see mnemos/code_version.py).
+MIN_CODE_VERSION_KEY = "min_code_version"
+
 VALID_FUNCTIONAL_TYPES = {
     "working",
     "preference",
@@ -3018,6 +3022,44 @@ class EngramStore:
         )
         self._commit()
 
+    def min_code_version(self) -> int | None:
+        """The lowest maintenance code version allowed to maintain this store.
+
+        None when no version has recorded itself yet, or the value is not a
+        number (the next raise overwrites it).
+        """
+        value = self.get_meta(MIN_CODE_VERSION_KEY)
+        try:
+            return int(value) if value is not None else None
+        except ValueError:
+            return None
+
+    def raise_min_code_version(self, version: int) -> int:
+        """Record that code at ``version`` has opened this store.
+
+        Only ever raises the value: code older than the stored minimum leaves
+        it alone. Both statements run in one immediate transaction, so two
+        servers starting together cannot interleave a read and a write and
+        lower what the newer one set. Returns the minimum now stored.
+        """
+        conn = self._get_conn()
+        self._begin_immediate()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)",
+                (MIN_CODE_VERSION_KEY, str(int(version))),
+            )
+            conn.execute(
+                "UPDATE meta SET value = ? WHERE key = ? AND CAST(value AS INTEGER) < ?",
+                (str(int(version)), MIN_CODE_VERSION_KEY, int(version)),
+            )
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
+        stored = self.min_code_version()
+        return stored if stored is not None else int(version)
+
     # ── Consolidation Log ──
 
     def log_consolidation(
@@ -3155,3 +3197,34 @@ class EngramStore:
             stats["accessibility_max"] = round(rows["max_acc"], 3)
 
         return stats
+
+
+class ReadOnlyEngramStore(EngramStore):
+    """An existing store opened so that nothing can change it.
+
+    Opening an ``EngramStore`` is itself a write: it migrates the schema and
+    stamps ``schema_version`` on every open, which rewrites the file even when
+    nothing else happens. A diagnostic has to leave the store exactly as it
+    found it, so this skips all of that and asks SQLite for a read-only
+    connection. Every read works as usual; any write raises
+    ``sqlite3.OperationalError`` instead of landing. The store must exist:
+    looking at memory never brings a store into being.
+    """
+
+    def __init__(self, db_path: str | Path):
+        self.db_path = Path(db_path).expanduser()
+        if not self.db_path.is_file():
+            raise FileNotFoundError(f"No Mnemos store at {self.db_path}")
+        self._conn: sqlite3.Connection | None = None
+        self._transaction_depth = 0
+
+    def _get_conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self._conn = sqlite3.connect(
+                f"{self.db_path.resolve().as_uri()}?mode=ro",
+                uri=True,
+                check_same_thread=False,
+            )
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA busy_timeout=5000")
+        return self._conn

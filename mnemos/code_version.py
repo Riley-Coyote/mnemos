@@ -23,3 +23,11 @@ OLDER_CODE_MESSAGE = (
     "This session runs older Mnemos code than the store expects. "
     "Restart the session."
 )
+
+# Restarting picks up the code installed now. When that is itself older than
+# whatever opened the store (a newer checkout, another install), only an
+# update or a deliberate reset clears it.
+OLDER_CODE_FIX = (
+    "If it still says this, the store was opened by newer code than is "
+    "installed; update Mnemos, or reset with 'mnemos repair min-code-version'."
+)

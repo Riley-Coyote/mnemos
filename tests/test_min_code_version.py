@@ -36,6 +36,11 @@ OLDER = (
     "This session runs older Mnemos code than the store expects. "
     "Restart the session."
 )
+# When restarting does not clear it, the installed code is itself older.
+FIX = (
+    "If it still says this, the store was opened by newer code than is "
+    "installed; update Mnemos, or reset with 'mnemos repair min-code-version'."
+)
 # A store opened by code far newer than this one.
 AHEAD = 999
 SCOPE = {"agent_id": "nova", "person_id": "riley", "project_scope": "demo"}
@@ -310,7 +315,7 @@ def test_health_names_an_older_session_and_the_fix(tmp_path):
         runtime.close()
     older_card = format_health_card(older)
 
-    assert f"ATTENTION — {OLDER}" in older_card
+    assert f"ATTENTION — {OLDER} {FIX}" in older_card
     assert f"(the store needs {AHEAD} or newer)" in older_card
     assert older["code"]["store_minimum"] == AHEAD
     assert older["code"]["older_than_store"] is True
@@ -420,7 +425,7 @@ def test_doctor_names_an_older_code_version(tmp_path, capsys):
     out = capsys.readouterr().out
 
     assert f"(the store needs {AHEAD} or newer)" in out
-    assert f"ATTENTION:  {OLDER}" in out
+    assert f"ATTENTION:  {OLDER} {FIX}" in out
     assert _store_minimum(db) == str(AHEAD)
 
 
@@ -440,3 +445,177 @@ def test_a_read_only_store_refuses_writes_and_never_creates_one(tmp_path):
             store.set_meta("written_by_a_reader", "yes")
     finally:
         store.close()
+
+
+# ── The way back: a human resets the minimum ──
+#
+# Opening a store only ever raises its minimum. If code newer than what is
+# installed raised it, nothing installed maintains the store again and
+# restarting does not help. The reset is a dry run unless --write, makes a
+# verified backup first, and never goes below 1.
+
+
+def _reset(db, *extra) -> int:
+    return main(["repair", "min-code-version", "--db-path", str(db), *SCOPE_ARGS, *extra])
+
+
+def _backups(db) -> list[Path]:
+    return sorted((Path(db).parent / "backups").glob("*.pre-repair-min-code-version-*.db"))
+
+
+def test_the_reset_is_a_dry_run_unless_written(tmp_path, capsys):
+    db = _seeded_store(tmp_path)
+    _claim_for_newer_code(db)
+    before = _settled_sha256(db)
+
+    assert _reset(db) == 0
+    shown = capsys.readouterr().out
+    assert "This code:      version" in shown
+    assert f"Store minimum:  {AHEAD}" in shown
+    assert "does not maintain it" in shown
+    assert "Dry run: nothing changed" in shown
+
+    assert _reset(db, "--set", "1") == 0
+    planned = capsys.readouterr().out
+    assert f"Would set the minimum from {AHEAD} to 1." in planned
+    assert "Dry run: nothing changed" in planned
+
+    assert _settled_sha256(db) == before, "a dry run changed the store"
+    assert _backups(db) == []
+
+    missing = tmp_path / "typo" / "memory.db"
+    assert main(["repair", "min-code-version", "--db-path", str(missing), *SCOPE_ARGS]) == 0
+    assert "nothing to repair" in capsys.readouterr().out
+    assert not missing.exists(), "the reset created a store just by looking"
+
+
+def test_the_reset_lowers_or_raises_the_minimum_after_a_verified_backup(tmp_path, capsys):
+    from mnemos.backup import check_database
+
+    db = _seeded_store(tmp_path)
+    _claim_for_newer_code(db)
+
+    assert _reset(db, "--set", "1", "--write") == 0
+    out = capsys.readouterr().out
+    assert f"Set the minimum from {AHEAD} to 1." in out
+    assert _store_minimum(db) == "1"
+    [backup] = _backups(db)
+    assert check_database(backup)["integrity"] == "ok"
+    assert _store_minimum(backup) == str(AHEAD), "the backup must be the state before"
+
+    # The code installed here maintains the store again.
+    runtime = _runtime(db)
+    try:
+        assert "Cycle: skipped" not in runtime.maintain()
+    finally:
+        runtime.close()
+
+    # And it raises as well as lowers, with a backup each time.
+    assert _reset(db, "--set", str(AHEAD), "--write") == 0
+    capsys.readouterr()
+    assert _store_minimum(db) == str(AHEAD)
+    assert len(_backups(db)) == 2
+    runtime = _runtime(db)
+    try:
+        assert OLDER in runtime.maintain()
+    finally:
+        runtime.close()
+
+
+def test_the_reset_refuses_below_one_and_needs_a_version_to_write(tmp_path, capsys):
+    db = _seeded_store(tmp_path)
+    _claim_for_newer_code(db)
+    before = _settled_sha256(db)
+
+    assert _reset(db, "--set", "0", "--write") == 1
+    assert "Refused" in capsys.readouterr().out
+    assert _reset(db, "--set", "-3", "--write") == 1
+    assert _reset(db, "--write") == 1
+    assert "--set N" in capsys.readouterr().out
+
+    assert _settled_sha256(db) == before, "a refused reset changed the store"
+    assert _store_minimum(db) == str(AHEAD)
+    assert _backups(db) == []
+
+
+# ── The consolidate command ──
+
+
+def test_the_consolidate_command_runs_no_passes_on_older_code(tmp_path, capsys):
+    db = _seeded_store(tmp_path)
+    consolidate = [
+        "--db-path", str(db), "--agent-id", "nova", "--person-id", "riley",
+        "--project-scope", "demo", "consolidate",
+    ]
+    cycles = _count(db, "consolidation_log")
+    assert main(consolidate) == 0
+    assert "Passes: connection_discovery" in capsys.readouterr().out
+    assert _count(db, "consolidation_log") == cycles + 1, "premise: current code consolidates"
+
+    _claim_for_newer_code(db)
+    cycles = _count(db, "consolidation_log")
+    assert main(consolidate) == 0
+    out = capsys.readouterr().out
+
+    assert _count(db, "consolidation_log") == cycles, "older code ran a consolidation cycle"
+    assert "Consolidation skipped: no passes ran." in out
+    assert f"{OLDER} {FIX}" in out
+
+
+# ── A capture on older code never moves a belief ──
+
+
+def test_older_code_captures_without_weighing_beliefs(tmp_path):
+    """Capture also weighs what arrives as evidence for or against beliefs.
+
+    Without a model that is a keyword-and-negation check: a capture sharing a
+    word with a belief and containing "not" lowers it and records a
+    contradiction. Newer code may replace those rules (the next package
+    removes that check), and an older server must never go on applying them,
+    so on older code a capture lands without the step.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from mnemos.core.belief import Belief
+
+    db = tmp_path / "memory.db"
+
+    def runtime() -> MnemosRuntime:
+        return MnemosRuntime(db_path=str(db), use_dedicated_model=False, **SCOPE)
+
+    seed = runtime()
+    try:
+        seed.capture("Riley reviews every deploy checklist before shipping.")
+        [anchor] = seed._store.get_active_engrams(agent_id="nova", limit=1)
+        belief = Belief(
+            agent_id="nova",
+            content="Riley reviews every deploy checklist",
+            confidence=0.6,
+            source="agent",
+            supporting_engram_ids=[anchor.id],
+            # Past the six-hour cooldown between revisions.
+            last_revised=(datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+        )
+        seed._store.save_belief(belief)
+    finally:
+        seed.close()
+
+    _claim_for_newer_code(db)
+    contradictions = _read(
+        db, "SELECT COUNT(*) FROM connections WHERE relation = 'contradicts'"
+    )[0]
+    memories = _count(db, "engrams")
+
+    older = runtime()
+    try:
+        captured = older.capture("Riley did not review the deploy checklist this week.")
+    finally:
+        older.close()
+
+    assert "Captured continuity." in captured
+    assert _count(db, "engrams") == memories + 1
+    confidence = _read(db, "SELECT confidence FROM beliefs WHERE id = ?", (belief.id,))[0]
+    assert confidence == pytest.approx(0.6), "older code lowered a belief"
+    assert _read(
+        db, "SELECT COUNT(*) FROM connections WHERE relation = 'contradicts'"
+    )[0] == contradictions, "older code recorded a contradiction"

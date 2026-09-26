@@ -27,7 +27,7 @@ from .authorship import (
     resolve_author_model,
     signature,
 )
-from .code_version import MAINTENANCE_CODE_VERSION, OLDER_CODE_MESSAGE
+from .code_version import MAINTENANCE_CODE_VERSION, OLDER_CODE_FIX, OLDER_CODE_MESSAGE
 from .config.loader import load_config
 from .consolidation.daemon import ConsolidationDaemon
 from .core.types import SourceType
@@ -479,6 +479,59 @@ class MnemosRuntime:
         ])
         return plan
 
+    def repair_min_code_version(
+        self, *, set_to: int | None = None, write: bool = False
+    ) -> dict[str, Any]:
+        """Show, and with ``set_to`` and ``write`` change, the store's minimum.
+
+        Opening a store only ever raises its minimum code version. When code
+        newer than what is installed raised it (an unmerged checkout, another
+        install), every session here stops maintaining the store and
+        restarting does not help. This is the way back, and only a human runs
+        it: without ``write`` nothing changes, and a verified backup comes
+        before any change. It never sets the minimum below 1.
+        """
+        if set_to is not None and set_to < 1:
+            raise ValueError("The minimum code version is 1 or more.")
+        plan: dict[str, Any] = {
+            "db_path": str(self.db_path),
+            "exists": self.db_path.exists(),
+            "running": MAINTENANCE_CODE_VERSION,
+            "store_minimum": None,
+            "set_to": set_to,
+            "changed": False,
+            "backup": None,
+        }
+        if not plan["exists"]:
+            return plan
+        # Read it as the store holds it now. Opening the store for writing
+        # records this code's version first, which would hide the value a
+        # human is deciding about.
+        peek = ReadOnlyEngramStore(self.db_path)
+        try:
+            plan["store_minimum"] = peek.min_code_version()
+        finally:
+            peek.close()
+        if not write or set_to is None or set_to == plan["store_minimum"]:
+            return plan
+
+        self._ensure_init()
+        assert self._store is not None
+        from .backup import create_backup
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        destination = (
+            self.db_path.parent / "backups"
+            / f"{self.db_path.stem}.pre-repair-min-code-version-{stamp}.db"
+        )
+        backup = create_backup(
+            self.db_path, destination, source_connection=self._store._get_conn()
+        )
+        plan["backup"] = backup["path"]
+        self._store.set_min_code_version(set_to)
+        plan["changed"] = True
+        return plan
+
     def close(self) -> None:
         if self._store is not None:
             self._store.close()
@@ -693,6 +746,18 @@ class MnemosRuntime:
             self._store.raise_min_code_version(MAINTENANCE_CODE_VERSION)
         except sqlite3.OperationalError:
             pass
+
+    def _older_than_store(self) -> int | None:
+        """The store's minimum when this code is older than it, else None.
+
+        Read on every call, not only at startup: a server that has run for
+        days learns here that a newer Mnemos has opened the store since.
+        """
+        assert self._store is not None
+        minimum = self._store.min_code_version()
+        if minimum is not None and minimum > MAINTENANCE_CODE_VERSION:
+            return minimum
+        return None
 
     def code_versions(self) -> dict[str, Any]:
         """The maintenance code version running here, and the store's minimum.
@@ -2013,7 +2078,11 @@ class MnemosRuntime:
             # Shift 3: the moment something does not fit what is already held
             # is the moment worth encoding deeply. This is now reachable
             # without beliefs or a model, so it no longer has to be skipped.
-            skip_surprise_detection=False,
+            # Code older than the store skips it all the same: this step also
+            # weighs the capture as evidence for or against beliefs, by rules
+            # newer code may have replaced, and older code must never move a
+            # belief. The capture itself still lands.
+            skip_surprise_detection=self._older_than_store() is not None,
         )
         note_id = self._store.write_hypomnema_entry(
             content.strip(),
@@ -2411,14 +2480,12 @@ class MnemosRuntime:
         assert self._store is not None
 
         requested_deep = bool(deep)
-        # Checked on every call, not only at startup: a server that has run
-        # for days learns here that a newer Mnemos has opened the store since.
-        # From then on it runs none of the passes (decay, linking, softening,
-        # lessons, questions, beliefs, identity), whose rules the newer code
-        # has replaced. The agent's own writes do not come through here and
-        # still land.
-        store_minimum = self._store.min_code_version()
-        if store_minimum is not None and store_minimum > MAINTENANCE_CODE_VERSION:
+        # Code older than the store runs none of the passes (decay, linking,
+        # softening, lessons, questions, beliefs, identity), whose rules the
+        # newer code has replaced. The agent's own writes do not come through
+        # here and still land.
+        store_minimum = self._older_than_store()
+        if store_minimum is not None:
             return "\n".join([
                 f"Requested: {'deep' if requested_deep else 'standard'}",
                 "Cycle: skipped",
@@ -3011,7 +3078,8 @@ def describe_code(code: Mapping[str, Any] | None) -> tuple[str, str | None]:
     """The code line of the health card and `mnemos doctor`, and its warning.
 
     Returns the line, plus the plain fix when this process runs older code
-    than the store expects (None otherwise).
+    than the store expects (None otherwise): restart first, and if that does
+    not clear it, update or reset.
     """
     code = code or {}
     running = code.get("running", MAINTENANCE_CODE_VERSION)
@@ -3019,7 +3087,9 @@ def describe_code(code: Mapping[str, Any] | None) -> tuple[str, str | None]:
     if minimum is None:
         return f"version {running} (the store sets no minimum yet)", None
     headline = f"version {running} (the store needs {minimum} or newer)"
-    return headline, OLDER_CODE_MESSAGE if code.get("older_than_store") else None
+    if not code.get("older_than_store"):
+        return headline, None
+    return headline, f"{OLDER_CODE_MESSAGE} {OLDER_CODE_FIX}"
 
 
 def format_health_card(data: dict[str, Any]) -> str:

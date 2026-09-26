@@ -2,6 +2,43 @@
 
 ## 0.3.1 (unreleased)
 
+### Old sessions stop maintaining a memory newer code has moved on from
+
+A Claude Code session keeps the Mnemos code it imported when it started, and a
+session can run for days. Every server started before an upgrade went on
+maintaining the same store by the old rules (decay, linking, softening,
+lessons, questions, beliefs, identity) after newer code had replaced them, and
+nothing in the store could tell it to stop. `mnemos doctor` also wrote to the
+store it was checking: it built a context packet, which ran maintenance and
+used up the showings of pending questions. On a copy of a real store, one
+doctor run logged a maintenance cycle, used two question showings and moved
+the session counter.
+
+- Each store records the newest maintenance code version that has opened it
+  (`min_code_version` in its meta table). A server raises it when it starts
+  and never lowers it.
+- Code older than the store runs no maintenance on it, whether through a
+  session or `mnemos consolidate`, and its captures skip the step that weighs
+  them as evidence for or against beliefs, so it can never move a belief. It
+  still takes the agent's own captures, handoffs, reflections and corrections:
+  refusing those would lose memories.
+- `mnemos_health` and `mnemos doctor` show the running version and the
+  store's minimum. When a session is older they say so, and what to do:
+  restart the session, and if it still says so, update Mnemos or reset the
+  minimum.
+- `mnemos repair min-code-version` shows both versions and, with
+  `--set N --write`, lowers or raises the minimum after a verified backup
+  (`backups/<db>.pre-repair-min-code-version-<stamp>.db`). It refuses N below
+  1, and only a human runs it.
+- `mnemos doctor` now opens the store read-only and changes nothing. It no
+  longer prints a context packet.
+
+Servers started before this change have no gate: they keep maintaining by
+their old rules until they are restarted. The gate protects every later bump.
+Each change to how memory is written or maintained raises
+`MAINTENANCE_CODE_VERSION` in `mnemos/code_version.py`, and from then on an
+older server stops maintaining any store the newer code has opened.
+
 ### Parallel sessions keep their own handoffs
 
 There was one handoff slot per scope, so when several sessions worked the same

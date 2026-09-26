@@ -239,6 +239,32 @@ def main(argv: list[str] | None = None) -> int:
         help="Remove them instead of printing what would go",
     )
 
+    # ── repair <what> ──
+    p_repair_group = sub.add_parser(
+        "repair", help="Guarded repairs of a store (dry run unless --write)"
+    )
+    repair_sub = p_repair_group.add_subparsers(dest="repair_command")
+    p_min_code = repair_sub.add_parser(
+        "min-code-version",
+        help="Show the lowest code version allowed to maintain this store, "
+             "or change it with --set N --write",
+    )
+    p_min_code.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
+    p_min_code.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_min_code.add_argument("--person-id", default=argparse.SUPPRESS, help="Person scope")
+    p_min_code.add_argument(
+        "--project-scope", default=argparse.SUPPRESS, help="Project scope"
+    )
+    p_min_code.add_argument(
+        "--set", dest="set_to", type=int, default=None, metavar="N",
+        help="The minimum to set, 1 or more (lower or higher than now)",
+    )
+    p_min_code.add_argument(
+        "--write",
+        action="store_true",
+        help="Change it instead of printing what would change",
+    )
+
     # ── hermes ──
     p_hermes = sub.add_parser("hermes", help="Hermes Agent identity-continuity integration")
     hermes_sub = p_hermes.add_subparsers(dest="hermes_command")
@@ -468,6 +494,7 @@ def main(argv: list[str] | None = None) -> int:
         "repair-softening": _cmd_repair_softening,
         "adopt-legacy": _cmd_adopt_legacy,
         "repair-lessons": _cmd_repair_lessons,
+        "repair": _cmd_repair,
         "hermes": _cmd_hermes,
         "identity": _cmd_identity,
         "mcp": _cmd_mcp,
@@ -1230,8 +1257,22 @@ def _cmd_search(args: argparse.Namespace) -> int:
 def _cmd_consolidate(args: argparse.Namespace) -> int:
     """Run a consolidation cycle."""
     store = _get_store(args)
+    from .code_version import MAINTENANCE_CODE_VERSION, OLDER_CODE_FIX, OLDER_CODE_MESSAGE
     from .consolidation.daemon import ConsolidationDaemon
     from .llm import create_client
+
+    # The same gate as maintenance through a session: code older than the
+    # store runs none of the passes, whose rules newer code has replaced.
+    minimum = store.min_code_version()
+    if minimum is not None and minimum > MAINTENANCE_CODE_VERSION:
+        store.close()
+        print("Consolidation skipped: no passes ran.")
+        print(
+            f"This code is version {MAINTENANCE_CODE_VERSION}; the store needs "
+            f"{minimum} or newer."
+        )
+        print(f"{OLDER_CODE_MESSAGE} {OLDER_CODE_FIX}")
+        return 0
 
     llm_client = create_client()
     try:
@@ -1496,6 +1537,85 @@ def _cmd_repair_lessons(args: argparse.Namespace) -> int:
     else:
         print("Dry run: nothing changed. Run again with --write to remove them")
         print("(a verified backup is made first).")
+    return 0
+
+
+def _cmd_repair(args: argparse.Namespace) -> int:
+    """Guarded repairs named by what they repair: `mnemos repair <what>`."""
+    if getattr(args, "repair_command", None) == "min-code-version":
+        return _cmd_repair_min_code_version(args)
+    print("Usage: mnemos repair min-code-version [--set N] [--write]", file=sys.stderr)
+    return 1
+
+
+def _cmd_repair_min_code_version(args: argparse.Namespace) -> int:
+    """Show, or reset, the lowest code version allowed to maintain a store.
+
+    Every Mnemos that opens a store raises this to its own version, and code
+    below it stops maintaining the store. If code newer than what is
+    installed raised it, nothing installed here maintains the store again
+    until it is updated or reset. A human runs this: a dry run unless
+    --write, a verified backup before any change, and never below 1.
+    """
+    from .simple_runtime import MnemosRuntime
+
+    set_to = args.set_to
+    if set_to is not None and set_to < 1:
+        print(f"Refused: the minimum code version is 1 or more, not {set_to}.")
+        return 1
+    if args.write and set_to is None:
+        print("Nothing to write: give the version to set with --set N.")
+        return 1
+
+    runtime = MnemosRuntime(
+        db_path=getattr(args, "db_path", None),
+        agent_id=getattr(args, "agent_id", None),
+        person_id=getattr(args, "person_id", None),
+        project_scope=getattr(args, "project_scope", None),
+    )
+    try:
+        plan = runtime.repair_min_code_version(set_to=set_to, write=args.write)
+    finally:
+        runtime.close()
+
+    if not plan["exists"]:
+        print(f"No store at {runtime.db_path}; nothing to repair.")
+        return 0
+
+    running = plan["running"]
+    minimum = plan["store_minimum"]
+    shown = "not set yet" if minimum is None else str(minimum)
+    print(f"Maintenance code version for {runtime.db_path}")
+    print()
+    print(f"  This code:      version {running}")
+    print(f"  Store minimum:  {shown}")
+    print()
+    if minimum is not None and minimum > running:
+        print("This code is older than the store expects, so it does not maintain it.")
+    else:
+        print("This code maintains this store.")
+
+    if set_to is None:
+        print("Dry run: nothing changed. To change the minimum, run again with")
+        print("--set N --write (a verified backup is made first).")
+        return 0
+    if set_to == minimum:
+        print(f"The minimum is already {set_to}; nothing changed.")
+        return 0
+    if not args.write:
+        print(f"Would set the minimum from {shown} to {set_to}.")
+        print("Dry run: nothing changed. Run again with --write to change it")
+        print("(a verified backup is made first).")
+        return 0
+    print(f"Set the minimum from {shown} to {set_to}. Backup: {plan['backup']}")
+    if set_to <= running:
+        print(
+            f"Code at version {set_to} or newer maintains this store again; "
+            "sessions already running pick this up at their next maintenance."
+        )
+    else:
+        print(f"This code (version {running}) no longer maintains this store.")
+    print("Any newer Mnemos raises the minimum again when it opens the store.")
     return 0
 
 

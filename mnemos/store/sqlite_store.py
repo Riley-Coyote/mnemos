@@ -3060,6 +3060,14 @@ class EngramStore:
         stored = self.min_code_version()
         return stored if stored is not None else int(version)
 
+    def set_min_code_version(self, version: int) -> None:
+        """Set the minimum outright, lower or higher. Only a human's reset
+        (`mnemos repair min-code-version`) does this; code opening the store
+        only ever raises it."""
+        if int(version) < 1:
+            raise ValueError("The minimum code version is 1 or more.")
+        self.set_meta(MIN_CODE_VERSION_KEY, str(int(version)))
+
     # ── Consolidation Log ──
 
     def log_consolidation(

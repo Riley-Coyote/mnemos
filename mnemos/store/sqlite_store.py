@@ -562,9 +562,18 @@ class EngramStore:
         conn.executescript(SQL_CREATE_TABLES)
         self._classify_legacy_hypomnema(conn)
         self._backfill_engram_scopes(conn)
+        # Only ever raised. A store newer code has stamped keeps its version
+        # when older code opens it, as min_code_version does: stamping this
+        # code's version over it would tell the newer code its own migration
+        # never ran.
         conn.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-            ("schema_version", str(SCHEMA_VERSION)),
+            "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
+            (str(SCHEMA_VERSION),),
+        )
+        conn.execute(
+            "UPDATE meta SET value = ? "
+            "WHERE key = 'schema_version' AND CAST(value AS INTEGER) < ?",
+            (str(SCHEMA_VERSION), SCHEMA_VERSION),
         )
         self._commit()
         integrity = [
@@ -2022,6 +2031,7 @@ class EngramStore:
         author_id: str = "",
         author_model: str = "",
         author_session: str = "",
+        retire_crowded: bool = True,
     ) -> str:
         """Atomically replace this session's handoff, preserving exact prose.
 
@@ -2034,7 +2044,10 @@ class EngramStore:
         that can't say which session they are share the empty session and
         replace each other, as every writer did before sessions were told
         apart. Beyond ``HANDOFF_SESSIONS_KEPT`` sessions' notes in a scope,
-        the oldest is retired; its prose stays in history.
+        the oldest is retired; its prose stays in history. With
+        ``retire_crowded`` False (code older than the store), no other
+        session's note is retired: they stay active until current code
+        retires them.
         """
 
         if not text.strip():
@@ -2108,7 +2121,7 @@ class EngramStore:
                 )
             # Bound how many sessions' notes stay active. A note pushed out
             # here is retired, not superseded: nothing replaced its content.
-            crowded = conn.execute(
+            crowded = [] if not retire_crowded else conn.execute(
                 f"""
                 SELECT id, content, revisions_json FROM hypomnema_entries
                 WHERE agent_id = ? AND person_id = ? AND project_scope = ?
@@ -2906,18 +2919,28 @@ class EngramStore:
         agent_id: str = "default",
         person_id: str = "user",
         project_scope: str = "global",
+        reflection_id: str | None = None,
     ) -> dict[str, Any] | None:
-        """Record the agent's answer. Returns the item, or None if not pending."""
+        """Record the agent's answer. Returns the item, or None if not pending.
+
+        Answers the oldest pending ask about ``target_id``, or exactly the ask
+        ``reflection_id`` names when given.
+        """
         conn = self._get_conn()
-        row = conn.execute(
-            """
-            SELECT * FROM reflection_queue
-            WHERE agent_id = ? AND person_id = ? AND project_scope = ?
-              AND target_id = ? AND answered_at IS NULL
-            ORDER BY created_at ASC LIMIT 1
-            """,
-            (agent_id, person_id, project_scope, target_id),
-        ).fetchone()
+        if reflection_id is not None:
+            row = conn.execute(
+                """
+                SELECT * FROM reflection_queue
+                WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+                  AND target_id = ? AND id = ? AND answered_at IS NULL
+                """,
+                (agent_id, person_id, project_scope, target_id, reflection_id),
+            ).fetchone()
+        else:
+            row = self.pending_reflection_for(
+                target_id, agent_id=agent_id, person_id=person_id,
+                project_scope=project_scope,
+            )
         if row is None:
             return None
         conn.execute(
@@ -2926,6 +2949,29 @@ class EngramStore:
         )
         self._commit()
         return dict(row)
+
+    def pending_reflection_for(
+        self,
+        target_id: str,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> dict[str, Any] | None:
+        """The ask ``answer_reflection`` would answer about ``target_id``.
+
+        Reads only: the ask stays pending and its showings are unchanged.
+        """
+        row = self._get_conn().execute(
+            """
+            SELECT * FROM reflection_queue
+            WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+              AND target_id = ? AND answered_at IS NULL
+            ORDER BY created_at ASC LIMIT 1
+            """,
+            (agent_id, person_id, project_scope, target_id),
+        ).fetchone()
+        return dict(row) if row is not None else None
 
     def reflection_stats(
         self,

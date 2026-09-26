@@ -1250,22 +1250,34 @@ class MnemosRuntime:
         self._ensure_init()
         assert self._store is not None
 
-        item = self._store.answer_reflection(
-            target_id.strip(),
-            answer,
-            agent_id=self.scope.agent_id,
-            person_id=self.scope.person_id,
-            project_scope=self.scope.project_scope,
-        )
+        scope = {
+            "agent_id": self.scope.agent_id,
+            "person_id": self.scope.person_id,
+            "project_scope": self.scope.project_scope,
+        }
+        # Code older than the store keeps the agent's words and applies none
+        # of its rules to them. It cannot take the verdict current code reads
+        # from a belief or contradiction answer, so answering one here would
+        # spend the question: it stays open for a current session instead.
+        older = self._older_than_store() is not None
+        if older:
+            waiting = self._store.pending_reflection_for(target_id.strip(), **scope)
+            if waiting is not None and waiting["kind"] in {"belief", "contradiction"}:
+                return self._keep_answer_open(waiting, answer)
+            item = (
+                self._store.answer_reflection(
+                    target_id.strip(), answer, reflection_id=waiting["id"], **scope
+                )
+                if waiting is not None
+                else None
+            )
+        else:
+            item = self._store.answer_reflection(target_id.strip(), answer, **scope)
         if item is None:
             return (
                 f"Nothing was pending for {target_id}. It may already have been "
                 "reflected on, or the id may be wrong."
             )
-        # The answer is now on the ask, which is marked answered: the words
-        # are kept whatever happens next. Code older than the store keeps the
-        # agent's words and applies none of its rules to them.
-        older = self._older_than_store() is not None
 
         if item["kind"] == "impact":
             engram = self._store.get_engram(item["target_id"])
@@ -1316,21 +1328,6 @@ class MnemosRuntime:
                 + "The details can fade now. This is what stays."
             )
 
-        if older and item["kind"] in {"belief", "contradiction"}:
-            # Forming, revising, retiring or linking follows rules read from
-            # the answer, which newer code may have replaced. The words stay
-            # on record with the question; nothing is done with them here.
-            not_applied = (
-                "no belief was formed, changed or retired"
-                if item["kind"] == "belief"
-                else "no contradiction was recorded and no memory lost weight"
-            )
-            return (
-                "Answer recorded, in your words, with the question it answers.\n"
-                f"  {answer}\n"
-                f"Not applied: {not_applied}."
-            )
-
         if item["kind"] == "belief":
             return self._apply_belief_reflection(item, answer)
 
@@ -1338,6 +1335,40 @@ class MnemosRuntime:
             return self._apply_contradiction_reflection(item, answer)
 
         return f"Reflection recorded for {item['target_id']} ({item['kind']})."
+
+    def _keep_answer_open(self, ask: dict[str, Any], answer: str) -> str:
+        """Keep an answer older code cannot apply, without spending its question.
+
+        The words become a signed continuity note that names the question
+        (its id and its text), so they are neither lost nor spent. The ask
+        itself is left exactly as it was: pending, its showings unchanged.
+        """
+        assert self._store is not None
+        author = self.author_model()
+        domain = _classify_domain(answer)
+        confidence, salience = _importance_scores("auto", domain)
+        note_id = self._store.write_hypomnema_entry(
+            f'{answer}\n\nIn answer to open question {ask["id"]}: "{ask["prompt"]}"',
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+            source="observed",
+            entry_kind="continuity",
+            authored_by="agent",
+            author_id=self.scope.agent_id,
+            author_model=author,
+            domain=domain,
+            tags=sorted({"reflection", "open-question", *_simple_tags(answer)}),
+            confidence=confidence,
+            salience=salience,
+        )
+        return (
+            "Kept your answer as a continuity note; the question stays open "
+            "for a current session.\n"
+            f"  {answer}\n"
+            f"Continuity note ID: {note_id}\n"
+            f"{self._signed_line(author)}"
+        )
 
     def _apply_belief_reflection(self, item: dict[str, Any], answer: str) -> str:
         """Form a belief the agent stated, or retire one it disavowed.
@@ -1881,7 +1912,11 @@ class MnemosRuntime:
         # something genuinely needs the agent's own judgement, and each one
         # stops being shown after a few sessions. A packet that asks for work
         # every time becomes a chore list appended to every conversation.
-        reflection = self._reflection_block()
+        #
+        # Code older than the store shows none and spends no showings: the
+        # questions wait for a current session, which can take the answer as
+        # current rules need it.
+        reflection = self._reflection_block() if self._older_than_store() is None else None
         if reflection:
             lines.extend(["", reflection])
 
@@ -1940,6 +1975,10 @@ class MnemosRuntime:
             author_id=self.scope.agent_id,
             author_model=author,
             author_session=session,
+            # Code older than the store replaces only this session's own note.
+            # Retiring other sessions' notes by count is a rule; they stay
+            # active until current code retires them.
+            retire_crowded=self._older_than_store() is None,
         )
         if session:
             lasts = (
@@ -2152,6 +2191,10 @@ class MnemosRuntime:
         # while carrying nothing, which is how a store ends up 76% records.
         # Empty is honest, and the reflection queue asks about it later.
         impact = (impact or "").strip()
+        # Code older than the store saves the capture in its own shape
+        # (classification, index, vector) and applies no rules that reach
+        # other memories: no weighing against beliefs, no links.
+        older = self._older_than_store() is not None
 
         engram = self._encoder.encode(
             content=full_content,
@@ -2171,7 +2214,10 @@ class MnemosRuntime:
             # weighs the capture as evidence for or against beliefs, by rules
             # newer code may have replaced, and older code must never move a
             # belief. The capture itself still lands.
-            skip_surprise_detection=self._older_than_store() is not None,
+            skip_surprise_detection=older,
+            # Links to other memories follow rules newer code may have
+            # replaced; maintenance's connection discovery makes them later.
+            discover_connections=not older,
         )
         note_id = self._store.write_hypomnema_entry(
             content.strip(),
@@ -2329,8 +2375,10 @@ class MnemosRuntime:
         # Code older than the store skips it: which belief a correction names
         # is decided by token overlap, a rule newer code may have replaced, and
         # older code never moves a belief by any path. The correction still
-        # lands on the memory it names, below.
-        if not target and self._older_than_store() is None:
+        # lands on the memory it names, below, saved without links to other
+        # memories and without a placeholder where its meaning would go.
+        older = self._older_than_store() is not None
+        if not target and not older:
             belief_note = self._maybe_correct_belief(correction, query, action)
             if belief_note:
                 return belief_note
@@ -2400,7 +2448,7 @@ class MnemosRuntime:
                 if action in {"forget", "archive", "remove", "delete"} and not correction.strip():
                     return f"Archived memory {target}."
                 meaning, meaning_source, kept = _replacement_impact(
-                    impact, "Correction to earlier continuity.", engram
+                    impact, "" if older else "Correction to earlier continuity.", engram
                 )
                 replacement = self._encoder.encode(
                     content=correction.strip(),
@@ -2414,6 +2462,7 @@ class MnemosRuntime:
                     project_scope=self.scope.project_scope,
                     override_confidence=0.92,
                     skip_surprise_detection=True,
+                    discover_connections=not older,
                 )
                 return (
                     f"Archived memory {target} and captured correction {replacement.id}.\n"
@@ -2491,7 +2540,7 @@ class MnemosRuntime:
                 # related_engram_id stays on the memory first captured.
                 meaning, meaning_source, kept = _replacement_impact(
                     impact,
-                    "Corrected continuity for future interactions.",
+                    "" if older else "Corrected continuity for future interactions.",
                     *(
                         self._store.get_engram(engram_id)
                         for engram_id in (
@@ -2520,6 +2569,7 @@ class MnemosRuntime:
                     project_scope=self.scope.project_scope,
                     override_confidence=0.92,
                     skip_surprise_detection=True,
+                    discover_connections=not older,
                 )
                 self._store.mark_hypomnema_promoted(note_id, replacement.id)
                 maintenance = self.maintain(auto=True)

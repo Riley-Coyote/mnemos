@@ -693,7 +693,18 @@ def test_older_recall_returns_memories_but_reconsolidates_none(tmp_path):
     )
 
 
-def test_older_reflect_keeps_the_answer_and_forms_nothing(tmp_path):
+def _asks(db) -> list[tuple]:
+    return _all(
+        db,
+        "SELECT id, kind, target_id, prompt, surfaced_count, answered_at, answer "
+        "FROM reflection_queue ORDER BY id",
+    )
+
+
+def test_older_reflect_leaves_belief_and_contradiction_questions_open(tmp_path):
+    """Stale code cannot take the verdict current code reads from these
+    answers, so answering there would spend the question. The words are kept
+    as a signed note naming the question, and the question waits."""
     from mnemos.core.belief import Belief
 
     db = tmp_path / "memory.db"
@@ -741,7 +752,7 @@ def test_older_reflect_keeps_the_answer_and_forms_nothing(tmp_path):
         store.close()
 
     _claim_for_newer_code(db)
-    beliefs, memories = _belief_state(db), _memory_state(db)
+    beliefs, memories, asks = _belief_state(db), _memory_state(db), _asks(db)
     answers = {
         formation: "Yes. Riley builds trips around the ferry.",
         reaffirmation: "No, not any more.",
@@ -750,21 +761,30 @@ def test_older_reflect_keeps_the_answer_and_forms_nothing(tmp_path):
 
     runtime = _runtime(db)
     try:
+        runtime.introduce("claude-opus-5-5")
         said = {target: runtime.reflect(target, answer) for target, answer in answers.items()}
     finally:
         runtime.close()
 
+    assert _asks(db) == asks, "older code answered a question or spent a showing"
     assert _belief_state(db) == beliefs, "older code formed, revised or retired a belief"
     assert _memory_state(db) == memories, "older code linked or weakened a memory"
-    for target, answer in answers.items():
-        assert "Answer recorded" in said[target]
-        assert "Not applied:" in said[target]
-        recorded = _read(
-            db,
-            "SELECT answer, answered_at FROM reflection_queue WHERE target_id = ?",
-            (target,),
+    notes = _all(
+        db,
+        "SELECT content, entry_kind, authored_by, author_model, active "
+        "FROM hypomnema_entries WHERE content LIKE '%open question%'",
+    )
+    for ask_id, _kind, target, prompt, *_ in asks:
+        answer = answers[target]
+        assert "the question stays open for a current session" in said[target]
+        assert said[target].splitlines()[-1] == OLDER
+        kept = [note for note in notes if note[0].startswith(answer)]
+        assert len(kept) == 1, f"the answer to {ask_id} was not kept exactly once"
+        content, entry_kind, authored_by, author_model, active = kept[0]
+        assert ask_id in content and prompt in content, "the note does not name its question"
+        assert (entry_kind, authored_by, author_model, active) == (
+            "continuity", "agent", "claude-opus-5-5", 1,
         )
-        assert recorded[0] == answer and recorded[1], "the agent's words were not kept"
 
 
 def test_older_reflect_lands_a_lesson_answer_on_its_memory_and_files_no_lesson(tmp_path):
@@ -918,3 +938,203 @@ def test_the_reset_backs_up_the_store_exactly_as_found(tmp_path, capsys):
     assert _dump(backup) == as_found, "the backup is not the store as the human found it"
     assert _store_minimum(backup) is None
     assert _store_minimum(db) == "5"
+
+
+# ── Questions wait, captures stand alone, handoffs stay, versions only rise ──
+
+
+def test_older_context_shows_no_questions_and_spends_no_showings(tmp_path):
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        runtime.capture(
+            "Riley plans every trip around the ferry timetable.",
+            impact="Trips bend to the ferry.",
+        )
+        [(memory,)] = _all(db, "SELECT id FROM engrams")
+        runtime._store._get_conn().execute("DELETE FROM reflection_queue")
+        runtime._store._get_conn().commit()
+        runtime._store.enqueue_reflection(
+            "belief", memory, "Is there a belief here? [theme:ferry]",
+            agent_id="nova", person_id="riley", project_scope="demo",
+        )
+        shown = runtime.context()
+    finally:
+        runtime.close()
+    assert "Is there a belief here?" in shown, "premise: current code shows the question"
+
+    _claim_for_newer_code(db)
+    asks = _asks(db)
+    runtime = _runtime(db)
+    try:
+        packet = runtime.context()
+    finally:
+        runtime.close()
+
+    assert "Something of yours is waiting on you" not in packet
+    assert "Is there a belief here?" not in packet, "older code presented a question"
+    assert _asks(db) == asks, "older code spent a showing"
+
+
+def test_older_capture_saves_its_own_shape_without_links(tmp_path, monkeypatch):
+    """No links at save time on older code; the capture keeps everything that
+    is its own. Maintenance under current code links it later."""
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        runtime.capture("Riley keeps the ferry timetable pinned beside the kitchen door.")
+    finally:
+        runtime.close()
+    _claim_for_newer_code(db)
+
+    text = "The ferry timetable pinned beside the kitchen door changed for winter."
+    _turn_semantic_recall_on(monkeypatch)  # so the capture's vector can be checked
+    runtime = _runtime(db)
+    try:
+        captured = runtime.capture(text)
+    finally:
+        runtime.close()
+    assert "Captured continuity." in captured
+    [(capture, kind, tags)] = _all(db, "SELECT id, kind, tags FROM engrams WHERE content = ?", (text,))
+
+    def links() -> list[tuple]:
+        return _all(
+            db,
+            "SELECT source_id, target_id, relation, formed_by FROM connections "
+            "WHERE source_id = ? OR target_id = ?",
+            (capture, capture),
+        )
+
+    assert links() == [], "older code linked the capture to other memories"
+    # Its own shape is all there: classification, full-text index, vector.
+    assert kind and json.loads(tags)
+    assert (capture,) in _all(db, "SELECT id FROM engrams_fts WHERE engrams_fts MATCH 'winter'")
+    assert _read(db, "SELECT COUNT(*) FROM embeddings WHERE engram_id = ?", (capture,))[0] == 1
+
+    # Current code's maintenance finds the links later, by the words the two
+    # memories share (semantic recall off again, so no vector does it).
+    monkeypatch.undo()
+    monkeypatch.setattr("mnemos.simple_runtime.MAINTENANCE_CODE_VERSION", AHEAD, raising=False)
+    runtime = _runtime(db)
+    try:
+        maintained = runtime.maintain()
+    finally:
+        runtime.close()
+    assert "connection_discovery" in maintained
+    assert any(formed_by.startswith("consolidation") for *_, formed_by in links()), (
+        "current code's connection discovery did not link the capture"
+    )
+
+
+def test_older_correct_writes_no_placeholder_meaning(tmp_path):
+    """With no meaning given and none to carry over, a correction's
+    replacement got a server-written placeholder where its meaning goes.
+    Older code leaves it empty: the agent's words, or nothing."""
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        runtime.capture("Riley parks the bike behind the library.")
+        runtime.capture("Riley stores the kayak in the garage.")
+    finally:
+        runtime.close()
+    ids = _memory_ids(db)
+    _claim_for_newer_code(db)
+
+    runtime = _runtime(db)
+    try:
+        runtime.correct(
+            "Riley parks the bike beside the library now.",
+            target_id=ids["Riley parks the bike behind the library."],
+        )
+        runtime.correct("Riley stores the kayak at the marina now.", query="kayak garage")
+    finally:
+        runtime.close()
+
+    for replacement in (
+        "Riley parks the bike beside the library now.",
+        "Riley stores the kayak at the marina now.",
+    ):
+        assert _all(
+            db, "SELECT impact, impact_source FROM engrams WHERE content = ?", (replacement,),
+        ) == [("", "")], f"older code wrote a placeholder meaning for {replacement!r}"
+
+
+def test_older_handoff_retires_no_other_sessions_note(tmp_path, monkeypatch):
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        runtime._ensure_init()
+        for n in range(1, 9):
+            runtime._store.write_handoff(
+                f"Session {n} left off here.", agent_id="nova", person_id="riley",
+                project_scope="demo", author_session=f"session-{n}",
+            )
+    finally:
+        runtime.close()
+
+    def active() -> list[str]:
+        return [
+            session for (session,) in _all(
+                db,
+                "SELECT author_session FROM hypomnema_entries "
+                "WHERE entry_kind = 'handoff' AND active = 1 ORDER BY created_at",
+            )
+        ]
+
+    assert len(active()) == 8, "premise: eight sessions' notes, the most kept"
+    _claim_for_newer_code(db)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "session-9")
+    runtime = _runtime(db)
+    try:
+        said = runtime.handoff("Session 9 left off here.")
+    finally:
+        runtime.close()
+
+    assert "Session handoff saved exactly as written." in said
+    assert active() == [f"session-{n}" for n in range(1, 10)], (
+        "older code retired another session's note"
+    )
+
+    # Current code retires them the next time it writes one.
+    monkeypatch.setattr("mnemos.simple_runtime.MAINTENANCE_CODE_VERSION", AHEAD, raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "session-10")
+    runtime = _runtime(db)
+    try:
+        runtime.handoff("Session 10 left off here.")
+    finally:
+        runtime.close()
+    assert active() == [f"session-{n}" for n in range(3, 11)]
+
+
+def test_schema_version_only_ever_rises(tmp_path):
+    from mnemos.store.sqlite_store import SCHEMA_VERSION, EngramStore
+
+    db = _seeded_store(tmp_path)
+
+    def stamp(value: int | None = None) -> str:
+        if value is not None:
+            conn = sqlite3.connect(str(db))
+            try:
+                conn.execute(
+                    "UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(value),)
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return _read(db, "SELECT value FROM meta WHERE key = 'schema_version'")[0]
+
+    # Newer code stamped the store; this code opens it, as a store and as a server.
+    stamp(SCHEMA_VERSION + 1)
+    EngramStore(str(db)).close()
+    assert stamp() == str(SCHEMA_VERSION + 1), "older code lowered the schema version"
+    runtime = _runtime(db)
+    try:
+        runtime.health()
+    finally:
+        runtime.close()
+    assert stamp() == str(SCHEMA_VERSION + 1)
+
+    # A store stamped lower is still raised to this code's version.
+    stamp(SCHEMA_VERSION - 1)
+    EngramStore(str(db)).close()
+    assert stamp() == str(SCHEMA_VERSION)

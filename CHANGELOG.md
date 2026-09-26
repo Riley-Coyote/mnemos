@@ -24,16 +24,25 @@ the session counter.
   - recall and the context packet still return what they find, but a return
     changes nothing: no access count, strength, version row or co-activation
     link;
-  - a capture skips the step that weighs it as evidence for or against
-    beliefs;
-  - an answer to a belief or contradiction question is kept with the
-    question, and nothing is formed, revised, retired or linked from it. An
+  - a capture or a correction is saved in its own shape (classification,
+    full-text index, vector) with no links to other memories and no weighing
+    against beliefs. Maintenance under current code links it later: on a copy
+    of a real store, one pass linked five such captures;
+  - a correction lands on the memory it names, but never lowers or retires a
+    belief, and gets no placeholder where its meaning would go;
+  - belief and contradiction questions wait for a current session. The packet
+    shows none and spends no showings. An answer given anyway is kept as a
+    signed continuity note that names the question, which stays open. An
     answer about what a memory taught still lands on that memory; filing it
     as a lesson waits for current code;
-  - a correction lands on the memory it names, but never lowers or retires a
-    belief.
+  - a handoff replaces only its own session's note and retires no other
+    session's.
 
   Old code never moves a belief by any path.
+- A store's `schema_version`, like its `min_code_version`, only ever rises.
+  Every open used to stamp the opener's own version, so older code lowered
+  what newer code had recorded. Opening a store that is already up to date
+  no longer changes the file at all.
 - Every result it returns (capture, recall, context, reflect, correct, handoff,
   introduce) ends with one line: "This session runs older Mnemos code than
   the store expects. Restart the session." The agent inside a stale session

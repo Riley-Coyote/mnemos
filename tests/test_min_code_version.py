@@ -619,3 +619,302 @@ def test_older_code_captures_without_weighing_beliefs(tmp_path):
     assert _read(
         db, "SELECT COUNT(*) FROM connections WHERE relation = 'contradicts'"
     )[0] == contradictions, "older code recorded a contradiction"
+
+
+# ── Older code records the agent's words and applies no rules ──
+#
+# This code becomes the older code once the next packages land, and every
+# session left open keeps running it for days. What it does by rule, rather
+# than by the agent's words, it must not do to a store newer code has opened.
+
+
+def _all(db, sql: str, params: tuple = ()) -> list[tuple]:
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        return [tuple(row) for row in conn.execute(sql, params).fetchall()]
+    finally:
+        conn.close()
+
+
+def _memory_state(db) -> dict[str, list[tuple]]:
+    """What a return can change: counts, weights, history and links."""
+    return {
+        "engrams": _all(
+            db,
+            "SELECT id, access_count, last_accessed, reconsolidation_count, "
+            "strength, stability, accessibility FROM engrams ORDER BY id",
+        ),
+        "versions": _all(db, "SELECT COUNT(*) FROM versions"),
+        "connections": _all(
+            db,
+            "SELECT source_id, target_id, relation, strength FROM connections "
+            "ORDER BY source_id, target_id, relation",
+        ),
+    }
+
+
+def _belief_state(db) -> list[tuple]:
+    return _all(
+        db,
+        "SELECT id, content, confidence, superseded_by, revision_history "
+        "FROM beliefs ORDER BY id",
+    )
+
+
+def _memory_ids(db) -> dict[str, str]:
+    return {content: engram_id for engram_id, content in _all(db, "SELECT id, content FROM engrams")}
+
+
+def test_older_recall_returns_memories_but_reconsolidates_none(tmp_path):
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        runtime.capture("Riley keeps the ferry timetable in the kitchen drawer.")
+        runtime.capture("The ferry leaves the harbour at seven on weekdays.")
+    finally:
+        runtime.close()
+    _claim_for_newer_code(db)
+    before = _memory_state(db)
+
+    runtime = _runtime(db)
+    try:
+        recalled = runtime.recall("ferry timetable")
+        packet = runtime.context("ferry timetable")
+    finally:
+        runtime.close()
+
+    assert "Durable memories:" in recalled
+    assert "ferry timetable in the kitchen drawer" in recalled
+    assert "The ferry leaves the harbour" in recalled, "premise: two memories come back together"
+    assert "Relevant memories:" in packet
+    assert _memory_state(db) == before, (
+        "older code changed what it returned: access counts, strength, "
+        "version rows or co-activation links"
+    )
+
+
+def test_older_reflect_keeps_the_answer_and_forms_nothing(tmp_path):
+    from mnemos.core.belief import Belief
+
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        # With an impact, so maintenance asks nothing about these memories.
+        for content in (
+            "Riley plans every trip around the ferry timetable.",
+            "Riley said the old ferry route was the prettiest.",
+            "Riley now avoids the ferry in winter.",
+            "Riley takes the ferry every winter weekend.",
+        ):
+            runtime.capture(content, impact="Trips bend to the ferry.")
+        held = Belief(
+            agent_id="nova", content="Riley loves the ferry", confidence=0.6,
+            source="agent",
+        )
+        runtime._store.save_belief(held)
+    finally:
+        runtime.close()
+    ids = _memory_ids(db)
+    formation = ids["Riley plans every trip around the ferry timetable."]
+    reaffirmation = ids["Riley said the old ferry route was the prettiest."]
+    contradiction = ids["Riley now avoids the ferry in winter."]
+    other = ids["Riley takes the ferry every winter weekend."]
+
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("DELETE FROM reflection_queue")
+        conn.commit()
+    finally:
+        conn.close()
+    store = _runtime(db)
+    try:
+        store._ensure_init()
+        for kind, target, prompt in (
+            ("belief", formation, "Is there a belief here? [theme:ferry]"),
+            ("belief", reaffirmation, f'You hold "Riley loves the ferry". Still true? [belief:{held.id}]'),
+            ("contradiction", contradiction, f"Do these contradict? [ref:{other}]"),
+        ):
+            store._store.enqueue_reflection(
+                kind, target, prompt, agent_id="nova", person_id="riley", project_scope="demo",
+            )
+    finally:
+        store.close()
+
+    _claim_for_newer_code(db)
+    beliefs, memories = _belief_state(db), _memory_state(db)
+    answers = {
+        formation: "Yes. Riley builds trips around the ferry.",
+        reaffirmation: "No, not any more.",
+        contradiction: "Yes, they contradict each other.",
+    }
+
+    runtime = _runtime(db)
+    try:
+        said = {target: runtime.reflect(target, answer) for target, answer in answers.items()}
+    finally:
+        runtime.close()
+
+    assert _belief_state(db) == beliefs, "older code formed, revised or retired a belief"
+    assert _memory_state(db) == memories, "older code linked or weakened a memory"
+    for target, answer in answers.items():
+        assert "Answer recorded" in said[target]
+        assert "Not applied:" in said[target]
+        recorded = _read(
+            db,
+            "SELECT answer, answered_at FROM reflection_queue WHERE target_id = ?",
+            (target,),
+        )
+        assert recorded[0] == answer and recorded[1], "the agent's words were not kept"
+
+
+def test_older_reflect_lands_a_lesson_answer_on_its_memory_and_files_no_lesson(tmp_path):
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        runtime.capture("Riley missed the last ferry and walked home in the rain.")
+    finally:
+        runtime.close()
+    [(memory,)] = _all(db, "SELECT id FROM engrams")
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("DELETE FROM reflection_queue")
+        conn.commit()
+    finally:
+        conn.close()
+    store = _runtime(db)
+    try:
+        store._ensure_init()
+        store._store.enqueue_reflection(
+            "lesson", memory, "This memory is fading. What did it teach?",
+            agent_id="nova", person_id="riley", project_scope="demo",
+        )
+    finally:
+        store.close()
+    _claim_for_newer_code(db)
+    memories = _count(db, "engrams")
+
+    lesson = "Check the last ferry before staying out late."
+    runtime = _runtime(db)
+    try:
+        said = runtime.reflect(memory, lesson)
+    finally:
+        runtime.close()
+
+    # The agent's words land on the memory they are about.
+    assert _read(db, "SELECT impact, impact_source FROM engrams WHERE id = ?", (memory,)) == (
+        lesson, "agent",
+    )
+    # Filing a lesson matches it against the lessons already held, by rule.
+    assert _count(db, "engrams") == memories, "older code filed a lesson"
+    assert _all(db, "SELECT 1 FROM connections WHERE relation = 'distilled_into'") == []
+    assert "Filing it as a lesson waits for current Mnemos." in said
+
+
+def test_older_correct_never_moves_a_belief(tmp_path):
+    from mnemos.core.belief import Belief
+
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        runtime.capture(
+            "Riley prefers dark roast coffee in the morning.",
+            impact="Morning coffee is dark.",
+        )
+        belief = Belief(
+            agent_id="nova", content="Riley prefers dark roast coffee",
+            confidence=0.6, source="agent",
+        )
+        runtime._store.save_belief(belief)
+    finally:
+        runtime.close()
+    _claim_for_newer_code(db)
+    beliefs = _belief_state(db)
+
+    runtime = _runtime(db)
+    try:
+        updated = runtime.correct(
+            "Riley prefers light roast coffee now.", query="Riley prefers dark roast coffee",
+        )
+        forgotten = runtime.correct("", query="Riley prefers dark roast coffee", action="forget")
+    finally:
+        runtime.close()
+
+    assert _belief_state(db) == beliefs, "older code moved a belief"
+    # The correction still lands on the memory it names.
+    assert "Updated closest continuity note" in updated
+    notes = [content for (content,) in _all(db, "SELECT content FROM hypomnema_entries")]
+    assert "Riley prefers light roast coffee now." in notes
+    assert OLDER in forgotten
+
+
+def test_the_notice_ends_each_tool_result_only_when_older(tmp_path):
+    db = tmp_path / "memory.db"
+    tools = ("capture", "recall", "context", "reflect", "correct", "handoff", "introduce")
+
+    def run(tag: str) -> dict[str, str]:
+        runtime = _runtime(db)
+        try:
+            results = {"capture": runtime.capture(f"Riley waters the {tag} ferns on Sundays.")}
+            [(memory,)] = _all(
+                db, "SELECT id FROM engrams WHERE content = ?",
+                (f"Riley waters the {tag} ferns on Sundays.",),
+            )
+            runtime._store.enqueue_reflection(
+                "impact", memory, "What did this change?",
+                agent_id="nova", person_id="riley", project_scope="demo",
+            )
+            results["recall"] = runtime.recall(f"{tag} ferns")
+            results["context"] = runtime.context(f"{tag} ferns")
+            results["reflect"] = runtime.reflect(memory, f"The {tag} ferns need a steady hand.")
+            results["correct"] = runtime.correct(
+                f"Riley waters the {tag} ferns on Saturdays.", query=f"{tag} ferns Sundays",
+            )
+            results["handoff"] = runtime.handoff(f"Left off repotting the {tag} ferns.")
+            results["introduce"] = runtime.introduce("claude-opus-5-5")
+            results["maintain"] = runtime.maintain()
+            results["health"] = format_health_card(runtime.health())
+        finally:
+            runtime.close()
+        return results
+
+    current = run("maidenhair")
+    for tool in (*tools, "maintain", "health"):
+        assert OLDER not in current[tool], f"{tool} carried the notice on current code"
+
+    _claim_for_newer_code(db)
+    older = run("staghorn")
+    for tool in tools:
+        assert older[tool].splitlines()[-1] == OLDER, f"{tool} did not end with the notice"
+        assert older[tool].count(OLDER) == 1, f"{tool} said it more than once"
+    # These say it in their own words already, once.
+    assert older["maintain"].count(OLDER) == 1
+    assert older["health"].count(OLDER) == 1
+
+
+def _dump(db) -> list[str]:
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        return list(conn.iterdump())
+    finally:
+        conn.close()
+
+
+def test_the_reset_backs_up_the_store_exactly_as_found(tmp_path, capsys):
+    db = _seeded_store(tmp_path)
+    # A store last opened by code from before the minimum existed holds no
+    # minimum at all, and opening it for writing records one.
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("DELETE FROM meta WHERE key = 'min_code_version'")
+        conn.commit()
+    finally:
+        conn.close()
+    as_found = _dump(db)
+
+    assert _reset(db, "--set", "5", "--write") == 0
+    capsys.readouterr()
+
+    [backup] = _backups(db)
+    assert _dump(backup) == as_found, "the backup is not the store as the human found it"
+    assert _store_minimum(backup) is None
+    assert _store_minimum(db) == "5"

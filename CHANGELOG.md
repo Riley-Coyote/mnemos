@@ -17,17 +17,34 @@ the session counter.
 - Each store records the newest maintenance code version that has opened it
   (`min_code_version` in its meta table). A server raises it when it starts
   and never lowers it.
-- Code older than the store runs no maintenance on it, whether through a
-  session or `mnemos consolidate`, and its captures skip the step that weighs
-  them as evidence for or against beliefs, so it can never move a belief. It
-  still takes the agent's own captures, handoffs, reflections and corrections:
-  refusing those would lose memories.
+- Code older than the store records the agent's words and applies no rules
+  to them. It takes the agent's own captures, handoffs, reflections and
+  corrections, because refusing those would lose memories, but:
+  - it runs no maintenance, whether through a session or `mnemos consolidate`;
+  - recall and the context packet still return what they find, but a return
+    changes nothing: no access count, strength, version row or co-activation
+    link;
+  - a capture skips the step that weighs it as evidence for or against
+    beliefs;
+  - an answer to a belief or contradiction question is kept with the
+    question, and nothing is formed, revised, retired or linked from it. An
+    answer about what a memory taught still lands on that memory; filing it
+    as a lesson waits for current code;
+  - a correction lands on the memory it names, but never lowers or retires a
+    belief.
+
+  Old code never moves a belief by any path.
+- Every result it returns (capture, recall, context, reflect, correct, handoff,
+  introduce) ends with one line: "This session runs older Mnemos code than
+  the store expects. Restart the session." The agent inside a stale session
+  is the only one who can see it. With current code nothing changes.
 - `mnemos_health` and `mnemos doctor` show the running version and the
   store's minimum. When a session is older they say so, and what to do:
   restart the session, and if it still says so, update Mnemos or reset the
   minimum.
 - `mnemos repair min-code-version` shows both versions and, with
-  `--set N --write`, lowers or raises the minimum after a verified backup
+  `--set N --write`, lowers or raises the minimum. It first makes a verified
+  backup of the store exactly as it found it
   (`backups/<db>.pre-repair-min-code-version-<stamp>.db`). It refuses N below
   1, and only a human runs it.
 - `mnemos doctor` now opens the store read-only and changes nothing. It no

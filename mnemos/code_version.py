@@ -17,7 +17,7 @@ maintained. Never lower it: a store already raised past a version stays there.
 
 from __future__ import annotations
 
-MAINTENANCE_CODE_VERSION = 2
+MAINTENANCE_CODE_VERSION = 3
 
 OLDER_CODE_MESSAGE = (
     "This session runs older Mnemos code than the store expects. "

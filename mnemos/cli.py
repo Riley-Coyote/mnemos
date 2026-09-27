@@ -239,6 +239,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Remove them instead of printing what would go",
     )
 
+    # ── repair-versions ──
+    p_repair = sub.add_parser(
+        "repair-versions",
+        help="Remove version rows that only repeat the one before them "
+             "(dry run unless --write)",
+    )
+    p_repair.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
+    p_repair.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_repair.add_argument("--person-id", default=argparse.SUPPRESS, help="Person scope")
+    p_repair.add_argument("--project-scope", default=argparse.SUPPRESS, help="Project scope")
+    p_repair.add_argument(
+        "--write",
+        action="store_true",
+        help="Remove them instead of printing what would go",
+    )
+
     # ── repair <what> ──
     p_repair_group = sub.add_parser(
         "repair", help="Guarded repairs of a store (dry run unless --write)"
@@ -510,6 +526,7 @@ def main(argv: list[str] | None = None) -> int:
         "repair-softening": _cmd_repair_softening,
         "adopt-legacy": _cmd_adopt_legacy,
         "repair-lessons": _cmd_repair_lessons,
+        "repair-versions": _cmd_repair_versions,
         "repair": _cmd_repair,
         "hermes": _cmd_hermes,
         "identity": _cmd_identity,
@@ -1550,6 +1567,66 @@ def _cmd_repair_lessons(args: argparse.Namespace) -> int:
     if args.write:
         print(f"Removed {plan['removed']:,} links. Backup: {plan['backup']}")
         print("A memory whose link went is filed again, correctly, the next time it fades.")
+    else:
+        print("Dry run: nothing changed. Run again with --write to remove them")
+        print("(a verified backup is made first).")
+    return 0
+
+
+def _cmd_repair_versions(args: argparse.Namespace) -> int:
+    """Remove the version rows that only repeat the one before them.
+
+    Every return used to append a full copy of the memory to its history,
+    although nothing a version records had changed. A human runs this: a dry
+    run unless --write, and a verified backup before anything is removed.
+    """
+    from .simple_runtime import MnemosRuntime
+
+    runtime = MnemosRuntime(
+        db_path=getattr(args, "db_path", None),
+        agent_id=getattr(args, "agent_id", None),
+        person_id=getattr(args, "person_id", None),
+        project_scope=getattr(args, "project_scope", None),
+    )
+    try:
+        plan = runtime.repair_versions(write=args.write)
+    finally:
+        runtime.close()
+
+    if not plan["exists"]:
+        print(f"No store at {runtime.db_path}; nothing to repair.")
+        return 0
+
+    found = plan["found"]
+    copies = len(found["duplicates"])
+
+    def row(count: int, what: str, action: str = "") -> None:
+        print(f"  {count:>9,}  {what:<56} {action}".rstrip())
+
+    print(f"Version history in {runtime.db_path}")
+    print()
+    row(found["rows"], f"version rows, for {found['memories']:,} memories")
+    row(copies, "copies of the version before them, written by a return", "go")
+    row(found["rows"] - copies, "that record a state or a change", "stay")
+    for engram_id, count in found["most_repeated"]:
+        print(f"             {engram_id}: {count:,} copies")
+
+    print()
+    if plan["older_than_store"]:
+        print(
+            "This code is older than the store expects, so it changes nothing. "
+            "Run the repair with current Mnemos."
+        )
+        return 1 if args.write else 0
+    if not copies:
+        print("Nothing to repair.")
+        return 0
+    if args.write:
+        print(
+            f"Removed {plan['removed']:,} rows; {found['rows'] - plan['removed']:,} "
+            f"remain. Backup: {plan['backup']}"
+        )
+        print("The file keeps its size; SQLite reuses the space.")
     else:
         print("Dry run: nothing changed. Run again with --write to remove them")
         print("(a verified backup is made first).")

@@ -748,6 +748,71 @@ class MnemosRuntime:
                 plan["restored"] += 1
         return plan
 
+    def repair_versions(self, *, write: bool = False) -> dict[str, Any]:
+        """Show, and with ``write`` remove, version rows that repeat the one
+        before them.
+
+        Every return used to append a full snapshot of the memory to its
+        history, although a return changes nothing a version records. This
+        finds those copies (``EngramStore.duplicate_versions``) across the
+        whole store: rows a return wrote that equal the row just before them.
+        The first row of every run stays, and so does every row written for
+        another reason, so every state the history recorded is kept.
+
+        A dry run reads the store read-only and changes nothing. With
+        ``write``, a verified backup of the store as found comes first; then,
+        in one transaction, the copies go and nothing else changes. A second
+        run finds nothing. Code older than the store refuses to write.
+        """
+        plan: dict[str, Any] = {
+            "db_path": str(self.db_path),
+            "exists": self.db_path.exists(),
+            "older_than_store": False,
+            "found": None,
+            "removed": 0,
+            "backup": None,
+        }
+        if not plan["exists"]:
+            return plan
+
+        peek = ReadOnlyEngramStore(self.db_path)
+        try:
+            minimum = peek.min_code_version()
+            plan["found"] = peek.duplicate_versions()
+        finally:
+            peek.close()
+        plan["older_than_store"] = minimum is not None and minimum > MAINTENANCE_CODE_VERSION
+        if not write or plan["older_than_store"] or not plan["found"]["duplicates"]:
+            return plan
+
+        from .backup import create_backup
+
+        # The backup is the store exactly as the human found it: read through
+        # a read-only connection, before opening for writing migrates the
+        # schema or records this code's version.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        destination = (
+            self.db_path.parent / "backups"
+            / f"{self.db_path.stem}.pre-repair-versions-{stamp}.db"
+        )
+        source = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            backup = create_backup(self.db_path, destination, source_connection=source)
+        finally:
+            source.close()
+        plan["backup"] = backup["path"]
+
+        self._ensure_init()
+        assert self._store is not None
+        if self._older_than_store() is not None:
+            plan["older_than_store"] = True
+            return plan
+        # Found again under the writer: the store may have moved on since.
+        with self._store.transaction():
+            found = plan["found"] = self._store.duplicate_versions()
+            plan["removed"] = self._store.remove_versions(found["duplicates"])
+        return plan
+
     def close(self) -> None:
         if self._store is not None:
             self._store.close()
@@ -913,8 +978,10 @@ class MnemosRuntime:
                 db_path=self.scope.db_path if has_vectors else None
             )
         else:
+            # Opening the store for writing records this code's version in it
+            # (EngramStore._record_code_version), so a server still running
+            # older code stops maintaining it.
             self._store = EngramStore(self.scope.db_path)
-            self._announce_code_version()
             self._embedding_index = EmbeddingIndex(db_path=self.scope.db_path)
         # The agent's self-declared model, recorded for the record rather
         # than to gate anything. Read straight from the freshly created
@@ -948,20 +1015,6 @@ class MnemosRuntime:
             self._store,
             embedding_index=self._embedding_index,
         )
-
-    def _announce_code_version(self) -> None:
-        """Raise the store's minimum code version to this code's, at startup.
-
-        From then on, a server still running older code stops maintaining the
-        store (see ``maintain``). The raise never lowers the value. If another
-        process holds the write lock right now, this server still starts; the
-        next one to open the store raises it.
-        """
-        assert self._store is not None
-        try:
-            self._store.raise_min_code_version(MAINTENANCE_CODE_VERSION)
-        except sqlite3.OperationalError:
-            pass
 
     def _older_than_store(self) -> int | None:
         """The store's minimum when this code is older than it, else None.
@@ -2315,6 +2368,7 @@ class MnemosRuntime:
         if memories:
             lines.extend(["", "Relevant memories:"])
             lines.extend(_format_memory(result) for result in memories)
+            self._reinforce_returned(query, memories)
 
         return "\n".join(lines)
 
@@ -2651,6 +2705,7 @@ class MnemosRuntime:
         if memories:
             lines.extend(["", "Durable memories:"])
             lines.extend(_format_memory(result) for result in memories)
+            self._reinforce_returned(query, memories)
         return "\n".join(lines)
 
     def _maybe_correct_belief(self, correction: str, query: str, action: str) -> str:
@@ -2943,6 +2998,8 @@ class MnemosRuntime:
                 )
 
         if action in {"forget", "archive", "remove", "delete"}:
+            # Finding a memory in order to forget it is not returning it to
+            # anyone, so nothing here is reinforced.
             matches = _named_matches(
                 search_text,
                 self._retrieve(search_text, max_results=1) if search_text else [],
@@ -3308,6 +3365,12 @@ class MnemosRuntime:
         ))
 
     def _retrieve(self, query: str, max_results: int = 5) -> list[Any]:
+        """The memories recall finds for ``query``, after every filter.
+
+        Finding changes nothing. Reconsolidating inside retrieval strengthened
+        results these filters then dropped, which no one was ever shown, so a
+        caller reinforces only what it returns, with ``_reinforce_returned``.
+        """
         assert self._store is not None
         assert self._retriever is not None
         emotional_state = self._store.get_latest_emotional_state(self.scope.agent_id)
@@ -3318,14 +3381,30 @@ class MnemosRuntime:
             project_scope=self.scope.project_scope,
             max_results=max(1, max_results),
             emotional_state=emotional_state,
-            # Code older than the store returns what it finds and changes
-            # none of it: how a return strengthens a memory is a rule.
-            reconsolidate_results=self._older_than_store() is None,
+            reconsolidate_results=False,
         ))
         return [
             result for result in results
             if self._engram_visible_in_current_scope(result.engram.id)
         ]
+
+    def _reinforce_returned(self, query: str, memories: list[Any]) -> None:
+        """Reconsolidate the memories a result shows the reader, and no others.
+
+        Each is reinforced at most once per session: the Claude Code session
+        (``CLAUDE_CODE_SESSION_ID``) when there is one, otherwise this server
+        process. Code older than the store reinforces nothing: how a return
+        strengthens a memory is a rule newer code may have replaced.
+        """
+        if not memories or self._older_than_store() is not None:
+            return
+        assert self._retriever is not None
+        self._retriever.reinforce(
+            memories,
+            query,
+            agent_id=self.scope.agent_id,
+            session=harness_session(),
+        )
 
     def _engram_visible_in_current_scope(self, engram_id: str) -> bool:
         """Respect hypomnema person/project scope for durable memories.

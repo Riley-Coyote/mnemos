@@ -2,6 +2,66 @@
 
 ## 0.3.1 (unreleased)
 
+### Returns that mean something, and versions only when words change
+
+Recall strengthens a memory because it came back to the one reading it. But
+reconsolidation ran inside retrieval, before the runtime's own filters, so
+memories the reader was never shown were strengthened, and linked to the ones
+it was shown. Nothing limited how often a memory was reinforced: on a copy of
+a real store, the most-returned memory had been reinforced 31,517 times.
+Maintenance counted its own reinforcing of a lesson as an access. And every
+return appended a full copy of the unchanged memory as a new version, while
+every save wrote the whole history again: 124,493 of that copy's 125,431
+version rows were such copies, and one maintenance cycle rewrote 29,379 of
+them.
+
+- Only what a result shows is reinforced. `mnemos_recall` and
+  `mnemos_context` reconsolidate exactly the memories they return, after every
+  filter, and link as co-activated only memories returned together. Finding a
+  memory in order to forget it (`mnemos_correct` with a forget action)
+  reinforces nothing.
+- A memory is reinforced at most once per session: the Claude Code session
+  (`CLAUDE_CODE_SESSION_ID`) when there is one, recorded in the store so every
+  process of that session agrees; otherwise the server process. A second
+  return in the same session changes nothing: no access count, timestamp,
+  strength or link. This holds on every surface that reconsolidates through
+  `ReactiveRetriever`.
+- Maintenance never records an access. Reinforcing a lesson while softening
+  no longer counts as reading it.
+- A return writes no version. It updates the memory's access record and trace
+  in place. A save writes a version only when it changes the memory's
+  content, impact or resolution.
+- Saving appends versions and never writes one again. A new version is
+  numbered after the last one stored, not by its place in a list that may be
+  partial: an engram found by text search carries no versions, and its
+  snapshot used to overwrite version 1. On a copy of a real store, one
+  maintenance cycle now writes no version rows (29,379 before) and took 3.12 s
+  instead of 3.33 s (median of three runs each).
+- `mnemos repair-versions` removes the copies returns left behind. A row goes
+  only when a return wrote it and it repeats the row just before it in that
+  memory's history; the first row of every run stays, and so does every row
+  written for another reason (softening, its repair). It is a dry run unless
+  `--write`, and reads the store read-only until then. With `--write`, a
+  verified backup comes first (`backups/<db>.pre-repair-versions-<stamp>.db`),
+  then the copies go in one transaction and nothing else changes. A second
+  run finds nothing. On a copy of a real store: 124,321 of 125,431 rows go
+  and 1,110 stay. The file keeps its size, since SQLite reuses the space; a
+  `VACUUM` took that copy from 162.8 MB to 101.3 MB.
+- A new table, `session_reinforcements`, records which session has reinforced
+  which memory. The schema script creates it when a store opens. Nothing is
+  migrated, so the schema version stays 11, and an older Mnemos ignores it.
+- `MAINTENANCE_CODE_VERSION` is 3. Code older than the store reinforces
+  nothing on any path, and records no session's reinforcement, so current
+  code still makes the one that session is due.
+- Every writable open of a store now records the code version, after its
+  migrations and only ever raising it. Only a simple-mode server recorded it,
+  when it started. The session-start hook, `mnemos search`, the prompt
+  builder, the bridge, the advanced server and the shared pool open their
+  own stores and reinforce by current rules, so a store they wrote could stay
+  marked for older code, and a server running that code never stood down. If
+  another process holds the write lock, the store still opens and the next
+  opener records it. A read-only open (`mnemos doctor`) records nothing.
+
 ### Beliefs change only for real reasons
 
 A belief is something the agent said yes to. Mnemos guessed instead: any

@@ -13,7 +13,9 @@ Pipeline:
 2. Spreading activation through connection graph (3 hops)
 3. Emotional bias applied multiplicatively
 4. Threshold → return activated engrams
-5. Reconsolidation on all returned engrams
+5. Reconsolidation of what is returned, once per session per memory. A
+   caller that filters further retrieves without it and reinforces what it
+   finally shows (``ReactiveRetriever.reinforce``).
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from ..code_version import MAINTENANCE_CODE_VERSION
 from ..core.engram import Engram
 from ..core.emotional_state import EmotionalState
 from ..core.types import ConnectionRelation
@@ -132,11 +135,13 @@ class ReactiveRetriever:
         2. Spreading activation (3 hops, decay per hop, weighted by relation)
         3. Emotional bias (multiplicative boost for congruent tags)
         4. Filter by threshold + confidence floor
-        5. Reconsolidate returned engrams, unless ``reconsolidate_results`` is
-           False: then the results come back and nothing is written (no access
-           count, strength, version row or co-activation link). Code older than
-           the store retrieves this way, because how a return changes a memory
-           is a rule newer code may have replaced.
+        5. Reconsolidate the engrams returned (see ``reinforce``), unless
+           ``reconsolidate_results`` is False: then the results come back and
+           nothing is written (no access count, strength or co-activation
+           link). A caller that filters the results further retrieves this way
+           and reinforces only what it shows. Code older than the store
+           retrieves this way too, because how a return changes a memory is a
+           rule newer code may have replaced.
 
         Returns:
             List of RetrievalResult sorted by activation level (descending).
@@ -311,27 +316,65 @@ class ReactiveRetriever:
         results.sort(key=lambda r: r.score, reverse=True)
         top_results = results[:max_results]
 
-        # 5. RECONSOLIDATE returned engrams
-        if self._reconsolidation_enabled and reconsolidate_results and top_results:
-            co_retrieved_ids = [r.engram.id for r in top_results]
-            for result in top_results:
-                # Reconsolidate in the engram's home store
-                target_store = self._store
-                if (
-                    result.engram.owner_agent_id != agent_id
-                    and self._shared_store
-                ):
-                    target_store = self._shared_store
-                result.engram = reconsolidate(
-                    engram=result.engram,
-                    current_context=cue,
-                    co_retrieved_ids=[
-                        eid for eid in co_retrieved_ids if eid != result.engram.id
-                    ],
-                    store=target_store,
-                )
+        # 5. RECONSOLIDATE what this call returns
+        if reconsolidate_results:
+            self.reinforce(top_results, cue, agent_id=agent_id)
 
         return top_results
+
+    def reinforce(
+        self,
+        results: list[RetrievalResult],
+        cue: str,
+        *,
+        agent_id: str = "default",
+        session: str | None = None,
+    ) -> None:
+        """Reconsolidate exactly ``results``: the memories shown to the reader.
+
+        Retrieval strengthens a memory because it came back, so only what a
+        caller actually returns, after all of its own filtering, may be
+        reinforced; results it drops were never seen. Memories returned
+        together are linked as co-activated with each other, and with nothing
+        that was dropped.
+
+        Each memory is reinforced at most once per ``session`` (None reads
+        ``CLAUDE_CODE_SESSION_ID``; an empty string means this process). A
+        second return in the same session changes nothing. Nothing is written
+        to a store that newer Mnemos code has opened: how a return changes a
+        memory is a rule that newer code may have replaced.
+        """
+        if not self._reconsolidation_enabled or not results:
+            return
+        returned_ids = [r.engram.id for r in results]
+        older: dict[int, bool] = {}
+        for result in results:
+            # Reconsolidate in the engram's home store
+            target_store = self._store
+            if (
+                result.engram.owner_agent_id != agent_id
+                and self._shared_store
+            ):
+                target_store = self._shared_store
+            if id(target_store) not in older:
+                older[id(target_store)] = _code_older_than(target_store)
+            if older[id(target_store)]:
+                continue
+            result.engram = reconsolidate(
+                engram=result.engram,
+                current_context=cue,
+                co_retrieved_ids=[
+                    eid for eid in returned_ids if eid != result.engram.id
+                ],
+                store=target_store,
+                session=session,
+            )
+
+
+def _code_older_than(store: Any) -> bool:
+    """Whether code newer than this has opened ``store`` (see code_version)."""
+    minimum = store.min_code_version()
+    return minimum is not None and minimum > MAINTENANCE_CODE_VERSION
 
 
 def _add_ranked_seeds(

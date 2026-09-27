@@ -26,11 +26,16 @@ import sqlite3
 import struct
 import subprocess
 import sys
+import threading
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
 
 import mnemos.retrieval.reactive as reactive
+import mnemos.simple_runtime as simple_runtime
 import mnemos.store.embedding_index as ei
 from mnemos.cli import main
 from mnemos.core.engram import Engram
@@ -520,3 +525,123 @@ def test_meaning_seeds_a_memory_at_0_35_and_none_between_0_30_and_0_35(tmp_path,
     assert results[0].retrieval_path == "embedding"
     assert results[0].score_breakdown["similarity"] == 0.35
     assert reactive.MEANING_FLOOR == 0.35
+
+
+# ── 6. A write-path pass keeps its budgets (review of PR #92) ──
+
+# 200 sentences of 100 characters: more passages than one text keeps.
+_LONGEST = " ".join(
+    f"Line {i:05d}: the keeper wrote down the tide, the wind and the lamp, and saw that all was well at sea."
+    for i in range(200)
+)
+
+
+def _count_encodes(monkeypatch) -> list[list[str]]:
+    """Every call the local model is asked to embed, with its texts."""
+    calls: list[list[str]] = []
+    original = _ConceptModel.encode
+
+    def counted(self, texts, normalize_embeddings=True, batch_size=32):
+        calls.append([texts] if isinstance(texts, str) else list(texts))
+        return original(self, texts, normalize_embeddings, batch_size)
+
+    monkeypatch.setattr(_ConceptModel, "encode", counted)
+    return calls
+
+
+def test_an_automatic_pass_never_starts_an_item_larger_than_its_budget(tmp_path, meaning, monkeypatch):
+    """A capture's or correction's automatic pass embeds at most 64 passages.
+    An item of 160 met first was taken whole anyway: 160 passages on a write,
+    and with a network backend two requests. Now it waits for a pass with
+    room and costs no call, and what fits behind it still goes."""
+    calls = _count_encodes(monkeypatch)
+    db = tmp_path / "memory.db"
+    rt = _runtime(db)
+    rt._ensure_init()
+    big = _memory(_LONGEST)
+    rt._store.save_engram(big)
+    assert len(ei.passages(_LONGEST)) == ei.PASSAGE_LIMIT == 160
+    assert simple_runtime.AUTO_INDEX_BUDGET == 64
+
+    alone = rt._index_for_recall()
+
+    assert calls == [], f"{len(calls)} embedding call(s), {sum(map(len, calls))} passages"
+    assert (alone["items"], alone["passages"], alone["waiting"]) == (0, 0, 1), alone
+    assert _rows(db, big.id) == []
+
+    small = _memory("The keeper lit the beacon at nine.")
+    small.created_at = "2026-01-01T00:00:00+00:00"  # older: met after the big one
+    rt._store.save_engram(small)
+    behind = rt._index_for_recall()
+
+    assert calls == [["The keeper lit the beacon at nine."]], calls
+    assert (behind["items"], behind["passages"], behind["waiting"]) == (1, 1, 1), behind
+    assert _rows(db, small.id) == [(0, ei.PASSAGE_SCHEME)] and _rows(db, big.id) == []
+
+
+def test_the_scheduled_job_indexes_what_the_write_path_left_whole(tmp_path, meaning, monkeypatch, capsys):
+    """Nothing starves: the item no automatic pass may start is indexed by the
+    scheduled job, whose budget (256) holds any item, in one piece."""
+    calls = _count_encodes(monkeypatch)
+    db = tmp_path / "memory.db"
+    rt = _runtime(db)
+    rt._ensure_init()
+    big = _memory(_LONGEST)
+    rt._store.save_engram(big)
+    rt._index_for_recall()
+    rt.close()
+    assert _rows(db, big.id) == [] and calls == [], "the write path started the big item"
+    assert simple_runtime.SCHEDULED_INDEX_BUDGET >= ei.PASSAGE_LIMIT
+
+    assert main(["--db-path", str(db), *SCOPE_ARGS, "consolidate"]) == 0
+    said = capsys.readouterr().out
+
+    assert _rows(db, big.id) == [(part, ei.PASSAGE_SCHEME) for part in range(ei.PASSAGE_LIMIT)], said
+    assert any(len(texts) == ei.PASSAGE_LIMIT for texts in calls), "not embedded in one piece"
+
+
+class _StalledProvider:
+    """``urllib.request.urlopen`` for a Gemini API that never answers: each
+    request waits out its timeout, then fails. Records when each started and
+    how long it was allowed to wait."""
+
+    def __init__(self) -> None:
+        self.requests: list[tuple[float, float]] = []
+        self.release = threading.Event()
+
+    def __call__(self, request, timeout=None):
+        self.requests.append((time.monotonic(), timeout))
+        self.release.wait(timeout if timeout is not None else 600)
+        raise urllib.error.URLError("timed out")
+
+
+def test_a_stalled_provider_holds_a_write_no_longer_than_its_budget(tmp_path, monkeypatch):
+    """A handoff of 160 passages needs two batch requests (100 and 60). Each
+    was given the whole write budget, so a provider that never answered held
+    the write for twice the budget. The pass now has one deadline: a request
+    waits until it at most, and none starts after it."""
+    budget = 0.5
+    provider = _StalledProvider()
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(urllib.request, "urlopen", provider)
+    monkeypatch.setattr(ei, "WRITE_NETWORK_TIMEOUT", budget)
+    monkeypatch.setattr(simple_runtime, "WRITE_EMBED_SECONDS", budget)
+    monkeypatch.setattr(ei, "_LOGGED", set(), raising=False)
+    rt = _runtime(tmp_path / "memory.db")
+    rt._ensure_init()
+    assert len(ei.passages(_LONGEST)) == 160
+
+    started = time.monotonic()
+    try:
+        said = rt.handoff(_LONGEST)
+    finally:
+        took = time.monotonic() - started
+        provider.release.set()
+
+    assert said.startswith("Session handoff saved exactly as written."), said
+    assert took < budget + 0.25, f"the write took {took:.2f} s on a {budget} s budget"
+    assert provider.requests, "no request was made"
+    first = provider.requests[0][0]
+    for at, timeout in provider.requests:
+        assert at - first < budget, "a request started after the deadline"
+        assert timeout <= budget - (at - first) + 0.05, "a request may wait past the deadline"

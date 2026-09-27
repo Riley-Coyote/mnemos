@@ -101,15 +101,17 @@ PASSAGE_LIMIT = 160
 _ID_CHUNK = 400
 
 # The write path (a capture, a correction, a handoff) never waits long on
-# indexing. It may spend about this many seconds on embedding calls; what does
+# indexing. Each pass it makes may spend about this many seconds on embedding
+# calls, all of them before one deadline, however they are batched; what does
 # not finish waits for the scheduled `mnemos consolidate` or
 # `mnemos embeddings index`. With a slow provider a handoff used to wait 120 s
 # for the batch and then 30 s for each passage: about 14 minutes for 24. The
 # local model's one-time load (from this machine only, once per process) is
 # not an embedding call and is not counted.
 WRITE_EMBED_SECONDS = 2.0
-# A network backend's wait per call on the write path. No retry, and no
-# second try one passage at a time: a failure leaves the items waiting.
+# A network backend's wait per call on the write path, and never past the
+# pass's deadline. No retry, and no second try one passage at a time: a
+# failure leaves the items waiting.
 WRITE_NETWORK_TIMEOUT = 2.0
 # Passages embedded per call on the write path, so the time budget can stop
 # between calls (a local call of this size takes well under a tenth of a second).
@@ -323,11 +325,14 @@ class _GeminiEmbedder:
     
     def batch_embed(
         self, texts: list[str], *, timeout: float = 120, fallback: bool = True,
+        deadline: float | None = None,
     ) -> list[list[float] | None]:
         """Embed multiple texts via batchEmbedContents API, waiting at most
         ``timeout`` seconds on each request. A failed request is retried one
         text at a time, unless ``fallback`` is False (the write path): then its
-        texts come back as None, and wait for a later pass."""
+        texts come back as None, and wait for a later pass. With ``deadline``
+        (a ``time.monotonic()`` moment), no request waits past it and none
+        starts after it: the texts left come back as None."""
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{self._model}:batchEmbedContents?key={self._api_key}"
@@ -346,14 +351,20 @@ class _GeminiEmbedder:
         
         for i in range(0, len(requests_list), batch_size):
             batch = requests_list[i:i + batch_size]
+            wait = timeout
+            if deadline is not None:
+                wait = min(timeout, deadline - time.monotonic())
+                if wait <= 0:
+                    all_results.extend([None] * (len(requests_list) - i))
+                    break
             payload = json.dumps({"requests": batch}).encode()
             req = urllib.request.Request(
                 url, data=payload,
                 headers={"Content-Type": "application/json"}
             )
-            
+
             try:
-                resp = urllib.request.urlopen(req, timeout=timeout)
+                resp = urllib.request.urlopen(req, timeout=wait)
                 data = json.loads(resp.read())
                 for emb in data.get("embeddings", []):
                     values = emb.get("values", [])
@@ -1083,15 +1094,19 @@ class EmbeddingIndex:
         that item before; items whose passages already match their text, cut
         by this scheme or a newer one, are skipped.
 
-        ``budget`` bounds the passages embedded in one call; an item is never
-        half-written, and what is left waits for the next call. ``seconds``
-        (the write path: ``WRITE_EMBED_SECONDS``) bounds the time spent on
-        embedding calls: they go in small batches, a network backend waits at
-        most ``WRITE_NETWORK_TIMEOUT`` on each with no retry, the first batch
-        that yields nothing ends the pass, and what the time does not cover
-        waits. The local model's one-time load comes before the clock. Nothing
-        here raises: a failure leaves items waiting. Returns how many items
-        and passages were written and how many items still wait.
+        ``budget`` bounds the passages embedded in one call. An item is never
+        half-written: one whose passages do not fit in what is left of the
+        budget, even the first, is not started, costs no embedding call and
+        waits for a pass with room (the scheduled job's budget holds any item
+        whole, and ``mnemos embeddings index`` has none). ``seconds`` (the
+        write path: ``WRITE_EMBED_SECONDS``) sets one deadline for the pass:
+        embedding calls go in small batches, no request starts after the
+        deadline, a network backend waits on each until it at most (and at
+        most ``WRITE_NETWORK_TIMEOUT``) with no retry, the first batch that
+        yields nothing ends the pass, and what the time does not cover waits.
+        The local model's one-time load comes before the clock. Nothing here
+        raises: a failure leaves items waiting. Returns how many items and
+        passages were written and how many items still wait.
         """
         done = {"items": 0, "passages": 0, "waiting": 0}
         if not self._available or not self._embedder or self._read_only:
@@ -1113,13 +1128,16 @@ class EmbeddingIndex:
             if stored.get(item_id) == digest:
                 continue
             parts = passages(text)
-            if budget is not None and todo and planned + len(parts) > budget:
+            if budget is not None and planned + len(parts) > budget:
+                # Up to 160 passages (a long handoff) against 64 on a
+                # capture's automatic pass: it waits, and what fits goes on.
                 done["waiting"] += 1
                 continue
             todo.append((item_id, digest, parts))
             planned += len(parts)
         if not todo:
             return done
+        deadline: float | None = None
         if seconds is None:
             batches = [todo]
         else:
@@ -1131,19 +1149,19 @@ class EmbeddingIndex:
                     done["waiting"] += len(todo)
                     return done
             batches = _batches(todo, _WRITE_CHUNK)
-        started = time.monotonic()
+            # One deadline for the whole pass. Each batch used to get its own
+            # wait, and a batch of more than 100 passages is two requests to
+            # a network backend, each given all of it: a provider that never
+            # answered held a 2 s write for 4 s.
+            deadline = time.monotonic() + seconds
         embedded: list[tuple[str, str, list[list[float]]]] = []
         for number, batch in enumerate(batches):
-            timeout = None
-            if seconds is not None:
-                left = seconds - (time.monotonic() - started)
-                if left <= 0:
-                    done["waiting"] += sum(len(rest) for rest in batches[number:])
-                    break
-                timeout = min(WRITE_NETWORK_TIMEOUT, left)
+            if deadline is not None and time.monotonic() >= deadline:
+                done["waiting"] += sum(len(rest) for rest in batches[number:])
+                break
             flat = [part for _, _, parts in batch for part in parts]
             try:
-                vectors = self._embed_many(flat, timeout=timeout)
+                vectors = self._embed_many(flat, deadline=deadline)
             except Exception as exc:
                 self._embedding_failed(_describe_failure(exc))
                 done["waiting"] += sum(len(rest) for rest in batches[number:])
@@ -1202,12 +1220,16 @@ class EmbeddingIndex:
         done.update(written)
         return done
 
-    def _embed_many(self, texts: list[str], *, timeout: float | None = None) -> list[Any]:
-        """Vectors for ``texts``. With ``timeout`` (the write path), a network
-        backend waits at most that long and does not retry one text at a
-        time: a failed call gives None for each text."""
-        if timeout is not None and isinstance(self._embedder, _GeminiEmbedder):
-            return self._embedder.batch_embed(texts, timeout=timeout, fallback=False)
+    def _embed_many(self, texts: list[str], *, deadline: float | None = None) -> list[Any]:
+        """Vectors for ``texts``. With ``deadline`` (the write path: a
+        ``time.monotonic()`` moment), a network backend starts no request
+        after it, waits on each until it at most (and at most
+        ``WRITE_NETWORK_TIMEOUT``), and does not retry one text at a time: a
+        text it could not embed gives None."""
+        if deadline is not None and isinstance(self._embedder, _GeminiEmbedder):
+            return self._embedder.batch_embed(
+                texts, timeout=WRITE_NETWORK_TIMEOUT, fallback=False, deadline=deadline,
+            )
         return self._embedder.batch_embed(texts)
 
     def batch_index(self, items: list[tuple[str, str]]) -> int:

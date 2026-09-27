@@ -2,6 +2,81 @@
 
 ## 0.3.1 (unreleased)
 
+### Every memory says who wrote it
+
+The memory could not tell the agent's words from a tool's. No memory recorded
+its author. On a copy of a real store (2026-09-26), 103 of the 469 memories in
+`claude-code/user/global` were the transcript indexer's model's words: memories
+it extracted and lessons copied from them. A lesson copies the impact it is
+drawn from, so a model's words landed in the most durable tier, and identity,
+belief questions and lessons were all measured from them. And the signature
+came from one declared model per scope: a Grok session that introduced itself
+became the store's declared model for everyone.
+
+- Every memory records `author_kind` (`agent`, `tool`, `system`, `import` or
+  `unknown`), `author_model` and `author_session` (the harness session,
+  `CLAUDE_CODE_SESSION_ID`), when it is written. A later save never changes
+  them. Captures, corrections, reflections, handoffs and lessons are the
+  agent's; the transcript indexer's output is a tool's; the deep reflection
+  pass's thoughts are a tool's (with a model) or Mnemos's (without). A path
+  that doesn't say is `unknown`, never guessed. Continuity notes already
+  recorded their kind of writer (`authored_by`) and model; captures now also
+  record the session.
+- The signature is resolved on every write, because the model can change
+  mid-session: `signed_as` (a new parameter on `mnemos_capture`,
+  `mnemos_correct`, `mnemos_reflect` and `mnemos_handoff`, which the server
+  instructions ask the agent to fill with its own model id), then
+  `MNEMOS_AGENT_MODEL`, then the model *this* session last introduced itself
+  as (kept per harness session, so another process of the session signs the
+  same way, and never another session's), then the session's transcript.
+  The SessionStart hook finds its reader the same way when the harness names
+  no model.
+- Only the agent's own words make it who it is: identity (the identity pass,
+  `mnemos identity diff`, the identity graph), belief questions and theme
+  mining read only `author_kind = 'agent'`, and a lesson is drawn only from an
+  impact the agent wrote (`impact_source` 'agent') on a memory the agent wrote.
+  The agent's evidence never strengthens a tool's "lesson", and the agent is
+  not asked what a tool's memory taught. The packet signs a lesson a tool
+  wrote "from a tool, not yours".
+- `memory_trace`: one row per tool call (context, capture, recall, correct,
+  reflect, handoff, introduce, maintain; health stays read-only), with the
+  session, the signing model, the ids the call showed or returned and the ids
+  it wrote. Ids only, never text. Rows older than 90 days are dropped.
+- `mnemos repair quarantine-tool-written` moves the tool-written memories in
+  a scope into the legacy quarantine (no person or project; their words,
+  links and history stay), dry run unless `--write`, after a verified
+  backup. `--undo --write` brings back exactly what it moved; `mnemos
+  adopt-legacy --include indexer` brings them back with all the other
+  tool-written memories the quarantine holds. It only runs by hand. On the
+  copy it listed 103 (96 active, 7 dormant), moved them, and `--undo` restored
+  the scope to the same 469 ids.
+
+Migration (schema 12). The first open by this code adds the three columns,
+after the usual verified pre-migration backup, and labels what the store held
+once, from what each row carries: `tool` when tagged `session-indexed`;
+`agent` for a capture or correction made through the agent's own tools (a
+`session` memory tagged `continuity`) and for a lesson whose words are exactly
+an agent-written impact of a memory it was drawn from; everything else
+`unknown`. The counts are kept in `meta.engram_authors_labeled`. On the copy:
+355 agent, 103 tool, 11 unknown in `claude-code/user/global` (356, 6,989 and
+135 in the whole file), in under two seconds.
+
+Changed behaviour, and what to do:
+
+- `MAINTENANCE_CODE_VERSION` is 4. Sessions still running older code stop
+  maintaining the store once this code opens it (restart them); what they
+  capture meanwhile is recorded as `unknown` and so stays out of identity,
+  belief questions and lessons.
+- `mnemos daemon install` no longer schedules `substrate-tick`, whose handlers
+  write memories in a model's words; installing or uninstalling removes one an
+  earlier install scheduled. `mnemos substrate-tick` and `mnemos index` still
+  run by hand, and say that they write a model's words.
+- The legacy quarantine counts lessons distilled from indexer output as the
+  indexer's (they copy its words), so a default `mnemos adopt-legacy` leaves
+  them hidden; name `--include indexer` to bring them back.
+- To move the indexer's memories out of recall and the packet: `mnemos repair
+  quarantine-tool-written` (dry run), then `--write`.
+
 ### One briefing, written for the one reading it
 
 The session-start packet is where this memory does its work, and two builders

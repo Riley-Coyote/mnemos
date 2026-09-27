@@ -229,12 +229,14 @@ def run_softening_pass(
             elif invent_impact:
                 engram.impact = _rule_based_impact(engram.content)
                 engram.impact_source = "template"
-            else:
+            elif getattr(engram, "author_kind", "unknown") == "agent":
                 # Shift 2 says the lesson is what survives the forgetting, so
                 # a lesson the server guessed at from keywords is the one
                 # thing that must not be written here. The compression is
                 # deterministic and happens anyway; the meaning is recorded
-                # for the agent to supply through mnemos_reflect.
+                # for the agent to supply through mnemos_reflect. Only about
+                # its own memories: a lesson is drawn only from the agent's
+                # words, so asking what a tool's memory taught leads nowhere.
                 stats.setdefault("awaiting_impact", []).append(engram.id)
 
         # SHIFT 2: Create or reinforce a lesson engram from the impact.
@@ -498,6 +500,9 @@ def _create_or_reinforce_lesson(
     engram: Any,
     store: EngramStore,
     stats: dict,
+    *,
+    author_model: str = "",
+    author_session: str = "",
 ) -> str | None:
     """Create or reinforce a lesson engram from the impact of a softened memory.
 
@@ -505,10 +510,23 @@ def _create_or_reinforce_lesson(
     becomes a persistent "lesson" engram with high stability. If a similar
     lesson already exists, reinforce it instead of creating a duplicate.
 
+    A lesson copies the words of the impact it is drawn from, and lessons are
+    the most durable thing a memory keeps, so one is drawn only from an impact
+    the agent wrote (``impact_source`` 'agent') on a memory the agent wrote
+    (``author_kind`` 'agent'), and only an agent's lesson is reinforced.
+    Words a tool or a model wrote never become one. ``author_model`` and
+    ``author_session`` sign a new lesson when the caller knows who wrote the
+    impact (an answer just given through mnemos_reflect); softening, which
+    finds the impact later, leaves the model unsigned.
+
     Returns the lesson engram ID, or None if no lesson was created.
     """
     impact_text = engram.impact
     if not impact_text or len(impact_text.strip()) < 10:
+        return None
+    if getattr(engram, "author_kind", "unknown") != "agent":
+        return None
+    if getattr(engram, "impact_source", "") != "agent":
         return None
     # A lesson is already what a memory taught. When one fades it fades like any
     # memory, but it is not distilled again: its impact is its own words, so it
@@ -531,7 +549,10 @@ def _create_or_reinforce_lesson(
     for conn in engram.connections:
         if conn.relation == ConnectionRelation.DISTILLED_INTO:
             lesson = store.get_engram(conn.target_id)
-            if lesson is not None and _same_lesson(mine, distinctive_terms(lesson.content)):
+            if (
+                lesson is not None and lesson.author_kind == "agent"
+                and _same_lesson(mine, distinctive_terms(lesson.content))
+            ):
                 return lesson.id
 
     # Look for a lesson that already says the same thing, by the impact's own
@@ -554,6 +575,8 @@ def _create_or_reinforce_lesson(
     for candidate in existing:
         if candidate.id == engram.id:
             continue
+        if candidate.author_kind != "agent":
+            continue  # a tool's "lesson" is not strengthened by the agent's evidence
         if ("lesson" in candidate.tags or "distilled" in candidate.tags) and _same_lesson(
             mine, distinctive_terms(candidate.content)
         ):
@@ -574,6 +597,10 @@ def _create_or_reinforce_lesson(
     lesson = Engram(
         content=impact_text,
         impact=impact_text,  # For lessons, impact IS the content
+        # The agent's words: an impact it wrote on a memory it wrote.
+        author_kind="agent",
+        author_model=(author_model or "").strip(),
+        author_session=(author_session or "").strip(),
         kind=EngramKind.PROCEDURAL,
         tags=list(set(engram.tags + ["lesson", "distilled"])),
         strength=0.8,

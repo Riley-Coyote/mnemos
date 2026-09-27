@@ -22,8 +22,11 @@ from .authorship import (
     clean_model_id,
     display_name,
     harness_session,
+    introduced_model,
     note_signature,
     resolve_author_model,
+    session_introduction_key,
+    session_introduction_record,
     signature,
 )
 from .code_version import MAINTENANCE_CODE_VERSION, OLDER_CODE_FIX, OLDER_CODE_MESSAGE
@@ -397,6 +400,33 @@ def _notice_when_older(method: Any) -> Any:
     return wrapper
 
 
+def _traced(tool: str) -> Any:
+    """Record one ``memory_trace`` row for each tool call: the ids it showed or
+    returned and the ids it wrote, and who made the call.
+
+    Only the outermost call records one (a correction can capture, a capture
+    runs maintenance), and whatever the inner calls read or write goes on that
+    row. A call that ended before it opened the store records nothing, so
+    asking never creates a store. See ``MnemosRuntime._record_trace``.
+    """
+
+    def decorate(method: Any) -> Any:
+        @functools.wraps(method)
+        def wrapper(self: "MnemosRuntime", *args: Any, **kwargs: Any) -> Any:
+            if self._trace is not None:
+                return method(self, *args, **kwargs)
+            self._trace = {"read": [], "written": [], "author": None}
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                trace, self._trace = self._trace, None
+                self._record_trace(tool, trace)
+
+        return wrapper
+
+    return decorate
+
+
 class MnemosRuntime:
     """High-level continuity interface used by simple MCP mode and tests."""
 
@@ -437,6 +467,9 @@ class MnemosRuntime:
         # How deep this runtime is in tool calls, so only the outermost one
         # ends its result with the older-code notice.
         self._notice_depth = 0
+        # What the tool call under way has read and written, for its
+        # memory_trace row (see _traced); None between calls.
+        self._trace: dict[str, Any] | None = None
 
     @property
     def db_path(self) -> Path:
@@ -822,6 +855,113 @@ class MnemosRuntime:
         with self._store.transaction():
             found = plan["found"] = self._store.duplicate_versions()
             plan["removed"] = self._store.remove_versions(found["duplicates"])
+        return plan
+
+    def repair_quarantine_tool_written(
+        self, *, write: bool = False, undo: bool = False,
+    ) -> dict[str, Any]:
+        """Show, and with ``write`` move, the memories in this scope a tool
+        wrote, into the legacy quarantine; or with ``undo``, back out of it.
+
+        A tool's words (``author_kind`` 'tool': on a real store, the transcript
+        indexer's model's output and the lessons copied from it) sat in scope
+        beside the agent's own, where recall and the packet reached them. This
+        moves them where the v6 scope migration left the rows it could not
+        place: without a person or project, out of every scoped read, with
+        their words, links and history intact. A default adoption leaves them.
+        ``undo`` returns exactly the memories this moved out of this scope
+        (the store records where each came from); ``mnemos adopt-legacy
+        --include indexer`` brings them back with all the other tool-written
+        memories the quarantine holds.
+
+        A dry run reads the store read-only and changes nothing, and works on
+        a store not yet migrated to record authorship (the migration's own rule
+        decides then). With ``write``, a verified backup of the store as found
+        comes first; then, in one transaction, they move. Archived memories
+        stay where they are, as does one a continuity note points at (opening
+        the store would give it back its note's scope). A second run finds
+        nothing. Only a human runs it, and code older than the store refuses.
+        """
+        plan: dict[str, Any] = {
+            "target": (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
+            "db_path": str(self.db_path),
+            "exists": self.db_path.exists(),
+            "undo": undo,
+            "older_than_store": False,
+            "found": [],
+            "movable": [],
+            "moved": 0,
+            "backup": None,
+        }
+        if not plan["exists"]:
+            return plan
+        scope = {
+            "agent_id": self.scope.agent_id,
+            "person_id": self.scope.person_id,
+            "project_scope": self.scope.project_scope,
+        }
+
+        def movable(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [row for row in rows if row["state"] != "archived" and not row["linked"]]
+
+        def find(store: EngramStore) -> list[dict[str, Any]]:
+            if not undo:
+                return store.tool_written_engrams(**scope)
+            # What this repair moved out of this scope and is still without one.
+            here = [scope["agent_id"], scope["person_id"], scope["project_scope"]]
+            moved_here = {
+                engram_id for engram_id, came_from in store.quarantined_tool_written().items()
+                if came_from == here
+            }
+            return [
+                {"id": row["id"], "state": row["state"], "content": row["content"],
+                 "linked": False}
+                for row in store.unscoped_engrams(scope["agent_id"])
+                if row["id"] in moved_here
+            ]
+
+        peek = ReadOnlyEngramStore(self.db_path)
+        try:
+            minimum = peek.min_code_version()
+            plan["found"] = find(peek)
+        finally:
+            peek.close()
+        plan["movable"] = movable(plan["found"])
+        plan["older_than_store"] = minimum is not None and minimum > MAINTENANCE_CODE_VERSION
+        if not write or plan["older_than_store"] or not plan["movable"]:
+            return plan
+
+        from .backup import create_backup
+
+        # The backup is the store exactly as the human found it: read through
+        # a read-only connection, before opening for writing migrates the
+        # schema or records this code's version.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        destination = (
+            self.db_path.parent / "backups"
+            / f"{self.db_path.stem}.pre-{'un' if undo else ''}quarantine-tool-written-{stamp}.db"
+        )
+        source = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            backup = create_backup(self.db_path, destination, source_connection=source)
+        finally:
+            source.close()
+        plan["backup"] = backup["path"]
+
+        self._ensure_init()
+        assert self._store is not None
+        if self._older_than_store() is not None:
+            plan["older_than_store"] = True
+            return plan
+        # Found again under the writer: the store may have moved on since.
+        with self._store.transaction():
+            plan["found"] = find(self._store)
+            plan["movable"] = movable(plan["found"])
+            ids = [row["id"] for row in plan["movable"]]
+            plan["moved"] = (
+                self._store.unquarantine_engrams(ids) if undo
+                else self._store.quarantine_engrams(ids, **scope)
+            )
         return plan
 
     def close(self) -> None:
@@ -1315,6 +1455,9 @@ class MnemosRuntime:
             if m:
                 asked_themes.add(m.group(1).strip())
 
+        # Themes are mined only from what the agent wrote: a word a tool's or
+        # a model's memories keep using is theirs, not something the agent
+        # keeps returning to.
         rows = self._store._get_conn().execute(
             """
             SELECT e.id, e.content
@@ -1322,6 +1465,7 @@ class MnemosRuntime:
             JOIN hypomnema_entries h ON h.related_engram_id = e.id
             WHERE h.agent_id = ? AND h.person_id = ? AND h.project_scope = ?
               AND h.active = 1 AND e.state = 'active'
+              AND e.author_kind = 'agent'
             ORDER BY e.created_at DESC
             LIMIT 200
             """,
@@ -1571,7 +1715,10 @@ class MnemosRuntime:
         )
 
     @_notice_when_older
-    def reflect(self, target_id: str, text: str, verdict: str = "") -> str:
+    @_traced("reflect")
+    def reflect(
+        self, target_id: str, text: str, verdict: str = "", signed_as: str = "",
+    ) -> str:
         """Record the agent's own reflection on one of its memories.
 
         ``verdict`` is what the agent decided (see ``_VERDICTS``), and it alone
@@ -1580,6 +1727,10 @@ class MnemosRuntime:
         themselves, so without a verdict they are its answer, as before. A
         belief or contradiction question answered without one keeps the words
         and stays open, and nothing is formed, retired or linked.
+
+        The answer is the agent's, signed with ``signed_as`` when the agent
+        gives its model id: a note it adds to, an answer kept open, and a
+        lesson drawn from it all carry that signature.
         """
         answer = (text or "").strip()
         if not answer:
@@ -1590,6 +1741,8 @@ class MnemosRuntime:
 
         self._ensure_init()
         assert self._store is not None
+        author = self.author_model(signed_as)
+        self._traced_author(author)
 
         scope = {
             "agent_id": self.scope.agent_id,
@@ -1597,6 +1750,7 @@ class MnemosRuntime:
             "project_scope": self.scope.project_scope,
         }
         target = target_id.strip()
+        self._traced_read(target)
         ask = self._store.pending_reflection_for(target, **scope)
         if ask is None:
             return (
@@ -1618,7 +1772,7 @@ class MnemosRuntime:
         # kind this code does not know.
         older = self._older_than_store() is not None
         if kind not in _ANSWERED_BY_WORDS and (older or allowed is None):
-            return self._keep_answer_open(ask, answer, decided)
+            return self._keep_answer_open(ask, answer, decided, author=author)
         if kind not in _ANSWERED_BY_WORDS and decided in ("", "not_now"):
             self._keep_on_question(ask, answer)
             if decided:
@@ -1658,7 +1812,8 @@ class MnemosRuntime:
             engram.impact = answer
             engram.impact_source = "agent"
             self._store.save_engram(engram)
-            self._carry_reflection_into_note(engram.id, answer)
+            self._traced_write(engram.id)
+            self._traced_write(self._carry_reflection_into_note(engram.id, answer, author=author))
             return (
                 "Reflection recorded.\n"
                 f"  Memory: {' '.join((engram.content or '').split())[:80]}\n"
@@ -1673,7 +1828,8 @@ class MnemosRuntime:
             engram.impact = answer
             engram.impact_source = "agent"
             self._store.save_engram(engram)
-            self._carry_reflection_into_note(engram.id, answer)
+            self._traced_write(engram.id)
+            self._traced_write(self._carry_reflection_into_note(engram.id, answer, author=author))
             if older:
                 # Filing a lesson matches it against the lessons already held,
                 # by rules newer code may have replaced. The memory keeps the
@@ -1691,7 +1847,21 @@ class MnemosRuntime:
             # absent from every Mnemos store ever built.
             from .consolidation.softening import _create_or_reinforce_lesson
 
-            lesson_id = _create_or_reinforce_lesson(engram, self._store, {})
+            # Drawn only from the agent's own memory: an answer about a
+            # memory a tool wrote stays that memory's impact and no lesson.
+            lesson_id = _create_or_reinforce_lesson(
+                engram, self._store, {},
+                author_model=author, author_session=harness_session(),
+            )
+            self._traced_write(lesson_id)
+            if lesson_id is None and engram.author_kind != "agent":
+                return (
+                    "Reflection recorded.\n"
+                    f"  Memory: {' '.join((engram.content or '').split())[:80]}\n"
+                    f"  Now carries: {answer}\n"
+                    "No lesson was drawn from it: you didn't write that memory, "
+                    "and lessons come only from your own."
+                )
             return (
                 "Lesson recorded.\n"
                 f"  From: {' '.join((engram.content or '').split())[:70]}\n"
@@ -1715,16 +1885,17 @@ class MnemosRuntime:
         )
         self._store._commit()
 
-    def _keep_answer_open(self, ask: dict[str, Any], answer: str, verdict: str = "") -> str:
+    def _keep_answer_open(
+        self, ask: dict[str, Any], answer: str, verdict: str = "", *, author: str = "",
+    ) -> str:
         """Keep an answer older code cannot apply, without spending its question.
 
-        The words become a signed continuity note that names the question
-        (its id and its text) and the verdict given, if any, so they are
-        neither lost nor spent. The ask itself is left exactly as it was:
+        The words become a continuity note signed ``author`` that names the
+        question (its id and its text) and the verdict given, if any, so they
+        are neither lost nor spent. The ask itself is left exactly as it was:
         pending, its showings unchanged.
         """
         assert self._store is not None
-        author = self.author_model()
         domain = _classify_domain(answer)
         confidence, salience = _importance_scores("auto", domain)
         note = f'{answer}\n\nIn answer to open question {ask["id"]}: "{ask["prompt"]}"'
@@ -1740,11 +1911,13 @@ class MnemosRuntime:
             authored_by="agent",
             author_id=self.scope.agent_id,
             author_model=author,
+            author_session=harness_session(),
             domain=domain,
             tags=sorted({"reflection", "open-question", *_simple_tags(answer)}),
             confidence=confidence,
             salience=salience,
         )
+        self._traced_write(note_id)
         return (
             "Kept your answer as a continuity note; the question stays open "
             "for a current session.\n"
@@ -1779,6 +1952,7 @@ class MnemosRuntime:
             source="agent",
         )
         self._store.save_belief(belief)
+        self._traced_write(belief.id)
         return (
             "Belief recorded, in your words.\n"
             f"  {answer}\n"
@@ -1810,6 +1984,7 @@ class MnemosRuntime:
             belief.revise(min(0.99, round(before + 0.05, 4)), f"reaffirmed by the agent: {answer}")
             belief.challenge()
             self._store.save_belief(belief)
+            self._traced_write(belief.id)
             return (
                 "Kept. The belief stands a little more firmly "
                 f"({before:.0%} to {belief.confidence:.0%})."
@@ -1818,6 +1993,7 @@ class MnemosRuntime:
         belief.revise(0.0, f"retired by the agent: {answer}")
         belief.superseded_by = "retired"
         self._store.save_belief(belief)
+        self._traced_write(belief.id)
         return (
             "Retired. That belief no longer shapes your context. It is kept, "
             "with your words, in its history."
@@ -1854,6 +2030,7 @@ class MnemosRuntime:
         if verdict == "compatible":
             removed = self._store.remove_connections([(source.id, other.id, contradicts)])
             if removed:
+                self._traced_write(source.id)
                 return (
                     "Noted: not a contradiction. The contradiction link between "
                     "them was removed; every other link stays."
@@ -1877,6 +2054,7 @@ class MnemosRuntime:
                     formed_by="agent_reflection",
                 ),
             )
+            self._traced_write(source.id)
         return (
             "Contradiction recorded.\n"
             f"  {' '.join((source.content or '').split())[:70]}\n"
@@ -1889,7 +2067,9 @@ class MnemosRuntime:
     #: stack a second copy underneath it.
     _REFLECTION_MARKER = "What this changed:"
 
-    def _carry_reflection_into_note(self, engram_id: str, answer: str) -> str | None:
+    def _carry_reflection_into_note(
+        self, engram_id: str, answer: str, *, author: str = "",
+    ) -> str | None:
         """Write the agent's reflection into the layer the packet is built from.
 
         `engram.impact` is the right home for a trace, and it is not enough on
@@ -1924,7 +2104,6 @@ class MnemosRuntime:
 
             # The note stays signed by whoever wrote it; the reflection added
             # to it names its own author, who may be a different model.
-            author = self.author_model()
             by = f"({display_name(author)}) " if author else ""
             return self._store.revise_hypomnema_entry(
                 note["id"],
@@ -2118,10 +2297,83 @@ class MnemosRuntime:
             "(This check fires once and will not appear again.)"
         )
 
-    def author_model(self) -> str:
-        """The model signing what this session writes, or ``""`` if unknown."""
+    def author_model(self, signed_as: str = "") -> str:
+        """The model signing this write, or ``""`` if unknown.
 
-        return resolve_author_model(self._session_author)
+        Resolved on every write, because the human can switch models in the
+        middle of a session: the model the agent signed the write as, the
+        operator's MNEMOS_AGENT_MODEL, the model this session last introduced
+        itself as, then the harness transcript. Never a guess.
+        """
+
+        return resolve_author_model(self._session_introduction(), signed_as=signed_as)
+
+    def _session_introduction(self) -> str:
+        """The model this session last introduced itself as, or ``""``.
+
+        Only this session's own introduction counts. One store is shared by
+        many sessions and models, and the store-wide declaration once signed
+        every session's writes with whichever model introduced itself last
+        (a Grok session's, found live on 2026-09-26). With a harness session
+        id, the store keeps each session's latest introduction, so every
+        process of the session (a restarted server, a CLI capture) signs the
+        same way; without one, only this process's own introduction counts.
+        """
+
+        session = harness_session()
+        if session and self._store is not None:
+            try:
+                recorded = introduced_model(
+                    self._store.get_meta(session_introduction_key(session))
+                )
+            except sqlite3.Error:
+                recorded = ""
+            if recorded:
+                return recorded
+        return self._session_author
+
+    def _traced_read(self, *ids: Any) -> None:
+        """Note ids the tool call under way showed or returned."""
+        if self._trace is not None:
+            self._trace["read"].extend(str(i) for i in ids if i)
+
+    def _traced_write(self, *ids: Any) -> None:
+        """Note ids the tool call under way wrote."""
+        if self._trace is not None:
+            self._trace["written"].extend(str(i) for i in ids if i)
+
+    def _traced_author(self, author: str) -> None:
+        """The model a write in the tool call under way was signed with."""
+        if self._trace is not None and self._trace["author"] is None:
+            self._trace["author"] = author
+
+    def _record_trace(self, tool: str, trace: dict[str, Any]) -> None:
+        """Write a tool call's memory_trace row, once the call has returned.
+
+        Never fails the call it describes, and never opens a store: a call
+        that did not open one leaves no row. Code older than the store writes
+        none, since what a row records is newer code's to decide.
+        """
+        if self._store is None or self._read_only:
+            return
+        try:
+            if self._older_than_store() is not None:
+                return
+            author = trace["author"]
+            if author is None:
+                author = self.author_model()
+            self._store.record_trace(
+                tool=tool,
+                agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+                session=harness_session(),
+                author_model=author,
+                read_ids=trace["read"],
+                written_ids=trace["written"],
+            )
+        except Exception:
+            pass
 
     def _signed_line(self, author: str) -> str:
         if author:
@@ -2133,10 +2385,14 @@ class MnemosRuntime:
         )
 
     @_notice_when_older
+    @_traced("introduce")
     def introduce(self, agent_model: str, agent_name: str = "") -> str:
         """Record the agent's self-declared model so maintenance stays kin.
 
-        The declaration also signs everything this session writes.
+        The declaration also signs what this session writes, when a write
+        doesn't carry its own ``signed_as``. It is this session's alone: kept
+        under the harness session's id when there is one (and in this process
+        either way), never as a signature for other sessions.
         """
 
         model = (agent_model or "").strip()
@@ -2148,6 +2404,15 @@ class MnemosRuntime:
 
         self._set_meta("agent_model", model)
         self._session_author = clean_model_id(model)
+        session = harness_session()
+        if session:
+            # Written even when the id doesn't look like a model's, so an
+            # earlier introduction of this session stops signing its writes.
+            assert self._store is not None
+            self._store.set_meta(
+                session_introduction_key(session),
+                session_introduction_record(self._session_author),
+            )
         name = agent_name.strip()
         if name:
             self._set_meta("agent_name", name)
@@ -2191,6 +2456,7 @@ class MnemosRuntime:
         return "\n".join(lines)
 
     @_notice_when_older
+    @_traced("context")
     def context(self, query: str = "", max_results: int = 5) -> str:
         """Return the session-start briefing, the one the hook injects.
 
@@ -2210,6 +2476,12 @@ class MnemosRuntime:
         self._current_session()
         packet = self._briefing_packet()
         self._note_context_outcome(carried_count(packet))
+        shown = packet.get("shown") or {}
+        asked = set(shown.get("questions") or [])
+        self._traced_read(
+            *sorted(shown_ids(packet)),
+            *(item["target_id"] for item in packet.get("reflections") or [] if item["id"] in asked),
+        )
 
         parts = [packet["prompt"]] if packet["prompt"] else []
         block = self._onboarding_block(status)
@@ -2295,20 +2567,26 @@ class MnemosRuntime:
             ],
             room,
         )
+        self._traced_read(*(
+            key if kind == "note" else memories[key].engram.id for kind, key in kept
+        ))
         self._reinforce_returned(
             query, [memories[index] for kind, index in kept if kind == "memory"],
         )
         return section
 
     @_notice_when_older
-    def handoff(self, text: str) -> str:
-        """Save the agent's exact private note for the next session."""
+    @_traced("handoff")
+    def handoff(self, text: str, signed_as: str = "") -> str:
+        """Save the agent's exact private note for the next session, signed
+        with ``signed_as`` when the agent gives its model id."""
 
         if not text.strip():
             return "Nothing saved: handoff text was empty."
         self._ensure_init()
         assert self._store is not None
-        author = self.author_model()
+        author = self.author_model(signed_as)
+        self._traced_author(author)
         session = harness_session()
         handoff_id = self._store.write_handoff(
             text,
@@ -2323,6 +2601,7 @@ class MnemosRuntime:
             # active until current code retires them.
             retire_crowded=self._older_than_store() is None,
         )
+        self._traced_write(handoff_id)
         if session:
             lasts = (
                 "It replaces only the handoff this session left before; notes "
@@ -2415,12 +2694,14 @@ class MnemosRuntime:
             entry for entry in continuity
             if entry.get("entry_kind") == "continuity"
         ]
+        # Who the agent is, drawn from what it wrote.
         engrams = self._store.get_active_engrams(
             agent_id=self.scope.agent_id,
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
             limit=max_nodes,
             load_connections=False,
+            author_kind="agent",
         )
 
         domain_counts: dict[str, int] = {}
@@ -2519,6 +2800,7 @@ class MnemosRuntime:
         return snapshot
 
     @_notice_when_older
+    @_traced("capture")
     def capture(
         self,
         content: str,
@@ -2526,6 +2808,7 @@ class MnemosRuntime:
         importance: str | float = "auto",
         impact: str = "",
         impact_source: str = "agent",
+        signed_as: str = "",
     ) -> str:
         """Capture durable continuity without exposing Mnemos internals.
 
@@ -2534,7 +2817,12 @@ class MnemosRuntime:
         mid-conversation with an impact in its own words. Server-internal
         captures that pass a boilerplate impact set this to 'template' so the
         two never blur — the whole point of the field is that an agent-authored
-        trace can be told from a generated one after the fact."""
+        trace can be told from a generated one after the fact.
+
+        The memory and its note are the agent's words (``author_kind``
+        'agent'), signed with ``signed_as`` when the agent gives its model id,
+        and otherwise as ``author_model`` resolves it, and marked with the
+        harness session."""
 
         if not content.strip():
             return "Nothing captured: content was empty."
@@ -2556,7 +2844,9 @@ class MnemosRuntime:
         domain = _classify_domain(full_content)
         kind = _classify_kind(full_content)
         tags = _simple_tags(content, context)
-        author = self.author_model()
+        author = self.author_model(signed_as)
+        session = harness_session()
+        self._traced_author(author)
         confidence, salience = _importance_scores(importance, domain)
         # Shift 1: a trace is what the memory changed, and only the agent can
         # say that. When it does not, the field stays empty rather than being
@@ -2591,6 +2881,9 @@ class MnemosRuntime:
             # Links to other memories follow rules newer code may have
             # replaced; maintenance's connection discovery makes them later.
             discover_connections=not older,
+            author_kind="agent",
+            author_model=author,
+            author_session=session,
         )
         note_id = self._store.write_hypomnema_entry(
             content.strip(),
@@ -2602,6 +2895,7 @@ class MnemosRuntime:
             authored_by="agent",
             author_id=self.scope.agent_id,
             author_model=author,
+            author_session=session,
             domain=domain,
             tags=tags,
             confidence=confidence,
@@ -2609,6 +2903,7 @@ class MnemosRuntime:
             foundational=domain in {"foundational", "identity"},
             related_engram_id=engram.id,
         )
+        self._traced_write(engram.id, note_id)
         self._store.mark_hypomnema_promoted(note_id, engram.id)
         self._record_first_capture(note_id, engram.id, content)
         # Continuity just arrived, so any run of empty packets is over.
@@ -2627,6 +2922,7 @@ class MnemosRuntime:
         )
 
     @_notice_when_older
+    @_traced("recall")
     def recall(self, query: str, max_results: int = 5) -> str:
         """Recall relevant continuity and durable memories."""
 
@@ -2640,6 +2936,7 @@ class MnemosRuntime:
         # id returns the note whole.
         whole = self._recall_by_id(query.strip())
         if whole:
+            self._traced_read(query.strip())
             return whole
 
         continuity = self._store.search_hypomnema(
@@ -2656,6 +2953,10 @@ class MnemosRuntime:
         if not continuity and not memories:
             return "No relevant continuity found."
 
+        self._traced_read(
+            *(entry["id"] for entry in continuity),
+            *(result.engram.id for result in memories),
+        )
         lines = [f"Mnemos recall for: {query.strip()}"]
         if continuity:
             lines.extend(["", "Continuity notes:"])
@@ -2700,6 +3001,7 @@ class MnemosRuntime:
 
         if action in {"forget", "archive", "remove", "delete"}:
             self._store.supersede_belief(best.id, reason=f"agent correction: {text[:80]}")
+            self._traced_write(best.id)
             return (
                 f'Retired the belief "{best.content[:80]}". '
                 "It will no longer shape your context."
@@ -2708,12 +3010,14 @@ class MnemosRuntime:
         self._store.revise_belief(
             best.id, new_conf, reason=f"agent correction: {text[:80]}"
         )
+        self._traced_write(best.id)
         return (
             f'Lowered confidence in the belief "{best.content[:80]}" '
             f"to {int(new_conf * 100)}%."
         )
 
     @_notice_when_older
+    @_traced("correct")
     def correct(
         self,
         correction: str,
@@ -2721,12 +3025,17 @@ class MnemosRuntime:
         query: str = "",
         action: str = "update",
         impact: str = "",
+        signed_as: str = "",
     ) -> str:
         """Correct, supersede, or archive stale memory.
 
         ``impact`` is what the corrected memory means now, in the agent's own
         words. Left empty, the replacement keeps what the memory it replaces
         meant, and the result says so.
+
+        The correction is the agent's words: its replacement memory and any
+        note it rewrites are signed with ``signed_as`` when the agent gives
+        its model id, and marked with the harness session.
         """
 
         if not correction.strip() and action not in {"forget", "archive", "remove", "delete"}:
@@ -2735,6 +3044,9 @@ class MnemosRuntime:
         self._ensure_init()
         assert self._store is not None
         assert self._encoder is not None
+        corrector = self.author_model(signed_as)
+        session = harness_session()
+        self._traced_author(corrector)
 
         action = action.strip().lower() or "update"
         target = target_id.strip()
@@ -2773,14 +3085,15 @@ class MnemosRuntime:
                         person_id=self.scope.person_id,
                         project_scope=self.scope.project_scope,
                     )
+                    self._traced_write(target)
                     related_engram_id = hypo.get("related_engram_id") or hypo.get("graduated_to_engram_id")
                     if related_engram_id:
                         related = self._store.get_engram(related_engram_id)
                         if related is not None:
                             self._store.archive_engram(related, reason=f"simple_correction_{action}")
+                            self._traced_write(related.id)
                     return f"Archived continuity note {target}."
 
-                corrector = self.author_model()
                 self._store.revise_hypomnema_entry(
                     target,
                     correction,
@@ -2792,7 +3105,9 @@ class MnemosRuntime:
                     salience=0.75,
                     author_model=corrector,
                     revised_by=corrector,
+                    author_session=session,
                 )
+                self._traced_write(target)
                 if (impact or "").strip():
                     # A note is revised in place and has no impact of its own,
                     # so a meaning given here would otherwise vanish silently.
@@ -2819,6 +3134,7 @@ class MnemosRuntime:
                         project_scope=self.scope.project_scope,
                     )
                 self._store.archive_engram(engram, reason=f"simple_correction_{action}")
+                self._traced_write(engram.id)
                 if action in {"forget", "archive", "remove", "delete"} and not correction.strip():
                     return f"Archived memory {target}."
                 meaning, meaning_source, kept = _replacement_impact(
@@ -2837,7 +3153,11 @@ class MnemosRuntime:
                     override_confidence=0.92,
                     skip_surprise_detection=True,
                     discover_connections=not older,
+                    author_kind="agent",
+                    author_model=corrector,
+                    author_session=session,
                 )
+                self._traced_write(replacement.id)
                 return (
                     f"Archived memory {target} and captured correction {replacement.id}.\n"
                     f"Correction: {correction.strip()}"
@@ -2871,11 +3191,13 @@ class MnemosRuntime:
                         person_id=self.scope.person_id,
                         project_scope=self.scope.project_scope,
                     )
+                    self._traced_write(match["id"])
                     related_engram_id = match.get("related_engram_id") or match.get("graduated_to_engram_id")
                     if related_engram_id:
                         related = self._store.get_engram(related_engram_id)
                         if related is not None:
                             self._store.archive_engram(related, reason=f"simple_correction_{action}")
+                            self._traced_write(related.id)
                     maintenance = self.maintain(auto=True)
                     return (
                         f"Archived closest continuity note {match['id']}.\n"
@@ -2884,7 +3206,6 @@ class MnemosRuntime:
                     )
 
                 note_id = match["id"]
-                corrector = self.author_model()
                 if action in {"supersede", "replace"}:
                     note_id = self._store.supersede_hypomnema_entry(
                         match["id"],
@@ -2894,6 +3215,7 @@ class MnemosRuntime:
                         person_id=self.scope.person_id,
                         project_scope=self.scope.project_scope,
                         author_model=corrector,
+                        author_session=session,
                     )
                 else:
                     self._store.revise_hypomnema_entry(
@@ -2907,7 +3229,9 @@ class MnemosRuntime:
                         salience=0.75,
                         author_model=corrector,
                         revised_by=corrector,
+                        author_session=session,
                     )
+                self._traced_write(match["id"], note_id)
 
                 # The note's memories, newest first: each correction points
                 # graduated_to_engram_id at its replacement, while
@@ -2930,6 +3254,7 @@ class MnemosRuntime:
                     related = self._store.get_engram(related_engram_id)
                     if related is not None:
                         self._store.archive_engram(related, reason=f"simple_correction_{action}")
+                        self._traced_write(related.id)
 
                 replacement = self._encoder.encode(
                     content=correction.strip(),
@@ -2944,7 +3269,11 @@ class MnemosRuntime:
                     override_confidence=0.92,
                     skip_surprise_detection=True,
                     discover_connections=not older,
+                    author_kind="agent",
+                    author_model=corrector,
+                    author_session=session,
                 )
+                self._traced_write(replacement.id)
                 self._store.mark_hypomnema_promoted(note_id, replacement.id)
                 maintenance = self.maintain(auto=True)
                 return (
@@ -2973,6 +3302,7 @@ class MnemosRuntime:
                     project_scope=self.scope.project_scope,
                 )
                 self._store.archive_engram(engram, reason=f"simple_correction_{action}")
+                self._traced_write(engram.id)
                 return f"Archived closest matching memory {engram.id}."
             # Forgetting acts only on what the words name, and never captures.
             if not search_text:
@@ -2987,6 +3317,7 @@ class MnemosRuntime:
             context=f"Correction supplied through mnemos_correct. Prior query: {query.strip()}",
             importance="high",
             impact=impact,
+            signed_as=signed_as,
         )
         if query_text:
             return (
@@ -2995,6 +3326,7 @@ class MnemosRuntime:
             )
         return captured
 
+    @_traced("maintain")
     def maintain(self, deep: bool = False, auto: bool = False) -> str:
         """Run the best available maintenance without requiring setup."""
 
@@ -3096,6 +3428,7 @@ class MnemosRuntime:
             if narrative:
                 self.last_dream_note_id = write_dream_entry(self._store, self.scope, narrative)
                 self.last_dream_narrative = narrative
+                self._traced_write(self.last_dream_note_id)
                 self._set_meta("dream_last_written_at", datetime.now(timezone.utc).isoformat())
                 dream_status = "updated"
         except Exception:
@@ -3394,6 +3727,9 @@ class MnemosRuntime:
                 self._store.mark_hypomnema_promoted(entry["id"], entry["related_engram_id"])
                 promoted += 1
                 continue
+            # The memory holds the note's words, so it keeps the note's
+            # author: the agent's note stays the agent's, Mnemos's stays
+            # Mnemos's, and any other kind is not claimed for either.
             engram = self._encoder.encode(
                 content=entry["content"],
                 impact="Stable continuity promoted during simple maintenance.",
@@ -3406,7 +3742,13 @@ class MnemosRuntime:
                 project_scope=self.scope.project_scope,
                 override_confidence=float(entry["confidence"]),
                 skip_surprise_detection=True,
+                author_kind={"agent": "agent", "system": "system"}.get(
+                    entry.get("authored_by") or "", "unknown"
+                ),
+                author_model=entry.get("author_model") or "",
+                author_session=entry.get("author_session") or "",
             )
+            self._traced_write(engram.id)
             self._store.mark_hypomnema_promoted(entry["id"], engram.id)
             promoted += 1
         return promoted

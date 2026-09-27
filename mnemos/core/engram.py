@@ -271,6 +271,22 @@ class Engram:
     fact — `_TEMPLATED_IMPACTS` in simple_runtime is exactly the archaeology
     done because this was not recorded — so it must be captured at write time."""
 
+    # Authorship: who wrote the words (schema v12). Written once, when the
+    # memory is first stored, and never changed by a later save.
+    author_kind: str = "unknown"
+    """'agent' (the agent's own words, through its own tools), 'tool' (a
+    program or a model working for Mnemos, such as the transcript indexer),
+    'system' (Mnemos's own templates), 'import' (brought in from elsewhere),
+    or 'unknown'. A path that cannot say who wrote the words leaves it
+    unknown: only the agent's own words shape its identity, beliefs and
+    lessons, so a guess here would decide who the agent is."""
+
+    author_model: str = ""
+    """The model that wrote the words, when known. Empty means unsigned."""
+
+    author_session: str = ""
+    """The harness session that wrote them (CLAUDE_CODE_SESSION_ID), when known."""
+
     # Encoding context
     encoding_context: EncodingContext = field(default_factory=EncodingContext)
 
@@ -369,6 +385,9 @@ class Engram:
             "content_at_encoding": self.content_at_encoding,
             "impact": self.impact,
             "impact_source": self.impact_source,
+            "author_kind": self.author_kind,
+            "author_model": self.author_model,
+            "author_session": self.author_session,
             "encoding_context": json.dumps(self.encoding_context.to_dict()),
             "kind": self.kind,
             "tags": json.dumps(self.tags),
@@ -420,6 +439,9 @@ class Engram:
             content_at_encoding=d.get("content_at_encoding", d.get("content", "")),
             impact=d.get("impact", ""),
             impact_source=d.get("impact_source", "") or "",
+            author_kind=d.get("author_kind") or "unknown",
+            author_model=d.get("author_model") or "",
+            author_session=d.get("author_session") or "",
             encoding_context=EncodingContext.from_dict(encoding_ctx),
             kind=d.get("kind", EngramKind.EPISODIC),
             tags=tags,

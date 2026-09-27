@@ -977,13 +977,16 @@ def test_a_v10_queue_is_rebuilt_to_take_reaffirmations(tmp_path):
     finally:
         store.close()
 
-    assert SCHEMA_VERSION == 11
-    assert _all(db, "SELECT value FROM meta WHERE key = 'schema_version'") == [("11",)]
+    # v11 made the queue take reaffirmations; later versions keep it so.
+    assert SCHEMA_VERSION >= 11
+    assert _all(db, "SELECT value FROM meta WHERE key = 'schema_version'") == [
+        (str(SCHEMA_VERSION),)
+    ]
     assert _all(db, "SELECT * FROM reflection_queue WHERE id IN ('a1', 'a2') ORDER BY id") == rows
     assert first and third, "a reaffirmation could not be asked, or asked again once answered"
     assert second is None, "two reaffirmations waited on one memory"
     assert again is None, "an answered belief question no longer counts as asked"
-    assert len(list((tmp_path / "backups").glob("legacy.pre-v11-*.db"))) == 1
+    assert len(list((tmp_path / "backups").glob(f"legacy.pre-v{SCHEMA_VERSION}-*.db"))) == 1
     assert _all(db, "PRAGMA integrity_check") == [("ok",)]
 
     # An older Mnemos opening this store runs its own schema script: the same

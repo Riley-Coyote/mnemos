@@ -280,6 +280,27 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Change it instead of printing what would change",
     )
+    p_quarantine = repair_sub.add_parser(
+        "quarantine-tool-written",
+        help="Move the memories a tool wrote (the transcript indexer's output) "
+             "out of this scope into the legacy quarantine (dry run unless --write)",
+    )
+    p_quarantine.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
+    p_quarantine.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_quarantine.add_argument("--person-id", default=argparse.SUPPRESS, help="Person scope")
+    p_quarantine.add_argument(
+        "--project-scope", default=argparse.SUPPRESS, help="Project scope"
+    )
+    p_quarantine.add_argument(
+        "--undo",
+        action="store_true",
+        help="Bring back exactly what this moved out of this scope",
+    )
+    p_quarantine.add_argument(
+        "--write",
+        action="store_true",
+        help="Move them instead of printing what would move",
+    )
     p_keyword = repair_sub.add_parser(
         "keyword-contradictions",
         help="Undo the contradiction links and belief revisions the removed "
@@ -590,8 +611,9 @@ def _cmd_hook(args: argparse.Namespace) -> int:
     reader_model = ""
     reader_session = ""
     workdir = ""
+    environ: dict[str, str] = dict(os.environ)
     try:
-        from .authorship import clean_model_id, clean_session_id, resolve_author_model
+        from .authorship import clean_model_id, clean_session_id
 
         payload = json.loads(bytes(received).decode("utf-8")) if received.strip() else {}
         if isinstance(payload, dict):
@@ -599,13 +621,8 @@ def _cmd_hook(args: argparse.Namespace) -> int:
             reader_session = clean_session_id(payload.get("session_id"))
             if isinstance(payload.get("cwd"), str):
                 workdir = payload["cwd"]
-        # Who is reading, found the way the MCP server finds who is writing:
-        # the operator's setting, what the harness said, then the session's
-        # own transcript (after a resume or compaction it names the model).
-        environ = dict(os.environ)
         if reader_session:
             environ["CLAUDE_CODE_SESSION_ID"] = reader_session
-        reader_model = resolve_author_model(reader_model, environ)
     except Exception:
         reader_model = ""
         reader_session = ""
@@ -628,6 +645,27 @@ def _cmd_hook(args: argparse.Namespace) -> int:
             return 0
         store = EngramStore(scope.db_path)
         try:
+            # Who is reading, found the way the MCP server finds who is
+            # writing: the operator's setting, what the harness said (or, when
+            # it said nothing, what this session last introduced itself as),
+            # then the session's own transcript (after a resume or compaction
+            # it names the model). Never another session's introduction.
+            try:
+                from .authorship import (
+                    harness_session,
+                    introduced_model,
+                    resolve_author_model,
+                    session_introduction_key,
+                )
+
+                session = harness_session(environ)
+                declared = reader_model or (
+                    introduced_model(store.get_meta(session_introduction_key(session)))
+                    if session else ""
+                )
+                reader_model = resolve_author_model(declared, environ)
+            except Exception:
+                reader_model = ""
             packet = build_context_packet(
                 store,
                 args.query,
@@ -744,6 +782,15 @@ def _daemon_install(blueprint: dict, *, write: bool) -> int:
 
     from .setup import scheduler as _scheduler
 
+    retired = _scheduler.retired_installed(
+        blueprint, _read_crontab_safe() if backend == "crontab" else ""
+    )
+    for entry in retired:
+        print(
+            f"\n  {entry['job'].name} — an earlier install scheduled it; it is "
+            "removed: it writes memories in a model's words, not yours"
+        )
+
     warning = _scheduler.tcc_warning(_mnemos_command(), backend=backend)
     if warning:
         print(f"\n{warning}")
@@ -757,6 +804,7 @@ def _daemon_install(blueprint: dict, *, write: bool) -> int:
     secure_directory(Path.home() / ".mnemos" / "logs", force=True)
 
     try:
+        _remove_retired(backend, retired)
         if backend == "launchd":
             for entry in entries:
                 path = entry["path"]
@@ -784,8 +832,28 @@ def _daemon_install(blueprint: dict, *, write: bool) -> int:
         return 1
 
     print(f"\nScheduled {len(entries)} job(s). Background maintenance is active.")
+    if retired:
+        print(f"Removed {len(retired)} job(s) an earlier install scheduled.")
     print("Check them any time with: mnemos daemon status")
     return 0
+
+
+def _remove_retired(backend: str, retired: list[dict]) -> None:
+    """Unschedule jobs an earlier install scheduled and this one no longer
+    does. A crontab needs nothing: the install rewrites this agent's lines."""
+    if backend == "launchd":
+        for entry in retired:
+            _launchctl("bootout", entry["path"], allow_missing=True)
+            entry["path"].unlink(missing_ok=True)
+    elif backend == "systemd" and retired:
+        for entry in retired:
+            try:
+                _systemctl("disable", "--now", entry["timer_name"])
+            except RuntimeError:
+                pass  # already stopped or never enabled; the files still go
+            for path in entry["units"]:
+                path.unlink(missing_ok=True)
+        _systemctl("daemon-reload")
 
 
 def scheduler_merge_crontab(entries: list[dict], agent_id: str) -> str | None:
@@ -832,6 +900,14 @@ def _daemon_status(blueprint: dict) -> int:
     for job in blueprint["skipped"]:
         print(f"  {job.name:<16} {'unavailable':<15} needs a model provider")
 
+    for entry in scheduler.retired_installed(
+        blueprint, _read_crontab_safe() if backend == "crontab" else ""
+    ):
+        print(
+            f"  {entry['job'].name:<16} {'retired':<15} "
+            "no longer scheduled; 'mnemos daemon install --write' removes it"
+        )
+
     if not installed_any:
         print("\nNo background maintenance scheduled. Install it with:")
         print("  mnemos daemon install --write")
@@ -851,18 +927,26 @@ def _read_crontab_safe() -> str:
 
 
 def _daemon_uninstall(blueprint: dict, *, write: bool) -> int:
+    from .setup import scheduler as _scheduler
+
     backend = blueprint["backend"]
     agent_id = blueprint["agent_id"]
     entries = blueprint["entries"]
+    retired = _scheduler.retired_installed(
+        blueprint, _read_crontab_safe() if backend == "crontab" else ""
+    )
 
     if not write:
-        print(f"Would remove {len(entries)} scheduled job(s) ({backend}):")
-        for entry in entries:
+        print(f"Would remove {len(entries) + len(retired)} scheduled job(s) ({backend}):")
+        for entry in [*entries, *retired]:
             print(f"  {entry['job'].name}")
         print("\nRe-run with --write to remove them.")
         return 0
 
     removed = 0
+    if retired and backend != "crontab":
+        _remove_retired(backend, retired)
+        removed += len(retired)
     if backend == "launchd":
         for entry in entries:
             path = entry["path"]
@@ -1404,6 +1488,21 @@ def _cmd_setup_openclaw(args: argparse.Namespace) -> int:
     return 0
 
 
+# Said whenever a command that writes memories in a model's words runs. Neither
+# is scheduled any more (see setup/scheduler.py); running one by hand works.
+_INDEXER_NOTICE = (
+    "Note: the indexer writes memories in a model's words, not the agent's. "
+    "They are recorded as a tool's, so they stay out of the agent's identity, "
+    "beliefs and lessons, and 'mnemos repair quarantine-tool-written' moves "
+    "them out of recall."
+)
+_SUBSTRATE_NOTICE = (
+    "Note: the substrate's handlers write memories in a model's words, not the "
+    "agent's. They are not recorded as the agent's, so they stay out of its "
+    "identity, beliefs and lessons."
+)
+
+
 def _cmd_substrate_tick(args: argparse.Namespace) -> int:
     """Run one cognitive substrate tick."""
     try:
@@ -1416,6 +1515,7 @@ def _cmd_substrate_tick(args: argparse.Namespace) -> int:
         )
         substrate = Substrate(config)
         print(f"Running substrate tick (agent: {_resolve_agent_id(args)})...")
+        print(_SUBSTRATE_NOTICE)
         result = substrate.tick()
         print(f"Tick complete: {json.dumps(result, indent=2, default=str)}")
         return 0
@@ -1436,6 +1536,7 @@ def _cmd_index(args: argparse.Namespace) -> int:
             agent_id=_resolve_agent_id(args),
             db_path=_resolve_db_path(args),
         )
+        print(_INDEXER_NOTICE)
         if args.backfill:
             print("Running backfill (last 24h)...")
             result = indexer.backfill()
@@ -1658,12 +1759,108 @@ def _cmd_repair(args: argparse.Namespace) -> int:
         return _cmd_repair_min_code_version(args)
     if getattr(args, "repair_command", None) == "keyword-contradictions":
         return _cmd_repair_keyword_contradictions(args)
+    if getattr(args, "repair_command", None) == "quarantine-tool-written":
+        return _cmd_repair_quarantine_tool_written(args)
     print(
         "Usage: mnemos repair min-code-version [--set N] [--write]\n"
-        "       mnemos repair keyword-contradictions [--write]",
+        "       mnemos repair keyword-contradictions [--write]\n"
+        "       mnemos repair quarantine-tool-written [--write]",
         file=sys.stderr,
     )
     return 1
+
+
+def _cmd_repair_quarantine_tool_written(args: argparse.Namespace) -> int:
+    """Move the memories a tool wrote out of this scope, into the quarantine.
+
+    The transcript indexer's model wrote memories and lessons into the same
+    scope as the agent's own, where recall and the packet reached them as the
+    agent's. A human runs this: a dry run unless --write, a verified backup
+    before anything moves, and `mnemos adopt-legacy --include indexer` brings
+    them back.
+    """
+    from .simple_runtime import MnemosRuntime
+
+    runtime = MnemosRuntime(
+        db_path=getattr(args, "db_path", None),
+        agent_id=getattr(args, "agent_id", None),
+        person_id=getattr(args, "person_id", None),
+        project_scope=getattr(args, "project_scope", None),
+    )
+    try:
+        plan = runtime.repair_quarantine_tool_written(write=args.write, undo=args.undo)
+    finally:
+        runtime.close()
+
+    if not plan["exists"]:
+        print(f"No store at {runtime.db_path}; nothing to repair.")
+        return 0
+
+    agent, person, project = plan["target"]
+    found = plan["found"]
+    archived = sum(1 for row in found if row["state"] == "archived")
+    linked = sum(1 for row in found if row["state"] != "archived" and row["linked"])
+    movable = plan["movable"]
+
+    def row(count: int, what: str, action: str = "") -> None:
+        print(f"  {count:>7,}  {what:<52} {action}".rstrip())
+
+    if plan["undo"]:
+        print(f"Memories quarantine-tool-written moved out of {agent} / {person} / "
+              f"{project}, {runtime.db_path}")
+        print()
+        row(len(movable), "still in the quarantine", "come back")
+        if archived:
+            row(archived, "archived since", "stay archived")
+        print()
+        if plan["older_than_store"]:
+            print(
+                "This code is older than the store expects, so it changes nothing. "
+                "Run the repair with current Mnemos."
+            )
+            return 1 if args.write else 0
+        if not movable:
+            print("Nothing to bring back.")
+            return 0
+        if args.write:
+            print(f"Brought back {plan['moved']:,} memories. Backup: {plan['backup']}")
+        else:
+            print("Dry run: nothing changed. Run again with --undo --write to bring")
+            print("them back (a verified backup is made first).")
+        return 0
+
+    print(f"Memories a tool wrote in {agent} / {person} / {project}, {runtime.db_path}")
+    print()
+    row(len(found), "written by a tool (the transcript indexer)")
+    row(len(movable), "in recall and the packet", "move to the quarantine")
+    if linked:
+        row(linked, "that a continuity note points at", "stay")
+    if archived:
+        row(archived, "archived", "stay archived")
+    for item in movable[:5]:
+        text = " ".join(str(item["content"]).split())
+        print(f"           - {text[:90]}{'...' if len(text) > 90 else ''}")
+
+    print()
+    if plan["older_than_store"]:
+        print(
+            "This code is older than the store expects, so it changes nothing. "
+            "Run the repair with current Mnemos."
+        )
+        return 1 if args.write else 0
+    if not movable:
+        print("Nothing to move.")
+        return 0
+    if args.write:
+        print(f"Moved {plan['moved']:,} memories into the quarantine. Backup: {plan['backup']}")
+        print("Bring exactly these back with: mnemos repair quarantine-tool-written "
+              "--undo --write")
+    else:
+        print("Dry run: nothing changed. Run again with --write to move them")
+        print("(a verified backup is made first). '--undo --write' brings exactly")
+        print("these back; 'mnemos adopt-legacy --include indexer' brings back all")
+        print("tool-written memories the quarantine holds.")
+    return 0
 
 
 def _cmd_repair_keyword_contradictions(args: argparse.Namespace) -> int:

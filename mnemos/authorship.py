@@ -7,19 +7,29 @@ words" makes every later model inherit the previous one's first person. A
 signed note says who wrote it, so the reader can tell a colleague's note from
 its own.
 
-Signatures come from, in order:
+Signatures are resolved on every write, because the human can switch models
+in the middle of a session. They come from, in order:
 
-1. ``MNEMOS_AGENT_MODEL`` — an operator's explicit setting;
-2. ``mnemos_introduce`` in the current session (tracked by the runtime);
-3. the harness itself, when it records the model — Claude Code writes the
+1. ``signed_as`` — the model id the agent gives on the write itself (an agent
+   always knows its own model);
+2. ``MNEMOS_AGENT_MODEL`` — an operator's explicit setting;
+3. ``mnemos_introduce`` — the model *this* session last introduced itself
+   as. Never another session's: one store is shared by many sessions and
+   models, and a store-wide declaration once signed every session's notes
+   with whichever model had introduced itself last;
+4. the harness itself, when it records the model — Claude Code writes the
    model id on every assistant turn of the session transcript;
-4. nothing. An unsigned note is recorded as unsigned, never guessed.
+5. nothing. An unsigned note is recorded as unsigned, never guessed.
 
 Detection reads only the tail of the transcript and keeps only the model id.
 
-A handoff is also marked with the harness session that wrote it. Several
-sessions often run at once in one scope, and a note left by another session is
-a colleague's even when the same model wrote it.
+Notes and memories are also marked with the harness session that wrote them.
+Several sessions often run at once in one scope, and a note left by another
+session is a colleague's even when the same model wrote it.
+
+Every memory also says what kind of writer wrote its words (``AUTHOR_KINDS``),
+set when it is written and never inferred later: only the agent's own words
+make it who it is.
 """
 
 from __future__ import annotations
@@ -27,6 +37,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
@@ -34,6 +45,14 @@ _MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}")
 _SESSION_ID = re.compile(r"[0-9A-Za-z][0-9A-Za-z-]{7,63}")
 _TAIL_START = 256 * 1024
 _TAIL_MAX = 4 * 1024 * 1024
+
+#: Who wrote a memory's words: the agent itself, a tool working for Mnemos (a
+#: program or a model, such as the transcript indexer), Mnemos's own templates,
+#: something brought in from elsewhere, or no one known.
+AUTHOR_KINDS = ("agent", "tool", "system", "import", "unknown")
+
+# Where a store keeps the model each harness session last introduced itself as.
+_SESSION_INTRODUCTION = "session_model:"
 
 
 def clean_model_id(value: object) -> str:
@@ -184,15 +203,48 @@ def _last_assistant_model(path: Path) -> str:
             window = min(size, window * 4, _TAIL_MAX)
 
 
-def resolve_author_model(declared: str = "", environ: Mapping[str, str] | None = None) -> str:
-    """The signature for a write: operator setting, declaration, then harness."""
+def resolve_author_model(
+    declared: str = "",
+    environ: Mapping[str, str] | None = None,
+    *,
+    signed_as: str = "",
+) -> str:
+    """The signature for a write: the model the agent signed it as, the
+    operator's setting, this session's own introduction (``declared``), then
+    the harness. ``""`` when none of them says; never a guess."""
 
     env = os.environ if environ is None else environ
     return (
-        clean_model_id(env.get("MNEMOS_AGENT_MODEL", ""))
+        clean_model_id(signed_as)
+        or clean_model_id(env.get("MNEMOS_AGENT_MODEL", ""))
         or clean_model_id(declared)
         or detect_harness_model(env)
     )
+
+
+def session_introduction_key(session_id: str) -> str:
+    """The meta key holding what one harness session introduced itself as."""
+
+    return f"{_SESSION_INTRODUCTION}{session_id}"
+
+
+def session_introduction_record(model: str) -> str:
+    """What a store keeps for a session's introduction: the model, and when."""
+
+    return json.dumps(
+        {"model": model, "at": datetime.now(timezone.utc).isoformat()},
+        sort_keys=True,
+    )
+
+
+def introduced_model(record: str | None) -> str:
+    """The model a stored session introduction names, or ``""``."""
+
+    try:
+        value = json.loads(record or "")
+    except (TypeError, ValueError):
+        return ""
+    return clean_model_id(value.get("model")) if isinstance(value, dict) else ""
 
 
 def note_signature(entry: Mapping[str, object]) -> str:
@@ -204,6 +256,19 @@ def note_signature(entry: Mapping[str, object]) -> str:
     if name:
         return f"by {name}"
     return "co-formed" if entry.get("authored_by") == "coauthored" else "unsigned"
+
+
+def lesson_signature(entry: Mapping[str, object]) -> str:
+    """How a lesson is signed in a packet: ``lesson``, unless a tool wrote it.
+
+    A lesson copies the words it was drawn from. One drawn from the transcript
+    indexer's output is that model's words, and a packet presenting it as a
+    lesson hands the agent another writer's words as its own.
+    """
+
+    if entry.get("author_kind") == "tool":
+        return "from a tool, not yours"
+    return "lesson"
 
 
 def from_same_session(reader_session: str, note_session: object) -> bool | None:

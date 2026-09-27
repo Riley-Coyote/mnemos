@@ -12,6 +12,7 @@ import math
 from datetime import datetime, timezone, timedelta
 from typing import TYPE_CHECKING, Any
 
+from ..authorship import AUTHOR_KINDS
 from ..core.engram import Connection, Engram, EncodingContext, MemorySource
 from ..store.fts import distinctive_terms, fts_words, or_query, overlap
 from ..core.types import (
@@ -155,6 +156,9 @@ class Encoder:
         skip_surprise_detection: bool = False,
         impact_source: str = "",
         discover_connections: bool = True,
+        author_kind: str = "unknown",
+        author_model: str = "",
+        author_session: str = "",
     ) -> Engram:
         """Create a new engram from raw content.
 
@@ -178,12 +182,21 @@ class Encoder:
                 full-text index, vector) and no links; code older than the store
                 saves this way, and maintenance's connection discovery links it
                 later.
+            author_kind: Who wrote the words: 'agent' (the agent's own words,
+                through its tools), 'tool' (a program or a model working for
+                Mnemos), 'system', 'import', or 'unknown'. Unknown unless the
+                caller says: the encoder cannot tell whose words it is given,
+                and only the agent's shape its identity, beliefs and lessons.
+            author_model: The model that wrote them, when known.
+            author_session: The harness session that wrote them, when known.
 
         Returns:
             The fully-formed, persisted Engram with connections attached.
         """
         if not content or not content.strip():
             raise ValueError("Cannot encode empty content")
+        if author_kind not in AUTHOR_KINDS:
+            raise ValueError(f"Unsupported author kind: {author_kind!r}")
 
         tags = tags or []
 
@@ -224,6 +237,9 @@ class Encoder:
             content=content,
             impact=impact,
             impact_source=impact_source if impact else "",
+            author_kind=author_kind,
+            author_model=(author_model or "").strip(),
+            author_session=(author_session or "").strip(),
             kind=kind,
             tags=tags,
             strength=strength,

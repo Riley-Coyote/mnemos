@@ -1,10 +1,11 @@
 """Native background scheduling for Mnemos maintenance.
 
 Memory that only works while a session happens to be open is not a memory
-system. Consolidation, decay, connection discovery and the substrate tick
-are what make continuity feel alive between conversations — and until now
-the only way to schedule them was OpenClaw's cron templates, which most
-users do not have.
+system. Consolidation, decay and connection discovery are what make
+continuity feel alive between conversations — and until now the only way to
+schedule them was OpenClaw's cron templates, which most users do not have.
+The substrate tick and the transcript indexer are not scheduled: both write
+memories in a model's words (see ``RETIRED_JOBS``).
 
 None of that work was ever OpenClaw-specific. ``mnemos consolidate``,
 ``mnemos substrate-tick`` and ``mnemos index`` are plain CLI commands;
@@ -78,6 +79,17 @@ JOBS: tuple[SchedulerJob, ...] = (
         description="Softening, belief review and reflection",
         daily_at=(3, 0),
     ),
+)
+
+# Jobs an earlier `mnemos daemon install` scheduled that this one no longer
+# does. Installing or uninstalling removes any of them still installed, so an
+# upgrade does not leave one running unattended with nothing to remove it.
+#
+# The substrate tick's handlers write memories in a model's words whenever a
+# provider key is present: dreams, insights, wanderings. Those are not the
+# agent's words, and a memory is the agent's own or it is nothing to build an
+# identity on. `mnemos substrate-tick` still runs by hand, and says so.
+RETIRED_JOBS: tuple[SchedulerJob, ...] = (
     SchedulerJob(
         name="substrate-tick",
         args=("substrate-tick",),
@@ -434,10 +446,45 @@ def plan(
             )
         entries.append(entry)
 
+    # Where each retired job would be if an earlier install scheduled it, so
+    # install and uninstall can remove it. A crontab needs nothing here: the
+    # install rewrites all of this agent's lines.
+    retired: list[dict] = []
+    for job in RETIRED_JOBS:
+        entry = {"job": job}
+        if backend == "launchd":
+            entry["path"] = launchd_plist_path(agent_id, job)
+        elif backend == "systemd":
+            service_name, timer_name = systemd_unit_names(agent_id, job)
+            entry["units"] = [
+                systemd_unit_dir() / service_name,
+                systemd_unit_dir() / timer_name,
+            ]
+            entry["timer_name"] = timer_name
+        retired.append(entry)
+
     return {
         "backend": backend,
         "agent_id": agent_id,
         "entries": entries,
         "skipped": skipped,
+        "retired": retired,
         "has_model": has_model,
     }
+
+
+def retired_installed(blueprint: dict, crontab: str = "") -> list[dict]:
+    """The retired jobs an earlier install left scheduled on this host."""
+    installed = []
+    for entry in blueprint.get("retired") or []:
+        job = entry["job"]
+        backend = blueprint["backend"]
+        if backend == "launchd":
+            present = entry["path"].exists()
+        elif backend == "systemd":
+            present = any(path.exists() for path in entry["units"])
+        else:
+            present = f"{CRON_MARKER}:{blueprint['agent_id']}:{job.name}" in crontab
+        if present:
+            installed.append(entry)
+    return installed

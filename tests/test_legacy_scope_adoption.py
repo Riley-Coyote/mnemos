@@ -39,6 +39,7 @@ from mnemos.store.sqlite_store import EngramStore
 AGENT = "claude-code"
 
 LESSON = "engram_legacy_lesson"
+INDEXER_LESSON = "engram_legacy_indexer_lesson"
 INDEXED = "engram_legacy_indexed_fact"
 INDEXER_TYPED = "engram_legacy_indexer_typed_lesson"
 DIRECT = "engram_legacy_direct"
@@ -86,10 +87,13 @@ INSERT INTO meta (key, value) VALUES ('schema_version', '5');
 
 # id, owner, state, tags, source type, content
 _ROWS = [
-    # A lesson softening distilled from a fading indexer memory: it inherits
-    # the indexer's tag, and must still count as a lesson.
-    (LESSON, AGENT, "active", ["lesson", "distilled", "session-indexed"], "reflection",
+    (LESSON, AGENT, "active", ["lesson", "distilled"], "reflection",
      "Never push to main without an explicit instruction to push."),
+    # A lesson softening distilled from a fading indexer memory inherits the
+    # indexer's tag. A lesson copies the words it was drawn from, so these are
+    # the indexer's model's words: it stays with the indexer's output.
+    (INDEXER_LESSON, AGENT, "active", ["lesson", "distilled", "session-indexed"],
+     "reflection", "Rebuild the search index after every schema change."),
     (INDEXED, AGENT, "active", ["session-indexed", "trace-type:fact"], "session",
      "The nightly backup cron fires at three in the morning."),
     # The indexer labels some of its own output "lesson". That is a type the
@@ -125,7 +129,7 @@ def legacy_db(tmp_path) -> str:
     conn.execute(
         "INSERT INTO connections (source_id, target_id, relation, strength, formed_at, formed_by) "
         "VALUES (?, ?, 'distilled_into', 0.9, ?, 'softening')",
-        (INDEXED, LESSON, stamp),
+        (INDEXED, INDEXER_LESSON, stamp),
     )
     conn.commit()
     conn.close()
@@ -167,11 +171,11 @@ def test_health_names_the_memories_the_scope_migration_hid(legacy_db):
         runtime.close()
 
     assert data["legacy"] == {
-        "hidden": 4, "lessons": 1, "other": 1, "indexer": 2, "archived": 1,
+        "hidden": 5, "lessons": 1, "other": 1, "indexer": 3, "archived": 1,
     }
     card = format_health_card(data)
-    assert "4 older memories from before scoping never reach recall" in card
-    assert "(1 lesson, 1 other, 2 from the transcript indexer)" in card
+    assert "5 older memories from before scoping never reach recall" in card
+    assert "(1 lesson, 1 other, 3 from the transcript indexer)" in card
     assert "mnemos adopt-legacy" in card
 
 
@@ -179,7 +183,7 @@ def test_doctor_points_at_the_hidden_memories(legacy_db, capsys):
     assert main(["doctor", "--db-path", legacy_db, "--agent-id", AGENT]) == 0
     out = capsys.readouterr().out
 
-    assert "4 older memories from before scoping never reach recall" in out
+    assert "5 older memories from before scoping never reach recall" in out
     assert "mnemos adopt-legacy" in out
 
 
@@ -218,6 +222,9 @@ def test_adopt_legacy_brings_back_lessons_but_not_indexer_output(legacy_db, caps
     assert scopes[LESSON] == (AGENT, "user", "global")
     assert scopes[INDEXED] == (AGENT, None, None)
     assert scopes[INDEXER_TYPED] == (AGENT, None, None)
+    assert scopes[INDEXER_LESSON] == (AGENT, None, None), (
+        "a lesson in the indexer's words came back as the agent's"
+    )
     assert scopes[ARCHIVED] == (AGENT, None, None)
     assert scopes[FOREIGN] == ("someone-else", None, None)
 
@@ -248,8 +255,8 @@ def test_indexer_output_left_hidden_is_counted_but_not_an_alarm(legacy_db, capsy
     finally:
         runtime.close()
     assert (
-        "2 older memories from before scoping never reach recall "
-        "(2 from the transcript indexer)"
+        "3 older memories from before scoping never reach recall "
+        "(3 from the transcript indexer)"
     ) in card
 
 
@@ -263,6 +270,7 @@ def test_indexer_output_comes_back_only_when_named(legacy_db, capsys):
     scopes = _scopes(legacy_db)
     assert scopes[INDEXED] == (AGENT, "user", "global")
     assert scopes[INDEXER_TYPED] == (AGENT, "user", "global")
+    assert scopes[INDEXER_LESSON] == (AGENT, "user", "global")
     assert scopes[LESSON] == (AGENT, None, None), "--include replaces the default"
     assert scopes[ARCHIVED] == (AGENT, None, None)
 

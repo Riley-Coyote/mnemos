@@ -41,7 +41,7 @@ class TestJobSelection:
     def test_the_deterministic_maintenance_jobs_always_run(self):
         """Continuity upkeep needs no model and must not be gated on one."""
         names = {job.name for job in scheduler.jobs_for(has_model=False)}
-        assert {"maintain", "maintain-deep", "substrate-tick"} <= names
+        assert {"maintain", "maintain-deep"} <= names
 
     def test_every_job_has_exactly_one_schedule(self):
         for job in scheduler.JOBS:
@@ -337,7 +337,7 @@ class TestPlan:
 
         assert blueprint["backend"] == "launchd"
         assert {e["job"].name for e in blueprint["entries"]} == {
-            "maintain", "maintain-deep", "substrate-tick",
+            "maintain", "maintain-deep",
         }
         assert blueprint["skipped"] == []
         for entry in blueprint["entries"]:

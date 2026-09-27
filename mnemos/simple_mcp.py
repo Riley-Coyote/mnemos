@@ -91,8 +91,11 @@ Two things to get right:
 - Several models may share this memory, so every note is signed by the
   model that wrote it. A note signed by a different model is a colleague's,
   not yours: use it, but do not claim its work or speak as if you did it.
-  If a write comes back unsigned, call mnemos_introduce with your exact
-  model id. Never ask the human what model you are.
+  Sign every capture, correction, reflection and handoff: pass signed_as
+  with your exact model id, as your system prompt gives it. The human can
+  switch models mid-conversation, and your own id on each write is what
+  keeps the signature true. If your model has changed since you called
+  mnemos_introduce, call it again. Never ask the human what model you are.
 
 Storage is local. Nothing leaves the machine unless the human configures
 a provider."""
@@ -234,7 +237,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             idempotent=False,
         )
     )
-    def mnemos_handoff(text: str) -> str:
+    def mnemos_handoff(text: str, signed_as: str = "") -> str:
         """Leave a signed note for whoever works here next, in your own words.
 
         Use after meaningful progress or a changed plan, while unresolved
@@ -251,10 +254,15 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         preserving it in history, and notes other sessions left stay beside
         it, so write about your own work, not theirs. Mnemos never
         summarizes, rewrites, promotes, decays, or expires it.
+
+        Args:
+            text: The note, in your own words.
+            signed_as: Your exact model id, as your system prompt gives it.
         """
 
         return _output(_get_runtime().handoff(
-            _text("text", text, MAX_HANDOFF_CHARS, required=True)
+            _text("text", text, MAX_HANDOFF_CHARS, required=True),
+            signed_as=_text("signed_as", signed_as, MAX_ID_CHARS),
         ))
 
     @server.tool(
@@ -270,6 +278,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         context: str = "",
         importance: str | float = "auto",
         impact: str = "",
+        signed_as: str = "",
     ) -> str:
         """Capture durable continuity from the current conversation.
 
@@ -289,6 +298,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
                 "I should check the live page before claiming a fix works"
                 is what it meant. Leave it out rather than padding it; your
                 memory will ask you later if it needs one.
+            signed_as: Your exact model id, as your system prompt gives it.
         """
 
         return _output(_get_runtime().capture(
@@ -296,6 +306,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             context=_text("context", context, MAX_CONTEXT_CHARS),
             importance=importance,
             impact=_text("impact", impact, MAX_REFLECTION_CHARS),
+            signed_as=_text("signed_as", signed_as, MAX_ID_CHARS),
         ))
 
     if include_recall:
@@ -333,6 +344,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         query: str = "",
         action: str = "update",
         impact: str = "",
+        signed_as: str = "",
     ) -> str:
         """Correct, supersede, or archive stale continuity.
 
@@ -348,6 +360,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
                 correction usually fixes a detail, not the meaning. The
                 result shows what was kept, so you can give a new one if it
                 no longer holds.
+            signed_as: Your exact model id, as your system prompt gives it.
         """
 
         return _output(_get_runtime().correct(
@@ -356,6 +369,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             query=_text("query", query, MAX_QUERY_CHARS),
             action=_text("action", action, 32),
             impact=_text("impact", impact, MAX_REFLECTION_CHARS),
+            signed_as=_text("signed_as", signed_as, MAX_ID_CHARS),
         ))
 
     @server.tool(
@@ -385,7 +399,9 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             idempotent=False,
         )
     )
-    def mnemos_reflect(target_id: str, text: str, verdict: str = "") -> str:
+    def mnemos_reflect(
+        target_id: str, text: str, verdict: str = "", signed_as: str = "",
+    ) -> str:
         """Answer something your memory asked you about itself.
 
         Mnemos never calls a model on your behalf. When a memory needs
@@ -417,12 +433,14 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             target_id: The memory id from the request in your context packet.
             text: Your reflection. One or two honest sentences, not a summary.
             verdict: Your decision, from the list above for this question.
+            signed_as: Your exact model id, as your system prompt gives it.
         """
 
         return _output(_get_runtime().reflect(
             target_id=_text("target_id", target_id, MAX_ID_CHARS, required=True),
             text=_text("text", text, MAX_REFLECTION_CHARS, required=True),
             verdict=_text("verdict", verdict, 32),
+            signed_as=_text("signed_as", signed_as, MAX_ID_CHARS),
         ))
 
     @server.tool(
@@ -437,11 +455,13 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         """Declare who you are, so your notes are signed and maintenance stays kin.
 
         Call at the start of a session with agent_model set to your exact
-        model id, as your system prompt gives it, and optionally agent_name.
-        Everything you write in this session is signed with it. Harnesses
-        that record the model (Claude Code does) are signed automatically;
-        your own declaration takes precedence over detection, and an explicit
-        MNEMOS_AGENT_MODEL environment setting takes precedence over both.
+        model id, as your system prompt gives it, and optionally agent_name,
+        and again whenever your model changes. What you write in this session
+        is signed with it unless the write carries its own signed_as, which
+        comes first. It signs only this session's writes, never another
+        session's. An explicit MNEMOS_AGENT_MODEL environment setting takes
+        precedence over this declaration, and the declaration over what the
+        harness records (Claude Code records the model).
         """
         return _output(_get_runtime().introduce(
             agent_model=_text("agent_model", agent_model, 256, required=True),

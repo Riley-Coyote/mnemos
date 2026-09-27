@@ -707,6 +707,10 @@ class SessionIndexer:
                         agent_id=self.agent_id,
                         override_confidence=confidence,
                         override_confidence_source="trace_extraction",
+                        # A model extracted these from a transcript: a tool's
+                        # words, never the agent's own. Which model varies by
+                        # attempt, so none is claimed.
+                        author_kind="tool",
                     )
                 finally:
                     signal.alarm(0)

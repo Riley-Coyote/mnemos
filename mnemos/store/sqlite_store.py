@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from ..authorship import AUTHOR_KINDS
 from ..code_version import MAINTENANCE_CODE_VERSION
 from ..file_security import secure_directory, secure_file
 from .fts import is_common
@@ -31,11 +32,26 @@ from ..core.identity import AgentIdentity
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # The lowest maintenance code version still allowed to maintain this store,
 # raised by each newer version that opens it (see mnemos/code_version.py).
 MIN_CODE_VERSION_KEY = "min_code_version"
+
+# Who wrote each memory's words (schema v12; see mnemos/authorship.py). Set
+# once, when the memory is first stored: a later save never changes it.
+VALID_AUTHOR_KINDS = frozenset(AUTHOR_KINDS)
+_AUTHOR_COLUMNS = frozenset({"author_kind", "author_model", "author_session"})
+# Set, with the counts, once the memories a store held before v12 have been
+# labelled. Its presence is what stops the labelling from running again.
+AUTHORS_LABELED_KEY = "engram_authors_labeled"
+# Where each memory `mnemos repair quarantine-tool-written` moved came from, so
+# `--undo` returns exactly those and nothing else the quarantine holds.
+QUARANTINED_KEY = "quarantined_tool_written"
+
+# How long memory_trace keeps a row: one per tool call, so "what did the agent
+# see" has an answer for as long as anyone is likely to ask it.
+TRACE_KEEP_DAYS = 90
 
 VALID_FUNCTIONAL_TYPES = {
     "working",
@@ -87,6 +103,7 @@ VALID_HYPO_DOMAINS = {
 # Allowed column names for engrams table — prevents SQL injection via to_dict() keys
 _ENGRAM_COLUMNS = frozenset({
     "id", "content", "content_at_encoding", "impact", "impact_source",
+    "author_kind", "author_model", "author_session",
     "resolution", "kind", "tags",
     "schema_refs", "strength", "stability", "accessibility", "encoding_context",
     "source", "lineage", "owner_agent_id", "person_id", "project_scope",
@@ -125,6 +142,9 @@ _RECONCILABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "engrams": [
         ("impact", "impact TEXT NOT NULL DEFAULT ''"),
         ("impact_source", "impact_source TEXT NOT NULL DEFAULT ''"),
+        ("author_kind", "author_kind TEXT NOT NULL DEFAULT 'unknown'"),
+        ("author_model", "author_model TEXT NOT NULL DEFAULT ''"),
+        ("author_session", "author_session TEXT NOT NULL DEFAULT ''"),
         ("resolution", "resolution REAL NOT NULL DEFAULT 1.0"),
         ("kind", "kind TEXT NOT NULL DEFAULT 'episodic'"),
         ("tags", "tags TEXT NOT NULL DEFAULT '[]'"),
@@ -226,6 +246,12 @@ CREATE TABLE IF NOT EXISTS engrams (
     content_at_encoding TEXT NOT NULL,
     impact TEXT NOT NULL DEFAULT '',
     impact_source TEXT NOT NULL DEFAULT '',
+    -- Who wrote the words (v12): agent, tool, system, import or unknown.
+    -- No CHECK: SQLite cannot widen one in place, and a store must never
+    -- refuse a row a newer Mnemos wrote.
+    author_kind TEXT NOT NULL DEFAULT 'unknown',
+    author_model TEXT NOT NULL DEFAULT '',
+    author_session TEXT NOT NULL DEFAULT '',
     resolution REAL NOT NULL DEFAULT 1.0,
     kind TEXT NOT NULL DEFAULT 'episodic',
     tags TEXT NOT NULL DEFAULT '[]',
@@ -450,9 +476,28 @@ CREATE TABLE IF NOT EXISTS host_mutations (
     PRIMARY KEY (host_namespace, idempotency_key)
 );
 
+-- One row per tool call (v12): which tool, in which session, signed by which
+-- model, and the ids it showed or returned and the ids it wrote, so "what did
+-- the agent actually see" has an answer. Ids only, never text: a forgotten
+-- memory leaves no copy here. Rows older than TRACE_KEEP_DAYS are dropped.
+CREATE TABLE IF NOT EXISTS memory_trace (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    agent_id TEXT NOT NULL DEFAULT 'default',
+    person_id TEXT NOT NULL DEFAULT 'user',
+    project_scope TEXT NOT NULL DEFAULT 'global',
+    session TEXT NOT NULL DEFAULT '',
+    author_model TEXT NOT NULL DEFAULT '',
+    read_ids TEXT NOT NULL DEFAULT '[]',
+    written_ids TEXT NOT NULL DEFAULT '[]'
+);
+
 """ + ";\n".join(_REFLECTION_QUEUE_INDEXES) + """;
 CREATE INDEX IF NOT EXISTS idx_host_mutations_completed
     ON host_mutations(completed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_trace_at ON memory_trace(at);
+CREATE INDEX IF NOT EXISTS idx_memory_trace_session ON memory_trace(session, at);
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS meta (
@@ -561,6 +606,79 @@ def _lexical_score(query: str, text: str) -> float:
     return len(query_terms & text_terms) / max(1, len(query_terms))
 
 
+def legacy_author_kinds(conn: sqlite3.Connection) -> dict[str, str]:
+    """Who wrote the memories a store held before it recorded authorship.
+
+    Only what a row carries decides, and anything it cannot show is left
+    ``unknown``, never guessed:
+
+    - ``tool``: tagged ``session-indexed``, the transcript indexer's mark. A
+      lesson distilled from indexer output inherits the tag, and it is that
+      model's words too: a lesson copies the impact it was drawn from.
+    - ``agent``: a capture or correction the agent made through its own
+      tools (a ``session`` memory tagged ``continuity``, which the simple
+      runtime puts on everything it captures, while the indexer, the bridge
+      and the advanced tools do not); and a lesson whose words are exactly
+      the impact of a memory it was distilled from, when that impact is the
+      agent's (``impact_source`` 'agent') on the agent's own memory, or is
+      itself an agent's lesson.
+
+    Returns the ids this labels ``agent`` or ``tool``; every other id is
+    ``unknown``. Reads only.
+    """
+
+    rows: dict[str, dict[str, Any]] = {}
+    for row in conn.execute(
+        "SELECT id, tags, source, impact, impact_source, content FROM engrams"
+    ):
+        tags = _decode_json(row[1], [])
+        source = _decode_json(row[2], {})
+        rows[row[0]] = {
+            "tags": {tag for tag in tags if isinstance(tag, str)} if isinstance(tags, list) else set(),
+            "type": source.get("type") if isinstance(source, dict) else None,
+            "impact": (row[3] or "").strip(),
+            "impact_source": row[4] or "",
+            "content": (row[5] or "").strip(),
+        }
+
+    kinds: dict[str, str] = {}
+    for engram_id, row in rows.items():
+        if "session-indexed" in row["tags"]:
+            kinds[engram_id] = "tool"
+        elif row["type"] == "session" and "continuity" in row["tags"]:
+            kinds[engram_id] = "agent"
+
+    sources: dict[str, list[str]] = {}
+    for source_id, target_id in conn.execute(
+        "SELECT source_id, target_id FROM connections WHERE relation = 'distilled_into'"
+    ):
+        sources.setdefault(target_id, []).append(source_id)
+    lessons = [
+        engram_id for engram_id, row in rows.items()
+        if engram_id not in kinds and row["type"] == "reflection"
+        and {"lesson", "distilled"} & row["tags"] and row["content"]
+    ]
+    # A lesson can be drawn from another lesson, so this runs until nothing
+    # more is placed.
+    placed = True
+    while placed:
+        placed = False
+        for engram_id in lessons:
+            if engram_id in kinds:
+                continue
+            for source_id in sources.get(engram_id, []):
+                source = rows.get(source_id)
+                if source is None or kinds.get(source_id) != "agent":
+                    continue
+                if source["impact"] != rows[engram_id]["content"]:
+                    continue
+                if source["impact_source"] == "agent" or source["type"] == "reflection":
+                    kinds[engram_id] = "agent"
+                    placed = True
+                    break
+    return kinds
+
+
 class EngramStore:
     """SQLite-backed storage for Mnemos engrams, beliefs, and identity.
 
@@ -632,6 +750,7 @@ class EngramStore:
         conn.executescript(SQL_CREATE_TABLES)
         self._classify_legacy_hypomnema(conn)
         self._backfill_engram_scopes(conn)
+        self._label_engram_authors(conn)
         # Only ever raised. A store newer code has stamped keeps its version
         # when older code opens it, as min_code_version does: stamping this
         # code's version over it would tell the newer code its own migration
@@ -810,6 +929,47 @@ class EngramStore:
             WHERE authored_by = 'unknown' AND source = 'co-formed'
             """
         )
+
+    @staticmethod
+    def _label_engram_authors(conn: sqlite3.Connection) -> None:
+        """Say who wrote the memories stored before authorship was (v12).
+
+        Runs once per store, in one transaction with the record of its
+        counts (``AUTHORS_LABELED_KEY``), which is what keeps it from running
+        again: from then on a memory's author is set when it is written, and
+        never inferred later. A row older code writes afterwards stays
+        ``unknown``. The rule is ``legacy_author_kinds``; every row it cannot
+        place keeps the column's default, ``unknown``.
+        """
+
+        done = "SELECT 1 FROM meta WHERE key = ?"
+        if conn.execute(done, (AUTHORS_LABELED_KEY,)).fetchone():
+            return
+        if conn.in_transaction:
+            conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Another process may have labelled the store while this one waited.
+            if not conn.execute(done, (AUTHORS_LABELED_KEY,)).fetchone():
+                kinds = legacy_author_kinds(conn)
+                conn.executemany(
+                    "UPDATE engrams SET author_kind = ? "
+                    "WHERE id = ? AND author_kind = 'unknown'",
+                    [(kind, engram_id) for engram_id, kind in kinds.items()],
+                )
+                counts = {
+                    row[0]: row[1] for row in conn.execute(
+                        "SELECT author_kind, COUNT(*) FROM engrams GROUP BY author_kind"
+                    )
+                }
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                    (AUTHORS_LABELED_KEY, _encode_json({"at": _utc_now(), "counts": counts})),
+                )
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
 
     @staticmethod
     def _backfill_engram_scopes(conn: sqlite3.Connection) -> None:
@@ -1042,6 +1202,11 @@ class EngramStore:
         stored. A version is written only when the save changes the memory's
         content, impact or resolution (or first stores the memory); a snapshot
         taken without such a change records nothing, and is dropped.
+
+        Who wrote the memory (``author_kind``, ``author_model``,
+        ``author_session``) is written with its first save and never changed
+        by a later one: authorship is a fact of the writing, not something a
+        pass that loads and saves a memory can restate.
         """
         conn = self._get_conn()
         data = engram.to_dict()
@@ -1050,7 +1215,10 @@ class EngramStore:
         safe_data = {k: v for k, v in data.items() if k in _ENGRAM_COLUMNS}
         columns = ", ".join(safe_data.keys())
         placeholders = ", ".join("?" for _ in safe_data)
-        updates = ", ".join(f"{k}=excluded.{k}" for k in safe_data if k != "id")
+        updates = ", ".join(
+            f"{k}=excluded.{k}" for k in safe_data
+            if k != "id" and k not in _AUTHOR_COLUMNS
+        )
 
         try:
             self._begin_immediate()
@@ -1139,19 +1307,24 @@ class EngramStore:
 
         ``_backfill_engram_scopes`` leaves them without a person or project,
         so every scoped read and every scoped maintenance pass skips them.
-        Each row is classified so a human can decide what comes back:
+        ``mnemos repair quarantine-tool-written`` moves tool-written memories
+        here too. Each row is classified so a human can decide what comes
+        back:
 
+        - ``indexer``: words a tool wrote (``author_kind`` 'tool': the
+          transcript indexer's output), including rows the indexer itself
+          labelled "lesson", and lessons distilled from its output, which
+          copy its words. On a store from before authorship was recorded,
+          the indexer's ``session-indexed`` tag says the same.
         - ``lessons``: what softening distilled from a fading memory — the
-          target of a ``distilled_into`` edge, or tagged ``distilled``. A
-          lesson inherits its source's tags, so it may also carry the
-          indexer's; it is still a lesson.
-        - ``indexer``: transcript-indexer output (tagged ``session-indexed``),
-          including rows the indexer itself labelled "lesson".
+          target of a ``distilled_into`` edge, or tagged ``distilled``.
         - ``other``: anything written through another path.
         """
+        authored = self.has_engram_column("author_kind")
         rows = self._get_conn().execute(
-            """
+            f"""
             SELECT e.id, e.state, e.tags, e.content,
+                   {"e.author_kind" if authored else "''"} AS author_kind,
                    EXISTS (
                        SELECT 1 FROM connections c
                        WHERE c.target_id = e.id AND c.relation = 'distilled_into'
@@ -1170,10 +1343,11 @@ class EngramStore:
                 tags = set(json.loads(row["tags"] or "[]"))
             except (TypeError, ValueError):
                 tags = set()
-            if row["distilled"] or "distilled" in tags:
-                kind = "lessons"
-            elif "session-indexed" in tags:
+            tool = row["author_kind"] == "tool" if authored else "session-indexed" in tags
+            if tool:
                 kind = "indexer"
+            elif row["distilled"] or "distilled" in tags:
+                kind = "lessons"
             else:
                 kind = "other"
             classified.append({
@@ -1235,6 +1409,144 @@ class EngramStore:
                 adopted += cursor.rowcount
         return adopted
 
+    def has_engram_column(self, name: str) -> bool:
+        """Whether the engrams table has this column: a store opened
+        read-only is never migrated, so it may predate one."""
+        return any(
+            row[1] == name
+            for row in self._get_conn().execute("PRAGMA table_info(engrams)")
+        )
+
+    def tool_written_engrams(
+        self, *, agent_id: str, person_id: str, project_scope: str
+    ) -> list[dict[str, Any]]:
+        """The memories in one exact scope whose words a tool wrote.
+
+        ``author_kind`` 'tool'. On a store opened read-only before it gained
+        that column, the rule its migration applies decides instead
+        (``legacy_author_kinds``), so a dry run reports what the repair will
+        find. Each row says whether a continuity note points at it
+        (``linked``): opening a store gives an unscoped memory a note links
+        to back its note's scope, so moving one of those would not last.
+        """
+        conn = self._get_conn()
+        scope = (agent_id, person_id, project_scope)
+        if self.has_engram_column("author_kind"):
+            rows = conn.execute(
+                "SELECT id, state, content, created_at FROM engrams "
+                "WHERE owner_agent_id = ? AND person_id = ? AND project_scope = ? "
+                "AND author_kind = 'tool' ORDER BY created_at, id",
+                scope,
+            ).fetchall()
+        else:
+            tools = {
+                engram_id for engram_id, kind in legacy_author_kinds(conn).items()
+                if kind == "tool"
+            }
+            rows = [
+                row for row in conn.execute(
+                    "SELECT id, state, content, created_at FROM engrams "
+                    "WHERE owner_agent_id = ? AND person_id = ? AND project_scope = ? "
+                    "ORDER BY created_at, id",
+                    scope,
+                ).fetchall()
+                if row["id"] in tools
+            ]
+        linked = {
+            row[0] for row in conn.execute(
+                "SELECT related_engram_id FROM hypomnema_entries "
+                "WHERE related_engram_id IS NOT NULL "
+                "UNION SELECT graduated_to_engram_id FROM hypomnema_entries "
+                "WHERE graduated_to_engram_id IS NOT NULL"
+            )
+        }
+        return [
+            {
+                "id": row["id"],
+                "state": row["state"],
+                "content": row["content"],
+                "linked": row["id"] in linked,
+            }
+            for row in rows
+        ]
+
+    def quarantine_engrams(
+        self,
+        engram_ids: list[str],
+        *,
+        agent_id: str,
+        person_id: str,
+        project_scope: str,
+    ) -> int:
+        """Move tool-written memories out of one scope into the legacy
+        quarantine, all or nothing.
+
+        Only rows still in exactly this scope, written by a tool, not
+        archived and not pointed at by a continuity note are touched; whatever
+        else is passed is left. They lose their person and project, as the v6
+        migration left the rows it could not place. Nothing else about them
+        changes: their words, links and history stay. Where each came from is
+        recorded (``QUARANTINED_KEY``), so ``unquarantine_engrams`` returns
+        exactly these; ``mnemos adopt-legacy --include indexer`` brings them
+        back too, with every other tool-written memory the quarantine holds.
+        Returns how many moved.
+        """
+        ids = list(dict.fromkeys(engram_ids))
+        moved = 0
+        with self.transaction() as conn:
+            recorded = self.quarantined_tool_written()
+            for start in range(0, len(ids), 500):
+                chunk = ids[start:start + 500]
+                marks = ",".join("?" * len(chunk))
+                where = (
+                    "WHERE owner_agent_id = ? AND person_id = ? AND project_scope = ? "
+                    "AND author_kind = 'tool' AND state != 'archived' "
+                    "AND id NOT IN (SELECT related_engram_id FROM hypomnema_entries "
+                    "               WHERE related_engram_id IS NOT NULL) "
+                    "AND id NOT IN (SELECT graduated_to_engram_id FROM hypomnema_entries "
+                    "               WHERE graduated_to_engram_id IS NOT NULL) "
+                    f"AND id IN ({marks})"
+                )
+                params = (agent_id, person_id, project_scope, *chunk)
+                for (engram_id,) in conn.execute(f"SELECT id FROM engrams {where}", params):
+                    recorded[engram_id] = [agent_id, person_id, project_scope]
+                moved += conn.execute(
+                    f"UPDATE engrams SET person_id = NULL, project_scope = NULL {where}",
+                    params,
+                ).rowcount
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                (QUARANTINED_KEY, _encode_json(recorded)),
+            )
+        return moved
+
+    def quarantined_tool_written(self) -> dict[str, list[str]]:
+        """What ``quarantine_engrams`` moved: id -> [agent, person, project]
+        it came from. An id stays listed after it comes back."""
+        value = _decode_json(self.get_meta(QUARANTINED_KEY), {})
+        return {
+            str(engram_id): list(scope) for engram_id, scope in value.items()
+            if isinstance(scope, list) and len(scope) == 3
+        } if isinstance(value, dict) else {}
+
+    def unquarantine_engrams(self, engram_ids: list[str]) -> int:
+        """Return memories ``quarantine_engrams`` moved to the scope each came
+        from, all or nothing. Only a listed memory still without a scope and
+        not archived moves. Returns how many came back."""
+        recorded = self.quarantined_tool_written()
+        by_scope: dict[tuple[str, str, str], list[str]] = {}
+        for engram_id in dict.fromkeys(engram_ids):
+            if engram_id in recorded:
+                by_scope.setdefault(tuple(recorded[engram_id]), []).append(engram_id)
+        back = 0
+        with self.transaction():
+            for (agent_id, person_id, project_scope), ids in by_scope.items():
+                back += self.adopt_unscoped_engrams(
+                    ids, agent_id=agent_id, person_id=person_id,
+                    project_scope=project_scope,
+                )
+        return back
+
     def get_engram(self, engram_id: str) -> Engram | None:
         """Load an engram by ID, including connections and versions."""
         conn = self._get_conn()
@@ -1261,6 +1573,7 @@ class EngramStore:
         load_connections: bool = True,
         person_id: str | None = None,
         project_scope: str | None = None,
+        author_kind: str | None = None,
     ) -> list[Engram]:
         """Get all active engrams for an agent, sorted by accessibility.
 
@@ -1270,26 +1583,31 @@ class EngramStore:
             load_connections: If True, load connections for each engram.
                 Set to False for bulk operations where connections aren't needed
                 (e.g., decay pass only needs accessibility/strength fields).
+            author_kind: Only engrams whose words this kind of writer wrote
+                ('agent' for the passes that make the agent who it is).
         """
         conn = self._get_conn()
+        author_sql = " AND author_kind = ?" if author_kind is not None else ""
+        author_args: tuple[str, ...] = (author_kind,) if author_kind is not None else ()
         if agent_id is None:
             rows = conn.execute(
-                "SELECT * FROM engrams WHERE state = 'active' "
-                "ORDER BY accessibility DESC LIMIT ?",
-                (limit,),
+                "SELECT * FROM engrams WHERE state = 'active'" + author_sql +
+                " ORDER BY accessibility DESC LIMIT ?",
+                (*author_args, limit),
             ).fetchall()
         elif person_id is not None and project_scope is not None:
             rows = conn.execute(
                 "SELECT * FROM engrams WHERE state = 'active' "
-                "AND owner_agent_id = ? AND person_id = ? AND project_scope = ? "
-                "ORDER BY accessibility DESC LIMIT ?",
-                (agent_id, person_id, project_scope, limit),
+                "AND owner_agent_id = ? AND person_id = ? AND project_scope = ?"
+                + author_sql + " ORDER BY accessibility DESC LIMIT ?",
+                (agent_id, person_id, project_scope, *author_args, limit),
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT * FROM engrams WHERE state = 'active' "
-                "AND owner_agent_id = ? ORDER BY accessibility DESC LIMIT ?",
-                (agent_id, limit),
+                "AND owner_agent_id = ?" + author_sql +
+                " ORDER BY accessibility DESC LIMIT ?",
+                (agent_id, *author_args, limit),
             ).fetchall()
         engrams = [Engram.from_dict(dict(r)) for r in rows]
         if load_connections:
@@ -2289,6 +2607,7 @@ class EngramStore:
         authored_by: str | None = None,
         author_id: str = "",
         author_model: str = "",
+        author_session: str = "",
         density: float = 0.5,
         domain: str = "topical",
         tags: str | list[str] | tuple[str, ...] | None = None,
@@ -2307,7 +2626,9 @@ class EngramStore:
         is the model that agent was running, when known. Several models can
         share one scope, and the model is what tells a reader whether a note
         is its own or a colleague's. Empty means unsigned, never unknown-but-
-        assumed.
+        assumed. ``author_session`` is the harness session that wrote it, when
+        known. ``authored_by`` says what kind of writer it was: a continuity
+        note's counterpart to a memory's ``author_kind``.
         """
         if source not in VALID_HYPO_SOURCES:
             raise ValueError(f"Unsupported hypomnema source: {source}")
@@ -2329,11 +2650,11 @@ class EngramStore:
             """
             INSERT INTO hypomnema_entries(
                 id, agent_id, person_id, project_scope, content,
-                entry_kind, authored_by, author_id, author_model, source,
-                density, domain, tags_json, confidence, salience,
+                entry_kind, authored_by, author_id, author_model, author_session,
+                source, density, domain, tags_json, confidence, salience,
                 active, foundational, revision_count, revisions_json,
                 related_session_id, related_engram_id, created_at, last_revised_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, '[]', ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, '[]', ?, ?, ?, ?)
             """,
             (
                 entry_id,
@@ -2345,6 +2666,7 @@ class EngramStore:
                 authored_by,
                 author_id.strip(),
                 (author_model or "").strip(),
+                (author_session or "").strip(),
                 source,
                 _clamp(density),
                 domain,
@@ -2800,6 +3122,7 @@ class EngramStore:
         salience: float | None = None,
         author_model: str | None = None,
         revised_by: str = "",
+        author_session: str | None = None,
     ) -> str:
         """Revise an existing hypomnema entry while preserving the old version.
 
@@ -2807,6 +3130,7 @@ class EngramStore:
         words with the reviser's. Left as ``None`` the signature stays with
         the original author — right for a revision that only adds to their
         words. ``revised_by`` is recorded in the revision trail either way.
+        ``author_session`` re-signs the session the same way.
         """
         if not new_content.strip():
             raise ValueError("Revised hypomnema content cannot be empty")
@@ -2832,6 +3156,9 @@ class EngramStore:
             "reason": reason.strip(),
         }
         signer = (author_model if author_model is not None else row["author_model"]) or ""
+        session = (
+            author_session if author_session is not None else row["author_session"]
+        ) or ""
         if revised_by.strip():
             revision["revised_by"] = revised_by.strip()
         if signer.strip() != (row["author_model"] or ""):
@@ -2844,6 +3171,7 @@ class EngramStore:
                 confidence = ?,
                 salience = ?,
                 author_model = ?,
+                author_session = ?,
                 revision_count = revision_count + 1,
                 revisions_json = ?,
                 last_revised_at = ?
@@ -2854,6 +3182,7 @@ class EngramStore:
                 _clamp(confidence if confidence is not None else row["confidence"]),
                 _clamp(salience if salience is not None else row["salience"]),
                 signer.strip(),
+                session.strip(),
                 _encode_json(revisions),
                 now,
                 entry_id,
@@ -2872,11 +3201,12 @@ class EngramStore:
         person_id: str = "user",
         project_scope: str = "global",
         author_model: str | None = None,
+        author_session: str | None = None,
     ) -> str:
         """Replace an active hypomnema entry with a new entry and audit link.
 
         The new entry keeps the original authorship unless ``author_model``
-        signs it for whoever wrote the replacement.
+        (and ``author_session``) sign it for whoever wrote the replacement.
         """
         row = self.get_hypomnema_entry(
             entry_id,
@@ -2898,6 +3228,9 @@ class EngramStore:
             authored_by=row["authored_by"],
             author_id=row["author_id"],
             author_model=row.get("author_model", "") if author_model is None else author_model,
+            author_session=(
+                row.get("author_session", "") if author_session is None else author_session
+            ),
             density=row["density"],
             domain=row["domain"],
             tags=row["tags"],
@@ -3447,6 +3780,47 @@ class EngramStore:
             raise
         stored = self.min_code_version()
         return stored if stored is not None else int(version)
+
+    # ── Trace: what each tool call saw and wrote ──
+
+    def record_trace(
+        self,
+        *,
+        tool: str,
+        agent_id: str,
+        person_id: str,
+        project_scope: str,
+        session: str = "",
+        author_model: str = "",
+        read_ids: list[str] | tuple[str, ...] = (),
+        written_ids: list[str] | tuple[str, ...] = (),
+    ) -> None:
+        """Record one tool call: the ids it showed or returned, and the ids it
+        wrote. Ids only, never text. Rows older than ``TRACE_KEEP_DAYS`` go in
+        the same transaction, so the table stays small."""
+        now = datetime.now(timezone.utc)
+        conn = self._get_conn()
+        try:
+            self._begin_immediate()
+            conn.execute(
+                "INSERT INTO memory_trace (at, tool, agent_id, person_id, project_scope, "
+                "session, author_model, read_ids, written_ids) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    now.isoformat(), tool, agent_id, person_id, project_scope,
+                    session or "", author_model or "",
+                    json.dumps(list(dict.fromkeys(read_ids))),
+                    json.dumps(list(dict.fromkeys(written_ids))),
+                ),
+            )
+            conn.execute(
+                "DELETE FROM memory_trace WHERE at < ?",
+                ((now - timedelta(days=TRACE_KEEP_DAYS)).isoformat(),),
+            )
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
 
     def set_min_code_version(self, version: int) -> None:
         """Set the minimum outright, lower or higher. Only a human's reset

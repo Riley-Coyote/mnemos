@@ -1111,3 +1111,51 @@ def test_a_memory_restored_from_the_archive_is_traced_as_written(tmp_path):
     assert engram_id in json.loads(row["read_ids"])
     assert engram_id in json.loads(row["written_ids"])
     assert _engram_row(db, engram_id)["state"] == "active"
+
+
+def test_identity_diff_reads_only_what_the_agent_wrote(tmp_path):
+    """Review of PR #86: `mnemos identity diff` loaded its own list, unfiltered,
+    so a tool's memory that had been returned often, or held a contradiction,
+    read as the agent's preoccupation and tension, and was counted."""
+    from mnemos.identity_diff import compute_graph_identity, diff_identity, parse_soul_file
+
+    db = tmp_path / "m.db"
+    soul = tmp_path / "SOUL.md"
+    soul.write_text(
+        "# Soul\n\n## Essence\n\n"
+        "- I keep the harbour ledger in one spreadsheet.\n"
+        "- Riley's harbour work comes first.\n"
+    )
+    store = EngramStore(str(db))
+    try:
+        anchor = _memory(store, "Riley decided the harbour ledger stays in one csv file.",
+                         "agent", tags=["harbour"], note=False)
+        twins = {}
+        for author, words, tag in (
+            ("agent", "The harbour ledger moved into a spreadsheet after all.", "spreadsheet"),
+            ("tool", "The zeppelin hangar log moved into a spreadsheet as well.", "zeppelin"),
+        ):
+            twin = Engram(content=words, tags=[tag], access_count=12,
+                          reconsolidation_count=9, **OWNER)
+            twin.author_kind = author
+            twin.add_connection(anchor.id, "contradicts", 0.7)
+            twin.add_connection(anchor.id, "co_activated", 0.5)
+            store.save_engram(twin)
+            twins[author] = twin
+        computed = compute_graph_identity(store, "nova")
+        report = diff_identity(parse_soul_file(soul), computed, llm_client=None)
+    finally:
+        store.close()
+
+    shown = json.dumps({
+        "items": [(item.facet, item.text) for item in computed.items],
+        "contradictions": computed.contradiction_edges,
+        "report": report.to_dict(),
+    })
+    assert "zeppelin" not in shown.lower(), shown
+    agent_twin = twins["agent"].content
+    assert [item.text for item in computed.facet("preoccupation")] == [agent_twin]
+    assert agent_twin in [item.text for item in computed.facet("hub")]
+    assert computed.contradiction_edges == [(agent_twin, anchor.content)]
+    assert computed.engram_count == 2
+    assert report.graph_stats["engram_count"] == 2

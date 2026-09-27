@@ -205,7 +205,10 @@ def test_health_reports_handoff_delivery_and_authorship(tmp_path):
         before = runtime.health()
         assert before["handoff"]["authored_by"] == "agent"
         assert before["handoff"]["delivery_count"] == 0
-        assert any("handoff" in warning for warning in before["continuity"]["warnings"])
+        # Waiting for the next session is a handoff's ordinary state: the card
+        # counts the deliveries and raises no warning. One is raised only once
+        # sessions have started without it for a day (tests/test_watchdog.py).
+        assert not any("handoff" in warning for warning in before["continuity"]["warnings"])
 
         runtime.context()
         after = runtime.health()

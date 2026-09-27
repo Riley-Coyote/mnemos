@@ -67,7 +67,7 @@ from .store.sqlite_store import (
     ReadOnlyEngramStore,
     handoff_retirement,
 )
-from .watchdog import flag_lines, flagged, note_counts, watch
+from .watchdog import STALL, continuity_moments, flag_lines, flagged, note_counts, watch
 
 
 SIMPLE_TOOL_NAMES = (
@@ -2345,42 +2345,67 @@ class MnemosRuntime:
                 f"The last {streak} context packets carried no continuity. "
                 "Memory is being read but is coming back empty."
             )
-        if sessions_since_capture is not None and sessions_since_capture >= 5:
+
+        # The watchdog's rule (mnemos/watchdog.py): a line here is a stall of
+        # more than a day with sessions come since, never the ordinary state
+        # between sessions. A handoff waiting for the next session, a new
+        # store's first day, a week away and a run of short sessions that had
+        # nothing to keep are all healthy, and each used to raise ATTENTION,
+        # which teaches the reader to ignore it.
+        now = datetime.now(timezone.utc)
+        moments = continuity_moments(self._store, **self._scope_args())
+        last_captured = moments["last_capture"]
+        if (
+            sessions_since_capture is not None and sessions_since_capture >= 5
+            and last_captured is not None and now - last_captured > STALL
+        ):
             warnings.append(
                 f"No capture has reached this scope in {sessions_since_capture} "
-                "sessions. Either nothing durable has come up, or captures are "
-                "not arriving."
+                f"sessions, since {last_captured.date().isoformat()}: either nothing "
+                "durable has come up, or captures are landing in another store or "
+                "scope. Run: mnemos doctor"
             )
         last_delivery = self._get_meta("last_context_delivery_at")
+        first_note = moments["first_live_note"]
         if notes > 0 and last_delivery is None:
-            warnings.append(
-                "Continuity exists in this scope, but no successful startup "
-                "delivery has been recorded yet."
-            )
+            if session >= 2 and first_note is not None and now - first_note > STALL:
+                warnings.append(
+                    "No starting session has been handed the continuity kept here "
+                    f"since {first_note.date().isoformat()}, though {session} sessions "
+                    "have used this memory. Run: mnemos hooks install --write"
+                )
         elif notes > 0 and last_delivery is not None:
-            try:
-                delivered_at = datetime.fromisoformat(last_delivery)
-                if delivered_at.tzinfo is None:
-                    delivered_at = delivered_at.replace(tzinfo=timezone.utc)
-                age = datetime.now(timezone.utc) - delivered_at
-                if age.days >= 7:
-                    warnings.append(
-                        f"Continuity has not been delivered for {age.days} days. "
-                        "Check that the startup integration is still active."
-                    )
-            except ValueError:
+            delivered_at = _moment(last_delivery)
+            if delivered_at is None:
                 warnings.append(
                     "Continuity exists, but its last delivery time is unreadable."
                 )
-        assert self._store is not None
-        active_handoff = self._store.get_latest_handoff(
-            agent_id=self.scope.agent_id,
-            person_id=self.scope.person_id,
-            project_scope=self.scope.project_scope,
-        )
-        if active_handoff and int(active_handoff.get("surface_count", 0)) == 0:
+            elif (
+                (now - delivered_at).days >= 7
+                and moments["last_write"] is not None
+                and moments["last_write"] > delivered_at
+            ):
+                warnings.append(
+                    f"No starting session has been handed continuity in "
+                    f"{(now - delivered_at).days} days, though memory has been written "
+                    "since. Run: mnemos hooks install --write"
+                )
+        # A handoff waits for the next session; that is its ordinary state. It
+        # has failed only once a session has started since without it: every
+        # starting session is handed the newest handoff (see live_handoffs),
+        # and a briefing delivered after it was written that did not carry it
+        # is that session.
+        handoff = self._store.get_latest_handoff(**self._scope_args())
+        written = _moment(handoff.get("created_at")) if handoff else None
+        delivered = _moment(last_delivery)
+        if (
+            handoff is not None and int(handoff.get("surface_count") or 0) == 0
+            and written is not None and now - written > STALL
+            and delivered is not None and delivered > written
+        ):
             warnings.append(
-                "A session handoff is waiting but has not been delivered yet."
+                f"A handoff left on {written.date().isoformat()} has not reached any "
+                "session, though sessions have started since. Run: mnemos_context"
             )
 
         return {

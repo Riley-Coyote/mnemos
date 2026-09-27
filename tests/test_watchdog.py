@@ -533,6 +533,207 @@ def test_the_last_pass_line_stays_while_nothing_has_waited_a_day(tmp_path, capsy
     assert "meaning index," not in card
 
 
+def test_a_note_rewritten_in_place_waits_from_its_rewrite(tmp_path, meaning):
+    """A note rewritten in place drops its passages with its old words, so it
+    waits for the index from the rewrite, not from when it was first written."""
+    db = _healthy(tmp_path)
+    runtime = _runtime(db)
+    try:
+        runtime.handoff("Left off wiring the release checklist.")
+    finally:
+        runtime.close()
+    handoff = _read(db, "SELECT id FROM hypomnema_entries WHERE entry_kind = 'handoff'")[0][0]
+    _write(db, "UPDATE hypomnema_entries SET created_at = ? WHERE id = ?", (_ago(days=3), handoff))
+    store = EngramStore(str(db))
+    try:
+        store.revise_hypomnema_entry(
+            handoff, "Left off wiring the release checklist; the tests pass.",
+            reason="corrected by its id", **SCOPE,
+        )
+    finally:
+        store.close()
+    _write(db, "UPDATE hypomnema_entries SET last_revised_at = ? WHERE id = ?", (_ago(hours=1), handoff))
+
+    card, data = _card(db)
+
+    check = data["watchdog"]["checks"]["recall_index"]
+    assert (check["waiting"], check["waiting_over_a_day"], check["stalled"]) == (1, 0, False), check
+    assert "meaning index" not in card, card
+
+
+# ── Continuity lines: a stall, never the ordinary state between sessions ──
+
+
+def _delivered(db: Path, at: str) -> None:
+    """When a starting session was last handed continuity."""
+    _write(db, "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+           ("simple:nova:riley:demo:last_context_delivery_at", at))
+
+
+def _sessions(db: Path, count: int) -> None:
+    """How many sessions have used this memory."""
+    _write(db, "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+           ("simple:nova:riley:demo:session_counter", str(count)))
+
+
+def _warnings(db: Path) -> list[str]:
+    runtime = _runtime(db)
+    try:
+        return runtime.continuity_signals()["warnings"]
+    finally:
+        runtime.close()
+
+
+def test_a_handoff_waiting_for_the_next_session_prints_nothing(tmp_path, capsys, monkeypatch):
+    db = _healthy(tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CURRENT_SESSION)
+    runtime = _runtime(db)
+    try:
+        runtime.handoff("Left off wiring the release checklist.")
+    finally:
+        runtime.close()
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
+
+    card, data = _card(db)
+    out = _doctor(db, capsys)
+
+    # Between sessions a handoff waits: that is its ordinary state.
+    assert data["continuity"]["warnings"] == [], data["continuity"]["warnings"]
+    assert "ATTENTION" not in card, card
+    assert "ATTENTION" not in out, out
+
+    # The next session is handed it, and leaves its own for the one after.
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", OLDER_SESSION)
+    runtime = _runtime(db)
+    try:
+        assert "Left off wiring the release checklist." in runtime.context()
+        runtime.handoff("Finished the checklist; the release notes are next.")
+    finally:
+        runtime.close()
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
+
+    card, data = _card(db)
+    assert data["continuity"]["warnings"] == [], data["continuity"]["warnings"]
+    assert "ATTENTION" not in card, card
+
+
+def test_a_handoff_no_session_was_handed_for_a_day_is_flagged(tmp_path, capsys, monkeypatch):
+    db = _healthy(tmp_path)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CURRENT_SESSION)
+    runtime = _runtime(db)
+    try:
+        runtime.handoff("Left off wiring the release checklist.")
+    finally:
+        runtime.close()
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
+    _write(db, "UPDATE hypomnema_entries SET created_at = ? WHERE entry_kind = 'handoff'",
+           (_ago(days=2),))
+    # A session started a day ago and was handed continuity, but not the handoff.
+    _delivered(db, _ago(days=1))
+
+    card, _data = _card(db)
+    out = _doctor(db, capsys)
+
+    said = (
+        f"A handoff left on {_day(days=2)} has not reached any session, though "
+        "sessions have started since. Run: mnemos_context"
+    )
+    assert f"  - {said}" in card, card
+    assert f"ATTENTION:  {said}" in out, out
+
+
+def test_a_handoff_no_session_has_come_for_is_not_flagged_however_old(tmp_path):
+    db = _healthy(tmp_path)
+    runtime = _runtime(db)
+    try:
+        runtime.handoff("Left off wiring the release checklist.")
+    finally:
+        runtime.close()
+    _write(db, "UPDATE hypomnema_entries SET created_at = ? WHERE entry_kind = 'handoff'",
+           (_ago(days=3),))
+    _delivered(db, _ago(days=4))  # the last session started before it was left
+
+    assert not any("handoff" in warning.lower() for warning in _warnings(db)), _warnings(db)
+
+
+def test_a_new_store_in_its_first_session_prints_nothing(tmp_path, capsys):
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        runtime.capture("Riley keeps the release notes in docs/releases.")
+        runtime.handoff("Set up memory; nothing else yet.")
+    finally:
+        runtime.close()
+
+    card, data = _card(db)
+    out = _doctor(db, capsys)
+
+    assert data["continuity"]["warnings"] == [], data["continuity"]["warnings"]
+    assert "ATTENTION" not in card, card
+    assert "ATTENTION" not in out, out
+
+
+def test_continuity_no_starting_session_was_handed_is_flagged(tmp_path, capsys):
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        runtime.capture("Riley keeps the release notes in docs/releases.")
+    finally:
+        runtime.close()
+    _write(db, "UPDATE hypomnema_entries SET created_at = ?", (_ago(days=2),))
+    _sessions(db, 3)  # sessions came and captured; none was handed anything
+
+    card, _data = _card(db)
+    out = _doctor(db, capsys)
+
+    said = (
+        f"No starting session has been handed the continuity kept here since "
+        f"{_day(days=2)}, though 3 sessions have used this memory. "
+        "Run: mnemos hooks install --write"
+    )
+    assert f"  - {said}" in card, card
+    assert f"ATTENTION:  {said}" in out, out
+
+
+def test_a_week_away_prints_nothing(tmp_path):
+    db = _healthy(tmp_path)
+    for table in ("engrams", "hypomnema_entries"):
+        _write(db, f"UPDATE {table} SET created_at = ?", (_ago(days=9),))
+    _delivered(db, _ago(days=8))
+
+    assert _warnings(db) == []
+
+
+def test_a_week_without_handing_continuity_while_memory_is_written_is_flagged(tmp_path):
+    db = _healthy(tmp_path)  # memory written just now
+    _delivered(db, _ago(days=8))
+
+    assert (
+        "No starting session has been handed continuity in 8 days, though memory "
+        "has been written since. Run: mnemos hooks install --write"
+    ) in _warnings(db)
+
+
+def test_a_run_of_short_sessions_without_a_capture_prints_nothing(tmp_path):
+    db = _healthy(tmp_path)  # captured today
+    _sessions(db, 6)  # five sessions since, each with nothing durable to keep
+
+    assert _warnings(db) == []
+
+
+def test_sessions_without_a_capture_for_over_a_day_are_flagged(tmp_path):
+    db = _healthy(tmp_path)
+    for table in ("engrams", "hypomnema_entries"):
+        _write(db, f"UPDATE {table} SET created_at = ?", (_ago(days=2),))
+    _sessions(db, 6)
+
+    assert (
+        f"No capture has reached this scope in 5 sessions, since {_day(days=2)}: "
+        "either nothing durable has come up, or captures are landing in another "
+        "store or scope. Run: mnemos doctor"
+    ) in _warnings(db)
+
+
 # ── Hidden notes are not missing ones ──
 
 

@@ -170,6 +170,42 @@ def note_counts(
     return {"live": int(live), "hidden": int(hidden), "captured": int(notes) + int(memories)}
 
 
+def continuity_moments(
+    store: EngramStore, *, agent_id: str, person_id: str, project_scope: str,
+) -> dict[str, datetime | None]:
+    """When continuity in one scope began and was last added to, for the
+    continuity warnings to tell a stall from a quiet spell: the oldest note
+    that reaches the briefing (``first_live_note``), the newest capture
+    (``last_capture``: the agent's notes and captured memories), and the
+    newest thing the agent wrote (``last_write``: those and its handoffs).
+    None where there is none. Reads."""
+    conn = store._get_conn()
+    scope = (agent_id, person_id, project_scope)
+    first_live = _rows(conn, """
+        SELECT MIN(h.created_at) FROM hypomnema_entries h
+        LEFT JOIN engrams m ON m.id = h.graduated_to_engram_id
+        WHERE h.agent_id = ? AND h.person_id = ? AND h.project_scope = ?
+          AND h.active = 1 AND (m.id IS NULL OR m.state NOT IN ('dormant', 'archived'))
+    """, scope)[0][0]
+    noted = _rows(conn, """
+        SELECT MAX(CASE WHEN entry_kind = 'continuity' THEN created_at END),
+               MAX(CASE WHEN entry_kind = 'handoff' THEN created_at END)
+        FROM hypomnema_entries
+        WHERE agent_id = ? AND person_id = ? AND project_scope = ? AND authored_by = 'agent'
+    """, scope)[0]
+    captured = _rows(conn, """
+        SELECT MAX(created_at) FROM engrams
+        WHERE owner_agent_id = ? AND person_id = ? AND project_scope = ?
+          AND CASE WHEN json_valid(source) THEN json_extract(source, '$.type') END = 'session'
+    """, scope)[0][0]
+    last_capture = _latest(noted[0], captured)
+    return {
+        "first_live_note": _at(first_live) if first_live else None,
+        "last_capture": last_capture,
+        "last_write": _latest(last_capture, noted[1]),
+    }
+
+
 # ── The checks ──
 
 
@@ -605,9 +641,12 @@ def _captures_after(
 
 
 def _words_written_at(store: EngramStore, ids: Sequence[str]) -> dict[str, datetime]:
-    """When each item's present words were written: a memory's newest version
-    or its creation, a handoff's creation (a newer one is a new row), any
-    other note's last revision."""
+    """When each item's present words were written, as near as the store
+    says: a memory's newest version or its creation; a note's (a handoff's
+    too) last revision. A note rewritten in place drops its passages with its
+    old words (``revise_hypomnema_entry``), so it waits from then, not from
+    when it was first written. A later date only ever makes an item look
+    younger, never stalled when it is not."""
     conn = store._get_conn()
     written: dict[str, datetime] = {}
     ordered = sorted(set(ids))
@@ -623,10 +662,10 @@ def _words_written_at(store: EngramStore, ids: Sequence[str]) -> dict[str, datet
             if moments:
                 written[row[0]] = max(moments)
         for row in _rows(conn, f"""
-            SELECT id, entry_kind, created_at, last_revised_at FROM hypomnema_entries
+            SELECT id, created_at, last_revised_at FROM hypomnema_entries
             WHERE id IN ({marks})
         """, chunk):
-            at = _at(row["created_at"] if row["entry_kind"] == "handoff" else row["last_revised_at"])
+            at = _at(row["last_revised_at"]) or _at(row["created_at"])
             if at:
                 written[row["id"]] = at
     return written
@@ -644,6 +683,11 @@ def _at(value: Any) -> datetime | None:
         except ValueError:
             return None
     return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _latest(*values: Any) -> datetime | None:
+    moments = [moment for moment in (_at(value) for value in values if value) if moment]
+    return max(moments) if moments else None
 
 
 def _older_than(value: Any, now: datetime, span: timedelta) -> bool:

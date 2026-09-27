@@ -46,10 +46,16 @@ What changed:
   under "Notes:".
 - Recall's meaning index: each memory and handoff is cut into passages the
   model reads whole (it reads about 1,000 characters), with a vector for each,
-  in a new table `passage_vectors`. It fills itself: a handoff as it is
-  written, up to 64 passages with each capture or correction, and everything
-  waiting with `mnemos_maintain`. Until an item has passages, recall uses its
-  whole-text vector and its words.
+  in a new table `passage_vectors`. It fills without depending on sessions:
+  a handoff as it is written, up to 64 passages with each capture or
+  correction, up to 256 each run of the scheduled job (`mnemos consolidate`,
+  seven runs a day), and everything waiting with `mnemos embeddings index`,
+  which indexes and does nothing else (no cycle, no decay, no links; a second
+  run indexes nothing). Until an item has passages, recall uses its whole-text
+  vector and its words. Code older than the store indexes nothing, so this is
+  how what it writes gets indexed.
+- Without the model, the scheduled job skips indexing and still consolidates,
+  and the health card says so in one line (`Recall index: not updated ...`).
 - The local embedding model loads only from files on this machine
   (`local_files_only`). Downloading is one explicit step:
   `mnemos embeddings download`. A hanging network no longer blocks recall,
@@ -72,14 +78,17 @@ Changed behaviour:
 - The model no longer downloads the first time it is needed. On a machine
   without it, semantic recall is off until `mnemos embeddings download` has
   run; doctor and the health card say so.
-- Maintenance reports a line, `Recall index: ...`, when it indexed something.
+- Maintenance and `mnemos consolidate` report a line, `Recall index: ...`,
+  when they indexed something or could not.
 
 Migration (schema 15). The first open by this code adds the table
 `passage_vectors`, empty, after the usual verified pre-migration backup. On a
-copy of the live store (schema 13), opening took 1.73 s, the backup (163 MB)
-included; integrity ok. Indexing everything there took 2.85 s (755 memories and
-handoffs, 1,763 passages). After upgrading, run `mnemos embeddings download`
-once if the model has never been downloaded on this machine.
+copy of the live store (schema 14), opening took 0.92 s, the backup (163 MB)
+included; integrity ok. Then run `mnemos embeddings index` once: on that copy
+it indexed 891 memories and handoffs (2,534 passages, five scopes) in 4.3 s
+(7.3 s for the whole command), with no network; run again, it indexed nothing.
+If the model has never been downloaded on the machine, run
+`mnemos embeddings download` first.
 
 ### Standing preferences, marked by the agent
 

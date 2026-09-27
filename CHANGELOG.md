@@ -25,6 +25,12 @@ notes waiting more than a day for recall's meaning index.
   structured result under `watchdog`. Whatever has stalled for more than a day
   gets one ATTENTION line: a plain sentence and the command that fixes or
   inspects it. When all is well, nothing more is printed.
+- A run of cycles that changed nothing is flagged only with evidence of work
+  left undone: failing passes, memories the cycles never read, or fading
+  memories never asked what they taught. A stable store whose cycles find
+  nothing to change stays quiet. A change the briefing never reported stays
+  flagged however long ago it was. A question's command carries the verdict
+  it needs, so following it settles the question.
 - It reads only. Every statement it runs is a read, it works on a store opened
   read-only, and on a copy of the live store the database and its write-ahead
   log were byte-identical after `mnemos doctor` and `mnemos_health`. A check

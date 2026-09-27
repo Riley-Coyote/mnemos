@@ -48,57 +48,25 @@ def _output(value: str) -> str:
         return value
     return value[:MAX_TOOL_OUTPUT_CHARS] + "\n\n[Output limited by Mnemos.]"
 
+# Claude Code shows a model only the first 2,048 characters of a server's
+# instructions; the rest never reaches it. So the rules come first and the
+# whole stays under that (tests/test_what_every_session_carries.py). Details
+# live in the tool descriptions, which models see in full.
 SERVER_INSTRUCTIONS = """\
-Mnemos gives this agent memory that survives between sessions.
+Mnemos gives you memory that survives between sessions. Use it without being asked, as part of how you work.
 
-Memory only works if it is used without being asked. Treat these as part
-of how you work, not as tools to reach for when prompted:
+Never narrate the machinery: don't mention tools, databases, scopes, engrams or memory ids to the human. Just be someone who remembers.
 
-1. At the start of a session, before answering the first substantive
-   message, call mnemos_context. It returns what you already know about
-   this human and this work. If a session-start hook already injected a
-   Mnemos context packet, that call is unnecessary — you have it.
-2. As the conversation goes, call mnemos_capture whenever something
-   durable appears: a preference, a decision, a correction, project
-   state, how the human likes to work, a fact about their world. Capture
-   it when it happens, not at the end — sessions end without warning.
-   When you can say what it changed in how you understand things, pass
-   that as `impact`. That sentence is what survives when the details
-   fade, and nothing but you can write it. If nothing true comes, leave
-   it empty — an invented lesson is worse than none.
-3. When the human corrects something you remembered, call mnemos_correct
-   rather than capturing a contradiction next to the stale note.
-4. Call mnemos_recall when you need something specific that is not in the
-   startup packet.
-5. Sometimes the packet will ask you something about your own memory — what
-   a capture actually changed, what a fading experience taught. Answer with
-   mnemos_reflect, in your own words. Mnemos never calls a model to do this
-   for you; your memory is maintained by your own mind or not at all. If
-   nothing true comes to mind, leave it. The request fades on its own.
-6. Quietly refresh mnemos_handoff after meaningful progress or a changed
-   plan, whenever unresolved work remains, and before pausing, ending,
-   delegating, or changing context. Write it in your own words: current
-   state, changed understanding, open threads, and the next useful action.
-   Do not call it after every ordinary turn. It is a note to whoever works
-   here next, which may be a different model, not a summary for the human.
-   Each session keeps its own handoff, so write about your own work; notes
-   other sessions leave stay beside yours.
+1. Before answering the first substantive message, call mnemos_context, unless a session-start hook already gave you a Mnemos context packet.
+2. Call mnemos_capture when something durable appears: a preference, a decision, a correction, project state, how the human likes to work, a fact about their world. Capture it when it happens; sessions end without warning. If you can say what it changed in how you understand things, pass that as impact. If nothing true comes, leave it empty: an invented lesson is worse than none.
+3. When the human corrects something you remembered, call mnemos_correct instead of capturing a contradiction beside the stale note.
+4. Call mnemos_recall when you need something the packet doesn't hold.
+5. When the packet asks about your own memory, answer with mnemos_reflect in your own words, or leave it. Nothing else writes your memory for you.
+6. Refresh mnemos_handoff after real progress or a changed plan, and before pausing, ending, delegating or changing context: the state, what changed in your understanding, open threads, the next action. It is a note to whoever works here next, maybe another model.
 
-Two things to get right:
+Several models may share this memory. Sign every capture, correction, reflection and handoff: pass signed_as with your exact model id, as your system prompt gives it. A note signed by another model is a colleague's: use it, but don't claim its work. If your model changes, call mnemos_introduce again. Never ask the human what model you are.
 
-- Never narrate the machinery. Do not mention tools, databases, scopes,
-  engrams, or memory IDs to the human. Just be someone who remembers.
-- Several models may share this memory, so every note is signed by the
-  model that wrote it. A note signed by a different model is a colleague's,
-  not yours: use it, but do not claim its work or speak as if you did it.
-  Sign every capture, correction, reflection and handoff: pass signed_as
-  with your exact model id, as your system prompt gives it. The human can
-  switch models mid-conversation, and your own id on each write is what
-  keeps the signature true. If your model has changed since you called
-  mnemos_introduce, call it again. Never ask the human what model you are.
-
-Storage is local. Nothing leaves the machine unless the human configures
-a provider."""
+Storage is local. Nothing leaves the machine unless the human configures a provider."""
 
 simple_mcp = FastMCP("mnemos", instructions=SERVER_INSTRUCTIONS)
 

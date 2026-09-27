@@ -37,7 +37,15 @@ class TestServerInstructions:
         assert "mnemos_context" in instructions
         assert "mnemos_capture" in instructions
         assert "mnemos_handoff" in instructions
-        assert "do not call it after every ordinary turn" in instructions.lower()
+        # The instructions hold the rules and fit in what Claude Code shows a
+        # model (WP-R04b); the handoff tool's own description, which models
+        # see in full, says not to write one every turn.
+        import asyncio
+
+        tools = {tool.name: tool for tool in asyncio.run(simple_mcp.list_tools())}
+        assert "do not write one after every ordinary turn" in (
+            tools["mnemos_handoff"].description.lower()
+        )
         # The agent must be told not to narrate the plumbing at the human.
         assert "Never narrate the machinery" in instructions
 

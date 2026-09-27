@@ -5,8 +5,9 @@
 ### Lesson questions that aren't starved
 
 When the agent's own memories fade without a lesson, maintenance asks what up
-to two of them taught, the most accessible first. It took the first two and
-only then asked. The queue refuses a second lesson question about a memory
+to two of them taught each cycle. It took the first two the softening pass
+named, the most accessible, and only then asked. The queue refuses a second
+lesson question about a memory
 however the first one ended (answered, skipped, shown out or expired), so
 once the two most accessible had been asked, they took both places in every
 cycle after. Nothing further was asked, each memory behind them faded without
@@ -16,13 +17,15 @@ until authorship labelling marked its writer unknown.
 
 - The memories already asked are set aside first, then up to two of the rest
   are asked. Each memory is still asked once.
+- The faintest are asked first. The question is there to catch what a memory
+  taught before it fades, and the faintest were asked last.
 - `MAINTENANCE_CODE_VERSION` is 9. Code older than the store runs no
   maintenance, so it asks no lesson questions.
 
 Changed behaviour: a fading memory behind ones already asked gets its
-question in the next cycle, and a plain "what did this change?" question
-still waiting about it is folded into that one, as for any memory asked a
-lesson question. No schema change.
+question in the next cycle, the faintest first, and a plain "what did this
+change?" question still waiting about it is folded into that one, as for any
+memory asked a lesson question. No schema change.
 
 ### A memory is found by what it taught
 

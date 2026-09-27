@@ -616,6 +616,9 @@ def test_health_returns_structured_dict(tmp_path):
         # The code version running here and the newest one the store has
         # seen: a session older than its store no longer maintains it.
         "code",
+        # What should be moving and whether it is: each check's expected and
+        # seen, and a flag for whatever stalled for more than a day.
+        "watchdog",
     }
     assert data["legacy"]["hidden"] == 0
     assert data["counts"]["continuity_notes_active"] >= 1

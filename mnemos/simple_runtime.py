@@ -67,6 +67,7 @@ from .store.sqlite_store import (
     ReadOnlyEngramStore,
     handoff_retirement,
 )
+from .watchdog import STALL, continuity_moments, flag_lines, flagged, note_counts, watch
 
 
 SIMPLE_TOOL_NAMES = (
@@ -142,6 +143,22 @@ def recall_index_meta_key(agent_id: str, person_id: str, project_scope: str) -> 
     return f"simple:{agent_id}:{person_id}:{project_scope}:{RECALL_INDEX_META}"
 
 
+def recall_index_items(
+    store: EngramStore, *, agent_id: str, person_id: str, project_scope: str,
+) -> list[tuple[str, str]]:
+    """What recall's meaning index holds for one scope, as ``(id, text)``:
+    every handoff (those in use first), notes with no memory of their own,
+    then the live memories, newest first. ``index_for_recall`` indexes these,
+    and the watchdog counts which of them still wait. Reads."""
+    scope = {"agent_id": agent_id, "person_id": person_id, "project_scope": project_scope}
+    items = [
+        (note["id"], note.get("content") or "")
+        for note in [*store.recallable_handoffs(**scope), *store.standalone_notes(**scope)]
+    ]
+    items += [(memory_id, content) for memory_id, content, _state in store.live_memory_texts(**scope)]
+    return items
+
+
 def index_for_recall(
     store: EngramStore,
     index: Any,
@@ -192,11 +209,7 @@ def index_for_recall(
         return done
     scope = {"agent_id": agent_id, "person_id": person_id, "project_scope": project_scope}
     try:
-        items = [
-            (note["id"], note.get("content") or "")
-            for note in [*store.recallable_handoffs(**scope), *store.standalone_notes(**scope)]
-        ]
-        items += [(memory_id, content) for memory_id, content, _state in store.live_memory_texts(**scope)]
+        items = recall_index_items(store, **scope)
         if only is not None:
             wanted = set(only)
             items = [item for item in items if item[0] in wanted]
@@ -2298,58 +2311,106 @@ class MnemosRuntime:
             session - int(last_capture) if last_capture is not None else None
         )
 
+        # A note the fate rule hides (its memory went quiet or faded) is not a
+        # missing one: "nothing has been captured" is said only when nothing
+        # was, in any state.
+        assert self._store is not None
+        held = note_counts(self._store, **self._scope_args())
+
         warnings: list[str] = []
-        if notes == 0:
+        if notes == 0 and held["hidden"]:
+            hidden = (
+                "the only one is hidden, because the memory it belongs to"
+                if held["hidden"] == 1 else
+                f"all {held['hidden']} are hidden, because the memories they belong to"
+            )
+            warnings.append(
+                f"No note reaches the briefing: {hidden} went quiet or faded. A "
+                "strong match in recall brings back a quiet one; "
+                "include_archived=true reaches a faded one."
+            )
+        elif notes == 0 and not held["captured"]:
             warnings.append(
                 "Nothing has been captured to this scope yet, so every "
                 "session starts from zero. If captures are being made, they "
                 "are landing somewhere this packet does not read."
+            )
+        elif notes == 0:
+            warnings.append(
+                "No note reaches the briefing, though memory was captured to "
+                "this scope: every note here was forgotten, replaced or retired."
             )
         if streak >= 3:
             warnings.append(
                 f"The last {streak} context packets carried no continuity. "
                 "Memory is being read but is coming back empty."
             )
-        if sessions_since_capture is not None and sessions_since_capture >= 5:
+
+        # The watchdog's rule (mnemos/watchdog.py): a line here is a stall of
+        # more than a day with sessions come since, never the ordinary state
+        # between sessions. A handoff waiting for the next session, a new
+        # store's first day, a week away and a run of short sessions that had
+        # nothing to keep are all healthy, and each used to raise ATTENTION,
+        # which teaches the reader to ignore it.
+        now = datetime.now(timezone.utc)
+        moments = continuity_moments(self._store, **self._scope_args())
+        last_captured = moments["last_capture"]
+        if (
+            sessions_since_capture is not None and sessions_since_capture >= 5
+            and last_captured is not None and now - last_captured > STALL
+        ):
             warnings.append(
                 f"No capture has reached this scope in {sessions_since_capture} "
-                "sessions. Either nothing durable has come up, or captures are "
-                "not arriving."
+                f"sessions, since {last_captured.date().isoformat()}: either nothing "
+                "durable has come up, or captures are landing in another store or "
+                "scope. Run: mnemos doctor"
             )
         last_delivery = self._get_meta("last_context_delivery_at")
+        first_note = moments["first_live_note"]
         if notes > 0 and last_delivery is None:
-            warnings.append(
-                "Continuity exists in this scope, but no successful startup "
-                "delivery has been recorded yet."
-            )
+            if session >= 2 and first_note is not None and now - first_note > STALL:
+                warnings.append(
+                    "No starting session has been handed the continuity kept here "
+                    f"since {first_note.date().isoformat()}, though {session} sessions "
+                    "have used this memory. Run: mnemos hooks install --write"
+                )
         elif notes > 0 and last_delivery is not None:
-            try:
-                delivered_at = datetime.fromisoformat(last_delivery)
-                if delivered_at.tzinfo is None:
-                    delivered_at = delivered_at.replace(tzinfo=timezone.utc)
-                age = datetime.now(timezone.utc) - delivered_at
-                if age.days >= 7:
-                    warnings.append(
-                        f"Continuity has not been delivered for {age.days} days. "
-                        "Check that the startup integration is still active."
-                    )
-            except ValueError:
+            delivered_at = _moment(last_delivery)
+            if delivered_at is None:
                 warnings.append(
                     "Continuity exists, but its last delivery time is unreadable."
                 )
-        assert self._store is not None
-        active_handoff = self._store.get_latest_handoff(
-            agent_id=self.scope.agent_id,
-            person_id=self.scope.person_id,
-            project_scope=self.scope.project_scope,
-        )
-        if active_handoff and int(active_handoff.get("surface_count", 0)) == 0:
+            elif (
+                (now - delivered_at).days >= 7
+                and moments["last_write"] is not None
+                and moments["last_write"] > delivered_at
+            ):
+                warnings.append(
+                    f"No starting session has been handed continuity in "
+                    f"{(now - delivered_at).days} days, though memory has been written "
+                    "since. Run: mnemos hooks install --write"
+                )
+        # A handoff waits for the next session; that is its ordinary state. It
+        # has failed only once a session has started since without it: every
+        # starting session is handed the newest handoff (see live_handoffs),
+        # and a briefing delivered after it was written that did not carry it
+        # is that session.
+        handoff = self._store.get_latest_handoff(**self._scope_args())
+        written = _moment(handoff.get("created_at")) if handoff else None
+        delivered = _moment(last_delivery)
+        if (
+            handoff is not None and int(handoff.get("surface_count") or 0) == 0
+            and written is not None and now - written > STALL
+            and delivered is not None and delivered > written
+        ):
             warnings.append(
-                "A session handoff is waiting but has not been delivered yet."
+                f"A handoff left on {written.date().isoformat()} has not reached any "
+                "session, though sessions have started since. Run: mnemos_context"
             )
 
         return {
             "notes_active": notes,
+            "notes_hidden": held["hidden"],
             "session": session,
             "empty_context_streak": streak,
             "sessions_since_capture": sessions_since_capture,
@@ -4465,6 +4526,11 @@ class MnemosRuntime:
             "counts": {
                 **states,
                 "continuity_notes_active": stats.get("hypomnema_active", 0),
+                # Kept apart from missing ones: a note whose memory went quiet
+                # or faded is hidden until the memory comes back.
+                "continuity_notes_hidden": note_counts(
+                    self._store, **self._scope_args()
+                )["hidden"],
                 "continuity_notes_foundational": stats.get("hypomnema_foundational", 0),
                 "connections": stats.get("connections", 0),
                 "beliefs_active": stats.get("beliefs_active", 0),
@@ -4498,7 +4564,24 @@ class MnemosRuntime:
             # by whichever process ran it (the scheduled job, maintenance, the
             # command): the card says when it could embed nothing.
             "recall_index": self.recall_index_status(),
+            # What should be moving and whether it is: each check's expected
+            # and seen, and a flag for whatever stalled for more than a day.
+            "watchdog": self.watchdog(),
         }
+
+    def watchdog(self) -> dict[str, Any]:
+        """What should be moving in this scope, and whether it is (see
+        mnemos/watchdog.py): questions nobody answers, a maintenance report the
+        briefing cannot find, maintenance that changes nothing, lesson questions
+        waiting their turn, what waits for recall's meaning index, sessions on
+        older code. Each check says what it expected and what it saw, and one
+        stalled for more than a day is flagged with the command that fixes or
+        inspects it. Reads only, and never creates a store."""
+        if not self.db_path.exists():
+            return {"checked_at": None, "checks": {}, "flags": []}
+        self._ensure_init()
+        assert self._store is not None
+        return watch(self._store, **self._scope_args(), index=self._embedding_index)
 
     def recall_index_status(self) -> dict[str, Any] | None:
         """The last pass over everything waiting for recall's meaning index in
@@ -5166,7 +5249,13 @@ def format_health_card(data: dict[str, Any]) -> str:
     )
     semantic_lines = [line("Semantic", semantic_headline)]
     semantic_lines += [f"{'':<15}{detail}" for detail in semantic_details]
-    recall_index = describe_recall_index(data.get("recall_index"))
+    watched = data.get("watchdog")
+    # The watchdog's flag about recall's meaning index carries the last pass's
+    # reason, so the line is said once.
+    recall_index = (
+        None if flagged(watched, "recall_index")
+        else describe_recall_index(data.get("recall_index"))
+    )
     if recall_index:
         semantic_lines.append(line("Recall index", recall_index))
     if semantic_attention:
@@ -5178,6 +5267,11 @@ def format_health_card(data: dict[str, Any]) -> str:
     code_headline, code_attention = describe_code(data.get("code"))
     if code_attention:
         continuity_lines = ["", f"ATTENTION — {code_attention}", *continuity_lines]
+    # Whatever stalled for more than a day, one line each with its command.
+    # Nothing at all when all is well.
+    watch_lines = [f"ATTENTION — {flag}" for flag in flag_lines(watched)]
+    if watch_lines:
+        continuity_lines = [*continuity_lines, "", *watch_lines]
 
     return "\n".join([
         "Mnemos health card",

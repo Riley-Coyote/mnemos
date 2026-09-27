@@ -2,6 +2,64 @@
 
 ## 0.3.1 (unreleased)
 
+### A watchdog for silent failure
+
+Every serious failure in this memory looked like success, and nothing watched
+the queues: a maintenance report the briefing could not find, questions nobody
+answered, lesson questions starved behind stale ones, old servers writing by
+old rules. On a copy of the live store the watchdog found 133 questions shown
+three times and never answered (5 of 179 ever answered), six Claude Code
+sessions still writing with code older than the store, and 711 memories and
+notes waiting more than a day for recall's meaning index.
+
+- `mnemos_health` and `mnemos doctor` watch what should be moving: questions
+  shown three times and never answered, and the answer rate; the newest
+  maintenance report the briefing can find, against the maintenance since;
+  cycles in the last 7 days and how many changed anything, and captures no
+  cycle followed; lesson questions waiting more than 14 days to be shown;
+  faded memories out of ordinary recall; sessions writing with code older than
+  the store, each named with when it last wrote; the share of memories the
+  agent did not write; what waits for recall's meaning index, and since when;
+  and notes hidden because their memory went quiet or faded.
+- Each check states what it expected and what it saw, in `mnemos_health`'s
+  structured result under `watchdog`. Whatever has stalled for more than a day
+  gets one ATTENTION line: a plain sentence and the command that fixes or
+  inspects it. When all is well, nothing more is printed.
+- A run of cycles that changed nothing is flagged only with evidence of work
+  left undone: failing passes, memories the cycles never read, or fading
+  memories never asked what they taught. A stable store whose cycles find
+  nothing to change stays quiet. A change the briefing never reported stays
+  flagged however long ago it was. A question's command carries the verdict
+  it needs, so following it settles the question.
+- It reads only. Every statement it runs is a read, it works on a store opened
+  read-only, and on a copy of the live store the database and its write-ahead
+  log were byte-identical after `mnemos doctor` and `mnemos_health`. A check
+  that cannot run says so in its data and prints nothing.
+- An older session is named by its session id as "below version N", the
+  store's minimum: the exact version a session runs is not recorded anywhere a
+  read can reach.
+- "Nothing has been captured" is said only when nothing was. A scope whose
+  notes are all hidden by their memories' fate, or were all forgotten, says
+  that instead.
+- The `Recall index: not updated` line folds into the watchdog's line about the
+  meaning index when that one is printed, so it is said once.
+- The continuity warnings follow the same rule, and no longer fire on the
+  ordinary state between sessions, which taught the reader to ignore ATTENTION.
+  A handoff waiting for the next session is flagged only after it has waited
+  more than a day while sessions started without it. The same goes for
+  continuity never handed to a starting session (not a new store's first day),
+  a week without a delivery (only if memory was written since), and sessions
+  without a capture (only once the last capture is more than a day old).
+
+Changed behaviour: the health card and `mnemos doctor` end with ATTENTION
+lines when something has stalled. `mnemos_health`'s structured result gains
+`watchdog` and `counts.continuity_notes_hidden`, and `continuity` gains
+`notes_hidden`. "A session handoff is waiting but has not been delivered yet"
+is gone, and the four continuity warnings above now read as one sentence and
+a command.
+
+No migration and no code-version bump: nothing here writes.
+
 ### Recall that finds by meaning
 
 Recall used meaning in name only. On copies of the live store:

@@ -23,10 +23,14 @@ search makes the same load. Downloading is one explicit step,
 ``mnemos embeddings download`` (``download_local_model``).
 
 Recall's meaning index is ``passage_vectors``: each memory recall can return,
-and each handoff, cut into passages the model reads whole (it reads about 256
-tokens, so one vector of a long text says nothing about its second half), with
-a vector for each. ``embeddings`` keeps one vector per memory's whole text, as
-capture writes it, for linking and for recall until a memory has passages.
+and each handoff, cut into passages (``passages``) with a vector for each, and
+found by its best one. The model reads about 256 tokens, so one vector of a
+long text says nothing about its second half; and it is trained on sentence
+pairs and averages what it reads, so one vector of several ideas is a blur of
+them. So a text is read twice over: in windows of a few sentences, and as a
+whole (its first 700 characters). ``embeddings`` keeps one vector per memory's
+whole text, as capture writes it, for linking and for recall until a memory
+has passages.
 """
 
 from __future__ import annotations
@@ -50,8 +54,9 @@ log = logging.getLogger(__name__)
 # Recall's meaning index (schema v15, and created here too for an index opened
 # on a database no store has migrated). One row per passage of a memory or a
 # handoff; ``text_hash`` is the text the passages were cut from, so a text that
-# changed is cut and embedded again. Rebuildable from the words at any time; it
-# is never memory itself.
+# changed is cut and embedded again, and ``scheme`` is how it was cut
+# (``PASSAGE_SCHEME``), so a text cut an older way is cut again. Rebuildable
+# from the words at any time; it is never memory itself.
 PASSAGE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS passage_vectors (
     item_id TEXT NOT NULL,
@@ -60,15 +65,37 @@ CREATE TABLE IF NOT EXISTS passage_vectors (
     text_hash TEXT NOT NULL,
     dims INTEGER NOT NULL,
     embedding BLOB NOT NULL,
+    scheme INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (item_id, model_name, part)
 )
 """
 
-# A passage the local model reads whole: about 150 to 200 of its 256 tokens.
+# How the passages of a text are cut (``passages``), which every row records:
+#   1  passages of up to 700 characters at paragraph, sentence and word breaks
+#      (R08). A row written by code that names no scheme was cut this way.
+#   2  windows of whole sentences, about 300 characters, each overlapping the
+#      next by one sentence; and the text's first 700 characters, whole.
+# A row cut by an older scheme is stale: its item waits to be indexed again and
+# is never found by it. On a copy of the live store, a standing rule of 548
+# characters was one scheme-1 passage, which scored 0.24 against "plain
+# language, brief replies, no jargon", under the floor of 0.3; the window of
+# its first three sentences scores 0.52, above anything else the query meets.
+# A newer scheme's rows count here, and this code never cuts them again.
+PASSAGE_SCHEME = 2
+_FIRST_SCHEME = 1
+_SCHEME_COLUMN = f"scheme INTEGER NOT NULL DEFAULT {_FIRST_SCHEME}"
+# A window: whole sentences, together at most this long. A sentence longer
+# than this alone is cut at spaces into near-equal pieces.
+WINDOW_CHARS = 300
+# The whole-text passage: a text's first this-many characters, about 150 to
+# 200 of the model's 256 tokens.
 PASSAGE_CHARS = 700
-# Passages kept for one text: its first ~16,000 characters. A capture can run
-# to 65,536; past this, the rest is found by its words.
-PASSAGE_LIMIT = 24
+# Passages kept for one text: enough for its first ~16,000 characters however
+# its sentences run. Windows advance least with sentences of about 100
+# characters (two to a window, one shared), about 101 characters each: 159
+# windows and the whole. A capture can run to 65,536; past this, the rest is
+# found by its words.
+PASSAGE_LIMIT = 160
 # Ids asked about in one statement, well under SQLite's variable limit.
 _ID_CHUNK = 400
 
@@ -87,8 +114,11 @@ WRITE_NETWORK_TIMEOUT = 2.0
 # between calls (a local call of this size takes well under a tenth of a second).
 _WRITE_CHUNK = 16
 
-_PARAGRAPHS = re.compile(r"\n\s*\n")
-_SENTENCES = re.compile(r"(?<=[.!?])\s+")
+# Where a sentence ends: a run of . ! ? or …, and any closing quotes or
+# brackets after it, before a space. A line break ends one too.
+_SENTENCE_END = re.compile("[.!?…]+[\"'”’)\\]]*(?=\\s)")
+# Words whose last period ends no sentence.
+_ABBREVIATIONS = frozenset({"e.g", "i.e", "etc", "vs", "cf"})
 
 # Failures already logged in this process. Each is said once, not on every
 # capture and recall that runs into it.
@@ -113,41 +143,85 @@ def text_hash(text: str) -> str:
 
 
 def passages(text: str) -> list[str]:
-    """``text`` cut into passages of at most ``PASSAGE_CHARS`` characters, at
-    paragraph breaks, then sentence ends, then spaces: each short enough for
-    the model to read whole. At most ``PASSAGE_LIMIT`` of them."""
-    text = (text or "").strip()
-    if not text:
+    """``text`` as recall's meaning index reads it (scheme 2): first the whole
+    text, as far as its first ``PASSAGE_CHARS`` characters; then windows of
+    whole sentences, each at most ``WINDOW_CHARS`` long and beginning with the
+    sentence the one before it ended with, when the two fit in one window. A
+    text that is one window is one passage. At most ``PASSAGE_LIMIT`` in all.
+
+    An item is found by its best passage, so a question can meet a text's gist
+    or one of its sentences: a window holds one idea or a few, which the model
+    can read without blurring them into the rest."""
+    whole = " ".join((text or "").split())
+    if not whole:
         return []
-    if len(text) <= PASSAGE_CHARS:
-        return [text]
+    windows = _windows([piece for sentence in _sentences(text) for piece in _pieces(sentence)])
+    if len(whole) > PASSAGE_CHARS:
+        cut = whole.rfind(" ", 0, PASSAGE_CHARS + 1)
+        whole = whole[:cut if cut > 0 else PASSAGE_CHARS]
+    if windows == [whole]:
+        return windows
+    return [whole, *windows][:PASSAGE_LIMIT]
+
+
+def _sentences(text: str) -> list[str]:
+    """``text``'s sentences, in order, each on one line with single spaces.
+    A line break ends a sentence, and so does ``_SENTENCE_END``, except the
+    period of an abbreviation or of a list's number ("1.")."""
+    found: list[str] = []
+    for line in (text or "").splitlines():
+        line = " ".join(line.split())
+        start = 0
+        for end in _SENTENCE_END.finditer(line):
+            if end.group() == ".":
+                word = line[:end.start()].rsplit(" ", 1)[-1].lstrip("([{\"'“‘").lower()
+                if word in _ABBREVIATIONS or line[start:end.start()].strip().isdigit():
+                    continue
+            if line[start:end.end()].strip():
+                found.append(line[start:end.end()].strip())
+            start = end.end()
+        if line[start:].strip():
+            found.append(line[start:].strip())
+    return found
+
+
+def _pieces(sentence: str) -> list[str]:
+    """``sentence`` whole, or, when it alone is longer than a window, cut at
+    spaces into the fewest pieces that fit, as near equal as the spaces allow
+    (a word longer than a window is cut where it must be)."""
     pieces: list[str] = []
-    for paragraph in _PARAGRAPHS.split(text):
-        paragraph = " ".join(paragraph.split())
-        if not paragraph:
-            continue
-        if len(paragraph) <= PASSAGE_CHARS:
-            pieces.append(paragraph)
-            continue
-        for sentence in _SENTENCES.split(paragraph):
-            while len(sentence) > PASSAGE_CHARS:
-                cut = sentence.rfind(" ", 0, PASSAGE_CHARS + 1)
-                cut = cut if cut > 0 else PASSAGE_CHARS
-                pieces.append(sentence[:cut].strip())
-                sentence = sentence[cut:].strip()
-            if sentence:
-                pieces.append(sentence)
-    out: list[str] = []
-    current = ""
-    for piece in pieces:
-        if current and len(current) + 1 + len(piece) > PASSAGE_CHARS:
-            out.append(current)
-            current = piece
-        else:
-            current = f"{current} {piece}" if current else piece
-    if current:
-        out.append(current)
-    return out[:PASSAGE_LIMIT]
+    while len(sentence) > WINDOW_CHARS:
+        count = -(-len(sentence) // WINDOW_CHARS)
+        cut = sentence.rfind(" ", 0, -(-len(sentence) // count) + 1)
+        if cut <= 0:
+            cut = sentence.rfind(" ", 0, WINDOW_CHARS + 1)
+        if cut <= 0:
+            cut = WINDOW_CHARS
+        pieces.append(sentence[:cut].strip())
+        sentence = sentence[cut:].strip()
+    if sentence:
+        pieces.append(sentence)
+    return pieces
+
+
+def _windows(sentences: list[str]) -> list[str]:
+    """``sentences`` packed in order into windows of at most ``WINDOW_CHARS``,
+    each window beginning with the last sentence of the one before when that
+    sentence and the next fit in one window (otherwise it could only repeat)."""
+    windows: list[str] = []
+    first, count = 0, len(sentences)
+    while first < count:
+        end, length = first + 1, len(sentences[first])
+        while end < count and length + 1 + len(sentences[end]) <= WINDOW_CHARS:
+            length += 1 + len(sentences[end])
+            end += 1
+        windows.append(" ".join(sentences[first:end]))
+        if end >= count:
+            break
+        shared = end - 1
+        overlaps = shared > first and len(sentences[shared]) + 1 + len(sentences[end]) <= WINDOW_CHARS
+        first = shared if overlaps else end
+    return windows
 
 
 def _describe_failure(exc: BaseException) -> str:
@@ -545,6 +619,8 @@ class EmbeddingIndex:
         self._unavailable_reason: str | None = None
         self._last_error: str | None = None
         self._verified = False
+        # Whether passage_vectors marks each row's scheme (``_marks_scheme``).
+        self._scheme_marked = False
 
         # Resolve Gemini API key
         api_key = gemini_api_key or _load_env_key("GEMINI_API_KEY")
@@ -580,6 +656,37 @@ class EmbeddingIndex:
             """)
             conn.execute(PASSAGE_TABLE_SQL)
             conn.commit()
+            self._marks_scheme(conn, add=True)
+
+    def _marks_scheme(self, conn: sqlite3.Connection, *, add: bool = False) -> bool:
+        """Whether ``passage_vectors`` records each row's scheme. Without the
+        column (a table R08's code made) no row counts: every item waits.
+
+        With ``add``, a writable index adds it, marking each row there scheme
+        1, in one transaction; the value is written into every row, because
+        some SQLite builds report an added column's default as NULL in
+        ``integrity_check``, which the store runs on every open. A column
+        another process added first, or a lock held past the wait, leaves the
+        table as it finds it, and a later pass adds it. Never raises."""
+        if self._scheme_marked:
+            return True
+        try:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(passage_vectors)")}
+            if columns and "scheme" not in columns and add and not self._read_only:
+                try:
+                    if not conn.in_transaction:
+                        conn.execute("BEGIN IMMEDIATE")
+                    conn.execute(f"ALTER TABLE passage_vectors ADD COLUMN {_SCHEME_COLUMN}")
+                    conn.execute(f"UPDATE passage_vectors SET scheme = {_FIRST_SCHEME}")
+                    conn.commit()
+                except sqlite3.Error:
+                    if conn.in_transaction:
+                        conn.rollback()
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(passage_vectors)")}
+        except sqlite3.Error:
+            return False
+        self._scheme_marked = "scheme" in columns
+        return self._scheme_marked
 
     def _get_conn(self) -> sqlite3.Connection | None:
         if not self._db_path:
@@ -716,12 +823,14 @@ class EmbeddingIndex:
         return status
 
     def _passages_stored(self, model: str) -> int:
+        """Passages recall can use: this model's, cut by this scheme or a newer one."""
         conn = self._existing_conn()
-        if conn is None:
+        if conn is None or not self._marks_scheme(conn):
             return 0
         try:
             row = conn.execute(
-                "SELECT COUNT(*) FROM passage_vectors WHERE model_name = ?", (model,)
+                "SELECT COUNT(*) FROM passage_vectors WHERE model_name = ? AND scheme >= ?",
+                (model, PASSAGE_SCHEME),
             ).fetchone()
         except sqlite3.OperationalError:
             return 0  # no passage table: nothing was cut into passages here
@@ -751,17 +860,20 @@ class EmbeddingIndex:
 
     def _ids_with_vectors(self, model: str) -> set[str]:
         """Ids recall can compare with a query by this model: a whole-text
-        vector, or passages."""
+        vector, or passages cut by this scheme or a newer one."""
         conn = self._existing_conn()
         if conn is None:
             return set()
+        queries = [("SELECT engram_id FROM embeddings WHERE model_name = ?", (model,))]
+        if self._marks_scheme(conn):
+            queries.append((
+                "SELECT DISTINCT item_id FROM passage_vectors WHERE model_name = ? AND scheme >= ?",
+                (model, PASSAGE_SCHEME),
+            ))
         ids: set[str] = set()
-        for sql in (
-            "SELECT engram_id FROM embeddings WHERE model_name = ?",
-            "SELECT DISTINCT item_id FROM passage_vectors WHERE model_name = ?",
-        ):
+        for sql, params in queries:
             try:
-                ids.update(row[0] for row in conn.execute(sql, (model,)).fetchall())
+                ids.update(row[0] for row in conn.execute(sql, params).fetchall())
             except sqlite3.OperationalError:
                 continue  # that table was never created here
         return ids
@@ -874,12 +986,14 @@ class EmbeddingIndex:
         real store 3,746 of them, 202 in scope, so across twelve cues 14 of 240
         meaning hits survived the scope check afterwards.
 
-        Each candidate counts by its best vector from this model: its passages,
-        or its whole-text vector while it has no passages yet. ``texts`` gives
-        the words some candidates hold now (recall passes the notes'): passages
-        cut from other words are stale and never count, so a note rewritten in
-        place (by code older than this, say) is never found by its old meaning.
-        It waits to be indexed again.
+        Each candidate counts by its best vector from this model: its passages
+        (``passages``: its sentence windows and its whole text), or its
+        whole-text vector while it has no passages yet. Passages cut by an
+        older scheme are stale and never count: the item waits to be indexed
+        again, like one with none. ``texts`` gives the words some candidates
+        hold now (recall passes the notes'): passages cut from other words are
+        stale too and never count, so a note rewritten in place (by code older
+        than this, say) is never found by its old meaning. It waits as well.
         """
         if not self._available or not self._embedder or not candidates:
             return []
@@ -893,8 +1007,9 @@ class EmbeddingIndex:
         model = self._embedder.model_name
         cut = self._rows_for(
             conn, "SELECT item_id, embedding, dims, text_hash FROM passage_vectors "
-            "WHERE model_name = ? AND item_id IN ({})", model, wanted,
-        )
+            "WHERE model_name = ? AND scheme >= ? AND item_id IN ({})",
+            (model, PASSAGE_SCHEME), wanted,
+        ) if self._marks_scheme(conn) else []
         now = {item_id: text_hash(text) for item_id, text in (texts or {}).items()}
         rows = [
             (item_id, blob, dims) for item_id, blob, dims, digest in cut
@@ -904,7 +1019,7 @@ class EmbeddingIndex:
         if without:
             rows += self._rows_for(
                 conn, "SELECT engram_id, embedding, dims FROM embeddings "
-                "WHERE model_name = ? AND engram_id IN ({})", model, without,
+                "WHERE model_name = ? AND engram_id IN ({})", (model,), without,
             )
         best: dict[str, float] = {}
         for item_id, similarity in _similarities(query_values, rows):
@@ -919,10 +1034,10 @@ class EmbeddingIndex:
 
     @staticmethod
     def _rows_for(
-        conn: sqlite3.Connection, sql: str, model: str, ids: Collection[str],
+        conn: sqlite3.Connection, sql: str, params: tuple[Any, ...], ids: Collection[str],
     ) -> list[tuple[Any, ...]]:
-        """``sql``'s rows for ``ids``, asked in chunks; none when the table
-        was never created here."""
+        """``sql``'s rows for ``ids`` (its ``params`` first), asked in chunks;
+        none when the table was never created here."""
         rows: list[tuple[Any, ...]] = []
         ordered = sorted(ids)
         for start in range(0, len(ordered), _ID_CHUNK):
@@ -930,7 +1045,7 @@ class EmbeddingIndex:
             try:
                 rows.extend(
                     tuple(row) for row in conn.execute(
-                        sql.format(", ".join("?" for _ in chunk)), (model, *chunk),
+                        sql.format(", ".join("?" for _ in chunk)), (*params, *chunk),
                     ).fetchall()
                 )
             except sqlite3.OperationalError:
@@ -938,28 +1053,22 @@ class EmbeddingIndex:
         return rows
 
     def passage_hashes(self, item_ids: Iterable[str]) -> dict[str, str]:
-        """For each of ``item_ids`` with passages from this model, the text
-        they were cut from (``text_hash``)."""
+        """For each of ``item_ids`` with passages from this model, cut by this
+        scheme or a newer one, the text they were cut from (``text_hash``).
+        An item missing here waits to be indexed: every count of what waits
+        (indexing, health, the watchdog) asks this."""
         if not self._embedder:
             return {}
         conn = self._existing_conn()
-        if conn is None:
+        if conn is None or not self._marks_scheme(conn):
             return {}
-        found: dict[str, str] = {}
-        ordered = sorted(set(item_ids))
-        for start in range(0, len(ordered), _ID_CHUNK):
-            chunk = ordered[start:start + _ID_CHUNK]
-            try:
-                found.update(
-                    (row[0], row[1]) for row in conn.execute(
-                        "SELECT item_id, text_hash FROM passage_vectors "
-                        f"WHERE model_name = ? AND part = 0 AND item_id IN ({', '.join('?' for _ in chunk)})",
-                        (self._embedder.model_name, *chunk),
-                    ).fetchall()
-                )
-            except sqlite3.OperationalError:
-                return found
-        return found
+        return {
+            item_id: digest for item_id, digest in self._rows_for(
+                conn, "SELECT item_id, text_hash FROM passage_vectors "
+                "WHERE model_name = ? AND part = 0 AND scheme >= ? AND item_id IN ({})",
+                (self._embedder.model_name, PASSAGE_SCHEME), set(item_ids),
+            )
+        }
 
     def index_passages(
         self,
@@ -969,8 +1078,9 @@ class EmbeddingIndex:
         seconds: float | None = None,
     ) -> dict[str, int]:
         """Cut each ``(item_id, text)`` into passages and store a vector for
-        each, replacing what this model stored for that item before; items
-        whose passages already match their text are skipped.
+        each, marked with this scheme, replacing what this model stored for
+        that item before; items whose passages already match their text, cut
+        by this scheme or a newer one, are skipped.
 
         ``budget`` bounds the passages embedded in one call; an item is never
         half-written, and what is left waits for the next call. ``seconds``
@@ -989,6 +1099,11 @@ class EmbeddingIndex:
         if conn is None:
             return done
         items = [(item_id, text) for item_id, text in items if (text or "").strip()]
+        if not self._marks_scheme(conn, add=True):
+            # A table that cannot mark its rows' scheme yet: what this pass
+            # wrote would count as an older cut. Everything waits for the next.
+            done["waiting"] = len(items)
+            return done
         stored = self.passage_hashes(item_id for item_id, _ in items)
         todo: list[tuple[str, str, list[str]]] = []
         planned = 0
@@ -1062,10 +1177,10 @@ class EmbeddingIndex:
                 )
                 conn.executemany(
                     "INSERT INTO passage_vectors "
-                    "(item_id, model_name, part, text_hash, dims, embedding) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "(item_id, model_name, part, text_hash, dims, embedding, scheme) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     [
-                        (item_id, model, part, digest, len(v), self._to_bytes(v))
+                        (item_id, model, part, digest, len(v), self._to_bytes(v), PASSAGE_SCHEME)
                         for part, v in enumerate(values)
                     ],
                 )

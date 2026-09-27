@@ -619,7 +619,11 @@ def test_long_texts_are_cut_into_passages_the_model_reads_whole():
                        for p in range(6))
     parts = ei.passages(text)
     assert len(parts) > 1 and all(len(part) <= ei.PASSAGE_CHARS for part in parts)
-    assert " ".join(parts).split() == text.split(), "a passage lost or added words"
+    # Words repeat across passages since R08b (windows overlap, and the whole
+    # text is kept too: test_passages_the_model_can_read.py), but none is cut.
+    words = set(text.split())
+    assert all(set(part.split()) <= words for part in parts), "a passage cut a word"
+    assert parts[-1].endswith(text.split()[-1]), "the passages stopped before the end"
     assert len(ei.passages("word " * 40_000)) == ei.PASSAGE_LIMIT
 
 

@@ -2,6 +2,28 @@
 
 ## 0.3.1 (unreleased)
 
+### Every rule reaches the model; beliefs carry their ids
+
+Claude Code shows a model only the first 2,048 characters of an MCP server's
+instructions. Mnemos's ran to 3,021 characters (3,420 in advanced mode), and
+every rule sat past the cut: "never narrate the machinery" began at character
+2,210, then came the signing rules and "storage is local". So no model in
+Claude Code was shown them (found in the lab, 2026-09-27: a session's copy
+ended at character 2,047, mid-sentence).
+
+- The instructions fit: 1,816 characters in simple mode and 1,972 in
+  advanced, each held to 2,048 by a test that reads what each mode serves
+  over the MCP protocol.
+- The rules come first: never narrate the machinery, the six steps of the
+  loop, sign every write, storage is local. The tool descriptions, which
+  models see in full, carry the details.
+- Each belief line in the briefing carries its id,
+  `- <belief> (40%, belief_...)`, so a correction can name it: a belief
+  changes only by its id.
+
+Changed behaviour: anything that reads the briefing's belief lines now finds
+the id after the confidence.
+
 ### One capture, one object; corrections that land once
 
 A capture writes two things, a continuity note (what the briefing is built

@@ -489,6 +489,15 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         session introduced itself as, who performed the last maintenance
         cycle, onboarding and verification progress, and the latest dream
         journal entry.
+
+        It also watches what should be moving: questions nobody answers, the
+        maintenance report the briefing can find, maintenance that changes
+        nothing, lesson questions waiting their turn, what waits for recall's
+        meaning index, and sessions still writing with older code. Whatever
+        has stalled for more than a day gets one ATTENTION line: a plain
+        sentence and the command that fixes or inspects it. When all is well
+        it adds nothing. The structured result keeps, for every check, what
+        was expected and what was seen.
         """
 
         runtime = _get_runtime()

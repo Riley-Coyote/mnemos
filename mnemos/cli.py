@@ -2294,18 +2294,34 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             return 0
 
         print("DB exists:    yes")
+        # Read once, before the semantic probe, and printed last: nothing of
+        # it when all is well.
+        try:
+            watched = runtime.watchdog()
+        except Exception:
+            watched = None
         _print_code_status(runtime)
         _print_identity_status(runtime)
         print(f"Model:        {'dedicated provider configured' if runtime.has_dedicated_model else 'local baseline only'}")
         _print_background_status(runtime.scope)
-        _print_semantic_status(runtime)
+        _print_semantic_status(runtime, watched)
         print(f"Simple tools: {', '.join(SIMPLE_TOOL_NAMES)}")
         _print_memory_status(runtime)
         _print_continuity_status(runtime)
         _print_legacy_status(runtime)
+        _print_watchdog(watched)
         return 0
     finally:
         runtime.close()
+
+
+def _print_watchdog(watched) -> None:
+    """Say what has stalled for more than a day, one line each with the
+    command that fixes or inspects it, and nothing when all is well."""
+    from .watchdog import flag_lines
+
+    for flag in flag_lines(watched):
+        print(f"  ATTENTION:  {flag}")
 
 
 def _print_memory_status(runtime) -> None:
@@ -2361,7 +2377,7 @@ def _print_identity_status(runtime) -> None:
     print(f"Identity:     {said}")
 
 
-def _print_semantic_status(runtime) -> None:
+def _print_semantic_status(runtime, watched=None) -> None:
     """Say whether recall can seed by meaning here, and why not if not.
 
     `sentence-transformers` is an optional extra, so retrieval is either
@@ -2387,9 +2403,15 @@ def _print_semantic_status(runtime) -> None:
     for detail in details:
         print(f"              {detail}")
     from .simple_runtime import describe_recall_index
+    from .watchdog import flagged
 
+    # The watchdog's flag about recall's meaning index carries the last pass's
+    # reason, and is printed with the others: said once.
     try:
-        recall_index = describe_recall_index(runtime.recall_index_status())
+        recall_index = (
+            None if flagged(watched, "recall_index")
+            else describe_recall_index(runtime.recall_index_status())
+        )
     except Exception:
         recall_index = None
     if recall_index:

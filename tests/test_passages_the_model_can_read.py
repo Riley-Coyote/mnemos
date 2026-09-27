@@ -4,8 +4,9 @@ R08 cut memories into passages of up to 700 characters. all-MiniLM-L6-v2 is
 trained on sentence pairs and averages what it reads, so a passage holding
 several ideas embeds as a blur of them. On a copy of the live store the
 plain-words rule (548 characters, one passage) scored 0.24 against "plain
-language, brief replies, no jargon", under the floor of 0.3, so meaning never
-found it; its first sentences alone scored 0.52, above anything the query met.
+language, brief replies, no jargon", under the floor (0.3 then), so meaning
+never found it; its first sentences alone scored 0.52, above anything the query
+met.
 
 Now a text is read as windows of whole sentences, about 300 characters, each
 overlapping the next by one sentence, and as a whole (its first 700
@@ -29,9 +30,11 @@ from pathlib import Path
 
 import pytest
 
+import mnemos.retrieval.reactive as reactive
 import mnemos.store.embedding_index as ei
 from mnemos.cli import main
 from mnemos.core.engram import Engram
+from mnemos.retrieval.reactive import ReactiveRetriever
 from mnemos.simple_runtime import MnemosRuntime, recall_index_items
 from mnemos.store.embedding_index import EmbeddingIndex
 from mnemos.store.sqlite_store import EngramStore
@@ -455,3 +458,65 @@ def test_a_newer_schemes_passages_count_and_are_never_cut_again(tmp_path, meanin
     assert [item for item, _ in index.search_candidates("lighthouse", {"engram_a"})] == ["engram_a"]
     assert index.index_passages([("engram_a", "The ferry leaves the pier at ten.")])["items"] == 1
     assert _rows(db, "engram_a") == [(0, ei.PASSAGE_SCHEME)], "words that changed are cut again"
+
+
+# ── 5. The meaning floor: 0.35 ──
+
+
+_AT_THE_FLOOR = "Apples keep best in a cool cellar."
+_UNDER_THE_FLOOR = "Pears ripen slowly on the windowsill."
+
+
+class _FixedModel:
+    """Vectors whose cosines with the cue are exact whatever the float width:
+    7 / sqrt(49 + 324 + 25 + 1 + 1) is 7/20, 0.35 to the last bit; 1/3 lies
+    between the old floor and the new one."""
+
+    vectors = {
+        "lighthouse": [1.0, 0.0, 0.0, 0.0, 0.0],
+        _AT_THE_FLOOR: [7.0, 18.0, 5.0, 1.0, 1.0],
+        _UNDER_THE_FLOOR: [1.0, 2.0, 2.0, 0.0, 0.0],
+    }
+
+    def encode(self, texts, normalize_embeddings=True, batch_size=32):
+        other = [0.0, 0.0, 0.0, 0.0, 1.0]
+        if isinstance(texts, str):
+            return _Vector(self.vectors.get(texts, other))
+        return [_Vector(self.vectors.get(text, other)) for text in texts]
+
+
+class _FixedEmbedder(ei._LocalEmbedder):
+    def _get_model(self):
+        if self._model is None:
+            self._model = _FixedModel()
+        return self._model
+
+
+def test_meaning_seeds_a_memory_at_0_35_and_none_between_0_30_and_0_35(tmp_path, monkeypatch):
+    """Read in windows, more of every text clears a floor: at 0.3 a question
+    that 15 items cleared was cleared by 41 on a copy of the lab's store, and
+    the lesson it was about fell out of the top ten. Neither memory shares a
+    word with the cue, so only meaning could seed them."""
+    monkeypatch.setattr(ei, "_check_local_deps", lambda: True)
+    monkeypatch.setattr(ei, "_LocalEmbedder", _FixedEmbedder)
+    monkeypatch.setattr(ei, "_LOGGED", set(), raising=False)
+    db = str(tmp_path / "memory.db")
+    store = EngramStore(db)
+    index = EmbeddingIndex(db_path=db)
+    at, under = _memory(_AT_THE_FLOOR), _memory(_UNDER_THE_FLOOR)
+    for memory in (at, under):
+        store.save_engram(memory)
+    index.index_passages([(memory.id, memory.content) for memory in (at, under)])
+    assert dict(index.search_candidates("lighthouse", {at.id, under.id})) == {
+        at.id: 0.35, under.id: 0.3333,
+    }, "premise: one memory exactly at 0.35, one between 0.30 and 0.35"
+
+    results = ReactiveRetriever(store, embedding_index=index,
+                                reconsolidation_enabled=False).retrieve("lighthouse", **SCOPE)
+
+    assert [result.engram.id for result in results] == [at.id], [
+        (result.engram.content, result.score_breakdown) for result in results
+    ]
+    assert results[0].retrieval_path == "embedding"
+    assert results[0].score_breakdown["similarity"] == 0.35
+    assert reactive.MEANING_FLOOR == 0.35

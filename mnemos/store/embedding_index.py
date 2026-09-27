@@ -78,8 +78,9 @@ CREATE TABLE IF NOT EXISTS passage_vectors (
 # A row cut by an older scheme is stale: its item waits to be indexed again and
 # is never found by it. On a copy of the live store, a standing rule of 548
 # characters was one scheme-1 passage, which scored 0.24 against "plain
-# language, brief replies, no jargon", under the floor of 0.3; the window of
-# its first three sentences scores 0.52, above anything else the query meets.
+# language, brief replies, no jargon", under the floor (0.3 then); the window
+# of its first three sentences scores 0.52, above anything else the query
+# meets.
 # A newer scheme's rows count here, and this code never cuts them again.
 PASSAGE_SCHEME = 2
 _FIRST_SCHEME = 1

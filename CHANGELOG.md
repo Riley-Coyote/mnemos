@@ -2,6 +2,85 @@
 
 ## 0.3.1 (unreleased)
 
+### Recall that finds by meaning
+
+Recall used meaning in name only. On copies of the live store:
+
+- The meaning search took its top 20 over all 3,746 stored vectors before it
+  checked scope, so across twelve cues 14 of 240 meaning hits survived and 1
+  of 60 results arrived by meaning.
+- Every reached memory re-fired on every hop, with no limit on its links, so
+  memories with 20 to 32 links outscored the ones a question was about.
+- Results were cut to the requested count before a filter dropped some, and a
+  match by meaning alone was dropped unless it scored 1.35.
+- 176 live memories (all of them lessons) and all 259 handoffs had no vector.
+- Query recall never returned a handoff: in the lab's baseline, 0 of 28 facts
+  that lived only in handoffs, and a superseded handoff led to a confident
+  "no record".
+- Loading the cached embedding model could hang on a network call.
+
+What changed:
+
+- The meaning search scores only what recall may return (the memories live in
+  the caller's scope, and the handoffs) and only then takes its top.
+- Words and meaning are fused by reciprocal rank, as Polyphonic fuses them:
+  words 0.3, meaning 0.5, k = 60. A match by meaning alone is returned when its
+  rank earns it.
+- Resonance passes on from newly reached memories only, each contribution
+  divided by the sender's links, for at most two hops. Dormant and archived
+  memories neither relay nor receive, as before.
+- Filter first, then cut: asked for five, recall returns five while matches
+  remain.
+- One list of common words (`mnemos/store/fts.py`), used by the search, the
+  links and lessons made from words, the filters and identity's comparison.
+- Handoffs join recall: the ones in use and the older ones (replaced by a newer
+  handoff from their session, or retired), by their words and their meaning,
+  under "Handoffs:", each with who left it and when. An older one says so. A
+  forgotten one stays gone. A handoff never relays activation and never
+  becomes a memory. Recall by id still reaches any handoff.
+- Each row carries up to 300 characters of the item's own words (a memory's
+  words, not its impact), so a list is usually enough to use.
+- A capture's note and memory are one object, so a capture comes back once, as
+  its memory. The "Continuity notes:" section is gone from recall; notes with no
+  memory of their own (reports, notes written through other tools) come back
+  under "Notes:".
+- Recall's meaning index: each memory and handoff is cut into passages the
+  model reads whole (it reads about 1,000 characters), with a vector for each,
+  in a new table `passage_vectors`. It fills itself: a handoff as it is
+  written, up to 64 passages with each capture or correction, and everything
+  waiting with `mnemos_maintain`. Until an item has passages, recall uses its
+  whole-text vector and its words.
+- The local embedding model loads only from files on this machine
+  (`local_files_only`). Downloading is one explicit step:
+  `mnemos embeddings download`. A hanging network no longer blocks recall,
+  health or doctor.
+- `MAINTENANCE_CODE_VERSION` is 8: the word list changes how maintenance links
+  and matches lessons, and indexing is new. Code older than the store records
+  the agent's words and indexes nothing.
+
+Measured on copies (the numbers are in the commit that makes the change):
+across the review's twelve cues, 51 of 59 results arrived by meaning (1 of 51
+before); of the lab's 29 missed facts, 19 now reach recall's top ten (6
+before), 10 of the 13 that lived only in handoffs (0 before); recall's median
+time fell from 151 to 42 ms.
+
+Changed behaviour:
+
+- Recall's output: "Durable memories:", then "Handoffs:", then "Notes:",
+  each in rank order; `max_results` counts every row. Rows show a memory's own
+  words where they showed its impact.
+- The model no longer downloads the first time it is needed. On a machine
+  without it, semantic recall is off until `mnemos embeddings download` has
+  run; doctor and the health card say so.
+- Maintenance reports a line, `Recall index: ...`, when it indexed something.
+
+Migration (schema 15). The first open by this code adds the table
+`passage_vectors`, empty, after the usual verified pre-migration backup. On a
+copy of the live store (schema 13), opening took 1.73 s, the backup (163 MB)
+included; integrity ok. Indexing everything there took 2.85 s (755 memories and
+handoffs, 1,763 passages). After upgrading, run `mnemos embeddings download`
+once if the model has never been downloaded on this machine.
+
 ### Standing preferences, marked by the agent
 
 A standing rule is obeyed, not recalled, and nothing marked one. The

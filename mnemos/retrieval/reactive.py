@@ -16,6 +16,14 @@ Pipeline:
 5. Reconsolidation of what is returned, once per session per memory. A
    caller that filters further retrieves without it and reinforces what it
    finally shows (``ReactiveRetriever.reinforce``).
+
+Quiet memories. A dormant memory is found only by the cue itself: it is seeded
+when it matches, at half the activation an active memory would start with, and
+a returned one wakes (``EngramStore.record_return``). Dormant and archived
+memories take no part in resonance: they pass no activation on, and none
+reaches them through a connection. Decay used to be the only way out of the
+active set and recall the only way back, and recall never looked, so a memory
+that went dormant stayed there, with every check green.
 """
 
 from __future__ import annotations
@@ -39,6 +47,15 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 _EMBEDDING_SEED_FAILURE_LOGGED = False
+
+# A dormant memory that matches the cue starts at this share of the activation
+# its match would give an active one, so an equal active match comes first.
+DORMANT_SEED_SHARE = 0.5
+# How many dormant memories one cue may seed, apart from the active seeds, so
+# a store where most memories have gone quiet cannot crowd the active ones out.
+DORMANT_SEED_LIMIT = 10
+# Memories that pass no activation on and receive none through a connection.
+_QUIET_STATES = frozenset({"dormant", "archived"})
 
 
 def _log_seed_failure_once(exc: Exception) -> None:
@@ -159,16 +176,27 @@ class ReactiveRetriever:
         # "for" was the best match for "getting ready for her reading".
         seed_activation: dict[str, float] = {}
 
-        # FTS seeds (keyword matching), with FTS5's bm25 rank for each
+        # FTS seeds (keyword matching), with FTS5's bm25 rank for each: the
+        # active memories that match, then up to DORMANT_SEED_LIMIT dormant
+        # ones. Both searches run the same query over the same index, so their
+        # ranks are placed on one scale before a dormant seed's is halved.
         fts_query = _to_fts_query(cue)
         fts_results = self._store.search_fts_ranked(
             fts_query, limit=30, agent_id=agent_id, person_id=person_id,
             project_scope=project_scope,
         )
+        fts_results += self._store.search_fts_ranked(
+            fts_query, limit=DORMANT_SEED_LIMIT, agent_id=agent_id,
+            person_id=person_id, project_scope=project_scope, state="dormant",
+        )
+        fts_results.sort(key=lambda ranked: ranked[1])
         _add_ranked_seeds(
             seeds, seed_activation,
             [(e, rank) for e, rank in fts_results if e.owner_agent_id == agent_id],
         )
+        for eid, engram in seeds.items():
+            if engram.state == "dormant":
+                seed_activation[eid] *= DORMANT_SEED_SHARE
 
         # Shared DB seeds (cross-agent shared memories), ranked within their own search
         if self._shared_store:
@@ -200,11 +228,14 @@ class ReactiveRetriever:
                             eid, agent_id=agent_id, person_id=person_id,
                             project_scope=project_scope,
                         )
-                        if engram and engram.state == "active":
+                        if engram and engram.state in ("active", "dormant"):
                             seeds[eid] = engram
                             embedding_similarity[eid] = similarity
-                            # a meaning match starts as bright as it matched, too
-                            seed_activation[eid] = min(1.0, similarity)
+                            # a meaning match starts as bright as it matched,
+                            # too, and a dormant one at half that
+                            seed_activation[eid] = min(1.0, similarity) * (
+                                DORMANT_SEED_SHARE if engram.state == "dormant" else 1.0
+                            )
             except Exception as exc:
                 # Embeddings are optional — FTS still works — but a failure
                 # here is a bug, not a missing backend (the index reports
@@ -221,13 +252,17 @@ class ReactiveRetriever:
         for seed_id in seeds:
             activation[seed_id] = seed_activation.get(seed_id, 1.0)
 
+        # A quiet memory (dormant or archived) passes nothing on: a dormant
+        # seed counts for its own match alone.
+        quiet = {eid for eid, engram in seeds.items() if engram.state in _QUIET_STATES}
+
         # Spread through connections
         for hop in range(1, self._depth + 1):
             hop_decay = self._decay ** hop
             new_activation: dict[str, float] = defaultdict(float)
 
             for engram_id, current_act in list(activation.items()):
-                if current_act < self._threshold:
+                if current_act < self._threshold or engram_id in quiet:
                     continue
 
                 connections = self._store.get_connections(engram_id)
@@ -238,10 +273,16 @@ class ReactiveRetriever:
                     except Exception:
                         pass
                 for conn in connections:
-                    if not self._store.engram_visible_in_scope(
+                    state = self._store.engram_state_in_scope(
                         conn.target_id, agent_id=agent_id, person_id=person_id,
                         project_scope=project_scope,
-                    ):
+                    )
+                    if state is None:
+                        continue
+                    # Nor does anything reach a quiet memory through a link:
+                    # only the cue brings a dormant one back, and nothing
+                    # carries on through it.
+                    if state in _QUIET_STATES:
                         continue
                     # Weight by relation type
                     relation_weight = _RELATION_WEIGHTS.get(conn.relation, 0.5)
@@ -284,7 +325,11 @@ class ReactiveRetriever:
             if not engram and self._shared_store:
                 engram = self._shared_store.get_engram(eid)
 
-            if not engram or engram.state != "active":
+            # An active memory, or a dormant one the cue itself matched.
+            if not engram or not (
+                engram.state == "active"
+                or (engram.state == "dormant" and eid in seeds)
+            ):
                 continue
             # Allow own engrams + shared/public from other agents
             if engram.owner_agent_id != agent_id and engram.visibility == "private":

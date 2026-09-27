@@ -68,6 +68,13 @@ HANDOFF_SESSIONS_KEPT = 8
 PACKET_HANDOFFS = 3
 LIVE_HANDOFF_HOURS = 72
 
+# Why a memory is in the archive, when nobody chose it: decay took it there
+# ("low_accessibility" is archive_engram's default, and the reason the first
+# decay pass wrote). Only these may come back through recall. A memory the
+# agent forgot, or replaced with a correction, was put there on purpose, and
+# stays until someone who can see it decides otherwise.
+FADED_ARCHIVE_REASONS = ("decay_below_threshold", "low_accessibility")
+
 VALID_HYPO_SOURCES = {"observed", "synthesized", "co-formed"}
 VALID_HYPO_ENTRY_KINDS = {
     "continuity",
@@ -1109,6 +1116,27 @@ class EngramStore:
         ).fetchone()
         return row is not None
 
+    def engram_state_in_scope(
+        self,
+        engram_id: str,
+        *,
+        agent_id: str,
+        person_id: str,
+        project_scope: str,
+    ) -> str | None:
+        """An engram's state when it belongs to one exact scope, else None.
+
+        Recall's resonance asks this of every memory a connection leads to, to
+        stay in scope and to leave quiet memories out (see ReactiveRetriever).
+        """
+        row = self._get_conn().execute(
+            """SELECT state FROM engrams
+               WHERE id = ? AND owner_agent_id = ?
+                 AND person_id = ? AND project_scope = ?""",
+            (engram_id, agent_id, person_id, project_scope),
+        ).fetchone()
+        return None if row is None else row[0]
+
     def active_engram_ids(
         self, *, agent_id: str, person_id: str, project_scope: str
     ) -> set[str]:
@@ -1271,26 +1299,57 @@ class EngramStore:
                 Set to False for bulk operations where connections aren't needed
                 (e.g., decay pass only needs accessibility/strength fields).
         """
+        return self.get_engrams_in_states(
+            ("active",),
+            agent_id=agent_id,
+            limit=limit,
+            load_connections=load_connections,
+            person_id=person_id,
+            project_scope=project_scope,
+        )
+
+    def get_engrams_in_states(
+        self,
+        states: tuple[str, ...],
+        *,
+        agent_id: str | None = "default",
+        limit: int = 1000,
+        load_connections: bool = True,
+        person_id: str | None = None,
+        project_scope: str | None = None,
+        after_id: str | None = None,
+    ) -> list[Engram]:
+        """Engrams in any of ``states`` for an agent, the most accessible
+        first, as ``get_active_engrams`` returns active ones.
+
+        With ``after_id``, the ``limit`` engrams after that id in id order
+        instead: one page of a walk through every one of them (start it with
+        ``after_id=""``). Changes made to the engrams along the way cannot make
+        such a walk skip or repeat one. Decay walks dormant memories this way,
+        apart from the active ones, so no dormant memory waits behind a limit
+        the active ones fill.
+        """
         conn = self._get_conn()
-        if agent_id is None:
-            rows = conn.execute(
-                "SELECT * FROM engrams WHERE state = 'active' "
-                "ORDER BY accessibility DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-        elif person_id is not None and project_scope is not None:
-            rows = conn.execute(
-                "SELECT * FROM engrams WHERE state = 'active' "
-                "AND owner_agent_id = ? AND person_id = ? AND project_scope = ? "
-                "ORDER BY accessibility DESC LIMIT ?",
-                (agent_id, person_id, project_scope, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM engrams WHERE state = 'active' "
-                "AND owner_agent_id = ? ORDER BY accessibility DESC LIMIT ?",
-                (agent_id, limit),
-            ).fetchall()
+        states = tuple(dict.fromkeys(states))
+        if not states:
+            return []
+        where = [f"state IN ({', '.join('?' * len(states))})"]
+        params: list[Any] = list(states)
+        if agent_id is not None:
+            where.append("owner_agent_id = ?")
+            params.append(agent_id)
+            if person_id is not None and project_scope is not None:
+                where.append("person_id = ? AND project_scope = ?")
+                params.extend([person_id, project_scope])
+        order = "accessibility DESC"
+        if after_id is not None:
+            where.append("id > ?")
+            params.append(after_id)
+            order = "id"
+        rows = conn.execute(
+            f"SELECT * FROM engrams WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?",
+            (*params, limit),
+        ).fetchall()
         engrams = [Engram.from_dict(dict(r)) for r in rows]
         if load_connections:
             for engram in engrams:
@@ -1344,22 +1403,27 @@ class EngramStore:
     def search_fts_ranked(
         self, query: str, limit: int = 50, *, agent_id: str | None = None,
         person_id: str | None = None, project_scope: str | None = None,
+        state: str = "active",
     ) -> list[tuple[Engram, float]]:
         """search_fts, with how well each engram matched: FTS5's bm25 rank.
 
         Ranks are negative, and the better the match, the lower the rank. They are
-        comparable within one search, not across searches.
+        comparable within one search, not across searches. Searches for one query
+        in different states are comparable too: bm25 weighs a match against the
+        whole index, whatever state the rows found are in. Recall searches active
+        memories, then dormant ones (``state="dormant"``); an archived memory has
+        no row in the index.
         """
         conn = self._get_conn()
         scope_sql = ""
-        params: list[Any] = [query]
+        params: list[Any] = [query, state]
         if agent_id is not None and person_id is not None and project_scope is not None:
             scope_sql = " AND e.owner_agent_id = ? AND e.person_id = ? AND e.project_scope = ?"
             params.extend([agent_id, person_id, project_scope])
         params.append(limit)
         rows = conn.execute(
             "SELECT e.*, f.rank AS fts_rank FROM engrams e JOIN engrams_fts f ON e.id = f.id "
-            "WHERE engrams_fts MATCH ? AND e.state = 'active'" + scope_sql +
+            "WHERE engrams_fts MATCH ? AND e.state = ?" + scope_sql +
             " ORDER BY rank LIMIT ?", params,
         ).fetchall()
         ranked = []
@@ -1715,14 +1779,25 @@ class EngramStore:
         co-activation links the return formed or strengthened. Never content,
         the text index, other links, or a version: a return changes none of
         what those hold.
+
+        A dormant memory that is returned wakes: it is active again, with the
+        accessibility the return gave it (reconsolidation's floor, well above
+        where decay makes a memory dormant). Like the rest of a return, this
+        happens once per session and never from code older than the store:
+        Mnemos comes here only through ``ReactiveRetriever.reinforce``, which
+        holds both rules.
         """
+        if engram.state == "dormant":
+            engram.state = "active"
         conn = self._get_conn()
         self._begin_immediate()
         try:
             conn.execute(
                 "UPDATE engrams SET access_count = ?, last_accessed = ?, "
                 "reconsolidation_count = ?, strength = ?, stability = ?, "
-                "accessibility = ? WHERE id = ?",
+                "accessibility = ?, "
+                "state = CASE WHEN state = 'dormant' THEN 'active' ELSE state END "
+                "WHERE id = ?",
                 (
                     engram.access_count,
                     engram.last_accessed,
@@ -1784,6 +1859,62 @@ class EngramStore:
             (f"%{query}%", f"%{query}%", limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def archive_reason(self, engram_id: str) -> str | None:
+        """Why an archived engram is in the archive, or None when it is not."""
+        row = self._get_conn().execute(
+            "SELECT a.archive_reason FROM archive a JOIN engrams e ON e.id = a.id "
+            "WHERE a.id = ? AND e.state = 'archived'",
+            (engram_id,),
+        ).fetchone()
+        return None if row is None else row[0]
+
+    def faded_engrams(
+        self,
+        *,
+        agent_id: str,
+        person_id: str,
+        project_scope: str,
+        limit: int = 500,
+        before_id: str | None = None,
+    ) -> list[Engram]:
+        """Archived engrams in one scope that faded there (FADED_ARCHIVE_REASONS),
+        ``limit`` at a time, newest first by id (a ULID, so by when each was
+        written, to the millisecond); with ``before_id``, the page after that
+        id. Walking the pages
+        reaches every one of them, as ``count_faded`` counts every one, and
+        restoring one along the way cannot make the walk skip or repeat one. A
+        memory forgotten or replaced by a correction is never among them.
+        Which of them a query names is the caller's to judge, word by word:
+        SQLite's LIKE folds the case of ASCII letters only."""
+        reasons = ", ".join("?" * len(FADED_ARCHIVE_REASONS))
+        sql = (
+            "SELECT e.* FROM engrams e JOIN archive a ON a.id = e.id "
+            "WHERE e.state = 'archived' AND e.owner_agent_id = ? "
+            "AND e.person_id = ? AND e.project_scope = ? "
+            f"AND a.archive_reason IN ({reasons})"
+        )
+        params: list[Any] = [agent_id, person_id, project_scope, *FADED_ARCHIVE_REASONS]
+        if before_id is not None:
+            sql += " AND e.id < ?"
+            params.append(before_id)
+        rows = self._get_conn().execute(
+            sql + " ORDER BY e.id DESC LIMIT ?", (*params, limit),
+        ).fetchall()
+        return [Engram.from_dict(dict(row)) for row in rows]
+
+    def count_faded(self, *, agent_id: str, person_id: str, project_scope: str) -> int:
+        """How many archived engrams in one scope faded there: stored, and out of
+        reach of an ordinary recall (see ``faded_engrams``)."""
+        reasons = ", ".join("?" * len(FADED_ARCHIVE_REASONS))
+        row = self._get_conn().execute(
+            "SELECT COUNT(*) FROM engrams e JOIN archive a ON a.id = e.id "
+            "WHERE e.state = 'archived' AND e.owner_agent_id = ? "
+            "AND e.person_id = ? AND e.project_scope = ? "
+            f"AND a.archive_reason IN ({reasons})",
+            (agent_id, person_id, project_scope, *FADED_ARCHIVE_REASONS),
+        ).fetchone()
+        return int(row[0]) if row else 0
 
     # ── Beliefs ──
 

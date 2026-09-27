@@ -33,6 +33,12 @@ alone score 0.52, above anything else the question meets.
   the top ten, a newer handoff that carries a fact counting for it), of the 42
   held-out facts memory holds: 35 before, 35 with windows at 0.3, 36 with
   windows at 0.35; of the 29 development facts: 22, 20 and 22.
+- A write starts only what it may finish. A capture's or correction's
+  automatic pass embeds at most 64 passages, and an item with more than are
+  left (a long handoff can have 160) is not started, even first: it waits for
+  the scheduled job (256 a run) or `mnemos embeddings index`, which take it
+  whole. Each pass on the write path has one deadline, 2 s: no request starts
+  after it and none waits past it, however many requests the pass needs.
 
 Measured on copies, before and after (each indexed under its own scheme, at
 the floor each ships with): of the lab's 29 missed facts, 22 reach recall's

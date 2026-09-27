@@ -221,10 +221,10 @@ class TestThePacket:
 
         packet = _hook(db_path, home, {"hook_event_name": "SessionStart", "model": "claude-opus-5-5"})
         assert "From your previous session, in your own words" not in packet
-        assert "Left by Fable 5.1 (claude-fable-5-1)" in packet
-        assert "You are Opus 5.5 (claude-opus-5-5), a different model." in packet
-        assert "colleague's note, not your memory" in packet
-        assert "[by Fable 5.1," in packet
+        assert "From Fable 5.1, a colleague" in packet
+        assert "Yours" not in packet
+        assert "don't claim its work as yours" in packet
+        assert "by Fable 5.1:" in packet
 
     def test_the_same_model_is_told_so(self, tmp_path):
         db_path = tmp_path / "shared.db"
@@ -233,7 +233,7 @@ class TestThePacket:
         (home / ".mnemos").mkdir(parents=True)
 
         packet = _hook(db_path, home, {"hook_event_name": "SessionStart", "model": "claude-fable-5-1"})
-        assert "Left by Fable 5.1 (claude-fable-5-1) — the same model as you" in packet
+        assert "Yours (Fable 5.1)" in packet
 
     def test_without_the_readers_name_the_reader_is_asked_to_compare(self, tmp_path):
         db_path = tmp_path / "shared.db"
@@ -242,9 +242,9 @@ class TestThePacket:
         (home / ".mnemos").mkdir(parents=True)
 
         packet = _hook(db_path, home, {"hook_event_name": "SessionStart"})
-        assert "Left by Fable 5.1 (claude-fable-5-1)" in packet
-        assert "If this signature isn't yours" in packet
-        assert "the same model as you" not in packet
+        assert "From Fable 5.1, " in packet
+        assert "(yours if you are Fable 5.1)" in packet
+        assert "Yours" not in packet
 
     def test_the_mcp_packet_names_the_reader_it_detects(self, tmp_path, monkeypatch):
         db_path = tmp_path / "shared.db"
@@ -254,7 +254,7 @@ class TestThePacket:
         try:
             packet = runtime.context()
             assert "From your previous session, in your own words" not in packet
-            assert "You are Opus 5.5 (claude-opus-5-5), a different model." in packet
+            assert "From Fable 5.1, a colleague" in packet
             assert "by Fable 5.1" in packet
         finally:
             runtime.close()
@@ -265,8 +265,9 @@ class TestThePacket:
         try:
             runtime.handoff("Old note from before signatures.")
             packet = runtime.context()
-            assert "It isn't signed." in packet
-            assert "don't assume you wrote it" in packet
+            assert "Unsigned, " in packet
+            assert "maybe a colleague's" in packet
+            assert "Yours" not in packet
         finally:
             runtime.close()
 

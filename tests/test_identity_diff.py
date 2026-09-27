@@ -293,9 +293,11 @@ def test_report_persists_and_loads(seeded_store, soul_path):
     assert runs and runs[0]["stats"]["agent_id"] == AGENT
 
 
-def test_divergence_note_written_and_surfaces_in_context(
+def test_divergence_note_written_and_recalled(
     seeded_store, soul_path, scope
 ):
+    # The session-start packet shows only its six sections, and an identity
+    # divergence note is none of them; it is found by recall.
     report = _diff(seeded_store, soul_path)
     note_id = write_divergence_note(seeded_store, scope, report)
     assert note_id is not None
@@ -310,7 +312,7 @@ def test_divergence_note_written_and_surfaces_in_context(
         use_dedicated_model=False,
     )
     try:
-        packet = runtime.context()
+        packet = runtime.recall("identity tension divergence")
     finally:
         runtime.close()
     assert "Identity tension" in packet

@@ -21,11 +21,11 @@ def test_context_auto_initializes_without_setup(tmp_path):
         runtime.close()
 
     assert db_path.exists()
-    assert "Mnemos continuity packet" in packet
-    assert "Scope: agent=nova person=riley project=demo" in packet
-    assert "Storage: local SQLite store ready" in packet
+    # A fresh store carries nothing yet: the first-session ritual is the
+    # whole answer, and building it ran no maintenance.
+    assert packet.startswith("ONBOARDING - first session")
     assert str(db_path) not in packet
-    assert "local deterministic maintenance" in packet
+    assert "maintenance" not in packet
 
 
 def test_capture_recall_and_correction_without_provider_key(tmp_path):

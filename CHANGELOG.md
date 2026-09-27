@@ -2,6 +2,76 @@
 
 ## 0.3.1 (unreleased)
 
+### One briefing, written for the one reading it
+
+The session-start packet is where this memory does its work, and two builders
+made it: the SessionStart hook's and `mnemos_context`'s. It showed each belief
+three times (as a core belief, as a living question and in the list), printed
+sections that are always empty in simple mode (scope, functional memory,
+review queue, "How To Use"), ranked notes against a fixed sentence so recency
+decided, and had lost its maintenance report: the report was looked for among
+the 50 top-scoring notes, where it no longer ranks, so each cycle wrote a new
+one instead of replacing the last. On a copy of a real store (2026-09-26) the
+hook's packet ran to its 10,364-character ceiling and was cut off in the
+middle of its question, and 117 reports were active at once.
+
+- One builder, `build_context_packet`, makes the packet for the hook and for
+  `mnemos_context`. Given the same session, model and folder they return the
+  same text (checked on that copy: 5,975 characters from each).
+- Six sections, in this order, each left out when it has nothing: **Where you
+  left off** (the reader's own handoff whole, then up to two notes from the
+  last three days), **Who you're with** (three foundational notes), **What
+  you're carrying** (three notes or lessons), **Beliefs** (each once, with its
+  confidence), **One question** (at most one, with the verdict call it takes)
+  and **While you were away** (the latest maintenance report, only when that
+  cycle changed something). A memory with nothing to carry gives no packet.
+- A handoff another session of the same model left is framed as the reader's
+  own ("Yours (Opus 5.5), from another session"). Only a different model's
+  note is a colleague's and carries "don't claim its work as yours" (Riley's
+  decision). A note whose author or reader can't be placed says so.
+- What you're carrying is ranked by the distinctive words it shares with the
+  names of the session's folder and repository (a worktree counts as its
+  repository), then by recency. The hook reads the folder from its payload
+  (`cwd`); `mnemos_context` uses its server's working folder, which Claude
+  Code sets to the session's. The folder only ranks; it never chooses the
+  scope. One of the three is always a concrete, dated episode (a note that
+  names someone or something and something specific) when there is one.
+- The packet stays under 6,000 characters (`--token-budget` now defaults to
+  1500 tokens), and so does anything appended to it: `--include-graph` recall
+  and `mnemos_context`'s results for a query get only the room left, and an
+  entry that doesn't fit is left out whole. The reader's handoff is never cut.
+  Notes are cut at a sentence boundary and end with their id, and
+  `mnemos_recall("<id>")` returns any note the packet cut, a handoff, a
+  continuity note or a lesson, whole. A forgotten note does not come back by
+  its id.
+- Asking for a memory by its id is a use: `mnemos_recall("<engram id>")`
+  reinforces an active memory as a query that returns it would, once a
+  session and never on code older than the store. A note read by its id is
+  not reinforced (notes have no reinforcement), and the packet showing a
+  memory is not a use: the briefing reinforces nothing. Graph recall
+  reinforces only the entries it shows.
+- The maintenance report is found by its tag, so each new report replaces the
+  last again. Reports that piled up stay as they are.
+- Code older than the store shows no question and spends no showing on the
+  hook's path too, as `mnemos_context` already did.
+
+Changed behaviour, and what to do:
+
+- `mnemos_context` runs no maintenance. Upkeep still rides on captures and
+  corrections, and `mnemos_maintain` runs it on demand. The tool is no longer
+  annotated destructive. With a query, it appends what else matches after the
+  packet (`### For "<query>"`), as recall finds it, leaving out everything the
+  packet rendered (notes, handoffs and lessons); what the budget left out of
+  the packet can come back here.
+- The packet no longer shows the identity summary, functional memory, the
+  review queue, the scope or identity-divergence notes (`mnemos recall` finds
+  those). `build_context_packet` no longer returns `identity`, `signers`,
+  `functional_memory`, `review_queue`, `session` or `stats`; it still accepts
+  `session_id`, `max_functional` and `max_hypomnema` and ignores them, and
+  `query` is used only for `include_engrams` graph recall.
+- `MAINTENANCE_CODE_VERSION` stays 3: this changes what the packet shows, not
+  how memory is written or maintained.
+
 ### Returns that mean something, and versions only when words change
 
 Recall strengthens a memory because it came back to the one reading it. But

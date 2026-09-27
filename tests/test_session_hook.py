@@ -197,9 +197,11 @@ class TestContinuityOnlyPacket:
         from mnemos.cli import main
 
         db_path = self._seed(tmp_path)
+        # A section with nothing in it is left out, so the cue must find
+        # the memory for the graph section to appear.
         assert main([
             "hook", "session-start", "--db-path", db_path,
-            "--agent-id", "demo", "--include-graph",
+            "--agent-id", "demo", "--include-graph", "--query", "cold brew",
         ]) == 0
 
         context = json.loads(capsys.readouterr().out)["hookSpecificOutput"][
@@ -244,8 +246,8 @@ class TestContinuityOnlyPacket:
             "the packet still overflows its budget and is being hard-cut"
         )
         # Every section must survive, not just the ones that sorted first.
-        assert "### Hypomnema" in prompt
-        assert "### Review Queue" in prompt
+        assert "### Who you're with" in prompt
+        assert "### What you're carrying" in prompt
         # And no note may end mid-word.
         for line in prompt.splitlines():
             if line.startswith("- ") and "…" in line:
@@ -281,8 +283,8 @@ class TestContinuityOnlyPacket:
         for entry in packet["hypomnema"]:
             assert DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
         assert "148 memories" in packet["prompt"]
-        assert "System-Generated Maintenance" in packet["prompt"]
-        assert "not the agent's own words" in packet["prompt"]
+        assert "### While you were away" in packet["prompt"]
+        assert "these aren't your words" in packet["prompt"]
 
 
 class TestHookInstaller:

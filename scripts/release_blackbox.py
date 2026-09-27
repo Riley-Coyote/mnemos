@@ -183,12 +183,13 @@ async def audit_mcp(executable: Path, env: dict[str, str], db: Path) -> None:
         packet = text_of(await session.call_tool("mnemos_context", {}))
         assert HANDOFF in packet, packet
         assert packet.count(HANDOFF) == 1, packet
-        # The handoff is signed by the model that introduced itself, and is
-        # never handed to the reader as its own words.
+        # The handoff is signed by the model that introduced itself, is never
+        # handed to the reader as its own words, and comes before the notes
+        # the reader is carrying.
         assert "From your previous session, in your own words" not in packet, packet
-        assert packet.index("Left by independent-blackbox") < (
-            packet.index("Continuity notes:")
-        )
+        assert packet.index("From independent-blackbox") < (
+            packet.index("### What you're carrying")
+        ), packet
         assert PRIVATE in packet, packet
         assert REFLECTION in packet, packet
 

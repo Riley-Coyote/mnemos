@@ -166,10 +166,11 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
     @server.tool(
         annotations=_annotations(
             title="Get continuity context",
+            # Records what it delivered (a handoff read, a question shown) and
+            # counts the session, but runs no maintenance: it never decays,
+            # archives or rewrites a memory.
             read_only=False,
-            # Runs an automatic maintenance cycle, which decays engrams and
-            # can move them to dormant or archived. Gated, but still a write.
-            destructive=True,
+            destructive=False,
             idempotent=False,
         )
     )
@@ -182,10 +183,14 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         """Get the startup continuity packet for this agent/session.
 
         Call at the beginning of a session. It auto-creates local storage on
-        first run, runs lightweight maintenance, and returns relevant
-        continuity without requiring setup. Set include_graph=true to also
-        return a portable SVG identity graph artifact when the client can
-        render images or structured content.
+        first run and returns the briefing the session-start hook injects:
+        where you left off, who you're with, what you're carrying, your
+        beliefs, at most one question, and what upkeep changed while you were
+        away. A section with nothing in it is left out. It runs no
+        maintenance. Pass a query to also get what else in memory matches it,
+        up to max_results of each kind. Set include_graph=true to also return
+        a portable SVG identity graph artifact when the client can render
+        images or structured content.
         """
 
         runtime = _get_runtime()
@@ -305,7 +310,8 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         def mnemos_recall(query: str, max_results: int = 5) -> str:
             """Recall relevant continuity and durable memories.
 
-            Pass a handoff's id as the query to read that note whole.
+            Pass the id of a note the packet cut short (its
+            mnemos_recall("<id>")) as the query to read that note whole.
             """
 
             return _output(_get_runtime().recall(

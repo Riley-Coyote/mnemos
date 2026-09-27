@@ -21,8 +21,6 @@ from typing import Any
 from .authorship import (
     clean_model_id,
     display_name,
-    from_same_session,
-    handoff_framing,
     harness_session,
     note_signature,
     resolve_author_model,
@@ -35,8 +33,19 @@ from .core.types import SourceType
 from .dream_journal import DREAM_JOURNAL_TAG, fetch_active_dream_entry
 from .encoding.encoder import Encoder
 from .identity_svg import build_timeline, render_identity_svg, short_label
-from .interface.context_packet import format_other_handoffs
-from .retrieval.reactive import ReactiveRetriever
+from .interface.context_packet import (
+    COLLEAGUE_LINE,
+    PACKET_MAX_CHARS,
+    PACKET_QUESTIONS,
+    build_context_packet,
+    carried_count,
+    fit_section,
+    format_questions,
+    room_after,
+    shown_ids,
+    whose_handoff,
+)
+from .retrieval.reactive import ReactiveRetriever, RetrievalResult
 # Re-exported: MnemosScope and resolve_scope moved to simple_scope but
 # remain importable from here for existing consumers.
 from .simple_scope import MnemosScope, resolve_scope  # noqa: F401
@@ -79,9 +88,11 @@ LEGACY_CLASSES = ("lessons", "other", "indexer")
 LEGACY_DEFAULT_INCLUDE = ("lessons", "other")
 
 
-# Hypomnema ids are uuid4 strings. Recall treats a query of exactly this shape
-# as an id before it treats it as words.
+# Hypomnema ids are uuid4 strings and engram ids are ULIDs after "engram_".
+# Recall treats a query of exactly either shape as an id before it treats it
+# as words.
 _ENTRY_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_ENGRAM_ID = re.compile(r"engram_[0-9A-Za-z]{10,40}")
 
 
 class HostMutationConflictError(ValueError):
@@ -1932,42 +1943,20 @@ class MnemosRuntime:
             # reflection the agent might retype.
             return None
 
-    def _reflection_block(self, limit: int = 2) -> str | None:
-        """The quiet ask, shown only when there is genuinely something to sit with."""
+    def _reflection_block(self, limit: int = PACKET_QUESTIONS) -> str | None:
+        """The question section as the packet shows it, spending one showing
+        of each question shown, or None when nothing is waiting.
+
+        The packet's builder shows the same section; this is for a caller that
+        wants only the questions.
+        """
         items = self.pending_reflections(limit=limit)
         if not items:
             return None
 
         assert self._store is not None
         self._store.mark_reflections_surfaced([i["id"] for i in items])
-
-        lines = ["Something of yours is waiting on you:"]
-        for item in items:
-            lines.append(f'  "{item["excerpt"]}"')
-            lines.append(f"    {item['prompt']}")
-            call = verdict_call_lines(item)
-            if call is None:
-                lines.append(f"    mnemos_reflect(target_id=\"{item['target_id']}\", ...)")
-            else:
-                lines.extend(f"    {line}" for line in call)
-        lines.append(
-            "  Answer in your own words if one comes. If nothing does, leave it — "
-            "this fades on its own."
-        )
-        return "\n".join(lines)
-
-    def _identity_summary(self) -> str | None:
-        """The agent's own computed self-summary, if there is one yet."""
-        self._ensure_init()
-        assert self._store is not None
-        try:
-            identity = self._store.get_identity(self.scope.agent_id)
-        except Exception:
-            return None
-        if identity is None:
-            return None
-        summary = (getattr(identity.epoch_state, "self_summary", "") or "").strip()
-        return summary or None
+        return format_questions(items)
 
     def _note_context_outcome(self, returned: int) -> None:
         """Record whether this session's packet actually carried anything.
@@ -2203,174 +2192,113 @@ class MnemosRuntime:
 
     @_notice_when_older
     def context(self, query: str = "", max_results: int = 5) -> str:
-        """Return the startup continuity packet for an agent."""
+        """Return the session-start briefing, the one the hook injects.
+
+        The shared packet comes first. After it, only what belongs to this
+        call: the first-session ritual while onboarding lasts, the one-time
+        MEMORY VERIFIED block, and, when ``query`` is given, what else in
+        memory matches it (at most ``max_results`` of each kind), in the room
+        left under the packet's budget. Building the packet runs no
+        maintenance; that rides on captures, corrections and mnemos_maintain.
+        """
 
         self._ensure_init()
         assert self._store is not None
 
-        # Onboarding guard runs before maintenance so the grandfather check
-        # reads the store exactly as the session found it.
+        # Onboarding reads the store exactly as the session found it.
         status = self._onboarding_status()
         self._current_session()
-        maintenance = self.maintain(auto=True)
-        stats = self._stats()
-        # Several sessions can work this scope at once, each with its own
-        # handoff. This session's own note comes first (after compaction it
-        # is the thread it was in), then other sessions' recent notes.
-        reader_session = harness_session()
-        handoffs = self._store.live_handoffs(
+        packet = self._briefing_packet()
+        self._note_context_outcome(carried_count(packet))
+
+        parts = [packet["prompt"]] if packet["prompt"] else []
+        block = self._onboarding_block(status)
+        if block:
+            parts.append(block)
+        verification = self._verification_block()
+        if verification:
+            parts.append(verification)
+        if query.strip():
+            room = room_after("\n\n".join(parts), PACKET_MAX_CHARS)
+            section = self._query_results(query, max_results, shown_ids(packet), room)
+            if section:
+                parts.append(section)
+        if not parts:
+            parts.append(
+                "Nothing has carried over yet: no handoff, notes or beliefs in this "
+                "memory. Capture durable context as the conversation gives it."
+            )
+        return "\n\n".join(parts)
+
+    def _briefing_packet(
+        self,
+        *,
+        workdir: str | None = None,
+        reader_model: str | None = None,
+        reader_session: str | None = None,
+    ) -> dict[str, Any]:
+        """The shared packet, built as the session-start hook builds it.
+
+        Each input defaults to what this process can see: the model making the
+        call, the Claude Code session (``CLAUDE_CODE_SESSION_ID``) and the
+        working folder. Claude Code starts each session's server in the
+        session's own folder, so the folder ranks notes the way the hook's
+        payload does; it never chooses the scope.
+        """
+        assert self._store is not None
+        return build_context_packet(
+            self._store,
+            "",
             agent_id=self.scope.agent_id,
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
-            reader_session=reader_session,
+            include_engrams=False,
+            reader_model=self.author_model() if reader_model is None else reader_model,
+            reader_session=harness_session() if reader_session is None else reader_session,
+            workdir=_working_folder() if workdir is None else workdir,
+            older_than_store=self._older_than_store() is not None,
         )
-        handoff = handoffs[0] if handoffs else None
-        # Fetch extras so the dedicated maintenance section never reduces the
-        # number of ordinary continuity notes. Handoffs are excluded from the
-        # search itself; each one would otherwise cost a slot.
-        all_continuity = self._store.search_hypomnema(
+
+    def _query_results(self, query: str, max_results: int, shown: set[str], room: int) -> str:
+        """What else matches ``query``, after the packet: notes, then durable
+        memories, as recall finds them, leaving out everything the packet
+        showed. Whole entries only, in ``room`` characters; ``""`` when none
+        fits. Only the memories kept are reinforced."""
+        assert self._store is not None
+        continuity = self._store.search_hypomnema(
             query,
             agent_id=self.scope.agent_id,
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
-            limit=max_results + 4,
-            exclude_kinds=("handoff",),
+            limit=max_results + len(shown),
+            exclude_kinds=("handoff", "maintenance_report"),
         )
-        all_continuity = _filter_continuity(query, all_continuity)
-        maintenance_reports = [
-            entry for entry in all_continuity
-            if entry.get("entry_kind") == "maintenance_report"
-            and DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
-        ][:3]
         continuity = [
-            entry for entry in all_continuity
-            if entry.get("entry_kind") not in {"handoff", "maintenance_report"}
+            entry for entry in _filter_continuity(query, continuity)
+            if entry["id"] not in shown
             and DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
         ][:max_results]
-        memories = self._retrieve(query, max_results=max_results) if query else []
-        self._note_context_outcome(
-            len(continuity) + len(maintenance_reports) + int(handoff is not None)
+        memories = [
+            result for result in self._retrieve(query, max_results=max_results + len(shown))
+            if result.engram.id not in shown
+        ][:max_results]
+
+        heading = f'### For "{query.strip()}"'
+        if not continuity and not memories:
+            said = f"{heading}\nNothing else in memory matches this."
+            return said if len(said) <= room else ""
+        section, kept = fit_section(
+            heading,
+            [
+                ("Continuity notes:", [(("note", entry["id"]), _format_continuity(entry)) for entry in continuity]),
+                ("Relevant memories:", [(("memory", index), _format_memory(result)) for index, result in enumerate(memories)]),
+            ],
+            room,
         )
-
-        lines = [
-            "Mnemos continuity packet",
-            f"Scope: agent={self.scope.agent_id} person={self.scope.person_id} project={self.scope.project_scope}",
-            "Storage: local SQLite store ready",
-            (
-                "Status: "
-                f"{stats.get('engrams_active', 0)} memories, "
-                f"{stats.get('hypomnema_active', 0)} continuity notes, "
-                f"{stats.get('connections', 0)} connections"
-            ),
-            "",
-        ]
-
-        reader = self.author_model()
-        if handoff:
-            heading, guidance = handoff_framing(
-                handoff.get("author_model") or "",
-                _age_text(handoff["created_at"]),
-                reader,
-                same_session=from_same_session(reader_session, handoff.get("author_session")),
-            )
-            lines.extend([
-                "",
-                heading,
-                handoff["content"],
-                guidance,
-            ])
-            others = format_other_handoffs(
-                handoffs[1:], reader_session=reader_session, heading_prefix="",
-            )
-            if others:
-                lines.extend(["", *others.splitlines()])
-            for delivered in handoffs:
-                self._store.mark_handoff_surfaced(
-                    delivered["id"],
-                    agent_id=self.scope.agent_id,
-                    person_id=self.scope.person_id,
-                    project_scope=self.scope.project_scope,
-                )
-
-        lines.extend([
-            "",
-            "Use this at the start of a session. Capture important preferences, decisions, project state, corrections, and durable context as the conversation unfolds.",
-            "",
-            "Maintenance:",
-            _indent(maintenance),
-        ])
-
-        # Shift 5: identity is measured from the shape of the graph — what
-        # this agent keeps returning to. It is computed on every maintenance
-        # cycle and is worth showing, because an agent reading its own
-        # concerns back is closer to the point of Mnemos than any count of
-        # memories is.
-        identity_summary = self._identity_summary()
-        if identity_summary:
-            signers = self._store.hypomnema_signers(
-                agent_id=self.scope.agent_id,
-                person_id=self.scope.person_id,
-                project_scope=self.scope.project_scope,
-            )
-            if len(signers) > 1:
-                names = ", ".join(display_name(model) for model in signers)
-                heading = (
-                    "What this shared memory keeps returning to, across notes "
-                    f"signed by {names}:"
-                )
-            else:
-                heading = "Who you have been, measured from what you keep returning to:"
-            lines.extend(["", heading, f"  {identity_summary}"])
-
-        # Quiet and occasional by design: at most a couple of items, only when
-        # something genuinely needs the agent's own judgement, and each one
-        # stops being shown after a few sessions. A packet that asks for work
-        # every time becomes a chore list appended to every conversation.
-        #
-        # Code older than the store shows none and spends no showings: the
-        # questions wait for a current session, which can take the answer as
-        # current rules need it.
-        reflection = self._reflection_block() if self._older_than_store() is None else None
-        if reflection:
-            lines.extend(["", reflection])
-
-        block = self._onboarding_block(status)
-        if block:
-            lines.extend(["", block])
-
-        verification = self._verification_block()
-        if verification:
-            lines.extend(["", verification])
-
-        dream = fetch_active_dream_entry(self._store, self.scope)
-        if dream:
-            lines.extend([
-                "",
-                "While you were away:",
-                _indent(dream["content"]),
-                "  (System-generated maintenance report, not your own words. Legacy reports may use first-person wording.)",
-            ])
-
-        if maintenance_reports:
-            lines.extend(["", "System-generated continuity checks:"])
-            for report in maintenance_reports:
-                lines.append(_indent(report["content"]))
-            lines.append(
-                "  (Mnemos mechanically produced these checks. They are not your own words.)"
-            )
-
-        if continuity:
-            lines.extend(["", "Continuity notes:"])
-            lines.extend(_format_continuity(entry) for entry in continuity)
-        else:
-            lines.extend(["", "Continuity notes: none yet. Capture durable context when the user gives it."])
-
-        if memories:
-            lines.extend(["", "Relevant memories:"])
-            lines.extend(_format_memory(result) for result in memories)
-            self._reinforce_returned(query, memories)
-
-        return "\n".join(lines)
+        self._reinforce_returned(
+            query, [memories[index] for kind, index in kept if kind == "memory"],
+        )
+        return section
 
     @_notice_when_older
     def handoff(self, text: str) -> str:
@@ -2413,30 +2341,60 @@ class MnemosRuntime:
             f"{lasts}"
         )
 
-    def _recall_handoff(self, handoff_id: str) -> str:
-        """A handoff read whole by its id, signed, or ``""`` if it isn't one."""
+    def _recall_by_id(self, note_id: str) -> str:
+        """A note the packet showed, read whole by its id, or ``""``.
 
-        if not _ENTRY_ID.fullmatch(handoff_id):
-            return ""
+        The packet cuts long notes and gives each cut one its id. A handoff
+        comes back framed as the packet framed it, active or not. A continuity
+        note or a durable memory comes back only while it is live: one that was
+        forgotten stays forgotten. A durable memory read this way is
+        reinforced as a recall would reinforce it.
+        """
         assert self._store is not None
-        note = self._store.get_hypomnema_entry(
-            handoff_id,
-            agent_id=self.scope.agent_id,
-            person_id=self.scope.person_id,
-            project_scope=self.scope.project_scope,
-        )
-        if not note or note.get("entry_kind") != "handoff":
-            return ""
-        heading, guidance = handoff_framing(
-            note.get("author_model") or "",
-            _age_text(note["created_at"]),
-            self.author_model(),
-            same_session=from_same_session(harness_session(), note.get("author_session")),
-        )
-        lines = [heading, note["content"], guidance]
-        if not note.get("active"):
-            lines.append("This note is no longer active: a newer one replaced it or it was forgotten.")
-        return "\n".join(lines)
+        scope = {
+            "agent_id": self.scope.agent_id,
+            "person_id": self.scope.person_id,
+            "project_scope": self.scope.project_scope,
+        }
+        if _ENTRY_ID.fullmatch(note_id):
+            note = self._store.get_hypomnema_entry(note_id, **scope)
+            if not note:
+                return ""
+            if note.get("entry_kind") == "handoff":
+                label, whose = whose_handoff(note, self.author_model(), harness_session())
+                lines = [f"{label}:", note["content"]]
+                if whose != "own":
+                    lines.append(COLLEAGUE_LINE)
+                if not note.get("active"):
+                    lines.append(
+                        "This note is no longer active: a newer one replaced it or it was forgotten."
+                    )
+                return "\n".join(lines)
+            if not note.get("active"):
+                return ""
+            return "\n".join([
+                f"Note {note_id}, {note_signature(note)}, {_age_text(note['created_at'])}:",
+                note["content"],
+            ])
+        if _ENGRAM_ID.fullmatch(note_id):
+            engram = self._store.get_engram_in_scope(note_id, **scope)
+            if engram is None or engram.state == "archived":
+                return ""
+            kind = "Lesson" if {"lesson", "distilled"} & set(engram.tags or []) else "Memory"
+            lines = [f"{kind} {note_id}, {_age_text(engram.created_at)}:", engram.content]
+            if engram.impact and engram.impact != engram.content:
+                lines.append(f"What it changed: {engram.impact}")
+            # Asking for a memory by its id is a use, as a query that returns
+            # it is: reinforced the same way, once a session and never by
+            # code older than the store. Only an active memory, as recall by
+            # query returns only active ones; waking a dormant one is a rule
+            # of its own. A note has no reinforcement.
+            if engram.state == "active":
+                self._reinforce_returned(
+                    note_id, [RetrievalResult(engram=engram, score=1.0, retrieval_path="id")],
+                )
+            return "\n".join(lines)
+        return ""
 
     def identity_graph(self, max_nodes: int = 18) -> dict[str, Any]:
         """Build a portable identity graph snapshot for visual-capable clients."""
@@ -2678,9 +2636,9 @@ class MnemosRuntime:
         self._ensure_init()
         assert self._store is not None
 
-        # The packet shows other sessions' handoffs as short lines, each with
-        # its id. Recalling that id returns the note whole.
-        whole = self._recall_handoff(query.strip())
+        # The packet cuts long notes and shows each one's id. Recalling that
+        # id returns the note whole.
+        whole = self._recall_by_id(query.strip())
         if whole:
             return whole
 
@@ -3573,6 +3531,15 @@ def _age_text(timestamp: str) -> str:
         return f"{hours} hour{'s' if hours != 1 else ''} ago"
     days = hours // 24
     return f"{days} day{'s' if days != 1 else ''} ago"
+
+
+def _working_folder() -> str:
+    """This process's working folder, or ``""`` when it has none (deleted)."""
+
+    try:
+        return os.getcwd()
+    except OSError:
+        return ""
 
 
 def _human_size(num_bytes: int) -> str:

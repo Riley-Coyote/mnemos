@@ -162,6 +162,18 @@ def recall_index_items(
     return items
 
 
+def recall_index_lessons(
+    store: EngramStore, *, agent_id: str, person_id: str, project_scope: str,
+) -> dict[str, str]:
+    """The lessons the agent wrote in the impacts of the memories recall's
+    meaning index holds for one scope: each is one more passage of its memory
+    (``EmbeddingIndex.index_passages``), so a memory is found by what it
+    taught. Reads."""
+    return store.live_memory_lessons(
+        agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+    )
+
+
 def index_for_recall(
     store: EngramStore,
     index: Any,
@@ -178,7 +190,9 @@ def index_for_recall(
     be found by meaning: every handoff (those in use first), notes with no
     memory of their own, then the live memories, newest first. Only what has no
     passages, or whose words changed since, is embedded; at most ``budget``
-    passages (None: everything waiting); ``only`` limits it to those ids.
+    passages (None: everything waiting); ``only`` limits it to those ids. A
+    memory's lesson, when the agent wrote one its words don't already say, is
+    one more passage of it, and a new or changed lesson has it cut again.
 
     Capture gives a memory one vector of its whole text, which the model reads
     only to about 1,000 characters, and lessons and handoffs had none: on a
@@ -216,7 +230,9 @@ def index_for_recall(
         if only is not None:
             wanted = set(only)
             items = [item for item in items if item[0] in wanted]
-        done.update(index.index_passages(items, budget=budget, seconds=seconds))
+        done.update(index.index_passages(
+            items, lessons=recall_index_lessons(store, **scope), budget=budget, seconds=seconds,
+        ))
         if not index.available:
             done["skipped"] = _index_unavailable(index)
     except Exception as exc:

@@ -1558,6 +1558,35 @@ class EngramStore:
         ).fetchall()
         return [(row[0], row[1] or "", row[2]) for row in rows]
 
+    def live_memory_lessons(
+        self, *, agent_id: str, person_id: str, project_scope: str
+    ) -> dict[str, str]:
+        """The lesson each memory recall may return holds in its impact, when
+        the agent wrote one that its own words don't already say
+        (``written_lesson``): memory id to lesson, newest first, active and
+        dormant, in one exact scope. Recall finds a memory by what it taught
+        as well as by what happened: these are ranked by their words beside
+        the memories', and each is one more passage of its memory in the
+        meaning index. A store without the impact columns has none."""
+        from ..core.placeholders import written_lesson
+
+        try:
+            rows = self._get_conn().execute(
+                """SELECT id, content, impact, impact_source FROM engrams
+                   WHERE state IN ('active', 'dormant') AND owner_agent_id = ?
+                     AND person_id = ? AND project_scope = ? AND impact != ''
+                   ORDER BY created_at DESC, id DESC""",
+                (agent_id, person_id, project_scope),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        lessons: dict[str, str] = {}
+        for engram_id, content, impact, source in rows:
+            lesson = written_lesson(content, impact, source or "")
+            if lesson:
+                lessons[engram_id] = lesson
+        return lessons
+
     def get_engram_in_scope(
         self, engram_id: str, *, agent_id: str, person_id: str, project_scope: str
     ) -> Engram | None:

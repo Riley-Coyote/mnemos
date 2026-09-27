@@ -28,3 +28,28 @@ TEMPLATED_IMPACTS = frozenset({
 def is_templated(impact: str | None, impact_source: str | None = "") -> bool:
     """Whether an impact is one the server wrote rather than the agent."""
     return impact_source == "template" or (impact or "").strip() in TEMPLATED_IMPACTS
+
+
+# What a capture appends after the agent's words when it gives context.
+_CONTEXT_MARK = "\n\nContext: "
+
+
+def written_lesson(
+    content: str | None, impact: str | None, impact_source: str | None = "",
+) -> str:
+    """The lesson a memory's impact holds, when the agent wrote one that says
+    something the memory's own words don't; else ``""``.
+
+    Not a lesson: no impact; one the server filled in (``is_templated``) or a
+    configured model extracted (``impact_source="model"``); and one that only
+    repeats the memory's words, as a lesson memory's impact does (its words
+    are its lesson) or a copy cut from the start of them.
+    """
+    lesson = (impact or "").strip()
+    if not lesson or impact_source in ("model", "template") or is_templated(lesson, impact_source):
+        return ""
+    said = " ".join(lesson.lower().split())
+    own = " ".join((content or "").split(_CONTEXT_MARK, 1)[0].lower().split())
+    if said == own or own.startswith(said.rstrip(" .…")):
+        return ""
+    return lesson

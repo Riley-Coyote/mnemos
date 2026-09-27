@@ -70,16 +70,16 @@ CUE_LINE_CHARS = 200
 # How far down recall's ranking a memory may sit and still be offered.
 CUE_POOL = 10
 # The meaning floor: the cosine a memory must reach with the message (the
-# starting floor, until the lab's L06 picks one). A memory sharing a
-# distinctive word with the message needs only CUE_WORD_FLOOR. On the lab's 20
-# development prompts every floor from 0.30 to 0.50 showed the same 39 lines:
-# what a higher floor turned away, the word path let back in.
+# starting floor, chosen for the lab's L06). A memory sharing a distinctive
+# word with the message needs only CUE_WORD_FLOOR. On the lab's 20 development
+# prompts every floor from 0.30 to 0.50 showed 38 or 39 lines, 8 of them holding
+# a fact for the task: what a higher floor turns away, the word path lets back.
 CUE_FLOOR = 0.40
 CUE_WORD_FLOOR = 0.25
 # Without meaning (no answerer, or one whose model is still loading): how many
 # distinctive words a memory must share with the message. On the same prompts,
-# 2 showed the most lines holding a fact for the task: 11 of 40 (1 word: 10 of
-# 42; 3 words: 9 of 21).
+# 2 words showed 42 lines, 8 of them holding a fact (1 word: the same; 3
+# words: 21 lines, 7).
 CUE_WORDS_SHARED = 2
 # Fewer content words than this ("ok", "yes", "beautiful") get nothing.
 CUE_MIN_WORDS = 4
@@ -312,17 +312,15 @@ def memory_line(engram: Any) -> tuple[str, bool]:
     memory's own words, without the context its capture kept after them. An
     impact the server filled in, or one a model extracted, is not the agent's.
     """
-    from .core.placeholders import is_templated
+    from .core.placeholders import written_lesson
 
     content = (getattr(engram, "content", "") or "").split(_CONTEXT_MARK, 1)[0].strip()
     impact = (getattr(engram, "impact", "") or "").strip()
     if _LESSON_TAGS & set(getattr(engram, "tags", None) or []):
         return content or impact, True
-    source = getattr(engram, "impact_source", "") or ""
-    if impact and source not in ("model", "template") and not is_templated(impact, source):
-        said, own = " ".join(impact.lower().split()), " ".join(content.lower().split())
-        if said != own and not own.startswith(said.rstrip(" .…")):
-            return impact, True
+    lesson = written_lesson(content, impact, getattr(engram, "impact_source", "") or "")
+    if lesson:
+        return lesson, True
     return content or impact, False
 
 

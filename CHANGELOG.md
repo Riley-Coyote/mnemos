@@ -2,6 +2,70 @@
 
 ## 0.3.1 (unreleased)
 
+### No one-way doors for memories that fade
+
+A memory could leave the active set and never come back, with every check
+green. Decay read active memories only, so a dormant one was never touched
+again: it could neither finish fading nor come back. Recall seeded from
+active memories only, so a dormant memory stayed out however exactly a cue
+named it: on a copy of a real store, a recall of each dormant memory's own
+distinctive words brought back none of its 24. A dormant or archived memory
+reached through a link still passed activation on to its neighbours.
+`archive.resharpen` had no caller, an archived memory's id returned nothing,
+and the dream report said dormant memories were "ready to wake if needed".
+
+- Recall seeds dormant memories that match the cue, at half the activation
+  an active match would start with (at most 10, beside the active seeds), so
+  an equal active match comes first. A dormant memory that is returned wakes:
+  it is active again, with the accessibility any return gives it. Waking is
+  part of the return, so it happens once per session, and a dormant memory
+  recalled by its id wakes too. On that copy, the same recalls now bring back
+  all 24, 19 of them first.
+- Dormant and archived memories take no part in resonance: they pass no
+  activation on, and none reaches them through a link. A dormant memory comes
+  back for its own match, or not at all. Results show "(it had gone quiet)"
+  beside one.
+- Decay keeps running over dormant memories until they wake or reach the
+  archive. The floors that hold an active memory up (recent use,
+  `foundational`, `active_project`) never lift a dormant one. The decay stats
+  count dormant memories apart, and `engrams_dormant` still counts only the
+  ones that went dormant in that pass. On another copy, one maintenance cycle
+  lowered all 24 and archived none.
+- A memory that faded into the archive (archived by decay) comes back by its
+  exact id, or through `mnemos_recall` with `include_archived=true` when the
+  query names it (half its meaningful words, and two when it has two or more:
+  the bar a correction's query clears). Either way it is restored with
+  `resharpen` and counts as returned. A memory the agent forgot, or replaced
+  with a correction, stays where it was put, by id and by flag.
+- `resharpen` restores only a memory that is archived, in one transaction,
+  and at full resolution when it brings back the original words, keeping the
+  worn wording as a version. An archive row whose memory is active or dormant
+  again is left alone; a copy of that store held 1,392 such rows.
+- `mnemos_health` and `mnemos doctor` count dormant memories, and the faded
+  ones an ordinary recall cannot reach, with the call that reaches them:
+  `mnemos_recall("<its words>", include_archived=true)`. Doctor still opens
+  the store read-only.
+- The dream report says "N memories went quiet. A strong match brings them
+  back." A cycle that archives some memories and quiets others reports both.
+- `MAINTENANCE_CODE_VERSION` is 4. Code older than the store still reads
+  dormant and faded memories, but wakes, fades and restores none of them. The
+  decay pass checks the store's minimum itself, so callers without the
+  runtime's gate (the bridge, the advanced server) leave dormant memories
+  alone too.
+
+Changed behaviour, and what to do:
+
+- Recall and `mnemos_context` can return a dormant memory, marked "(it had
+  gone quiet)", and returning it wakes it.
+- `mnemos_recall` takes `include_archived` (default false). With it, what
+  faded into the archive appears after the durable memories under "From the
+  archive:", and comes back.
+- `mnemos_health` returns `counts.memories_dormant` and `unreachable`
+  (`count` and `command`), and the card's memories line counts dormant ones.
+- Dormant memories no longer stay dormant indefinitely: unless recalled, they
+  keep fading and reach the archive, where their id or `include_archived`
+  finds them.
+
 ### One briefing, written for the one reading it
 
 The session-start packet is where this memory does its work, and two builders

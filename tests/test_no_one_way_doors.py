@@ -22,6 +22,7 @@ none of it: it wakes, fades and restores nothing.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import sqlite3
 import subprocess
@@ -32,6 +33,7 @@ from pathlib import Path
 import anyio
 import pytest
 
+from mnemos.cli import main
 from mnemos.code_version import MAINTENANCE_CODE_VERSION
 from mnemos.consolidation.decay import run_decay_pass
 from mnemos.core.engram import Connection, Engram
@@ -43,6 +45,7 @@ from mnemos.store.archive import resharpen
 from mnemos.store.sqlite_store import EngramStore
 
 SCOPE = {"agent_id": "nova", "person_id": "riley", "project_scope": "demo"}
+SCOPE_ARGS = ["--agent-id", "nova", "--person-id", "riley", "--project-scope", "demo"]
 STORE_SCOPE = {"owner_agent_id": "nova", "person_id": "riley", "project_scope": "demo"}
 FERRY = "Riley keeps the ferry timetable in the kitchen drawer."
 HARBOUR = "The ferry leaves the harbour at seven on weekdays."
@@ -671,6 +674,49 @@ def test_health_counts_memories_out_of_ordinary_recall(tmp_path):
         f"{UNREACHABLE} reaches it"
     ) in card, card
     assert "Memories:      1 active, 1 dormant, 2 archived" in card, card
+
+
+def _settled_sha256(path: Path) -> str:
+    """Hash the store with everything written so far folded into the file."""
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        conn.close()
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_doctor_prints_what_health_prints_and_changes_nothing(tmp_path, capsys):
+    """`mnemos doctor` counts dormant memories and the ones an ordinary recall
+    cannot reach, in the health card's words and with its call, from a store
+    it opens read-only."""
+    db, (faded, forgotten, quiet, _) = _stored(
+        tmp_path,
+        "The harbour ledger lives in the blue binder on the shelf.",
+        "The harbour ledger password is written on a sticky note.",
+        FERRY,
+        HARBOUR,
+    )
+    _fade(db, faded)
+    _go_quiet(db, quiet)
+    runtime = _runtime(db)
+    try:
+        runtime.correct("", target_id=forgotten, action="forget")
+        card = format_health_card(runtime.health())
+    finally:
+        runtime.close()
+    before = _settled_sha256(db)
+
+    assert main(["doctor", "--db-path", str(db), *SCOPE_ARGS]) == 0
+    out = capsys.readouterr().out
+
+    assert "Memories:     1 active, 1 dormant, 2 archived" in out, out
+    for label in ("Memories:", "Unreachable:"):
+        [said] = [line for line in out.splitlines() if line.startswith(label)]
+        [shown] = [line for line in card.splitlines() if line.startswith(label)]
+        assert said[len(label):].strip() == shown[len(label):].strip(), (said, shown)
+    assert UNREACHABLE in out
+    assert _settled_sha256(db) == before, "doctor changed the store it was checking"
 
 
 # ── 7. The dream report says what is true ──

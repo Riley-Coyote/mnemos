@@ -3269,6 +3269,7 @@ class MnemosRuntime:
         stats = self._stats()
         db_path = self.db_path
         size_bytes = db_path.stat().st_size if db_path.exists() else 0
+        states = _state_counts(stats)
 
         last_cycle: dict[str, Any] | None = None
         runs = self._store.get_consolidation_runs(
@@ -3347,9 +3348,7 @@ class MnemosRuntime:
             # be older than the store, and then it no longer maintains it.
             "code": self.code_versions(),
             "counts": {
-                "memories_active": stats.get("engrams_active", 0),
-                "memories_dormant": stats.get("engrams_dormant", 0),
-                "memories_archived": stats.get("archived", 0),
+                **states,
                 "continuity_notes_active": stats.get("hypomnema_active", 0),
                 "continuity_notes_foundational": stats.get("hypomnema_foundational", 0),
                 "connections": stats.get("connections", 0),
@@ -3374,23 +3373,37 @@ class MnemosRuntime:
             },
             "handoff": handoff_health,
             "continuity": self.continuity_signals(),
-            # Memories stored in this scope that an ordinary recall never
-            # returns, and the one call that does. Dormant ones are not among
-            # them: a strong match brings those back. Forgotten ones are not
-            # either: nothing brings those back, by the agent's own choice.
-            "unreachable": {
-                "count": self._store.count_faded(
-                    agent_id=self.scope.agent_id,
-                    person_id=self.scope.person_id,
-                    project_scope=self.scope.project_scope,
-                ),
-                "command": UNREACHABLE_COMMAND,
-            },
+            "unreachable": self.unreachable_memories(),
             # Memory held in this file that no read path reaches. Without this
             # the card counted only the scoped rows, and a store holding
             # thousands of quarantined memories reported a healthy few hundred.
             "legacy": self.legacy_counts(),
             "semantic": self.semantic_status(),
+        }
+
+    def memory_counts(self) -> dict[str, int]:
+        """How many memories this scope holds in each state, as the health
+        card counts them (and `mnemos doctor`, from the same numbers).
+        Read-only."""
+        return _state_counts(self._stats())
+
+    def unreachable_memories(self) -> dict[str, Any]:
+        """Memories stored in this scope that an ordinary recall never returns,
+        and the one call that does. Read-only.
+
+        Dormant ones are not among them: a strong match brings those back.
+        Forgotten or replaced ones are not either: nothing brings those back,
+        by the agent's own choice. What is left faded into the archive.
+        """
+        self._ensure_init()
+        assert self._store is not None
+        return {
+            "count": self._store.count_faded(
+                agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+            ),
+            "command": UNREACHABLE_COMMAND,
         }
 
     def semantic_status(self, verify: bool = False) -> dict[str, Any]:
@@ -3702,6 +3715,25 @@ def format_legacy_summary(counts: Mapping[str, int] | None) -> str | None:
     )
 
 
+def _state_counts(stats: Mapping[str, Any]) -> dict[str, int]:
+    """The memory counts by state out of the store's stats."""
+    return {
+        "memories_active": int(stats.get("engrams_active", 0) or 0),
+        "memories_dormant": int(stats.get("engrams_dormant", 0) or 0),
+        "memories_archived": int(stats.get("archived", 0) or 0),
+    }
+
+
+def format_memory_counts(counts: Mapping[str, Any]) -> str:
+    """How many memories are active, dormant and archived, in the words the
+    health card and `mnemos doctor` both print."""
+    return (
+        f"{counts.get('memories_active', 0)} active, "
+        f"{counts.get('memories_dormant', 0)} dormant, "
+        f"{counts.get('memories_archived', 0)} archived"
+    )
+
+
 def format_unreachable_summary(unreachable: Mapping[str, Any] | None) -> str | None:
     """One plain sentence about memories an ordinary recall never returns, and
     the call that does, or None when there are none."""
@@ -3892,12 +3924,7 @@ def format_health_card(data: dict[str, Any]) -> str:
         ),
         line("Store", f"{store['db_path']} ({_human_size(store['size_bytes'])})"),
         line("Code", code_headline),
-        line(
-            "Memories",
-            f"{counts['memories_active']} active, "
-            f"{counts.get('memories_dormant', 0)} dormant, "
-            f"{counts['memories_archived']} archived",
-        ),
+        line("Memories", format_memory_counts(counts)),
         *unreachable_lines,
         *legacy_lines,
         line(

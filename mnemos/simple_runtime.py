@@ -2732,16 +2732,14 @@ class MnemosRuntime:
         its fate: one that went quiet wakes, and one that faded into the
         archive is restored, by the rules recall by the memory's id follows
         (never by code older than the store). Returns the line saying what
-        happened, ``""`` when the memory is in use or the note has none, and
-        None when it was forgotten or replaced, which leaves the note out of
-        use with it."""
+        happened, ``""`` when the memory is in use or the note has none of
+        its own (a memory it only references is not its fate), and None when
+        it was forgotten or replaced, which leaves the note out of use with
+        it."""
         assert self._store is not None
         scope = self._scope_args()
-        engram = None
-        for engram_id in self._store.note_memory_ids(note):
-            engram = self._store.get_engram_in_scope(engram_id, **scope)
-            if engram is not None:
-                break
+        memory_id = self._store.pair_memory_id(note)
+        engram = self._store.get_engram_in_scope(memory_id, **scope) if memory_id else None
         if engram is None or engram.state not in ("dormant", "archived"):
             return ""
         faded = engram.state == "archived"
@@ -3228,10 +3226,10 @@ class MnemosRuntime:
         self, note: dict[str, Any] | None, engram: Engram | None,
     ) -> tuple[list[dict[str, Any]], list[Engram]]:
         """Everything holding one pair's words: its note and every active
-        note pointing at its memory, its memory and every memory those notes
-        point at. A correction or a forget takes them out of use together, so
-        none stays live beside the rest (an older correction could leave a
-        note pointing at two)."""
+        note paired with its memory, and its memory. A correction or a forget
+        takes them out of use together, so none stays live beside the rest. A
+        memory a note only references is not part of it, and neither is a
+        note that only references the memory."""
         assert self._store is not None
         scope = self._scope_args()
         notes: dict[str, dict[str, Any]] = {}
@@ -3243,11 +3241,11 @@ class MnemosRuntime:
             for other in self._store.notes_for_engram(engram.id, **scope):
                 notes.setdefault(other["id"], other)
         for held in list(notes.values()):
-            for engram_id in self._store.note_memory_ids(held):
-                if engram_id not in memories:
-                    found = self._store.get_engram_in_scope(engram_id, **scope)
-                    if found is not None:
-                        memories[engram_id] = found
+            engram_id = self._store.pair_memory_id(held)
+            if engram_id and engram_id not in memories:
+                found = self._store.get_engram_in_scope(engram_id, **scope)
+                if found is not None:
+                    memories[engram_id] = found
         return list(notes.values()), list(memories.values())
 
     def _still_held(self, engram: Engram) -> bool:
@@ -3326,8 +3324,14 @@ class MnemosRuntime:
     ) -> dict[str, Any]:
         """How a correction's note is written: the agent's words, signed, in
         the place the note it replaces held (its domain, tags, and standing
-        as foundational), or classified afresh when it replaces no note."""
+        as foundational, and a memory it only referenced, which it still
+        references), or classified afresh when it replaces no note."""
+        assert self._store is not None
         domain = (note or {}).get("domain") or _classify_domain(correction)
+        referenced = (
+            (note or {}).get("related_engram_id")
+            if note is not None and not self._store.pair_memory_id(note) else None
+        )
         return {
             **self._scope_args(),
             "source": "observed",
@@ -3345,6 +3349,7 @@ class MnemosRuntime:
                 else domain in {"foundational", "identity"}
             ),
             "related_session_id": (note or {}).get("related_session_id"),
+            "related_engram_id": referenced,
         }
 
     def _replace_pair(
@@ -4232,11 +4237,10 @@ class MnemosRuntime:
             limit=limit,
         )
         promoted = 0
+        # A note that references a memory is never a candidate: marking it
+        # promoted into that memory paired it with a memory no capture wrote
+        # together with it.
         for entry in candidates:
-            if entry.get("related_engram_id"):
-                self._store.mark_hypomnema_promoted(entry["id"], entry["related_engram_id"])
-                promoted += 1
-                continue
             # The memory holds the note's words, so it keeps the note's
             # author: the agent's note stays the agent's, Mnemos's stays
             # Mnemos's, and any other kind is not claimed for either.

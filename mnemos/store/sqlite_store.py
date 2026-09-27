@@ -45,6 +45,10 @@ _AUTHOR_COLUMNS = frozenset({"author_kind", "author_model", "author_session"})
 # Set, with the counts, once the memories a store held before v12 have been
 # labelled. Its presence is what stops the labelling from running again.
 AUTHORS_LABELED_KEY = "engram_authors_labeled"
+# Set, with what it linked per scope, once the capture notes a store held from
+# before pairs were recorded have been paired with their memories (v13). Its
+# presence is what stops the linking from running again.
+CAPTURE_PAIRS_LINKED_KEY = "capture_pairs_linked"
 # Where each memory `mnemos repair quarantine-tool-written` moved came from, so
 # `--undo` returns exactly those and nothing else the quarantine holds.
 QUARANTINED_KEY = "quarantined_tool_written"
@@ -116,19 +120,37 @@ VALID_HYPO_DOMAINS = {
 }
 
 # A continuity note's memory, when it has one, for a query that joins it as
-# ``m`` to the note as ``h``: where a correction or promotion last pointed the
-# note (graduated_to_engram_id), else the memory it was captured as
-# (related_engram_id). A capture points both at the same memory.
-_NOTE_MEMORY_JOIN = (
-    "LEFT JOIN engrams m ON m.id = COALESCE(h.graduated_to_engram_id, h.related_engram_id)"
-)
+# ``m`` to the note as ``h``: the memory it is paired with, which one capture
+# wrote together with it (``graduated_to_engram_id``; promotion pairs a note
+# with a memory made from its words the same way). ``related_engram_id`` is
+# only a reference: a note written through the advanced tools can name a
+# memory it interprets or summarises, and that memory is never its pair.
+_NOTE_MEMORY_JOIN = "LEFT JOIN engrams m ON m.id = h.graduated_to_engram_id"
 # A note shares its memory's fate. It is live while it is active and its
 # memory, if it has one, has neither gone quiet nor faded into the archive:
 # when decay takes the memory there the note stops showing, and when recall
 # wakes it or resharpen restores it the note is back. Nothing is copied from
 # one to the other, so the two cannot fall out of step. A note with no memory
-# (a handoff, a report, an answer kept open) is live while it is active.
+# of its own (a handoff, a report, an answer kept open, a note that only
+# references a memory) is live while it is active.
 _NOTE_LIVE = "h.active = 1 AND (m.id IS NULL OR m.state NOT IN ('dormant', 'archived'))"
+# A note's own words, for a query that holds it as ``h``: its content without
+# a reflection added to it later (the runtime appends one after a blank line,
+# as "What this changed: ...").
+_NOTE_WORDS = (
+    "CASE WHEN instr(h.content, char(10) || char(10) || 'What this changed:') > 0 "
+    "THEN rtrim(substr(h.content, 1, "
+    "instr(h.content, char(10) || char(10) || 'What this changed:') - 1)) "
+    "ELSE h.content END"
+)
+# Whether a memory's text (``{text}``) is a note's words as a capture writes
+# them: the same words, or the words and the context the capture adds after a
+# blank line ("Context: ...").
+_CAPTURED_AS = (
+    f"(trim({{text}}) = trim({_NOTE_WORDS}) "
+    f"OR substr({{text}}, 1, length({_NOTE_WORDS}) + 11) = "
+    f"{_NOTE_WORDS} || char(10) || char(10) || 'Context: ')"
+)
 
 # Allowed column names for engrams table — prevents SQL injection via to_dict() keys
 _ENGRAM_COLUMNS = frozenset({
@@ -562,8 +584,9 @@ CREATE INDEX IF NOT EXISTS idx_hypomnema_scope_revised
 CREATE INDEX IF NOT EXISTS idx_hypomnema_promotion
     ON hypomnema_entries(agent_id, project_scope, created_at)
     WHERE active = 1 AND graduated_to_engram_id IS NULL;
--- A capture's note records its memory; these make the memory-to-note
--- direction a lookup (see EngramStore.capture_pair).
+-- A note records its pair (graduated_to_engram_id) and any memory it only
+-- references (related_engram_id); these make the memory-to-note direction a
+-- lookup (see EngramStore.capture_pair).
 CREATE INDEX IF NOT EXISTS idx_hypomnema_related_engram
     ON hypomnema_entries(related_engram_id);
 CREATE INDEX IF NOT EXISTS idx_hypomnema_graduated_engram
@@ -795,6 +818,7 @@ class EngramStore:
         self._classify_legacy_hypomnema(conn)
         self._backfill_engram_scopes(conn)
         self._label_engram_authors(conn)
+        self._link_older_capture_pairs(conn)
         # Only ever raised. A store newer code has stamped keeps its version
         # when older code opens it, as min_code_version does: stamping this
         # code's version over it would tell the newer code its own migration
@@ -1009,6 +1033,65 @@ class EngramStore:
                 conn.execute(
                     "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
                     (AUTHORS_LABELED_KEY, _encode_json({"at": _utc_now(), "counts": counts})),
+                )
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+
+    @staticmethod
+    def _link_older_capture_pairs(conn: sqlite3.Connection) -> None:
+        """Pair the capture notes that name their memory only as a reference
+        (v13).
+
+        A note and a memory are a pair only when one capture wrote them
+        together, and the pair is recorded as ``graduated_to_engram_id``. A
+        note with only ``related_engram_id`` may be a capture from before the
+        pair was recorded, or a note that interprets or summarises a memory
+        (the advanced tools write those), and nothing kept at write time tells
+        them apart. The words do: such a note is paired with the memory it
+        names when its own words are the memory's words as a capture writes
+        them (``_CAPTURED_AS``), in the same scope.
+
+        Runs once per store, in one transaction with the record of what it
+        linked (``CAPTURE_PAIRS_LINKED_KEY``), which keeps it from running
+        again: from then on a note is paired when it is written, or never.
+        """
+        done = "SELECT 1 FROM meta WHERE key = ?"
+        if conn.execute(done, (CAPTURE_PAIRS_LINKED_KEY,)).fetchone():
+            return
+        if conn.in_transaction:
+            conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Another process may have linked them while this one waited.
+            if not conn.execute(done, (CAPTURE_PAIRS_LINKED_KEY,)).fetchone():
+                rows = conn.execute(
+                    f"""
+                    SELECT h.id, h.related_engram_id,
+                           h.agent_id || '/' || h.person_id || '/' || h.project_scope AS scope
+                    FROM hypomnema_entries h
+                    JOIN engrams e ON e.id = h.related_engram_id
+                    WHERE h.entry_kind = 'continuity'
+                      AND h.graduated_to_engram_id IS NULL
+                      AND e.owner_agent_id = h.agent_id
+                      AND e.person_id = h.person_id
+                      AND e.project_scope = h.project_scope
+                      AND ({_CAPTURED_AS.format(text='e.content')}
+                           OR {_CAPTURED_AS.format(text='e.content_at_encoding')})
+                    """
+                ).fetchall()
+                conn.executemany(
+                    "UPDATE hypomnema_entries SET graduated_to_engram_id = ? "
+                    "WHERE id = ? AND graduated_to_engram_id IS NULL",
+                    [(row[1], row[0]) for row in rows],
+                )
+                linked: dict[str, int] = {}
+                for row in rows:
+                    linked[row[2]] = linked.get(row[2], 0) + 1
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                    (CAPTURE_PAIRS_LINKED_KEY, _encode_json({"at": _utc_now(), "linked": linked})),
                 )
             conn.commit()
         except BaseException:
@@ -3510,30 +3593,37 @@ class EngramStore:
     #
     # A capture is one object kept in two layers: the continuity note the
     # briefing is built from, and the memory the graph holds. Both are written
-    # in one transaction, and the note records the link: both of its memory
-    # columns point at the memory. That row is the pair's only record, and it
+    # in one transaction, and the note records the pair
+    # (``graduated_to_engram_id``). That row is the pair's only record, and it
     # is read both ways: ``capture_pair`` reaches the note and the memory from
     # either one's id. A second copy of the link, kept on the memory, could
-    # disagree with the first, which is the split pairs exist to end; and
-    # captures written by older code, which record only the note's side, are
-    # pairs in exactly the same way.
+    # disagree with the first, which is the split pairs exist to end.
+    #
+    # Only one capture writing them together makes a note and a memory a
+    # pair (promotion pairs a note with a memory made from its own words the
+    # same way). ``related_engram_id`` is a reference: a capture's note names
+    # the memory it was captured as there too, but a note written through the
+    # advanced tools can name a memory it only interprets or summarises, and
+    # that memory is never its pair. Captures from before the pair was
+    # recorded are linked once, when the store is opened by this code
+    # (``_link_older_capture_pairs``).
 
     def save_capture_pair(self, engram: Engram, content: str, **note: Any) -> str:
         """Save a capture's memory and its continuity note together, and
         return the note's id.
 
-        One transaction: both land or neither does. The note points at the
-        memory as the memory it was captured as (``related_engram_id``) and
-        as the one it stands for now (``graduated_to_engram_id``), so it is
-        never promoted into a second one. ``note`` takes
-        ``write_hypomnema_entry``'s keywords, less the memory link. The
-        memory's vector is not written here: see ``Encoder.finish``.
+        One transaction: both land or neither does. The note is paired with
+        the memory (``graduated_to_engram_id``), so it is never promoted into
+        a second one, and names it as the memory it was captured as
+        (``related_engram_id``), unless ``related_engram_id`` is given: a note
+        that replaces one referencing another memory keeps that reference.
+        ``note`` takes ``write_hypomnema_entry``'s keywords. The memory's
+        vector is not written here: see ``Encoder.finish``.
         """
+        note["related_engram_id"] = note.get("related_engram_id") or engram.id
         with self.transaction() as conn:
             self.save_engram(engram)
-            note_id = self.write_hypomnema_entry(
-                content, related_engram_id=engram.id, **note
-            )
+            note_id = self.write_hypomnema_entry(content, **note)
             conn.execute(
                 "UPDATE hypomnema_entries SET graduated_to_engram_id = ? WHERE id = ?",
                 (engram.id, note_id),
@@ -3541,18 +3631,10 @@ class EngramStore:
         return note_id
 
     @staticmethod
-    def note_memory_ids(note: dict[str, Any]) -> list[str]:
-        """The memories a continuity note points at, the one it stands for
-        now first: where a correction or promotion last pointed it, then the
-        memory it was captured as. One id for a capture's note, none for a
-        note without a memory, two only for a note an older correction left
-        pointing at both the memory it replaced and the replacement."""
-        ids: list[str] = []
-        for key in ("graduated_to_engram_id", "related_engram_id"):
-            value = note.get(key)
-            if value and value not in ids:
-                ids.append(value)
-        return ids
+    def pair_memory_id(note: dict[str, Any]) -> str | None:
+        """The memory a continuity note is paired with, or None: never a
+        memory it only references."""
+        return note.get("graduated_to_engram_id") or None
 
     def notes_for_engram(
         self,
@@ -3563,18 +3645,19 @@ class EngramStore:
         project_scope: str,
         active_only: bool = True,
     ) -> list[dict[str, Any]]:
-        """The continuity notes in one exact scope that point at a memory,
-        active ones first, then the most recently revised."""
+        """The continuity notes in one exact scope paired with a memory,
+        active ones first, then the most recently revised. A note that only
+        references the memory is not among them."""
         sql = (
             "SELECT * FROM hypomnema_entries "
             "WHERE agent_id = ? AND person_id = ? AND project_scope = ? "
-            "AND (related_engram_id = ? OR graduated_to_engram_id = ?)"
+            "AND graduated_to_engram_id = ?"
         )
         if active_only:
             sql += " AND active = 1"
         rows = self._get_conn().execute(
             sql + " ORDER BY active DESC, last_revised_at DESC",
-            (agent_id, person_id, project_scope, engram_id, engram_id),
+            (agent_id, person_id, project_scope, engram_id),
         ).fetchall()
         return [self._hydrate_hypomnema_row(dict(row)) for row in rows]
 
@@ -3589,22 +3672,19 @@ class EngramStore:
         """The continuity note and the memory one capture wrote, reached from
         either one's id, in one exact scope, in whatever state they are.
 
-        ``(note, None)`` for a note without a memory (and for a handoff or a
-        report, which are never half of a pair), ``(None, engram)`` for a
-        memory no note points at, and ``(None, None)`` when the id names
-        neither here. From a memory, its note is the active one pointing at
-        it, else the one most recently retired with it.
+        ``(note, None)`` for a note with no memory of its own (a note that
+        only references one, and a handoff or a report, which are never half
+        of a pair), ``(None, engram)`` for a memory no note is paired with,
+        and ``(None, None)`` when the id names neither here. From a memory,
+        its note is the active one paired with it, else the one most
+        recently retired with it.
         """
         scope = {"agent_id": agent_id, "person_id": person_id, "project_scope": project_scope}
         note = self.get_hypomnema_entry(pair_id, **scope)
         if note is not None:
-            if note.get("entry_kind") != "continuity":
-                return note, None
-            for engram_id in self.note_memory_ids(note):
-                engram = self.get_engram_in_scope(engram_id, **scope)
-                if engram is not None:
-                    return note, engram
-            return note, None
+            memory_id = self.pair_memory_id(note) if note.get("entry_kind") == "continuity" else None
+            engram = self.get_engram_in_scope(memory_id, **scope) if memory_id else None
+            return note, engram
         engram = self.get_engram_in_scope(pair_id, **scope)
         if engram is None:
             return None, None
@@ -3743,7 +3823,12 @@ class EngramStore:
         project_scope: str = "global",
         limit: int = 10,
     ) -> list[dict[str, Any]]:
-        """List stable hypomnema entries ready to become Mnemos engrams."""
+        """List stable hypomnema entries ready to become Mnemos engrams.
+
+        A note that references a memory it interprets or summarises
+        (``related_engram_id``) is never one: promoting it would pair it with
+        a memory no capture wrote together with it.
+        """
         conn = self._get_conn()
         rows = conn.execute(
             """
@@ -3752,6 +3837,7 @@ class EngramStore:
               AND active = 1
               AND entry_kind = 'continuity'
               AND graduated_to_engram_id IS NULL
+              AND related_engram_id IS NULL
               AND confidence >= 0.82
               AND salience >= 0.65
               AND (revision_count >= 1 OR foundational = 1)
@@ -3804,6 +3890,7 @@ class EngramStore:
             "AND active = 1 "
             "AND entry_kind = 'continuity' "
             "AND graduated_to_engram_id IS NULL "
+            "AND related_engram_id IS NULL "
             "AND confidence >= 0.82 "
             "AND salience >= 0.65 "
             "AND (revision_count >= 1 OR foundational = 1)"

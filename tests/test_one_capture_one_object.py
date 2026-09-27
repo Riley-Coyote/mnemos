@@ -720,6 +720,177 @@ def test_a_correction_made_in_one_process_is_one_pair_in_another(tmp_path):
         reader.close()
 
 
+# ── 9. A note that only references a memory is never its pair ──
+#
+# The advanced tools write notes that name a memory they interpret or
+# summarise (``related_engram_id``). One capture writing a note and a memory
+# together is what makes them a pair (``graduated_to_engram_id``); a reference
+# never does. Such a note is corrected and forgotten on its own, and does not
+# share the fate of the memory it references.
+
+SUMMARY = "Paddling thread, where it stands: the gear question is settled for the season."
+SUMMARY_NOW = "Paddling thread, where it stands: new paddles are on order."
+
+
+def _summary_of(db, memory_id: str, **fields) -> str:
+    """A note that only references a memory, written as mnemos_hypomnema_write
+    writes one."""
+    store = EngramStore(str(db))
+    try:
+        return store.write_hypomnema_entry(
+            SUMMARY,
+            source="synthesized",
+            agent_id=SCOPE["agent_id"],
+            person_id=SCOPE["person_id"],
+            project_scope=SCOPE["project_scope"],
+            related_engram_id=memory_id,
+            **fields,
+        )
+    finally:
+        store.close()
+
+
+def _note(db, note_id: str) -> dict:
+    [row] = _rows(db, "SELECT * FROM hypomnema_entries WHERE id = ?", (note_id,))
+    return row
+
+
+def test_correcting_a_summary_note_by_its_id_leaves_the_memory_it_references(tmp_path):
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        memory_id, note_id = _captured(runtime.capture(ORIGINAL))
+    finally:
+        runtime.close()
+    summary_id = _summary_of(db, memory_id)
+
+    runtime = _runtime(db)
+    try:
+        result = runtime.correct(SUMMARY_NOW, target_id=summary_id)
+    finally:
+        runtime.close()
+
+    assert result.startswith(f"Updated continuity note {summary_id}."), result
+    assert _state(db, memory_id) == "active", "correcting a summary retired the memory it references"
+    memory, note = _only_live_pair(db)
+    assert (memory["id"], note["id"]) == (memory_id, note_id), "the capture's own pair came apart"
+    old = _note(db, summary_id)
+    new = _note(db, old["superseded_by"])
+    assert old["active"] == 0 and (new["active"], new["content"]) == (1, SUMMARY_NOW)
+    # The corrected summary still references what it summarises.
+    assert new["related_engram_id"] == memory_id
+
+
+def test_forgetting_a_summary_note_by_its_id_leaves_the_memory_it_references(tmp_path):
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        memory_id, note_id = _captured(runtime.capture(ORIGINAL))
+    finally:
+        runtime.close()
+    summary_id = _summary_of(db, memory_id)
+
+    runtime = _runtime(db)
+    try:
+        result = runtime.correct("", target_id=summary_id, action="forget")
+    finally:
+        runtime.close()
+
+    assert _state(db, memory_id) == "active", "forgetting a summary retired the memory it references"
+    assert result == f"Archived continuity note {summary_id}.", result
+    memory, note = _only_live_pair(db)
+    assert (memory["id"], note["id"]) == (memory_id, note_id)
+    assert _note(db, summary_id)["active"] == 0
+
+
+def test_a_summary_note_does_not_share_the_fate_of_the_memory_it_references(tmp_path):
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        # With their meaning given, no question about either is waiting.
+        memory_id, _note_id = _captured(runtime.capture(ORIGINAL, impact=MEANING))
+        runtime.capture(OTHER, impact="Tuesdays belong to the choir.")
+    finally:
+        runtime.close()
+    _summary_of(db, memory_id)
+    assert _decay(db, memory_id, accessibility=0.06, hours=100) == "dormant"
+
+    reader = _runtime(db)
+    try:
+        briefing = reader.context()
+        counted = reader.health()["counts"]["continuity_notes_active"]
+    finally:
+        reader.close()
+
+    assert SUMMARY in briefing, f"a summary hid when the memory it references went quiet:\n{briefing}"
+    # The memory's own note goes quiet with it; the summary and the choir stay.
+    assert OLD_WORDS not in briefing and "choir rehearses" in briefing
+    assert counted == 2
+
+
+def test_an_older_capture_linked_only_one_way_is_still_one_pair_after_migration(tmp_path):
+    """A store from before the pair was recorded: the capture's note names its
+    memory only as related_engram_id. Opening it with this code pairs them,
+    because the note's words are the memory's words as a capture writes them
+    (the memory adds the capture's context; the note has since gained a
+    reflection). A summary that references the same memory is left alone."""
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        memory_id, note_id = _captured(runtime.capture(ORIGINAL, context="At the lake house."))
+    finally:
+        runtime.close()
+    summary_id = _summary_of(db, memory_id)
+    _write(
+        db,
+        "UPDATE hypomnema_entries SET graduated_to_engram_id = NULL, content = ? WHERE id = ?",
+        (f"{ORIGINAL}\n\nWhat this changed: (Opus 5.5) Paddles live with the boat.", note_id),
+    )
+    _write(db, "DELETE FROM meta WHERE key = 'capture_pairs_linked'")
+    _write(db, "UPDATE meta SET value = '12' WHERE key = 'schema_version'")
+    assert [row["content"] for row in _rows(db, "SELECT content FROM engrams WHERE id = ?", (memory_id,))] == [
+        f"{ORIGINAL}\n\nContext: At the lake house."
+    ], "premise: the memory holds the capture's context"
+
+    EngramStore(str(db)).close()  # the first open by this code migrates it
+
+    assert _note(db, note_id)["graduated_to_engram_id"] == memory_id, "the older capture was not paired"
+    assert _note(db, summary_id)["graduated_to_engram_id"] is None, "a summary was paired with what it references"
+    runtime = _runtime(db)
+    try:
+        runtime.correct(CORRECTED, target_id=note_id)
+    finally:
+        runtime.close()
+    assert _live_memories(db, OLD_WORDS) == [], "correcting the older capture's note left its memory saying the old thing"
+    memory, note = _only_live_pair(db)
+    assert memory["content"] == note["content"] == CORRECTED
+
+
+def test_a_summary_note_is_never_promoted_into_the_memory_it_references(tmp_path):
+    """Promotion marked a note that references a memory as graduated into
+    it, pairing the two."""
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        memory_id, note_id = _captured(runtime.capture(ORIGINAL))
+    finally:
+        runtime.close()
+    summary_id = _summary_of(db, memory_id, confidence=0.9, salience=0.8, foundational=True)
+
+    runtime = _runtime(db)
+    try:
+        runtime.maintain()
+    finally:
+        runtime.close()
+
+    assert _note(db, summary_id)["graduated_to_engram_id"] is None, (
+        "promotion paired a summary with the memory it references"
+    )
+    assert [row["id"] for row in _rows(
+        db, "SELECT id FROM hypomnema_entries WHERE graduated_to_engram_id = ?", (memory_id,),
+    )] == [note_id]
+
+
 # ── A working local embedding backend, without torch (as the version tests use) ──
 
 

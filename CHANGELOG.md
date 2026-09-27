@@ -41,6 +41,11 @@ replacement without a note.
   retires a belief the agent stated (`action=forget`), or replaces it with the
   agent's words, formed at 40% as a stated belief is, the old one retired and
   pointing at it.
+- Only one capture writing them together makes a note and a memory a pair
+  (`graduated_to_engram_id`). A note that only references a memory
+  (`related_engram_id`, as the advanced tools' summaries do) is corrected and
+  forgotten on its own, never shares that memory's fate, and is never
+  promoted into it. A corrected summary still references what it summarises.
 - A note shares its memory's fate. When decay takes the memory dormant or
   into the archive, the note stops showing (briefing, recall, counts); when
   the memory wakes or `resharpen` restores it, the note is back. Nothing is
@@ -54,7 +59,12 @@ replacement without a note.
 Migration (schema 13). The first open by this code adds `author_model` and
 `author_session` to `versions` (empty for every existing row) and two indexes
 on the note-to-memory columns, after the usual verified pre-migration backup.
-No row is changed. On a copy of the real store it opened in 1.6 seconds.
+Once per store (recorded in `meta.capture_pairs_linked`), it pairs a capture
+note that named its memory only as a reference, when the note's words are
+the memory's words as a capture writes them; no other row changes. On a fresh
+copy of the real store it opened in under a second and paired none: its 200
+capture notes were already paired, and its 9 notes with only a reference are
+summaries whose words differ (all in `claude-field`).
 
 Changed behaviour, and what to do:
 
@@ -62,6 +72,8 @@ Changed behaviour, and what to do:
   ("Continuity note ID", "Memory ID"); the note id changes, as the memory id
   always did. An impact given that way is saved.
 - Correcting a belief needs its id; words alone no longer retire or lower one.
+- Forgetting a note that only references a memory no longer archives that
+  memory.
 - Notes over dormant or archived memories leave the briefing. On the copy,
   its live notes went from 200 to 181: 16 over dormant memories and 3 over
   memories replaced by a correction.

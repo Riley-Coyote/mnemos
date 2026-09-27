@@ -121,7 +121,8 @@ def test_recall_shows_the_notes_the_question_is_about(tmp_path):
         rt.capture(content=note)
 
     out = rt.recall("getting ready for her reading")
-    notes = out.split("Continuity notes:", 1)[-1].split("Durable memories:", 1)[0]
-    shown = {line.split("] ", 1)[1] for line in notes.splitlines() if line.startswith("- [")}
+    # A capture's note and memory are one object, so recall shows each
+    # capture once, as its memory (R08); every row is one.
+    shown = {line.split("] ", 1)[1] for line in out.splitlines() if line.startswith("- [")}
 
     assert shown == set(about_the_reading), shown

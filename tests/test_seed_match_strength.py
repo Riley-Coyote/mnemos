@@ -9,10 +9,13 @@ rule captured one afternoon did not come back the next morning when recalled by
 its own words: five heavily linked memories scored 10 to 12, the rule 1.7.
 
 Now a keyword seed starts at its bm25 rank relative to the best match of the
-same search, and a meaning seed at its similarity.
+same search, and a meaning seed at its similarity. Since R08 both start at their
+reciprocal-rank-fused score relative to the best seed (tests/test_recall_by_meaning.py).
 """
 
 from __future__ import annotations
+
+import pytest
 
 from mnemos.core.engram import Connection, Engram
 from mnemos.core.types import ConnectionRelation
@@ -78,17 +81,25 @@ class _MeaningIndex:
         return [(self.engram_id, self.similarity)]
 
 
-def test_a_meaning_seed_starts_at_its_similarity(store):
-    """A memory found only by meaning starts at its similarity, not at 1.0."""
+def test_a_meaning_seed_starts_at_its_fused_rank(store):
+    """A memory found only by meaning starts where rank fusion puts it (R08),
+    no longer at its similarity: first by meaning it scores 0.5 / (60 + 1), a
+    memory first by words 0.3 / (60 + 1), each relative to the best seed. So a
+    meaning match is never locked out below every keyword match."""
     unnamed = _memory("an entry that shares no words with the cue")
-    store.save_engram(unnamed)
+    named = _memory("lighthouse keeper")
+    for engram in (unnamed, named):
+        store.save_engram(engram)
 
     retriever = ReactiveRetriever(store, embedding_index=_MeaningIndex(unnamed.id, 0.42),
                                   reconsolidation_enabled=False)
     results = retriever.retrieve("lighthouse keeper", **SCOPE)
+    score = {r.engram.id: r.score for r in results}
 
-    assert [r.engram.id for r in results] == [unnamed.id]
-    assert results[0].score == 0.42
+    assert [r.engram.id for r in results] == [unnamed.id, named.id]
+    assert results[0].retrieval_path == "embedding"
+    assert score[unnamed.id] == 1.0
+    assert score[named.id] == pytest.approx(0.3 / 0.5, abs=1e-4)
 
 
 def test_ranked_search_is_the_same_search_with_its_ranks(store):

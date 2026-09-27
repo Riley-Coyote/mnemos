@@ -56,6 +56,16 @@ What changed:
   how what it writes gets indexed.
 - Without the model, the scheduled job skips indexing and still consolidates,
   and the health card says so in one line (`Recall index: not updated ...`).
+- A write never waits long on indexing. A capture, a correction or a handoff
+  spends at most about 2 s embedding, and a network backend waits at most 2 s
+  a call there, with no retry and no second try one passage at a time. What
+  doesn't fit, or fails, waits for the scheduled job or the command. (With a
+  slow provider, a handoff used to wait 120 s for the batch, then 30 s a
+  passage.) The local model's one-time load is not counted.
+- A note rewritten in place (a handoff corrected by its id, say) drops its
+  passages with its old words, in the same transaction, and a correction
+  re-indexes it within the write's budget. Recall also ignores any passage cut
+  from words a note no longer holds, so it is never found by its old meaning.
 - The local embedding model loads only from files on this machine
   (`local_files_only`). Downloading is one explicit step:
   `mnemos embeddings download`. A hanging network no longer blocks recall,

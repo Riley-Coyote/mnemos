@@ -33,6 +33,7 @@ class _FakeEngram:
         self.impact = ""
         self.content = ""
         self.kind = "semantic"
+        self.author_kind = "agent"
 
 
 def _profile(tag_lists):

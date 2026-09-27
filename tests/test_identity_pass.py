@@ -27,7 +27,7 @@ def _fill(encoder, agent_id="identity-test"):
         encoder.encode(
             content=content, impact="", kind="semantic", tags=["continuity"],
             source=SourceType.SESSION, agent_id=agent_id,
-            skip_surprise_detection=True,
+            skip_surprise_detection=True, author_kind="agent",
         )
 
 
@@ -63,7 +63,7 @@ class TestIdentityNeedsNoModel:
                 content="Another decision about deployment and staging pipelines",
                 impact="", kind="semantic", tags=["deployment"],
                 source=SourceType.SESSION, agent_id="identity-test",
-                skip_surprise_detection=True,
+                skip_surprise_detection=True, author_kind="agent",
             )
 
         run_identity_pass(store, agent_id="identity-test")

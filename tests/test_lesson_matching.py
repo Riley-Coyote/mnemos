@@ -25,7 +25,9 @@ from mnemos.core.engram import Engram
 from mnemos.core.types import ConnectionRelation
 from mnemos.simple_runtime import MnemosRuntime
 
-SCOPE = dict(owner_agent_id="default", person_id="user", project_scope="global")
+# The agent's own memories: only the agent's words become lessons.
+SCOPE = dict(owner_agent_id="default", person_id="user", project_scope="global",
+             author_kind="agent")
 
 
 def _lesson(store, content: str) -> Engram:

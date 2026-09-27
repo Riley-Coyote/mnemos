@@ -87,10 +87,11 @@ def run_reflection_pass(
         "narrative_length": 0,
     }
 
-    # 1. LOAD RECENT ENGRAMS
+    # 1. LOAD RECENT ENGRAMS: the agent's own. Themes are mined only from
+    # what the agent wrote, never from a tool's or a model's words.
     all_engrams = store.get_active_engrams(
         agent_id=agent_id, person_id=person_id, project_scope=project_scope,
-        limit=200,
+        limit=200, author_kind="agent",
     )
     recent = [
         e for e in all_engrams
@@ -113,9 +114,12 @@ def run_reflection_pass(
     else:
         thought_lines = _generate_template_thoughts(recent)
 
-    # Encode thoughts as new engrams
+    # Encode thoughts as new engrams. A model wrote them, or Mnemos's own
+    # template did; either way they are not the agent's words.
     from ..encoding.encoder import Encoder
     encoder = Encoder(store)
+    writer = "tool" if llm_client else "system"
+    writer_model = str(getattr(llm_client, "_model", "") or "") if llm_client else ""
 
     for thought in thought_lines[:max_thoughts]:
         if thought and len(thought.strip()) > 10:
@@ -127,6 +131,8 @@ def run_reflection_pass(
                 agent_id=agent_id,
                 person_id=person_id or "user",
                 project_scope=project_scope or "global",
+                author_kind=writer,
+                author_model=writer_model,
             )
             stats["thoughts_generated"] += 1
 
@@ -155,16 +161,20 @@ def run_identity_pass(
     ``len(recent) < 3`` guard on the last 24 hours. Identity is not a
     property of the last day; a quiet week is not an absence of self. This
     pass reads the whole active graph and runs every cycle.
+
+    Only what the agent wrote counts (``author_kind`` 'agent'). On one real
+    store 103 of 450 memories were a transcript indexer's model's words, and
+    what the agent is must not be measured from them.
     """
     stats: dict[str, Any] = {"identity_computed": False}
 
     engrams = store.get_active_engrams(
         agent_id=agent_id, person_id=person_id, project_scope=project_scope,
-        limit=1000,
+        limit=1000, author_kind="agent",
     )
     if not engrams:
         # Nothing to be the shape of yet. Not a failure.
-        stats["reason"] = "no active memories"
+        stats["reason"] = "no active memories the agent wrote"
         return stats
 
     if identity is None:
@@ -216,8 +226,14 @@ def compute_identity_profile(
 
     Public: identity_diff compares this computed profile against the
     declared SOUL.md.
+
+    Only memories the agent wrote are measured (``author_kind`` 'agent'),
+    whoever passes them in.
     """
     agent_id = identity.memory_profile.agent_id
+    all_engrams = [
+        e for e in all_engrams if getattr(e, "author_kind", "unknown") == "agent"
+    ]
 
     # 1. PERSISTENT CONCERNS: what the agent keeps returning to.
     # Count only tags that mean something. Mnemos stamps a fixed vocabulary of

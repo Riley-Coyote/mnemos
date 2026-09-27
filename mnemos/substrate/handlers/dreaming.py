@@ -193,6 +193,7 @@ If something does emerge, respond with:
         kind="episodic",
         tags=["dream", "collision"],
         skip_surprise_detection=True,
+        author_kind="tool",  # a model's words, not the agent's
     )
 
     return produced_events

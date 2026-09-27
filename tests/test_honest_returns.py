@@ -441,7 +441,7 @@ def test_maintenance_records_no_access(tmp_path, monkeypatch):
             content=said, impact=said, kind="procedural", tags=["lesson", "distilled"],
             strength=0.5, stability=0.5, owner_agent_id="demo",
             person_id=runtime.scope.person_id, project_scope=runtime.scope.project_scope,
-            last_accessed="2026-01-01T00:00:00+00:00",
+            last_accessed="2026-01-01T00:00:00+00:00", author_kind="agent",
         )
         store.save_engram(lesson)
         # The captured memory has faded, and long enough ago to be softened.

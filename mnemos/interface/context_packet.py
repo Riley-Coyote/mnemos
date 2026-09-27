@@ -37,6 +37,7 @@ from ..authorship import (
     clean_session_id,
     display_name,
     from_same_session,
+    lesson_signature,
     note_signature,
     same_model,
 )
@@ -429,7 +430,7 @@ def _lesson_item(row: dict[str, Any], place: set[str]) -> dict[str, Any]:
         "shown": shown,
         "date": date,
         "created_at": row.get("created_at") or "",
-        "by": "lesson",
+        "by": lesson_signature(row),
         "shared": len(place & distinctive_terms(text)),
         "episode": False,
     }
@@ -451,7 +452,7 @@ def _dated(text: str, created_at: str | None) -> tuple[str, str]:
 def _lessons(store: "EngramStore", **scope: str) -> list[dict[str, Any]]:
     rows = store._get_conn().execute(
         """
-        SELECT id, content, created_at FROM engrams
+        SELECT id, content, created_at, author_kind FROM engrams
         WHERE owner_agent_id = ? AND person_id = ? AND project_scope = ?
           AND state = 'active'
           AND (tags LIKE '%"lesson"%' OR tags LIKE '%"distilled"%')

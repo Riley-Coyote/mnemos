@@ -218,10 +218,15 @@ def compute_graph_identity(store: EngramStore, agent_id: str) -> ComputedIdentit
     frequency, hubs from connection counts) and layers the diff-specific
     thresholds on top: beliefs >= 0.7 as values, beliefs <= 0.4 as living
     questions, top-reconsolidated engrams as preoccupations.
+
+    Only memories the agent wrote (``author_kind`` 'agent') are loaded, so no
+    facet, count or contradiction can come from a tool's or a model's words:
+    a transcript indexer's memory that had been returned often read as a
+    preoccupation, and one holding a contradiction as the agent's tension.
     """
     from .consolidation.reflection import compute_identity_profile
 
-    engrams = store.get_active_engrams(agent_id=agent_id, limit=1000)
+    engrams = store.get_active_engrams(agent_id=agent_id, limit=1000, author_kind="agent")
     identity = store.get_identity(agent_id)
     if identity is None:
         identity = AgentIdentity(memory_profile=MemoryProfile(agent_id=agent_id))

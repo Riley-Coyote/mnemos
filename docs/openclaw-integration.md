@@ -102,7 +102,6 @@ mnemos setup-openclaw --agent nova
 | Cron | Schedule | What It Does |
 |------|----------|-------------|
 | observer-context-sync | Every 30 min | Updates active-context.md from recent sessions |
-| substrate-tick | Every 4 hours | Runs memory consolidation (decay, dreaming, beliefs) |
 | memory-maintenance | Every 6 hours | Keeps MEMORY.md current |
 | cross-agent-bridge | Every 2 hours | Syncs context between agents |
 | morning-brief | Daily 10 AM | Generates morning summary and priorities |

@@ -8,10 +8,12 @@ Jobs:
 - mnemos-shallow: Every 4h — shallow consolidation (decay + connections)
 - mnemos-deep: Daily 3am — deep consolidation (all passes)
 - mnemos-export: Every 2h — export updated workspace files
-- mnemos-substrate-tick: Every 4h — cognitive substrate tick (handlers, modulators)
 
-Transcript indexing is deliberately not scheduled here (it buries the
-continuity layer); it stays available as the explicit `mnemos index` command.
+Neither the transcript indexer nor the substrate tick is scheduled here: both
+write memories in a model's words, not the agent's, and the indexer's volume
+buried the continuity layer. Both stay available by hand (`mnemos index`,
+`mnemos substrate-tick`). Installing these jobs replaces every `mnemos-*` job
+already in jobs.json, so a substrate tick an earlier install added goes too.
 """
 
 from __future__ import annotations
@@ -96,22 +98,10 @@ def generate_cron_jobs(
                 ),
             },
         },
-        {
-            "id": f"mnemos-substrate-{uuid.uuid4().hex[:12]}",
-            "agentId": agent_id,
-            "name": "mnemos-substrate-tick",
-            "enabled": True,
-            "schedule": {
-                "kind": "cron",
-                "expr": "15 */4 * * *",  # Every 4 hours at :15 (offset from consolidation)
-                "tz": timezone,
-            },
-            "sessionTarget": "isolated",
-            "payload": {
-                "kind": "command",
-                "message": "mnemos substrate-tick",
-            },
-        },
+        # No substrate-tick job: its handlers write memories in a model's
+        # words, which are not the agent's (setup/scheduler.py retires it the
+        # same way). It stays available as the explicit `mnemos substrate-tick`.
+        #
         # No session-indexer job. The turnkey scheduler (setup/scheduler.py)
         # deliberately excludes transcript indexing — on one live store it
         # wrote ~7,058 engrams against 13 deliberate captures and buried the

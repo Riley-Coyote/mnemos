@@ -88,6 +88,7 @@ Respond with:
         kind="emotional",
         tags=["surprise", "reflection"],
         skip_surprise_detection=False,  # Surprise CAN chain — it's the original signal
+        author_kind="tool",  # a model's words, not the agent's
     )
 
     return produced_events

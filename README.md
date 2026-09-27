@@ -49,7 +49,7 @@ document ingestion, Mnemos is not that and is not trying to be.
 | Experimental research prototypes | Source imports only | Not production-supported |
 | Hermes agent with another memory provider | Hermes Sidecar Mode | `mnemos hermes quickstart --agent-safe` |
 | Hermes agent using Mnemos as its provider | Hermes Provider Mode | `mnemos hermes quickstart --provider` |
-| Background memory maintenance | Substrate tick | `mnemos substrate-tick` |
+| Background memory maintenance | Scheduled upkeep | `mnemos daemon install --write` |
 
 Start with **Simple MCP Mode**. It is the product: nine tools, and the default.
 
@@ -372,8 +372,8 @@ Mnemos works without background jobs. Normal MCP tool use can capture, recall,
 correct, and run lightweight maintenance.
 
 But memory that only works while a session is open is doing half the job.
-Decay, connection discovery, consolidation and the substrate tick are what make
-continuity feel alive between conversations.
+Decay, connection discovery and consolidation are what make continuity feel
+alive between conversations.
 
 ### Background Maintenance
 
@@ -389,8 +389,12 @@ No external agent runner is required.
 |---|---|---|
 | `maintain` | decay and connection discovery | every 4h |
 | `maintain-deep` | softening, belief review, reflection | daily at 03:00 |
-| `substrate-tick` | handlers and modulators | every 4h |
-| `index` | index session transcripts | every 30m, only with a model provider |
+
+Neither the substrate tick nor the transcript indexer is scheduled: both write
+memories in a model's words, not the agent's. They are recorded as a tool's,
+kept out of identity, beliefs and lessons, and `mnemos repair
+quarantine-tool-written` moves them out of recall. Both still run by hand.
+Installing removes a substrate tick an earlier install scheduled.
 
 Preview before committing to anything:
 
@@ -468,7 +472,7 @@ which outside model may write an agent's memory is answered by construction.
 Run a Mnemos maintenance check for this agent.
 
 First run mnemos doctor and read the retrieval, continuity, and background status.
-If the doctor output is healthy, run mnemos substrate-tick for one maintenance cycle.
+If the doctor output is healthy, run mnemos consolidate for one maintenance cycle.
 If a dedicated model provider is not configured, explain that Mnemos will use local, deterministic maintenance only, and that work needing judgement is left for the agent to answer through mnemos_reflect rather than performed by an outside model.
 Report what maintenance ran and whether any follow-up is needed.
 ```

@@ -70,6 +70,7 @@ def _engram(content: str, tags: list[str], impact: str = "", recon: int = 0) -> 
         impact=impact,
         owner_agent_id=AGENT,
         encoding_context=EncodingContext(session_id="seed"),
+        author_kind="agent",
     )
     e.tags = list(tags)
     e.reconsolidation_count = recon

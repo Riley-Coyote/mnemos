@@ -26,7 +26,9 @@ and the dream report said dormant memories were "ready to wake if needed".
   back for its own match, or not at all. Results show "(it had gone quiet)"
   beside one.
 - Decay keeps running over dormant memories until they wake or reach the
-  archive. The floors that hold an active memory up (recent use,
+  archive: every one of them, read a page at a time apart from the active
+  ones, so none waits behind the limit on how many active memories one pass
+  reads (10,000). The floors that hold an active memory up (recent use,
   `foundational`, `active_project`) never lift a dormant one. The decay stats
   count dormant memories apart, and `engrams_dormant` still counts only the
   ones that went dormant in that pass. On another copy, one maintenance cycle
@@ -34,7 +36,8 @@ and the dream report said dormant memories were "ready to wake if needed".
 - A memory that faded into the archive (archived by decay) comes back by its
   exact id, or through `mnemos_recall` with `include_archived=true` when the
   query names it (half its meaningful words, and two when it has two or more:
-  the bar a correction's query clears). Either way it is restored with
+  the bar a correction's query clears). Every faded memory in the scope is
+  weighed, however many there are. Either way it is restored with
   `resharpen` and counts as returned. A memory the agent forgot, or replaced
   with a correction, stays where it was put, by id and by flag.
 - `resharpen` restores only a memory that is archived, in one transaction,

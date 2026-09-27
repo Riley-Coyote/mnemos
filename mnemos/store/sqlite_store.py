@@ -1317,34 +1317,39 @@ class EngramStore:
         load_connections: bool = True,
         person_id: str | None = None,
         project_scope: str | None = None,
+        after_id: str | None = None,
     ) -> list[Engram]:
-        """Engrams in any of ``states`` for an agent, sorted by accessibility,
-        as ``get_active_engrams`` returns active ones. Decay reads active and
-        dormant memories this way, so a dormant one keeps fading."""
+        """Engrams in any of ``states`` for an agent, the most accessible
+        first, as ``get_active_engrams`` returns active ones.
+
+        With ``after_id``, the ``limit`` engrams after that id in id order
+        instead: one page of a walk through every one of them (start it with
+        ``after_id=""``). Changes made to the engrams along the way cannot make
+        such a walk skip or repeat one. Decay walks dormant memories this way,
+        apart from the active ones, so no dormant memory waits behind a limit
+        the active ones fill.
+        """
         conn = self._get_conn()
         states = tuple(dict.fromkeys(states))
         if not states:
             return []
-        in_states = f"state IN ({', '.join('?' * len(states))})"
-        if agent_id is None:
-            rows = conn.execute(
-                f"SELECT * FROM engrams WHERE {in_states} "
-                "ORDER BY accessibility DESC LIMIT ?",
-                (*states, limit),
-            ).fetchall()
-        elif person_id is not None and project_scope is not None:
-            rows = conn.execute(
-                f"SELECT * FROM engrams WHERE {in_states} "
-                "AND owner_agent_id = ? AND person_id = ? AND project_scope = ? "
-                "ORDER BY accessibility DESC LIMIT ?",
-                (*states, agent_id, person_id, project_scope, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                f"SELECT * FROM engrams WHERE {in_states} "
-                "AND owner_agent_id = ? ORDER BY accessibility DESC LIMIT ?",
-                (*states, agent_id, limit),
-            ).fetchall()
+        where = [f"state IN ({', '.join('?' * len(states))})"]
+        params: list[Any] = list(states)
+        if agent_id is not None:
+            where.append("owner_agent_id = ?")
+            params.append(agent_id)
+            if person_id is not None and project_scope is not None:
+                where.append("person_id = ? AND project_scope = ?")
+                params.extend([person_id, project_scope])
+        order = "accessibility DESC"
+        if after_id is not None:
+            where.append("id > ?")
+            params.append(after_id)
+            order = "id"
+        rows = conn.execute(
+            f"SELECT * FROM engrams WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?",
+            (*params, limit),
+        ).fetchall()
         engrams = [Engram.from_dict(dict(r)) for r in rows]
         if load_connections:
             for engram in engrams:
@@ -1870,20 +1875,31 @@ class EngramStore:
         agent_id: str,
         person_id: str,
         project_scope: str,
-        limit: int = 10000,
+        limit: int = 500,
+        before_id: str | None = None,
     ) -> list[Engram]:
         """Archived engrams in one scope that faded there (FADED_ARCHIVE_REASONS),
-        newest first. A memory forgotten or replaced by a correction is never
-        among them. Which of them a query names is the caller's to judge, word
-        by word: SQLite's LIKE folds the case of ASCII letters only."""
+        ``limit`` at a time, newest first by id (a ULID, so by when each was
+        written, to the millisecond); with ``before_id``, the page after that
+        id. Walking the pages
+        reaches every one of them, as ``count_faded`` counts every one, and
+        restoring one along the way cannot make the walk skip or repeat one. A
+        memory forgotten or replaced by a correction is never among them.
+        Which of them a query names is the caller's to judge, word by word:
+        SQLite's LIKE folds the case of ASCII letters only."""
         reasons = ", ".join("?" * len(FADED_ARCHIVE_REASONS))
-        rows = self._get_conn().execute(
+        sql = (
             "SELECT e.* FROM engrams e JOIN archive a ON a.id = e.id "
             "WHERE e.state = 'archived' AND e.owner_agent_id = ? "
             "AND e.person_id = ? AND e.project_scope = ? "
-            f"AND a.archive_reason IN ({reasons}) "
-            "ORDER BY a.archived_at DESC LIMIT ?",
-            (agent_id, person_id, project_scope, *FADED_ARCHIVE_REASONS, limit),
+            f"AND a.archive_reason IN ({reasons})"
+        )
+        params: list[Any] = [agent_id, person_id, project_scope, *FADED_ARCHIVE_REASONS]
+        if before_id is not None:
+            sql += " AND e.id < ?"
+            params.append(before_id)
+        rows = self._get_conn().execute(
+            sql + " ORDER BY e.id DESC LIMIT ?", (*params, limit),
         ).fetchall()
         return [Engram.from_dict(dict(row)) for row in rows]
 

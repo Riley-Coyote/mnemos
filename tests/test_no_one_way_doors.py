@@ -393,6 +393,42 @@ def test_decay_keeps_fading_a_dormant_memory_to_the_archive(tmp_path):
     assert stats["dormant_processed"] == 2
 
 
+def test_decay_reaches_every_dormant_memory_however_many_are_active(tmp_path, monkeypatch):
+    """Read together with the active memories, the most accessible first under
+    one limit (10,000), dormant memories were the first left out once a scope
+    held that many active ones, and never finished fading. With the limit at 2,
+    three active memories and five dormant ones, every dormant one still fades,
+    read two at a time."""
+    db = tmp_path / "memory.db"
+    store = EngramStore(str(db))
+    try:
+        for n in range(3):
+            _engram(store, f"The harbour ledger holds page {n}.",
+                    accessibility=0.9, last_accessed=_ago(1))
+        quiet = [
+            _engram(store, f"The old ferry pier number {n} was rebuilt in stone.",
+                    state="dormant", accessibility=0.03, stability=0.0,
+                    last_accessed=_ago(720))
+            for n in range(5)
+        ]
+    finally:
+        store.close()
+    real = EngramStore.get_engrams_in_states
+
+    def capped(self, states, **kwargs):
+        kwargs["limit"] = min(kwargs.get("limit", 1000), 2)
+        return real(self, states, **kwargs)
+
+    monkeypatch.setattr(EngramStore, "get_engrams_in_states", capped)
+
+    stats = _decay(db)
+
+    assert [_row(db, engram_id, "state")["state"] for engram_id in quiet] == ["archived"] * 5, (
+        "a dormant memory never reached the decay pass"
+    )
+    assert stats["dormant_processed"] == 5
+
+
 def test_older_code_leaves_dormant_memories_to_the_newer_rules(tmp_path):
     """Fading a dormant memory is this version's rule: code older than the
     store applies it through no path, the runtime's maintenance or the pass
@@ -506,6 +542,49 @@ def test_include_archived_matches_words_whatever_their_case(tmp_path):
 
     assert "in the attic" in shown.split("From the archive:", 1)[-1], shown
     assert _row(db, emile, "state")["state"] == "active"
+
+
+def test_include_archived_weighs_every_faded_memory_however_many(tmp_path, monkeypatch):
+    """Health counts every faded memory, so recall must reach every one. Recall
+    weighed only the newest 10,000. With room for 2 at a time and three faded
+    memories, a query naming only the oldest still brings it back."""
+    db = tmp_path / "memory.db"
+    texts = (
+        "The lighthouse keeper logs the weather at dawn.",
+        "Marigolds bloom beside the greenhouse door every June.",
+        "The choir rehearses on Tuesday evenings in the old hall.",
+    )
+    # The oldest first, by id and by when each faded.
+    ids = [f"engram_0000000000000000000000000{n}" for n in (1, 2, 3)]
+    store = EngramStore(str(db))
+    try:
+        for engram_id, text in zip(ids, texts):
+            engram = Engram(id=engram_id, content=text, **STORE_SCOPE)
+            store.save_engram(engram)
+            store.archive_engram(engram, reason="decay_below_threshold")
+    finally:
+        store.close()
+    for day, engram_id in enumerate(ids, start=1):
+        _write(db, "UPDATE archive SET archived_at = ? WHERE id = ?",
+               (f"2026-09-0{day}T00:00:00+00:00", engram_id))
+    real = EngramStore.faded_engrams
+
+    def capped(self, **kwargs):
+        kwargs["limit"] = min(kwargs.get("limit", 10000), 2)
+        return real(self, **kwargs)
+
+    monkeypatch.setattr(EngramStore, "faded_engrams", capped)
+
+    runtime = _runtime(db)
+    try:
+        shown = runtime.recall("lighthouse keeper", include_archived=True)
+    finally:
+        runtime.close()
+
+    assert "logs the weather at dawn" in shown.split("From the archive:", 1)[-1], (
+        f"the oldest faded memory was never weighed:\n{shown}"
+    )
+    assert _row(db, ids[0], "state")["state"] == "active"
 
 
 def test_mnemos_recall_takes_include_archived_over_the_protocol(tmp_path):

@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import json
 import hashlib
+import heapq
 import os
 import re
 import sqlite3
@@ -2431,22 +2432,38 @@ class MnemosRuntime:
 
     def _faded_matches(self, query: str, max_results: int) -> list[Engram]:
         """The memories that faded into the archive and that ``query`` names,
-        the closest first: at least half of its meaningful words, and two when
-        it has two or more (the bar a correction's query must clear). A memory
-        forgotten or replaced by a correction is never among them."""
+        the closest first, then the newest: at least half of its meaningful
+        words, and two when it has two or more (the bar a correction's query
+        must clear). Every faded memory in the scope is weighed, page by page,
+        and only the closest are kept in hand. A memory forgotten or replaced
+        by a correction is never among them."""
         assert self._store is not None
         if not _named_terms(query) - _CORRECTION_VERBS:
             return []
-        candidates = self._store.faded_engrams(
-            agent_id=self.scope.agent_id,
-            person_id=self.scope.person_id,
-            project_scope=self.scope.project_scope,
-        )
-        return _named_matches(
-            query,
-            candidates,
-            lambda e: f"{e.content or ''} {e.content_at_encoding or ''} {e.impact or ''}",
-        )[:max(1, max_results)]
+
+        def named() -> Any:
+            position = 0
+            before: str | None = None
+            while True:
+                page = self._store.faded_engrams(
+                    agent_id=self.scope.agent_id,
+                    person_id=self.scope.person_id,
+                    project_scope=self.scope.project_scope,
+                    before_id=before,
+                )
+                if not page:
+                    return
+                for engram in page:
+                    shared = _named_by(query, " ".join([
+                        engram.content or "", engram.content_at_encoding or "", engram.impact or "",
+                    ]))
+                    if shared:
+                        yield shared, position, engram
+                    position += 1
+                before = page[-1].id
+
+        closest = heapq.nsmallest(max(1, max_results), named(), key=lambda m: (-m[0], m[1]))
+        return [engram for _shared, _position, engram in closest]
 
     def identity_graph(self, max_nodes: int = 18) -> dict[str, Any]:
         """Build a portable identity graph snapshot for visual-capable clients."""

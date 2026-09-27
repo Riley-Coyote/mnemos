@@ -2,6 +2,70 @@
 
 ## 0.3.1 (unreleased)
 
+### Passages the model can read
+
+Recall's meaning index cut each text into passages of up to 700 characters.
+The local model (all-MiniLM-L6-v2) is trained on sentence pairs and averages
+what it reads, so a passage holding several ideas embedded as a blur of them.
+On a copy of the live store, a standing rule of 548 characters (one passage)
+scored 0.24 against "plain language, brief replies, no jargon", under the
+meaning floor (0.3 then), so meaning never found it; its first three sentences
+alone score 0.52, above anything else the question meets.
+
+- A text is read as windows of whole sentences, at most 300 characters, each
+  beginning with the sentence the one before ended with (when the two fit in
+  one window), and as a whole: its first 700 characters, one more passage. A
+  text that is one window is one passage. A sentence longer than a window is
+  cut at spaces into near-equal pieces; a line break ends a sentence. An item
+  is found by its best passage, so a question can meet its gist or one of its
+  sentences. Up to 160 passages a text: windows to the end of a 16,000
+  character handoff however its sentences run.
+- Each passage row records how it was cut (`passage_vectors.scheme`: 1 for the
+  700-character passages, 2 for these). A row cut by an older scheme is stale:
+  its item waits to be indexed again, like one with no passages, and is never
+  found by it. Every count of what waits (indexing, the health card, the
+  watchdog) sees it waiting. A newer scheme's rows are used as they are and
+  never cut again the older way.
+- The meaning floor rises from 0.3 to 0.35; the fusion weights (words 0.3,
+  meaning 0.5) stay. Read in windows, more of every text clears a floor: at
+  0.3 a question that 15 items cleared was cleared by 41, and two facts in the
+  lesson it was about fell out of the top ten. In the lab's replay (facts in
+  the top ten, a newer handoff that carries a fact counting for it), of the 42
+  held-out facts memory holds: 35 before, 35 with windows at 0.3, 36 with
+  windows at 0.35; of the 29 development facts: 22, 20 and 22.
+- A write starts only what it may finish. A capture's or correction's
+  automatic pass embeds at most 64 passages; a waiting item with more than
+  are left (a long text can have up to 160) is not started, even first, and
+  waits for the scheduled job (256 a run) or `mnemos embeddings index`, which
+  take it whole. A handoff is indexed by its own write, whatever its length.
+  Each pass on the write path has one deadline, 2 s: no request starts after
+  it and none waits past it, however many requests the pass needs.
+
+Measured on copies, before and after (each indexed under its own scheme, at
+the floor each ships with): of the lab's 29 missed facts, 22 reach recall's
+top ten (19 before) and all 13 that lived only in handoffs (10 before);
+crediting a newer handoff that holds the same fact, 22 (22 before). For
+"plain language, brief replies, no jargon" the rule now ranks 1st (19th
+before); for "how does Riley want me to talk to him" it is still not ranked.
+Across the review's twelve cues, the index's own best match is returned for
+12 (11 before). Recall's median time rose from about 44 to 53 ms. The live
+store's index grows from 1,763 to 4,604 passages in the agent's scope (6.1 an
+item, at most 23).
+
+Changed behaviour: after the upgrade, everything indexed the old way waits to
+be indexed again. Until it is, recall finds a memory by its whole-text vector
+and its words, and a handoff or lesson by its words only, and the watchdog
+flags what waits. Run `mnemos embeddings index` once (6.6 s on a copy of the
+live store); otherwise the scheduled job catches up at 256 passages a run.
+`passages_stored`, `memories_searchable` and `handoffs_searchable` count only
+passages cut this way.
+
+No schema version change: the index adds the `scheme` column to an existing
+table the first time a writable index opens it, marking every row there 1 in
+one transaction. No code-version bump: code older than this writes rows marked
+1, which this code indexes again, and reads this code's rows as current, so
+the two never cut the same text back and forth.
+
 ### A watchdog for silent failure
 
 Every serious failure in this memory looked like success, and nothing watched

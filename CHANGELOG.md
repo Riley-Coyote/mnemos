@@ -2,6 +2,34 @@
 
 ## 0.3.1 (unreleased)
 
+### A memory is found by what it taught
+
+Recall searched a memory's words and their meaning, and never the lesson the
+agent wrote in its impact. A memory whose words are about a report and whose
+lesson says "avoid jargon" was found by no search for "avoid jargon", by recall
+or by the cue. On a copy of the live store, 29 of the 172 active memories with
+a lesson of the agent's had no lesson memory holding the same words; asked with
+each lesson's first sentence, recall's top ten held 15 of them.
+
+- A memory's lesson is one more passage of it in the meaning index (passage
+  scheme 3), and the lessons in the scope are ranked by their words beside the
+  memories' own words, fused as one more list (weight 0.3, as words are).
+  Asked the same way, recall's top ten now hold all 29.
+- Only the agent's lessons: an impact the server filled in, one a configured
+  model extracted, or one that only repeats the memory's words is neither
+  indexed nor matched.
+- A lesson written after the capture (answering what a memory taught) has its
+  memory indexed again, although its words didn't change.
+- A text's own passages keep the hash of the text alone, so code on scheme 2
+  reads the new rows as current and never cuts them back.
+
+Changed behaviour: after the upgrade every passage cut by scheme 2 is stale:
+until it is indexed again, recall finds by each memory's whole-text vector and
+by words, and the watchdog shows what waits. Run `mnemos embeddings index`
+once (7.9 s on a copy of the live store: 892 items, 7,115 passages, 194 of them
+lessons; the agent's scope goes from 4,618 to 4,803 passages), or the
+scheduled job catches up at 256 passages a run.
+
 ### Experience that comes to the cue
 
 Memory waited to be asked. In the lab, with a notebook present, the agent
@@ -22,9 +50,9 @@ changed nothing. Memory that works doesn't wait to be asked.
   briefing carries them), and the same words under two ids (a lesson and the
   memory it was drawn from) come once, under the memory's id.
 - Never twice in a session: the session-start hook records what its briefing
-  showed and the cue what it offers, in a small file per session under
-  `~/.mnemos/run` (0600, the folder 0700). Files older than 7 days are removed
-  on the way. Compaction keeps the session, so what was shown stays shown;
+  showed (its graph section too, with `--include-graph`) and the cue what it
+  offers, in a small file per session under `~/.mnemos/run` (0600, the folder
+  0700). Files older than 7 days are removed on the way. Compaction keeps the session, so what was shown stays shown;
   `/clear` starts a new session with an empty context, and what the new
   briefing shows is recorded there.
 - Shown is not used: each offer is counted as offered in that file (the
@@ -48,12 +76,12 @@ changed nothing. Memory that works doesn't wait to be asked.
   would block the prompt.
 
 Measured over the lab's 20 development prompts, three rounds, with the real
-model: warm, p50 129 ms and p95 161 ms end to end; from words alone, p50 98 ms
-and p95 104 ms. With real Claude Code, `/clear` gave the session a new id while
+model: warm, p50 133 ms and p95 174 ms end to end; from words alone, p50 106 ms
+and p95 112 ms. With real Claude Code, `/clear` gave the session a new id while
 its Mnemos server kept running under the old one, and the hook reached the
 server by meaning before and after. On a copy of the lab's snapshot, the cue
-showed 39 lines for those prompts at every floor from 0.30 to 0.50 (what a
-higher floor turns away, the word path lets back in), 10 of them holding a
+showed 38 or 39 lines for those prompts at every floor from 0.30 to 0.50 (what
+a higher floor turns away, the word path lets back in), 8 of them holding a
 fact for the task; six prompts have fewer than four content words.
 
 Changed behaviour: `mnemos serve` starts a background thread for the cue, and

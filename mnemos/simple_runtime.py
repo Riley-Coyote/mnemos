@@ -1656,6 +1656,10 @@ class MnemosRuntime:
         before any are chosen. Choosing first let the two most accessible,
         asked long before, take both places in every cycle: nothing further
         was asked, and every memory behind them faded without its question.
+
+        Of the rest, the faintest are asked first. The question exists to
+        catch what a memory taught before it fades, and the faintest is the
+        nearest to gone; the softening pass names them the other way round.
         """
         self._ensure_init()
         assert self._store is not None
@@ -1674,6 +1678,16 @@ class MnemosRuntime:
             engram_id for engram_id in (softening_stats.get("awaiting_impact") or [])
             if engram_id not in asked
         ]
+        accessibility: dict[str, float] = {}
+        for start in range(0, len(waiting), 500):
+            chunk = waiting[start:start + 500]
+            marks = ",".join("?" * len(chunk))
+            for row in self._store._get_conn().execute(
+                f"SELECT id, accessibility FROM engrams WHERE id IN ({marks})", chunk,
+            ).fetchall():
+                accessibility[row[0]] = row[1]
+        # A memory no longer there sorts last; the loop below skips it.
+        waiting.sort(key=lambda engram_id: accessibility.get(engram_id, float("inf")))
 
         enqueued = 0
         for engram_id in waiting[:limit]:

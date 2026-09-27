@@ -10,7 +10,8 @@ further was asked, each memory behind them faded without its question, and
 every cycle reported success.
 
 The memories already asked are now set aside first, and up to two of the rest
-are asked.
+are asked, the faintest first: the question exists to catch what a memory
+taught before it fades.
 """
 
 from __future__ import annotations
@@ -169,29 +170,48 @@ def test_two_memories_asked_before_leave_room_for_the_third(tmp_path, ended):
     assert asked == 1
 
 
-def test_the_next_cycle_asks_the_memory_the_first_two_left_waiting(tmp_path):
-    """Nothing made by hand: the first cycle asks the two most accessible, and
-    before this change every cycle after it asked nothing at all."""
+def test_the_next_cycle_asks_the_memory_the_first_cycle_left_waiting(tmp_path):
+    """Nothing made by hand: the first cycle asks two of the three, and before
+    the fix every cycle after it asked nothing at all."""
     db = tmp_path / "memory.db"
-    first, second, third = _fading(db)
+    ids = _fading(db)
     rt = _runtime(db)
     try:
         rt.maintain()
-        assert _lessons(db) == {first: 1, second: 1}, "the first cycle asks the two at the head"
+        asked_first = set(_lessons(db))
+        assert len(asked_first) == 2, f"the first cycle asks two: {_lessons(db)}"
+        (left,) = set(ids) - asked_first
 
         rt.maintain()
-        assert _lessons(db) == {first: 1, second: 1, third: 1}, (
+        assert _lessons(db) == dict.fromkeys(ids, 1), (
             "the second cycle asked nothing: the two asked in the first took both "
-            f"places again, and the third memory faded unasked: {_lessons(db)}"
+            f"places again, and the memory left waiting faded unasked: {_lessons(db)}"
         )
         # Its plain "what did this change?" is folded into the lesson question:
         # one question about one memory, not two.
-        assert _waiting_for(db, third) == ["lesson"]
+        assert _waiting_for(db, left) == ["lesson"]
 
         rt.maintain()
-        assert _lessons(db) == {first: 1, second: 1, third: 1}, "a memory was asked twice"
+        assert _lessons(db) == dict.fromkeys(ids, 1), "a memory was asked twice"
     finally:
         rt.close()
+
+
+def test_the_first_cycle_asks_the_two_faintest(tmp_path):
+    """A lesson question exists to catch what a memory taught before it fades,
+    so the faintest are asked first. The softening pass names them the other
+    way round, the most accessible first."""
+    db = tmp_path / "memory.db"
+    most, fainter, faintest = _fading(db)
+    rt = _runtime(db)
+    try:
+        rt.maintain()
+    finally:
+        rt.close()
+    assert _lessons(db) == {fainter: 1, faintest: 1}, (
+        "the first cycle asked about the most accessible memory while the "
+        f"faintest, the nearest to fading, waited: {_lessons(db)}"
+    )
 
 
 # ── Read back in another process ──
@@ -211,12 +231,14 @@ finally:
 
 def test_a_question_asked_in_one_process_is_answered_in_another(tmp_path):
     db = tmp_path / "memory.db"
-    first, second, third = _fading(db)
+    ids = _fading(db)
+    words = {memory: text for memory, (text, _) in zip(ids, HARBOUR)}
     rt = _runtime(db)
     try:
         rt.maintain()
     finally:
         rt.close()
+    (left,) = set(ids) - set(_lessons(db))  # asked next, by the other process
 
     home = tmp_path / "home"
     home.mkdir()
@@ -238,9 +260,9 @@ def test_a_question_asked_in_one_process_is_answered_in_another(tmp_path):
             for item in rt._store.pending_reflections(**SCOPE, limit=10)
             if item["kind"] == "lesson"
         }
-        assert third in waiting, f"the other process asked nothing about it: {waiting}"
-        assert waiting[third]["excerpt"].startswith("Tide tables for the estuary")
-        said = rt.reflect(third, "Notices posted where people already stop are the ones read.")
+        assert left in waiting, f"the other process asked nothing about it: {waiting}"
+        assert waiting[left]["excerpt"] == words[left]
+        said = rt.reflect(left, "What is done at one fixed place each time is what gets done.")
     finally:
         rt.close()
     assert said.startswith("Lesson recorded."), said

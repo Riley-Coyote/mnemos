@@ -56,7 +56,7 @@ from .retrieval.reactive import ReactiveRetriever, RetrievalResult
 # Re-exported: MnemosScope and resolve_scope moved to simple_scope but
 # remain importable from here for existing consumers.
 from .simple_scope import MnemosScope, resolve_scope  # noqa: F401
-from .store.embedding_index import EmbeddingIndex
+from .store.embedding_index import WRITE_EMBED_SECONDS, EmbeddingIndex
 from .core.engram import Engram
 from .core.placeholders import TEMPLATED_IMPACTS, is_templated
 from .store.archive import resharpen
@@ -152,6 +152,7 @@ def index_for_recall(
     budget: int | None = None,
     only: Collection[str] | None = None,
     record: str = "",
+    seconds: float | None = None,
 ) -> dict[str, Any]:
     """Give what recall can return in one scope its passage vectors, so it can
     be found by meaning: every handoff (those in use first), notes with no
@@ -165,6 +166,10 @@ def index_for_recall(
     handoffs, so no question could find them by meaning. The runtime,
     ``mnemos consolidate`` and ``mnemos embeddings index`` all index through
     this, the same way.
+
+    ``seconds`` bounds the time spent embedding: a session's write passes
+    ``WRITE_EMBED_SECONDS``, and what it doesn't cover waits for the scheduled
+    job or ``mnemos embeddings index``, which pass nothing and index it all.
 
     Returns ``items``, ``passages`` and ``waiting``, and ``skipped``: why
     nothing could be embedded when the embedding model failed (the local model
@@ -195,7 +200,7 @@ def index_for_recall(
         if only is not None:
             wanted = set(only)
             items = [item for item in items if item[0] in wanted]
-        done.update(index.index_passages(items, budget=budget))
+        done.update(index.index_passages(items, budget=budget, seconds=seconds))
         if not index.available:
             done["skipped"] = _index_unavailable(index)
     except Exception as exc:
@@ -3351,10 +3356,14 @@ class MnemosRuntime:
         only: Collection[str] | None = None,
     ) -> dict[str, Any]:
         """Give what recall can return in this scope its passage vectors
-        (``index_for_recall``): at most ``budget`` passages (None: everything
-        waiting), or only the items ``only`` names. A read-only runtime indexes
-        nothing. A pass over everything waiting (no ``only``) is recorded for
-        the health card; indexing one handoff as it is written is not."""
+        (``index_for_recall``): at most ``budget`` passages, or only the items
+        ``only`` names, and never more than ``WRITE_EMBED_SECONDS`` of embedding:
+        every call here is inside a session's tool call (a capture, a
+        correction, a handoff, a maintain), and a slow or failing provider must
+        not hold it. What doesn't fit waits for the scheduled job or
+        ``mnemos embeddings index``. A read-only runtime indexes nothing. A
+        pass over everything waiting (no ``only``) is recorded for the health
+        card; indexing one handoff as it is written is not."""
         if self._read_only:
             return {"items": 0, "passages": 0, "waiting": 0, "skipped": None}
         assert self._store is not None
@@ -3364,6 +3373,7 @@ class MnemosRuntime:
             budget=budget,
             only=only,
             record="mnemos_maintain" if only is None else "",
+            seconds=WRITE_EMBED_SECONDS,
             **self._scope_args(),
         )
 
@@ -3767,6 +3777,10 @@ class MnemosRuntime:
             author_session=session,
         )
         self._traced_write(note["id"])
+        # The revision dropped its passages with its old words. Index the new
+        # words now, within the write's budget; if they don't fit, the note
+        # waits with no passages, never found by its old meaning.
+        self._index_for_recall(budget=None, only={note["id"]})
         if (impact or "").strip():
             return (
                 f"Updated {closest}continuity note {note['id']}.\n"

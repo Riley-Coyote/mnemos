@@ -3640,6 +3640,11 @@ class EngramStore:
                 entry_id,
             ),
         )
+        # Its passages were cut from the words it no longer holds: gone with
+        # them, in this transaction, so recall never finds it by its old
+        # meaning. It waits to be indexed again, and a correction re-indexes
+        # it at once when it can (MnemosRuntime._correct_other_note).
+        conn.execute("DELETE FROM passage_vectors WHERE item_id = ?", (entry_id,))
         self._commit()
         return entry_id
 

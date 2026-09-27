@@ -22,13 +22,18 @@ each text a vector by the concepts it names, so meaning is exactly controlled.
 
 from __future__ import annotations
 
+import io
+import json
 import math
 import re
 import sqlite3
 import subprocess
 import sys
 import threading
+import time
 import types
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -855,3 +860,171 @@ def test_a_missing_model_does_not_stop_consolidation(tmp_path, monkeypatch, caps
     said = [line for line in card.splitlines() if line.startswith("Recall index:")]
     assert len(said) == 1 and "mnemos consolidate" in said[0], card
     assert "mnemos embeddings download" in said[0]
+
+
+# ── A write never waits long on indexing (review of PR #90) ──
+
+
+class _Gemini:
+    """``urllib.request.urlopen`` for the Gemini API. It answers with concept
+    vectors, hangs until its timeout (a slow provider), or refuses at once (a
+    failing one), and records the timeout of every call."""
+
+    def __init__(self) -> None:
+        self.mode = "answer"
+        self.calls: list[float | None] = []
+        self.release = threading.Event()
+
+    def __call__(self, request, timeout=None):
+        self.calls.append(timeout)
+        if self.mode == "hang":
+            self.release.wait(timeout if timeout is not None else 600)
+            raise urllib.error.URLError("timed out")
+        if self.mode == "refuse":
+            raise urllib.error.URLError("connection refused")
+        payload = json.loads(request.data)
+        if "requests" in payload:
+            body = {"embeddings": [
+                {"values": concept_vector(item["content"]["parts"][0]["text"])}
+                for item in payload["requests"]
+            ]}
+        else:
+            body = {"embedding": {"values": concept_vector(payload["content"]["parts"][0]["text"])}}
+        return io.BytesIO(json.dumps(body).encode())
+
+
+@pytest.fixture
+def gemini(monkeypatch):
+    """Recall's embedding backend is Gemini, and the network is ``_Gemini``.
+    The write path's waits are shortened (0.3 s) so a hang costs little here;
+    the rule under test is that a write waits no longer than they say."""
+    fake = _Gemini()
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr(ei, "WRITE_NETWORK_TIMEOUT", 0.3, raising=False)
+    monkeypatch.setattr(simple_runtime, "WRITE_EMBED_SECONDS", 0.3, raising=False)
+    yield fake
+    fake.release.set()
+
+
+_LONG_HANDOFF = " ".join(f"Sentence {i} is about the beacon lamp on the point." for i in range(40))
+
+
+def test_a_slow_provider_never_holds_a_write(tmp_path, gemini, capsys):
+    """With a provider that hung, a handoff waited 120 s for the batch, then
+    30 s a passage: about 14 minutes for 24 passages. A write now waits about
+    its budget; what it could not index waits for `mnemos embeddings index` or
+    the scheduled job, which keep their full waits."""
+    db = tmp_path / "memory.db"
+    said: dict = {}
+    stop = threading.Event()
+
+    def write(rt):
+        # While the provider answers, a capture runs the maintenance cycle, so
+        # the next capture, minutes sooner than the activity gate allows,
+        # skips it and waits on its own indexing alone. (The cycle's
+        # connection discovery waits on the provider by its own rules, as it
+        # did before this change; it is not indexing.)
+        rt.capture("The lighthouse keeper logs every storm.")
+        gemini.mode = "hang"
+        started = time.monotonic()
+        said["handoff"] = rt.handoff(_LONG_HANDOFF)
+        said["handoff seconds"] = time.monotonic() - started
+        if stop.is_set():
+            return
+        started = time.monotonic()
+        said["capture"] = rt.capture("The ferry pier needs new boards before the regatta.")
+        said["capture seconds"] = time.monotonic() - started
+
+    worker = threading.Thread(target=_in_its_own_runtime(db, write), daemon=True)
+    worker.start()
+    worker.join(15)
+    try:
+        assert not worker.is_alive(), "a write waited on the provider"
+    finally:
+        stop.set()
+        gemini.release.set()
+        worker.join(60)
+    assert said["handoff seconds"] < 2, said
+    assert said["capture seconds"] < 2, said
+    handoff_id = _handoff_id(said["handoff"])
+    assert len(ei.passages(_LONG_HANDOFF)) >= 3
+    assert _passages(db, handoff_id) == [], "the handoff should wait, unindexed"
+    waited = [t for t in gemini.calls if t is not None and t < 1]
+    assert waited and all(t <= 0.3 for t in waited), gemini.calls
+
+    gemini.mode = "answer"
+    gemini.calls.clear()
+    assert main(_cli(db, "embeddings", "index")) == 0
+    assert _passages(db, handoff_id), capsys.readouterr().out
+    assert gemini.calls and set(gemini.calls) == {120}, "the command's waits changed"
+
+
+def test_a_failing_provider_fails_no_write_and_is_asked_once(tmp_path, gemini):
+    db = tmp_path / "memory.db"
+    gemini.mode = "refuse"
+    rt = _runtime(db)
+
+    said = rt.handoff(_LONG_HANDOFF)
+
+    assert said.startswith("Session handoff saved exactly as written."), said
+    handoff_id = _handoff_id(said)
+    assert rt._store.get_hypomnema_entry(handoff_id, **SCOPE)["content"] == _LONG_HANDOFF
+    assert len(gemini.calls) == 1, f"the write retried: {len(gemini.calls)} calls"
+    assert _passages(db, handoff_id) == []
+    assert "Captured continuity." in rt.capture("The ferry pier needs new boards.")
+
+
+# ── A correction in place refreshes the index (review of PR #90) ──
+
+
+def test_a_correction_in_place_moves_a_handoffs_meaning(tmp_path, meaning):
+    """A handoff corrected by its id kept the passages of its old words: it
+    was found by what it no longer said, and not by what it says."""
+    rt = _runtime(tmp_path / "memory.db")
+    handoff_id = _handoff_id(rt.handoff("Tonight the beacon on the point needs a new lamp."))
+    assert "the beacon on the point" in rt.recall("lighthouse"), "premise: found by its meaning"
+
+    rt.correct(correction="The ferry pier needs new boards before the regatta.",
+               target_id=handoff_id)
+    old_sense = rt.recall("lighthouse")
+    new_sense = rt.recall("harbour")
+
+    assert "ferry pier" not in old_sense, old_sense
+    assert "The ferry pier needs new boards" in new_sense, new_sense
+
+
+def test_a_correction_the_budget_cannot_index_leaves_no_stale_passages(tmp_path, meaning,
+                                                                        monkeypatch):
+    db = tmp_path / "memory.db"
+    rt = _runtime(db)
+    handoff_id = _handoff_id(rt.handoff("Tonight the beacon on the point needs a new lamp."))
+    assert _passages(db, handoff_id)
+
+    def busy(self, texts, **kwargs):
+        raise RuntimeError("the model is busy")
+
+    monkeypatch.setattr(_ConceptModel, "encode", busy)
+    rt.correct(correction="The ferry pier needs new boards before the regatta.",
+               target_id=handoff_id)
+
+    assert _passages(db, handoff_id) == [], "stale passages outlived the correction"
+    assert "ferry pier" not in rt.recall("lighthouse")
+
+
+def test_a_note_rewritten_by_older_code_is_not_found_by_its_old_meaning(tmp_path, meaning):
+    """Code older than this rewrites a note's words and leaves its passages:
+    recall counts no passage cut from words the note no longer holds."""
+    db = tmp_path / "memory.db"
+    rt = _runtime(db)
+    handoff_id = _handoff_id(rt.handoff("Tonight the beacon on the point needs a new lamp."))
+    rt.close()
+    conn = sqlite3.connect(str(db))
+    conn.execute("UPDATE hypomnema_entries SET content = ? WHERE id = ?",
+                 ("The ferry pier needs new boards before the regatta.", handoff_id))
+    conn.commit()
+    conn.close()
+    assert _passages(db, handoff_id), "premise: the old passages are still there"
+
+    rt = _runtime(db)
+    assert "ferry pier" not in rt.recall("lighthouse")

@@ -38,9 +38,10 @@ import os
 import re
 import sqlite3
 import struct
+import time
 import urllib.request
 import urllib.error
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +71,21 @@ PASSAGE_CHARS = 700
 PASSAGE_LIMIT = 24
 # Ids asked about in one statement, well under SQLite's variable limit.
 _ID_CHUNK = 400
+
+# The write path (a capture, a correction, a handoff) never waits long on
+# indexing. It may spend about this many seconds on embedding calls; what does
+# not finish waits for the scheduled `mnemos consolidate` or
+# `mnemos embeddings index`. With a slow provider a handoff used to wait 120 s
+# for the batch and then 30 s for each passage: about 14 minutes for 24. The
+# local model's one-time load (from this machine only, once per process) is
+# not an embedding call and is not counted.
+WRITE_EMBED_SECONDS = 2.0
+# A network backend's wait per call on the write path. No retry, and no
+# second try one passage at a time: a failure leaves the items waiting.
+WRITE_NETWORK_TIMEOUT = 2.0
+# Passages embedded per call on the write path, so the time budget can stop
+# between calls (a local call of this size takes well under a tenth of a second).
+_WRITE_CHUNK = 16
 
 _PARAGRAPHS = re.compile(r"\n\s*\n")
 _SENTENCES = re.compile(r"(?<=[.!?])\s+")
@@ -200,8 +216,9 @@ class _GeminiEmbedder:
         text = error if isinstance(error, str) else _describe_failure(error)
         self.last_error = text.replace(self._api_key, "<key>") if self._api_key else text
 
-    def embed(self, text: str) -> list[float] | None:
-        """Generate embedding for a single text."""
+    def embed(self, text: str, *, timeout: float = 30) -> list[float] | None:
+        """Generate embedding for a single text, waiting at most ``timeout``
+        seconds on the network."""
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{self._model}:embedContent?key={self._api_key}"
@@ -216,7 +233,7 @@ class _GeminiEmbedder:
             headers={"Content-Type": "application/json"}
         )
         try:
-            resp = urllib.request.urlopen(req, timeout=30)
+            resp = urllib.request.urlopen(req, timeout=timeout)
             data = json.loads(resp.read())
             values = data.get("embedding", {}).get("values", [])
             if values:
@@ -229,8 +246,13 @@ class _GeminiEmbedder:
             self._failed(exc)
             return None
     
-    def batch_embed(self, texts: list[str]) -> list[list[float] | None]:
-        """Embed multiple texts via batchEmbedContents API."""
+    def batch_embed(
+        self, texts: list[str], *, timeout: float = 120, fallback: bool = True,
+    ) -> list[list[float] | None]:
+        """Embed multiple texts via batchEmbedContents API, waiting at most
+        ``timeout`` seconds on each request. A failed request is retried one
+        text at a time, unless ``fallback`` is False (the write path): then its
+        texts come back as None, and wait for a later pass."""
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{self._model}:batchEmbedContents?key={self._api_key}"
@@ -256,7 +278,7 @@ class _GeminiEmbedder:
             )
             
             try:
-                resp = urllib.request.urlopen(req, timeout=120)
+                resp = urllib.request.urlopen(req, timeout=timeout)
                 data = json.loads(resp.read())
                 for emb in data.get("embeddings", []):
                     values = emb.get("values", [])
@@ -265,7 +287,11 @@ class _GeminiEmbedder:
                         all_results.append(values)
                     else:
                         all_results.append(None)
-            except Exception:
+            except Exception as exc:
+                if not fallback:
+                    self._failed(exc)
+                    all_results.extend([None] * len(batch))
+                    continue
                 # Fall back to individual calls for this batch
                 for r in batch:
                     text = r["content"]["parts"][0]["text"]
@@ -419,6 +445,25 @@ def download_local_model(model_name: str = "all-MiniLM-L6-v2") -> str:
     return model_name
 
 
+def _batches(
+    todo: list[tuple[str, str, list[str]]], size: int,
+) -> list[list[tuple[str, str, list[str]]]]:
+    """``todo`` in order, in batches of whole items holding at most ``size``
+    passages each (an item with more is a batch of its own)."""
+    batches: list[list[tuple[str, str, list[str]]]] = []
+    current: list[tuple[str, str, list[str]]] = []
+    count = 0
+    for item in todo:
+        if current and count + len(item[2]) > size:
+            batches.append(current)
+            current, count = [], 0
+        current.append(item)
+        count += len(item[2])
+    if current:
+        batches.append(current)
+    return batches
+
+
 def _similarities(
     query_values: list[float], rows: list[tuple[str, bytes, int]],
 ) -> list[tuple[str, float]]:
@@ -548,11 +593,16 @@ class EmbeddingIndex:
             self._conn.row_factory = sqlite3.Row
         return self._conn
 
-    def _embed(self, text: str) -> list[float] | None:
+    def _embed(self, text: str, *, timeout: float | None = None) -> list[float] | None:
+        """One text's vector, or None. ``timeout`` bounds a network backend's
+        wait (the write path); the local model has no network to wait on."""
         if not self._available or not self._embedder:
             return None
         try:
-            values = self._embedder.embed(text)
+            if timeout is not None and isinstance(self._embedder, _GeminiEmbedder):
+                values = self._embedder.embed(text, timeout=timeout)
+            else:
+                values = self._embedder.embed(text)
         except Exception as exc:
             self._embedding_failed(_describe_failure(exc))
             return None
@@ -720,7 +770,10 @@ class EmbeddingIndex:
         if not self._available or not self._embedder or self._read_only:
             return False
 
-        values = self._embed(content)
+        # Called on the write path (Encoder.finish, after a capture): a slow
+        # provider must not hold the capture. Without the vector, the memory
+        # waits for passages, which recall uses first anyway.
+        values = self._embed(content, timeout=WRITE_NETWORK_TIMEOUT)
         if values is None:
             return False
 
@@ -810,6 +863,7 @@ class EmbeddingIndex:
         *,
         k: int = 30,
         floor: float = 0.0,
+        texts: Mapping[str, str] | None = None,
     ) -> list[tuple[str, float]]:
         """The ``candidates`` closest in meaning to ``query``, best first, at
         most ``k``, none below ``floor``.
@@ -821,7 +875,11 @@ class EmbeddingIndex:
         meaning hits survived the scope check afterwards.
 
         Each candidate counts by its best vector from this model: its passages,
-        or its whole-text vector while it has no passages yet.
+        or its whole-text vector while it has no passages yet. ``texts`` gives
+        the words some candidates hold now (recall passes the notes'): passages
+        cut from other words are stale and never count, so a note rewritten in
+        place (by code older than this, say) is never found by its old meaning.
+        It waits to be indexed again.
         """
         if not self._available or not self._embedder or not candidates:
             return []
@@ -833,11 +891,16 @@ class EmbeddingIndex:
         if query_values is None:
             return []
         model = self._embedder.model_name
-        rows = self._rows_for(
-            conn, "SELECT item_id, embedding, dims FROM passage_vectors "
+        cut = self._rows_for(
+            conn, "SELECT item_id, embedding, dims, text_hash FROM passage_vectors "
             "WHERE model_name = ? AND item_id IN ({})", model, wanted,
         )
-        without = wanted - {row[0] for row in rows}
+        now = {item_id: text_hash(text) for item_id, text in (texts or {}).items()}
+        rows = [
+            (item_id, blob, dims) for item_id, blob, dims, digest in cut
+            if item_id not in now or now[item_id] == digest
+        ]
+        without = wanted - {row[0] for row in cut}
         if without:
             rows += self._rows_for(
                 conn, "SELECT engram_id, embedding, dims FROM embeddings "
@@ -857,16 +920,16 @@ class EmbeddingIndex:
     @staticmethod
     def _rows_for(
         conn: sqlite3.Connection, sql: str, model: str, ids: Collection[str],
-    ) -> list[tuple[str, bytes, int]]:
+    ) -> list[tuple[Any, ...]]:
         """``sql``'s rows for ``ids``, asked in chunks; none when the table
         was never created here."""
-        rows: list[tuple[str, bytes, int]] = []
+        rows: list[tuple[Any, ...]] = []
         ordered = sorted(ids)
         for start in range(0, len(ordered), _ID_CHUNK):
             chunk = ordered[start:start + _ID_CHUNK]
             try:
                 rows.extend(
-                    (row[0], row[1], row[2]) for row in conn.execute(
+                    tuple(row) for row in conn.execute(
                         sql.format(", ".join("?" for _ in chunk)), (model, *chunk),
                     ).fetchall()
                 )
@@ -899,15 +962,25 @@ class EmbeddingIndex:
         return found
 
     def index_passages(
-        self, items: Iterable[tuple[str, str]], *, budget: int | None = None,
+        self,
+        items: Iterable[tuple[str, str]],
+        *,
+        budget: int | None = None,
+        seconds: float | None = None,
     ) -> dict[str, int]:
         """Cut each ``(item_id, text)`` into passages and store a vector for
         each, replacing what this model stored for that item before; items
         whose passages already match their text are skipped.
 
         ``budget`` bounds the passages embedded in one call; an item is never
-        half-written, and what is left waits for the next call. Returns how
-        many items and passages were written and how many items still wait.
+        half-written, and what is left waits for the next call. ``seconds``
+        (the write path: ``WRITE_EMBED_SECONDS``) bounds the time spent on
+        embedding calls: they go in small batches, a network backend waits at
+        most ``WRITE_NETWORK_TIMEOUT`` on each with no retry, the first batch
+        that yields nothing ends the pass, and what the time does not cover
+        waits. The local model's one-time load comes before the clock. Nothing
+        here raises: a failure leaves items waiting. Returns how many items
+        and passages were written and how many items still wait.
         """
         done = {"items": 0, "passages": 0, "waiting": 0}
         if not self._available or not self._embedder or self._read_only:
@@ -931,23 +1004,58 @@ class EmbeddingIndex:
             planned += len(parts)
         if not todo:
             return done
-        flat = [part for _, _, parts in todo for part in parts]
-        try:
-            vectors = self._embedder.batch_embed(flat)
-        except Exception as exc:
-            self._embedding_failed(_describe_failure(exc))
-            done["waiting"] += len(todo)
-            return done
-        model = self._embedder.model_name
-        position = 0
-        written = {"items": 0, "passages": 0}
-        try:
-            for item_id, digest, parts in todo:
+        if seconds is None:
+            batches = [todo]
+        else:
+            if isinstance(self._embedder, _LocalEmbedder):
+                try:
+                    self._embedder._get_model()
+                except Exception as exc:
+                    self._embedding_failed(_describe_failure(exc))
+                    done["waiting"] += len(todo)
+                    return done
+            batches = _batches(todo, _WRITE_CHUNK)
+        started = time.monotonic()
+        embedded: list[tuple[str, str, list[list[float]]]] = []
+        for number, batch in enumerate(batches):
+            timeout = None
+            if seconds is not None:
+                left = seconds - (time.monotonic() - started)
+                if left <= 0:
+                    done["waiting"] += sum(len(rest) for rest in batches[number:])
+                    break
+                timeout = min(WRITE_NETWORK_TIMEOUT, left)
+            flat = [part for _, _, parts in batch for part in parts]
+            try:
+                vectors = self._embed_many(flat, timeout=timeout)
+            except Exception as exc:
+                self._embedding_failed(_describe_failure(exc))
+                done["waiting"] += sum(len(rest) for rest in batches[number:])
+                break
+            position = 0
+            kept = 0
+            for item_id, digest, parts in batch:
                 values = vectors[position:position + len(parts)]
                 position += len(parts)
                 if len(values) != len(parts) or any(v is None for v in values):
                     done["waiting"] += 1
                     continue
+                embedded.append((item_id, digest, values))
+                kept += 1
+            if not kept:
+                failure = getattr(self._embedder, "last_error", None)
+                if failure:
+                    self._embedding_failed(failure)
+                if seconds is not None:
+                    # Nothing came back: fail fast, and the rest waits.
+                    done["waiting"] += sum(len(rest) for rest in batches[number + 1:])
+                    break
+        if not embedded:
+            return done
+        model = self._embedder.model_name
+        written = {"items": 0, "passages": 0}
+        try:
+            for item_id, digest, values in embedded:
                 conn.execute(
                     "DELETE FROM passage_vectors WHERE item_id = ? AND model_name = ?",
                     (item_id, model),
@@ -962,7 +1070,7 @@ class EmbeddingIndex:
                     ],
                 )
                 written["items"] += 1
-                written["passages"] += len(parts)
+                written["passages"] += len(values)
             conn.commit()
         except sqlite3.Error as exc:
             # Another writer holds the lock, or the table is missing. Nothing
@@ -973,10 +1081,18 @@ class EmbeddingIndex:
                 "passages-write", logging.WARNING,
                 "Passage vectors were not written: %s", _describe_failure(exc),
             )
-            done["waiting"] += written["items"]
+            done["waiting"] += len(embedded)
             return done
         done.update(written)
         return done
+
+    def _embed_many(self, texts: list[str], *, timeout: float | None = None) -> list[Any]:
+        """Vectors for ``texts``. With ``timeout`` (the write path), a network
+        backend waits at most that long and does not retry one text at a
+        time: a failed call gives None for each text."""
+        if timeout is not None and isinstance(self._embedder, _GeminiEmbedder):
+            return self._embedder.batch_embed(texts, timeout=timeout, fallback=False)
+        return self._embedder.batch_embed(texts)
 
     def batch_index(self, items: list[tuple[str, str]]) -> int:
         if not self._available or not self._embedder or self._read_only:

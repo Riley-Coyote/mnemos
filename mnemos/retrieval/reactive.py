@@ -281,7 +281,8 @@ class ReactiveRetriever:
         if self._embedding_index is not None:
             try:
                 candidates = self._store.live_engram_ids(**scope) | set(note_by_id)
-                for item_id, sim in self._meaning_hits(cue, candidates):
+                words_now = {item_id: note.get("content") or "" for item_id, note in note_by_id.items()}
+                for item_id, sim in self._meaning_hits(cue, candidates, words_now):
                     if item_id not in note_by_id and item_id not in engrams:
                         engram = self._store.get_engram_in_scope(item_id, **scope)
                         if engram is None or engram.state not in ("active", "dormant"):
@@ -444,13 +445,16 @@ class ReactiveRetriever:
 
         return top
 
-    def _meaning_hits(self, cue: str, candidates: Collection[str]) -> list[tuple[str, float]]:
+    def _meaning_hits(
+        self, cue: str, candidates: Collection[str], texts: dict[str, str] | None = None,
+    ) -> list[tuple[str, float]]:
         """The candidates closest in meaning to ``cue``, at most ``MEANING_SEEDS``,
-        none below ``MEANING_FLOOR``, scored before the top is taken."""
+        none below ``MEANING_FLOOR``, scored before the top is taken. ``texts``
+        are the notes' words now: a passage cut from other words never counts."""
         index = self._embedding_index
         if hasattr(index, "search_candidates"):
             return index.search_candidates(
-                cue, candidates, k=MEANING_SEEDS, floor=MEANING_FLOOR,
+                cue, candidates, k=MEANING_SEEDS, floor=MEANING_FLOOR, texts=texts,
             )
         if not hasattr(index, "search"):
             return []

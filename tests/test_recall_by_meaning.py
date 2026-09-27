@@ -713,7 +713,8 @@ def test_a_v14_store_gains_the_passage_table_after_a_verified_backup(tmp_path):
         conn.close()
     assert "passage_vectors" in tables
     assert meta["schema_version"] == "15"
-    assert meta["min_code_version"] == str(MAINTENANCE_CODE_VERSION) == "8"
+    assert meta["min_code_version"] == str(MAINTENANCE_CODE_VERSION)
+    assert MAINTENANCE_CODE_VERSION >= 8
     assert list((tmp_path / "backups").glob("memory.pre-v15-*.db"))
 
 

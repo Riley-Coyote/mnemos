@@ -1649,12 +1649,34 @@ class MnemosRuntime:
         deterministically, but what a memory *meant* is the one thing the
         server must not guess at — a lesson assembled from keywords is not
         wisdom, it is a summary wearing wisdom's clothes.
+
+        A memory is asked this once. The question stays on the queue however
+        it ends (answered, skipped, shown out or expired) and the queue
+        refuses a second one, so the memories already asked are set aside
+        before any are chosen. Choosing first let the two most accessible,
+        asked long before, take both places in every cycle: nothing further
+        was asked, and every memory behind them faded without its question.
         """
         self._ensure_init()
         assert self._store is not None
 
+        asked = {
+            row[0] for row in self._store._get_conn().execute(
+                """
+                SELECT target_id FROM reflection_queue
+                WHERE kind = 'lesson'
+                  AND agent_id = ? AND person_id = ? AND project_scope = ?
+                """,
+                (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
+            ).fetchall()
+        }
+        waiting = [
+            engram_id for engram_id in (softening_stats.get("awaiting_impact") or [])
+            if engram_id not in asked
+        ]
+
         enqueued = 0
-        for engram_id in (softening_stats.get("awaiting_impact") or [])[:limit]:
+        for engram_id in waiting[:limit]:
             engram = self._store.get_engram(engram_id)
             if engram is None:
                 continue

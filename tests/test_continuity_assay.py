@@ -14,6 +14,7 @@ regardless of what the rest of the suite says.
 """
 
 import json
+import sqlite3
 import subprocess
 import sys
 import uuid
@@ -130,14 +131,26 @@ class TestContinuityCrossesAProcessBoundary:
         read = _run("hook", "session-start", home=home)
         packet = json.loads(read.stdout)["hookSpecificOutput"]["additionalContext"]
 
-        # The scope the packet reports must be the scope doctor resolves.
-        for line in doctor.stdout.splitlines():
-            if line.startswith("Agent:"):
-                agent = line.split(":", 1)[1].strip()
-                assert f"agent: {agent}" in packet, (
-                    f"doctor resolved agent={agent} but the packet reports a "
-                    f"different scope — writer and reader disagree"
-                )
+        # The packet no longer prints its scope, so the note it carries is
+        # looked up in the scope and database doctor resolves.
+        resolved = dict(
+            line.split(":", 1) for line in doctor.stdout.splitlines()
+            if line.split(":", 1)[0] in {"Agent", "Person", "Project", "Database"}
+        )
+        resolved = {key: value.strip() for key, value in resolved.items()}
+        conn = sqlite3.connect(f"file:{resolved['Database']}?mode=ro", uri=True)
+        try:
+            [(found,)] = conn.execute(
+                "SELECT COUNT(*) FROM hypomnema_entries WHERE agent_id = ? "
+                "AND person_id = ? AND project_scope = ? AND content LIKE ?",
+                (resolved["Agent"], resolved["Person"], resolved["Project"], f"%{token}%"),
+            ).fetchall()
+        finally:
+            conn.close()
+        assert found == 1, (
+            f"doctor resolved {resolved} but the note the packet carries is not "
+            "there — writer and reader disagree"
+        )
         assert token in packet
 
     def test_continuity_is_not_reset_by_a_later_session(self, home):

@@ -104,10 +104,11 @@ def test_simple_tools_have_protocol_risk_annotations():
 
     assert tools["mnemos_context"].annotations.openWorldHint is False
     assert tools["mnemos_context"].annotations.readOnlyHint is False
-    # context() and maintain() both run a consolidation cycle, and decay
-    # archives engrams that fall below threshold. Archival is not reversible
-    # through the tool surface, so both must declare themselves destructive.
-    assert tools["mnemos_context"].annotations.destructiveHint is True
+    # maintain() runs a consolidation cycle, and decay archives engrams that
+    # fall below threshold. Archival is not reversible through the tool
+    # surface, so it must declare itself destructive. context() builds the
+    # packet and runs no cycle.
+    assert tools["mnemos_context"].annotations.destructiveHint is False
     assert tools["mnemos_maintain"].annotations.destructiveHint is True
     assert tools["mnemos_recall"].annotations.readOnlyHint is False
     assert tools["mnemos_capture"].annotations.destructiveHint is False
@@ -190,8 +191,9 @@ def test_simple_stdio_server_lists_and_calls_context(tmp_path):
                     block.text for block in result.content
                     if getattr(block, "type", None) == "text"
                 )
-                assert "Mnemos continuity packet" in text
-                assert "agent=smoke" in text
+                # A fresh store: the packet is empty, so the first-session
+                # ritual is what comes back.
+                assert "ONBOARDING - first session" in text
 
                 introduced = await session.call_tool(
                     "mnemos_introduce", {"agent_model": "claude-sonnet-4-6"}

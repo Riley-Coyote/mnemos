@@ -67,7 +67,9 @@ class TestAbsenceIsReported:
         runtime.context()
         assert runtime.continuity_signals()["empty_context_streak"] == 0
 
-        # A query that matches nothing still returns an empty packet.
+        # The packet shows what the scope carries whatever the query, so it
+        # comes back empty once the only note is forgotten.
+        runtime.correct("", query="Riley cold brew", action="forget")
         runtime.context(query="zzzzz-nothing-matches-this-zzzzz")
         assert runtime.continuity_signals()["empty_context_streak"] == 1
 

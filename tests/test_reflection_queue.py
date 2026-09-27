@@ -146,7 +146,7 @@ class TestPacketPresence:
         assert runtime._reflection_block() is None
 
         packet = runtime.context()
-        assert "Something of yours is waiting" not in packet
+        assert "### One question" not in packet
 
     def test_the_request_appears_with_the_id_needed_to_answer(self, runtime):
         runtime.capture("Spent the afternoon rewriting the deploy script", importance="high")
@@ -154,7 +154,7 @@ class TestPacketPresence:
 
         packet = runtime.context()
 
-        assert "Something of yours is waiting" in packet
+        assert "### One question" in packet
         assert "mnemos_reflect(target_id=" in packet
         # It must read as an invitation, not an obligation.
         assert "leave it" in packet
@@ -213,7 +213,7 @@ class TestTheHookPacketCarriesThem:
         )
 
         assert packet["reflections"], "the packet carried no reflection request"
-        assert "Waiting On You" in packet["prompt"]
+        assert "### One question" in packet["prompt"]
         assert "mnemos_reflect(target_id=" in packet["prompt"]
 
     def test_a_quiet_scope_adds_no_section(self, runtime):
@@ -228,7 +228,7 @@ class TestTheHookPacketCarriesThem:
             include_engrams=False,
         )
         assert packet["reflections"] == []
-        assert "Waiting On You" not in packet["prompt"]
+        assert "### One question" not in packet["prompt"]
 
     def test_a_read_only_caller_can_decline_to_consume_a_surfacing(self, runtime):
         """Inspecting the packet must not use up an agent's chances to answer."""

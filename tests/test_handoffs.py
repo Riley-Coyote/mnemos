@@ -53,9 +53,9 @@ def test_exact_handoff_survives_restart_context_correction_and_backup(tmp_path):
         # Nobody signed this handoff, so the packet must not hand it to the
         # reader as its own words.
         assert "From your previous session, in your own words" not in packet
-        assert packet.index("Left by an earlier session") < packet.index(
-            "Continuity notes:"
-        )
+        assert "Yours" not in packet
+        assert packet.index("### Where you left off") < packet.index("Unsigned, ")
+        assert packet.index("Unsigned, ") < packet.index(text)
         surfaced = second._store.get_latest_handoff(**SCOPE)
         assert surfaced["surface_count"] == 1
         assert surfaced["last_surfaced_at"] is not None
@@ -169,7 +169,7 @@ def test_startup_packet_delivers_handoff_first_once_and_marks_delivery(tmp_path)
         assert packet["handoff"]["content"] == text
         assert all(row["entry_kind"] != "handoff" for row in packet["hypomnema"])
         assert packet["prompt"].count(text) == 1
-        assert packet["prompt"].index(text) < packet["prompt"].index("### Hypomnema")
+        assert packet["prompt"].index(text) < packet["prompt"].index("### What you're carrying")
         delivered = store.get_latest_handoff(**SCOPE)
         assert delivered["surface_count"] == 1
         assert delivered["last_surfaced_at"] is not None

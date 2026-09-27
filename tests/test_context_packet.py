@@ -4,7 +4,7 @@ from mnemos.interface.context_packet import build_context_packet
 from mnemos.interface.visual_snapshot import build_memory_visual_snapshot
 
 
-def test_context_packet_orders_memory_layers(store):
+def test_context_packet_shows_foundational_notes_and_no_functional_memory(store):
     session = store.start_memory_session(
         session_id="ctx-session",
         agent_id="vektor",
@@ -42,10 +42,12 @@ def test_context_packet_orders_memory_layers(store):
     )
 
     prompt = packet["prompt"]
-    assert "### Functional Memory" in prompt
-    assert "### Hypomnema" in prompt
-    assert "### Mnemos Graph" in prompt
-    assert "turnkey single-agent memory system" in prompt
+    # The briefing has no functional-memory section (simple mode can't write
+    # one), and a section with nothing in it is left out, the graph included.
+    assert "### Functional Memory" not in prompt
+    assert "turnkey single-agent memory system" not in prompt
+    assert "### Who you're with" in prompt
+    assert "### Mnemos Graph" not in prompt
     assert "scoped continuity" in prompt
 
 

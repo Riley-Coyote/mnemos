@@ -19,6 +19,12 @@ DREAM_JOURNAL_TAG = "dream-journal"
 DREAM_DOMAIN = "situational"
 MAX_NARRATIVE_CHARS = 700
 
+# What a deep cycle that changed nothing reports. The packet leaves it out:
+# "While you were away" is for when something changed.
+NO_CHANGE_NARRATIVE = (
+    "Mnemos checked the stored continuity; no mechanical changes were needed."
+)
+
 
 def _plural(n: int, singular: str, plural: str) -> str:
     return singular if n == 1 else plural
@@ -102,9 +108,7 @@ def compose_dream_narrative(
     # A deep cycle with nothing to report still deserves one true sentence.
     has_work = bool(sentences) and not (is_deep and len(sentences) == 1)
     if not has_work:
-        sentences = [
-            "Mnemos checked the stored continuity; no mechanical changes were needed."
-        ]
+        sentences = [NO_CHANGE_NARRATIVE]
 
     narrative = " ".join(sentences)
     if len(narrative) > MAX_NARRATIVE_CHARS:
@@ -160,20 +164,47 @@ def collect_belief_deltas(
         return []
 
 
+def latest_dream_entry(
+    store: EngramStore,
+    *,
+    agent_id: str,
+    person_id: str,
+    project_scope: str,
+) -> dict[str, Any] | None:
+    """The newest active dream-journal report in one scope, found by its tag.
+
+    It used to be looked for among the 50 notes that scored highest, and a
+    report scores low, so once a scope held more notes than that it was never
+    found again. The packet lost its report, and each cycle wrote a new one
+    instead of replacing the last: 117 were active at once on a copy of a real
+    store (2026-09-26).
+    """
+
+    entries = store.get_hypomnema_entries_by_tag(
+        DREAM_JOURNAL_TAG,
+        agent_id=agent_id,
+        person_id=person_id,
+        project_scope=project_scope,
+        limit=1,
+    )
+    return entries[0] if entries else None
+
+
 def fetch_active_dream_entry(store: EngramStore, scope: MnemosScope) -> dict[str, Any] | None:
     """Return the active dream-journal note for a scope, if one exists."""
 
-    entries = store.search_hypomnema(
-        "",
+    return latest_dream_entry(
+        store,
         agent_id=scope.agent_id,
         person_id=scope.person_id,
         project_scope=scope.project_scope,
-        limit=50,
     )
-    for entry in entries:
-        if DREAM_JOURNAL_TAG in (entry.get("tags") or []):
-            return entry
-    return None
+
+
+def changed_something(entry: dict[str, Any]) -> bool:
+    """Whether a report says the cycle changed anything."""
+
+    return " ".join(str(entry.get("content") or "").split()) != NO_CHANGE_NARRATIVE
 
 
 def write_dream_entry(store: EngramStore, scope: MnemosScope, narrative: str) -> str:

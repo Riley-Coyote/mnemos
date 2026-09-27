@@ -175,7 +175,7 @@ class TestTheIncident:
         assert "Sanctuary steward: the season check-in ran" in packet
         assert "What Lights Up: the conversation page is done" in packet
         assert packet.index("Sanctuary steward") < packet.index("What Lights Up")
-        assert packet.count("Opus 5.5 (claude-opus-5-5)") >= 2
+        assert packet.count("(Opus 5.5)") >= 2
 
     def test_after_compaction_a_session_is_handed_its_own_note_first(self, tmp_path):
         db_path = tmp_path / "shared.db"
@@ -185,7 +185,7 @@ class TestTheIncident:
         packet = _hook(db_path, tmp_path, _start(LIGHTS, source="compact"))
         assert LIGHTS_NOTE in packet
         assert packet.index("What Lights Up") < packet.index("Sanctuary steward")
-        assert "Left earlier in this session by Opus 5.5 (claude-opus-5-5)" in packet
+        assert "Yours (Opus 5.5), from this session" in packet
 
     def test_the_mcp_packet_hands_a_session_its_own_note_first(self, tmp_path, monkeypatch):
         db_path = tmp_path / "shared.db"
@@ -319,7 +319,7 @@ class TestThePacketStaysSmall:
             assert older[:30] not in packet
         # The other sessions' lines are short: they name the thread and how to
         # read it whole, and leave the rest of the packet to continuity.
-        head = packet.split("### Scope", 1)[0]
+        head = packet.split("### What you're carrying", 1)[0]
         assert len(head) < len(newest) + 1600
         assert "Riley wants short, plain messages." in packet
         assert "The staging deploy runs before production." in packet
@@ -337,8 +337,8 @@ class TestThePacketStaysSmall:
             monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
 
             packet = runtime.context(max_results=5)
-            section = packet.split("Continuity notes:", 1)[1]
-            assert sum(fact in section for fact in facts) == 5
+            section = packet.split("### What you're carrying", 1)[1].split("\n### ", 1)[0]
+            assert sum(fact in section for fact in facts) == 3
 
             recalled = runtime.recall("release durable facts")
             assert "Handoff 0 about" not in recalled
@@ -346,7 +346,7 @@ class TestThePacketStaysSmall:
 
             store_packet = build_context_packet(runtime._store, "release", **SCOPE)
             assert all(row["entry_kind"] != "handoff" for row in store_packet["hypomnema"])
-            assert len(store_packet["hypomnema"]) == 6
+            assert len(store_packet["hypomnema"]) == 3
         finally:
             runtime.close()
 
@@ -389,14 +389,17 @@ class TestThePacketStaysSmall:
 
 
 class TestSignatures:
-    def test_another_sessions_note_is_a_colleagues_even_from_the_same_model(self, tmp_path):
+    def test_another_sessions_note_from_the_same_model_is_yours(self, tmp_path):
+        # Several sessions of one model are the same agent working in
+        # parallel (Riley's decision, 2026-09-26): only a different model's
+        # note is a colleague's.
         db_path = tmp_path / "shared.db"
         _handoff_from(LIGHTS, LIGHTS_NOTE, db_path, tmp_path)
 
         packet = _hook(db_path, tmp_path, _start(FRESH))
-        assert "Left by Opus 5.5 (claude-opus-5-5) — the same model as you, in another session —" in packet
-        assert "colleague's" in packet
-        assert "Carry on from it." not in packet
+        assert "Yours (Opus 5.5), from another session," in packet
+        assert "colleague" not in packet
+        assert "don't claim" not in packet
 
     def test_other_sessions_lines_are_signed_and_say_how_to_read_them(self, tmp_path):
         db_path = tmp_path / "shared.db"
@@ -404,9 +407,10 @@ class TestSignatures:
         _handoff_from(STEWARD, STEWARD_NOTE, db_path, tmp_path)
 
         packet = _hook(db_path, tmp_path, _start(FRESH))
-        sibling = packet.split("Also live, from other sessions", 1)[1]
-        assert "Fable 5.1 (claude-fable-5-1)" in sibling
-        assert "mnemos_recall" in sibling
+        sibling = packet.split("Other notes from the last three days:", 1)[1]
+        assert "From Fable 5.1, a colleague" in sibling
+        # Short enough to show whole, so it needs no id to be read whole.
+        assert " ".join(LIGHTS_NOTE.split()) in sibling
 
     def test_a_note_from_an_unknown_session_is_not_called_another_sessions(self, tmp_path):
         # A note written before sessions were told apart could be the
@@ -421,8 +425,11 @@ class TestSignatures:
 
         packet = _hook(db_path, tmp_path, _start(FRESH))
         assert "Written before sessions were told apart." in packet
-        assert "### Also live\n" in packet
-        assert "from other sessions" not in packet
+        [line] = [
+            line for line in packet.splitlines()
+            if "Written before sessions were told apart." in line
+        ]
+        assert "another session" not in line
 
     def test_framing_follows_the_session_as_well_as_the_model(self):
         heading, guidance = handoff_framing(
@@ -474,7 +481,7 @@ class TestReadingANoteWhole:
         finally:
             runtime.close()
         assert long_note in recalled
-        assert "Left by Fable 5.1 (claude-fable-5-1) in another session" in recalled
+        assert "From Fable 5.1, a colleague" in recalled
 
 
 class TestCorrectionsLeaveHandoffsAlone:

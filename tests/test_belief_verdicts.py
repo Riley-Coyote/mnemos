@@ -321,9 +321,11 @@ def test_no_verdict_changes_nothing(tmp_path, kind, words):
 ])
 def test_the_packet_shows_the_verdict_a_question_takes(tmp_path, builder, kind, verdicts):
     """An agent copies the call the packet shows. Without a verdict a belief
-    or contradiction answer forms nothing, so both builders (the runtime's
-    and the session-start hook's) show it, with the verdicts that kind takes.
-    An impact question's words are its answer, and its call stays as it was."""
+    or contradiction answer forms nothing, so both paths (the runtime's and
+    the session-start hook's) show it, with the verdicts that kind takes.
+    An impact question's words are its answer, and its call takes no verdict.
+    Both paths render the question with the one packet builder, so the call
+    reads the same in each."""
     from mnemos.interface.context_packet import build_context_packet
 
     db = tmp_path / "memory.db"
@@ -351,8 +353,7 @@ def test_the_packet_shows_the_verdict_a_question_takes(tmp_path, builder, kind, 
     if verdicts is None:
         assert call not in lines
         assert [line for line in lines if line.startswith("mnemos_reflect(")] == [
-            f'mnemos_reflect(target_id="{target}", ...)' if builder == "runtime"
-            else f'mnemos_reflect(target_id="{target}", text="…")'
+            f'mnemos_reflect(target_id="{target}", text="…")'
         ]
         assert not [line for line in lines if line.startswith("verdict:")]
         return
@@ -769,7 +770,7 @@ def test_an_unanswered_reaffirmation_is_put_again_once_it_expires(tmp_path):
     assert len(_all(db, "SELECT id FROM reflection_queue WHERE kind = 'reaffirm'")) == 1
 
 
-def test_reaffirmations_share_the_two_question_cap(tmp_path):
+def test_reaffirmations_share_the_one_question_cap(tmp_path):
     db = tmp_path / "memory.db"
     rt = _runtime(db)
     try:
@@ -784,7 +785,7 @@ def test_reaffirmations_share_the_two_question_cap(tmp_path):
         block = rt._reflection_block()
     finally:
         rt.close()
-    assert block.count("mnemos_reflect(") == 2
+    assert block.count("mnemos_reflect(") == 1
 
 
 def test_a_declined_theme_is_not_asked_again(tmp_path):

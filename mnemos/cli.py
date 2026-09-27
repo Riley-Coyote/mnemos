@@ -424,10 +424,11 @@ def main(argv: list[str] | None = None) -> int:
     p_hook_start.add_argument(
         "--query",
         default="what should I know to continue our work?",
-        help="Retrieval cue used to select long-term memories",
+        help="Retrieval cue for --include-graph (the packet itself takes no cue)",
     )
     p_hook_start.add_argument(
-        "--token-budget", type=int, default=2600, help="Approximate packet size"
+        "--token-budget", type=int, default=1500,
+        help="Approximate packet size in tokens (1500 is about 6,000 characters)",
     )
     p_hook_start.add_argument(
         "--include-graph",
@@ -566,11 +567,13 @@ def _cmd_hook(args: argparse.Namespace) -> int:
     # already there and returns the moment there is nothing more to read.
     #
     # The payload can name the model starting the session (Claude Code sends
-    # `model` on SessionStart when it has one) and always names the session
+    # `model` on SessionStart when it has one), always names the session
     # (`session_id`, the same id its MCP servers get as CLAUDE_CODE_SESSION_ID,
-    # kept across compaction). Those are the only uses made of it: the packet
-    # can then say whether the reader wrote the handoff, and hand a session
-    # its own note before other sessions' notes.
+    # kept across compaction) and says where it works (`cwd`). Those are the
+    # only uses made of it: the packet can then say whether the reader wrote a
+    # handoff, hand a session its own note first, and rank what the reader is
+    # carrying by the folder and repository it works in. The folder ranks; it
+    # never chooses whose memory this is.
     received = bytearray()
     try:
         import select
@@ -586,16 +589,31 @@ def _cmd_hook(args: argparse.Namespace) -> int:
         pass
     reader_model = ""
     reader_session = ""
+    workdir = ""
     try:
-        from .authorship import clean_model_id, clean_session_id
+        from .authorship import clean_model_id, clean_session_id, resolve_author_model
 
         payload = json.loads(bytes(received).decode("utf-8")) if received.strip() else {}
         if isinstance(payload, dict):
             reader_model = clean_model_id(payload.get("model"))
             reader_session = clean_session_id(payload.get("session_id"))
+            if isinstance(payload.get("cwd"), str):
+                workdir = payload["cwd"]
+        # Who is reading, found the way the MCP server finds who is writing:
+        # the operator's setting, what the harness said, then the session's
+        # own transcript (after a resume or compaction it names the model).
+        environ = dict(os.environ)
+        if reader_session:
+            environ["CLAUDE_CODE_SESSION_ID"] = reader_session
+        reader_model = resolve_author_model(reader_model, environ)
     except Exception:
         reader_model = ""
         reader_session = ""
+    if not workdir:
+        try:
+            workdir = os.getcwd()
+        except OSError:
+            workdir = ""
 
     try:
         from .interface.context_packet import build_context_packet
@@ -621,6 +639,7 @@ def _cmd_hook(args: argparse.Namespace) -> int:
                 include_engrams=bool(getattr(args, "include_graph", False)),
                 reader_model=reader_model,
                 reader_session=reader_session,
+                workdir=workdir,
             )
         finally:
             store.close()

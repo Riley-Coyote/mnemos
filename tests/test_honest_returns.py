@@ -192,7 +192,10 @@ def test_only_the_memories_a_result_shows_are_reinforced(tmp_path, call):
         runtime.close()
 
     assert "ferry timetable in the kitchen drawer" in shown
-    assert "Marigolds" not in shown, "premise: the runtime's filter drops the garden note"
+    # context() shows the scope's notes before its results for the query, the
+    # garden note among them; what it returned for the query comes after.
+    returned = shown.split(f'### For "{CUE}"', 1)[-1]
+    assert "Marigolds" not in returned, "premise: the runtime's filter drops the garden note"
     assert _accesses(db, ferry) == 1, "the memory shown was not reinforced"
     assert _row(db, garden, ACCESS) == garden_before, (
         "a memory the reader was never shown was reinforced"

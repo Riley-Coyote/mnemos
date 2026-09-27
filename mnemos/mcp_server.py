@@ -74,16 +74,13 @@ _llm_client = None
 _config: dict | None = None
 _default_agent_id = "default"
 
+# Held under the 2,048 characters Claude Code shows a model, like the simple
+# mode's (see SERVER_INSTRUCTIONS).
 ADVANCED_INSTRUCTIONS = (
     SIMPLE_SERVER_INSTRUCTIONS
     + "\n\n"
-    + """\
-This server also exposes the advanced surface: functional-memory sessions,
-hypomnema continuity, promotion, beliefs, and consolidation. The everyday
-loop above is still the one to use. Reach past it only when you need to
-inspect or administer memory directly — mnemos_context_packet for a full
-structured packet, mnemos_review_queue for what needs a human decision,
-mnemos_status for system state."""
+    + "Advanced tools are here too. Keep to the loop above; use mnemos_context_packet, "
+    "mnemos_review_queue or mnemos_status only to inspect or administer memory."
 )
 
 mcp = FastMCP("mnemos", instructions=ADVANCED_INSTRUCTIONS)

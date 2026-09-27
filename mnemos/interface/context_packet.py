@@ -12,7 +12,7 @@ say is left out rather than announced empty:
 3. What you're carrying: up to three notes or lessons, ranked by the words they
    share with the folder and repository the session works in, then by recency.
    One of them is a concrete, dated episode whenever there is one.
-4. Beliefs: each once, with its confidence.
+4. Beliefs: each once, with its confidence and its id.
 5. One question: at most one thing the agent's memory is waiting on it for.
 6. While you were away: the latest maintenance report, when it changed
    something.
@@ -608,8 +608,15 @@ def _format_notes(
 
 
 def _format_beliefs(packet: dict[str, Any], dropped: set[tuple[str, str]]) -> str:
+    """Each belief once, with its confidence and its id.
+
+    A belief changes only when a correction names it by id, so the reader
+    needs the id to correct or retire one. The id is for the reader; the
+    instructions keep it from the human.
+    """
     lines = [
-        f"- {belief['content']} ({int(round(float(belief['confidence']) * 100))}%)"
+        f"- {belief['content']} "
+        f"({int(round(float(belief['confidence']) * 100))}%, {belief['id']})"
         for belief in packet.get("beliefs") or []
         if ("belief", belief["id"]) not in dropped
     ]

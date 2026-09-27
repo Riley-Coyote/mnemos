@@ -280,6 +280,7 @@ def _section(text: str, heading: str) -> str:
 
 def _ids_hidden(text: str) -> str:
     text = re.sub(r'mnemos_recall\("[^"]+"\)', 'mnemos_recall("<id>")', text)
+    text = re.sub(r"\bbelief_\w+", "belief_<id>", text)
     return re.sub(r'target_id="[^"]+"', 'target_id="<id>"', text)
 
 
@@ -325,8 +326,8 @@ changes. […] Whole note: mnemos_recall("<id>")
 ferry/parse.py; the three failing tests pass now.
 
 ### Beliefs
-- Plain words carry further than clever ones. (40%)
-- What's checked against the real thing outranks what's reasoned out. (35%)
+- Plain words carry further than clever ones. (40%, belief_<id>)
+- What's checked against the real thing outranks what's reasoned out. (35%, belief_<id>)
 
 ### One question
 About: "Riley plans every trip around the ferry timetable."
@@ -419,7 +420,12 @@ def test_each_belief_appears_once_with_its_confidence(tmp_path, monkeypatch):
     for packet in (from_hook, from_tool):
         for content, confidence in BELIEFS:
             assert packet.count(content) == 1, f"{content!r} shown {packet.count(content)} times"
-            assert f"- {content} ({round(confidence * 100)}%)" in packet
+            # With its confidence, and its id for a correction to name.
+            assert re.search(
+                rf"^- {re.escape(content)} \({round(confidence * 100)}%, belief_\w+\)$",
+                packet,
+                re.M,
+            ), packet
         assert "Persistent concerns" not in packet
         assert "Accumulated 3 lessons" not in packet
 

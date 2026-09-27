@@ -45,7 +45,8 @@ became the store's declared model for everyone.
 - `memory_trace`: one row per tool call (context, capture, recall, correct,
   reflect, handoff, introduce, maintain; health stays read-only), with the
   session, the signing model, the ids the call showed or returned and the ids
-  it wrote. Ids only, never text. Rows older than 90 days are dropped.
+  it wrote (a memory recall restores from the archive counts as written). Ids
+  only, never text. Rows older than 90 days are dropped.
 - `mnemos repair quarantine-tool-written` moves the tool-written memories in
   a scope into the legacy quarantine (no person or project; their words,
   links and history stay), dry run unless `--write`, after a verified
@@ -68,7 +69,7 @@ an agent-written impact of a memory it was drawn from; everything else
 
 Changed behaviour, and what to do:
 
-- `MAINTENANCE_CODE_VERSION` is 4. Sessions still running older code stop
+- `MAINTENANCE_CODE_VERSION` is 5. Sessions still running older code stop
   maintaining the store once this code opens it (restart them); what they
   capture meanwhile is recorded as `unknown` and so stays out of identity,
   belief questions and lessons.
@@ -87,6 +88,73 @@ Changed behaviour, and what to do:
   them hidden; name `--include indexer` to bring them back.
 - To move the indexer's memories out of recall and the packet: `mnemos repair
   quarantine-tool-written` (dry run), then `--write`.
+
+### No one-way doors for memories that fade
+
+A memory could leave the active set and never come back, with every check
+green. Decay read active memories only, so a dormant one was never touched
+again: it could neither finish fading nor come back. Recall seeded from
+active memories only, so a dormant memory stayed out however exactly a cue
+named it: on a copy of a real store, a recall of each dormant memory's own
+distinctive words brought back none of its 24. A dormant or archived memory
+reached through a link still passed activation on to its neighbours.
+`archive.resharpen` had no caller, an archived memory's id returned nothing,
+and the dream report said dormant memories were "ready to wake if needed".
+
+- Recall seeds dormant memories that match the cue, at half the activation
+  an active match would start with (at most 10, beside the active seeds), so
+  an equal active match comes first. A dormant memory that is returned wakes:
+  it is active again, with the accessibility any return gives it. Waking is
+  part of the return, so it happens once per session, and a dormant memory
+  recalled by its id wakes too. On that copy, the same recalls now bring back
+  all 24, 19 of them first.
+- Dormant and archived memories take no part in resonance: they pass no
+  activation on, and none reaches them through a link. A dormant memory comes
+  back for its own match, or not at all. Results show "(it had gone quiet)"
+  beside one.
+- Decay keeps running over dormant memories until they wake or reach the
+  archive: every one of them, read a page at a time apart from the active
+  ones, so none waits behind the limit on how many active memories one pass
+  reads (10,000). The floors that hold an active memory up (recent use,
+  `foundational`, `active_project`) never lift a dormant one. The decay stats
+  count dormant memories apart, and `engrams_dormant` still counts only the
+  ones that went dormant in that pass. On another copy, one maintenance cycle
+  lowered all 24 and archived none.
+- A memory that faded into the archive (archived by decay) comes back by its
+  exact id, or through `mnemos_recall` with `include_archived=true` when the
+  query names it (half its meaningful words, and two when it has two or more:
+  the bar a correction's query clears). Every faded memory in the scope is
+  weighed, however many there are. Either way it is restored with
+  `resharpen` and counts as returned. A memory the agent forgot, or replaced
+  with a correction, stays where it was put, by id and by flag.
+- `resharpen` restores only a memory that is archived, in one transaction,
+  and at full resolution when it brings back the original words, keeping the
+  worn wording as a version. An archive row whose memory is active or dormant
+  again is left alone; a copy of that store held 1,392 such rows.
+- `mnemos_health` and `mnemos doctor` count dormant memories, and the faded
+  ones an ordinary recall cannot reach, with the call that reaches them:
+  `mnemos_recall("<its words>", include_archived=true)`. Doctor still opens
+  the store read-only.
+- The dream report says "N memories went quiet. A strong match brings them
+  back." A cycle that archives some memories and quiets others reports both.
+- `MAINTENANCE_CODE_VERSION` is 4. Code older than the store still reads
+  dormant and faded memories, but wakes, fades and restores none of them. The
+  decay pass checks the store's minimum itself, so callers without the
+  runtime's gate (the bridge, the advanced server) leave dormant memories
+  alone too.
+
+Changed behaviour, and what to do:
+
+- Recall and `mnemos_context` can return a dormant memory, marked "(it had
+  gone quiet)", and returning it wakes it.
+- `mnemos_recall` takes `include_archived` (default false). With it, what
+  faded into the archive appears after the durable memories under "From the
+  archive:", and comes back.
+- `mnemos_health` returns `counts.memories_dormant` and `unreachable`
+  (`count` and `command`), and the card's memories line counts dormant ones.
+- Dormant memories no longer stay dormant indefinitely: unless recalled, they
+  keep fading and reach the archive, where their id or `include_archived`
+  finds them.
 
 ### One briefing, written for the one reading it
 

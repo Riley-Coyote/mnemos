@@ -80,10 +80,13 @@ def compose_dream_narrative(
             f"Mnemos moved {engrams_archived} faded "
             f"{_plural(engrams_archived, 'memory', 'memories')} into the archive."
         )
-    elif engrams_dormant > 0:
+    # What recall does with them, and no more: a dormant memory comes back
+    # only when a cue matches it well. "Ready to wake if needed" promised a
+    # door that recall never opened.
+    if engrams_dormant > 0:
         sentences.append(
             f"{engrams_dormant} {_plural(engrams_dormant, 'memory', 'memories')} "
-            "went dormant, ready to wake if needed."
+            f"went quiet. A strong match brings {_plural(engrams_dormant, 'it', 'them')} back."
         )
     for delta in (belief_deltas or [])[:3]:
         old = float(delta.get("old_confidence", 0.0))

@@ -2155,11 +2155,30 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         _print_background_status(runtime.scope)
         _print_semantic_status(runtime)
         print(f"Simple tools: {', '.join(SIMPLE_TOOL_NAMES)}")
+        _print_memory_status(runtime)
         _print_continuity_status(runtime)
         _print_legacy_status(runtime)
         return 0
     finally:
         runtime.close()
+
+
+def _print_memory_status(runtime) -> None:
+    """How many memories are active, dormant and archived, and the faded ones
+    an ordinary recall never returns, with the call that does: the health
+    card's numbers, in its words."""
+    from .simple_runtime import format_memory_counts, format_unreachable_summary
+
+    try:
+        counts = runtime.memory_counts()
+        unreachable = runtime.unreachable_memories()
+    except Exception as exc:
+        print(f"Memories:     unknown ({type(exc).__name__}: {exc})")
+        return
+    print(f"Memories:     {format_memory_counts(counts)}")
+    summary = format_unreachable_summary(unreachable)
+    if summary:
+        print(f"Unreachable:  {summary}")
 
 
 def _print_code_status(runtime) -> None:

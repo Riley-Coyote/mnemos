@@ -605,6 +605,9 @@ def test_health_returns_structured_dict(tmp_path):
         "continuity",
         # Memory held in the file that no scoped read reaches.
         "legacy",
+        # Memories in this scope that faded out of ordinary recall, and the
+        # one call that reaches them.
+        "unreachable",
         # Whether recall can seed by meaning here, and why not if not.
         "semantic",
         # The code version running here and the newest one the store has

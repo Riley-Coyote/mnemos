@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import json
 import hashlib
+import heapq
 import os
 import re
 import sqlite3
@@ -55,8 +56,9 @@ from .simple_scope import MnemosScope, resolve_scope  # noqa: F401
 from .store.embedding_index import EmbeddingIndex
 from .core.engram import Engram
 from .core.placeholders import TEMPLATED_IMPACTS, is_templated
+from .store.archive import resharpen
 from .store.fts import distinctive_terms, fts_words, meaningful_words, or_query
-from .store.sqlite_store import EngramStore, ReadOnlyEngramStore
+from .store.sqlite_store import FADED_ARCHIVE_REASONS, EngramStore, ReadOnlyEngramStore
 
 
 SIMPLE_TOOL_NAMES = (
@@ -89,6 +91,10 @@ _MAX_HOST_MUTATION_REQUEST_BYTES = 1024 * 1024
 # every recall slot for some ordinary questions.
 LEGACY_CLASSES = ("lessons", "other", "indexer")
 LEGACY_DEFAULT_INCLUDE = ("lessons", "other")
+
+# The one call that reaches the memories an ordinary recall never returns:
+# those that faded into the archive. Named on the health card beside their count.
+UNREACHABLE_COMMAND = 'mnemos_recall("<its words>", include_archived=true)'
 
 
 # Hypomnema ids are uuid4 strings and engram ids are ULIDs after "engram_".
@@ -2631,9 +2637,12 @@ class MnemosRuntime:
 
         The packet cuts long notes and gives each cut one its id. A handoff
         comes back framed as the packet framed it, active or not. A continuity
-        note or a durable memory comes back only while it is live: one that was
-        forgotten stays forgotten. A durable memory read this way is
-        reinforced as a recall would reinforce it.
+        note comes back only while it is live: one that was forgotten stays
+        forgotten. So does a durable memory that was forgotten or replaced by
+        a correction. A durable memory read this way is reinforced as a recall
+        would reinforce it: a dormant one wakes, and one that faded into the
+        archive is brought back first (``resharpen``). Its id is the one way
+        to reach a faded memory without asking recall to search the archive.
         """
         assert self._store is not None
         scope = {
@@ -2663,23 +2672,86 @@ class MnemosRuntime:
             ])
         if _ENGRAM_ID.fullmatch(note_id):
             engram = self._store.get_engram_in_scope(note_id, **scope)
-            if engram is None or engram.state == "archived":
+            if engram is None:
                 return ""
+            faded = engram.state == "archived"
+            if faded:
+                # Only decay's door opens back. What the agent forgot, or
+                # replaced with a correction, it closed on purpose.
+                if self._store.archive_reason(note_id) not in FADED_ARCHIVE_REASONS:
+                    return ""
+                engram = self._restore_faded(engram)
+            quiet = engram.state == "dormant"
             kind = "Lesson" if {"lesson", "distilled"} & set(engram.tags or []) else "Memory"
             lines = [f"{kind} {note_id}, {_age_text(engram.created_at)}:", engram.content]
             if engram.impact and engram.impact != engram.content:
                 lines.append(f"What it changed: {engram.impact}")
+            if faded:
+                lines.append(
+                    "It had faded into the archive; recalling it by its id brought it back."
+                    if engram.state == "active"
+                    else "It has faded into the archive, and this session's code leaves it there."
+                )
+            elif quiet:
+                lines.append("It had gone quiet.")
             # Asking for a memory by its id is a use, as a query that returns
             # it is: reinforced the same way, once a session and never by
-            # code older than the store. Only an active memory, as recall by
-            # query returns only active ones; waking a dormant one is a rule
-            # of its own. A note has no reinforcement.
-            if engram.state == "active":
+            # code older than the store, and a dormant one wakes as it would
+            # from a query. A note has no reinforcement.
+            if engram.state in ("active", "dormant"):
                 self._reinforce_returned(
                     note_id, [RetrievalResult(engram=engram, score=1.0, retrieval_path="id")],
                 )
             return "\n".join(lines)
         return ""
+
+    def _restore_faded(self, engram: Engram) -> Engram:
+        """Bring a memory that faded into the archive back (``resharpen``), and
+        return it as it now stands. Code older than the store leaves it where
+        it is: restoring applies this version's rules to what it restores."""
+        assert self._store is not None
+        if self._older_than_store() is not None:
+            return engram
+        restored = resharpen(self._store, engram.id)
+        if restored is None:
+            return engram
+        self._traced_write(restored.id)
+        return restored
+
+    def _faded_matches(self, query: str, max_results: int) -> list[Engram]:
+        """The memories that faded into the archive and that ``query`` names,
+        the closest first, then the newest: at least half of its meaningful
+        words, and two when it has two or more (the bar a correction's query
+        must clear). Every faded memory in the scope is weighed, page by page,
+        and only the closest are kept in hand. A memory forgotten or replaced
+        by a correction is never among them."""
+        assert self._store is not None
+        if not _named_terms(query) - _CORRECTION_VERBS:
+            return []
+
+        def named() -> Any:
+            position = 0
+            before: str | None = None
+            while True:
+                page = self._store.faded_engrams(
+                    agent_id=self.scope.agent_id,
+                    person_id=self.scope.person_id,
+                    project_scope=self.scope.project_scope,
+                    before_id=before,
+                )
+                if not page:
+                    return
+                for engram in page:
+                    shared = _named_by(query, " ".join([
+                        engram.content or "", engram.content_at_encoding or "", engram.impact or "",
+                    ]))
+                    if shared:
+                        yield shared, position, engram
+                    position += 1
+                before = page[-1].id
+
+        closest = heapq.nsmallest(max(1, max_results), named(), key=lambda m: (-m[0], m[1]))
+        return [engram for _shared, _position, engram in closest]
 
     def identity_graph(self, max_nodes: int = 18) -> dict[str, Any]:
         """Build a portable identity graph snapshot for visual-capable clients."""
@@ -2929,8 +3001,15 @@ class MnemosRuntime:
 
     @_notice_when_older
     @_traced("recall")
-    def recall(self, query: str, max_results: int = 5) -> str:
-        """Recall relevant continuity and durable memories."""
+    def recall(self, query: str, max_results: int = 5, include_archived: bool = False) -> str:
+        """Recall relevant continuity and durable memories.
+
+        A dormant memory comes back when the query matches it well, and
+        wakes. With ``include_archived``, memories that faded into the
+        archive and that the query names come back too, restored; one the
+        agent forgot, or replaced with a correction, never does. A faded
+        memory's id reaches it without the flag.
+        """
 
         if not query.strip():
             return "Recall needs a query."
@@ -2955,8 +3034,11 @@ class MnemosRuntime:
         )
         continuity = _filter_continuity(query, continuity)
         memories = self._retrieve(query, max_results=max_results)
+        faded = self._faded_matches(query, max_results) if include_archived else []
 
-        if not continuity and not memories:
+        if not continuity and not memories and not faded:
+            if include_archived:
+                return "No relevant continuity found, in memory or in the archive."
             return "No relevant continuity found."
 
         self._traced_read(
@@ -2970,7 +3052,32 @@ class MnemosRuntime:
         if memories:
             lines.extend(["", "Durable memories:"])
             lines.extend(_format_memory(result) for result in memories)
-            self._reinforce_returned(query, memories)
+        returned = list(memories)
+        if faded:
+            restored = [self._restore_faded(engram) for engram in faded]
+            self._traced_read(*(engram.id for engram in restored))
+            one = len(restored) == 1
+            lines.extend(["", "From the archive:"])
+            lines.extend(_format_archived(engram) for engram in restored)
+            if all(engram.state == "active" for engram in restored):
+                lines.append(
+                    "It had faded out of ordinary recall; recalling it brought it back."
+                    if one
+                    else "These had faded out of ordinary recall; recalling them brought them back."
+                )
+            else:
+                lines.append(
+                    f"{'It has' if one else 'These have'} faded out of ordinary recall, "
+                    f"and this session's code leaves {'it' if one else 'them'} in the archive."
+                )
+            returned += [
+                RetrievalResult(engram=engram, score=0.0, retrieval_path="archive")
+                for engram in restored
+                if engram.state == "active"
+            ]
+        # Everything shown is one return, reinforced together: what came back
+        # from the archive is linked with what recall found beside it.
+        self._reinforce_returned(query, returned)
         return "\n".join(lines)
 
     def _maybe_correct_belief(self, correction: str, query: str, action: str) -> str:
@@ -3522,6 +3629,7 @@ class MnemosRuntime:
         stats = self._stats()
         db_path = self.db_path
         size_bytes = db_path.stat().st_size if db_path.exists() else 0
+        states = _state_counts(stats)
 
         last_cycle: dict[str, Any] | None = None
         runs = self._store.get_consolidation_runs(
@@ -3600,8 +3708,7 @@ class MnemosRuntime:
             # be older than the store, and then it no longer maintains it.
             "code": self.code_versions(),
             "counts": {
-                "memories_active": stats.get("engrams_active", 0),
-                "memories_archived": stats.get("archived", 0),
+                **states,
                 "continuity_notes_active": stats.get("hypomnema_active", 0),
                 "continuity_notes_foundational": stats.get("hypomnema_foundational", 0),
                 "connections": stats.get("connections", 0),
@@ -3626,6 +3733,7 @@ class MnemosRuntime:
             },
             "handoff": handoff_health,
             "continuity": self.continuity_signals(),
+            "unreachable": self.unreachable_memories(),
             # Memory held in this file that no read path reaches. Without this
             # the card counted only the scoped rows, and a store holding
             # thousands of quarantined memories reported a healthy few hundred.
@@ -3640,6 +3748,31 @@ class MnemosRuntime:
             "session": harness_session() or None,
             "model": model or None,
             "name": name or None,
+        }
+
+    def memory_counts(self) -> dict[str, int]:
+        """How many memories this scope holds in each state, as the health
+        card counts them (and `mnemos doctor`, from the same numbers).
+        Read-only."""
+        return _state_counts(self._stats())
+
+    def unreachable_memories(self) -> dict[str, Any]:
+        """Memories stored in this scope that an ordinary recall never returns,
+        and the one call that does. Read-only.
+
+        Dormant ones are not among them: a strong match brings those back.
+        Forgotten or replaced ones are not either: nothing brings those back,
+        by the agent's own choice. What is left faded into the archive.
+        """
+        self._ensure_init()
+        assert self._store is not None
+        return {
+            "count": self._store.count_faded(
+                agent_id=self.scope.agent_id,
+                person_id=self.scope.person_id,
+                project_scope=self.scope.project_scope,
+            ),
+            "command": UNREACHABLE_COMMAND,
         }
 
     def semantic_status(self, verify: bool = False) -> dict[str, Any]:
@@ -3858,8 +3991,23 @@ def _format_memory(result: Any) -> str:
     display = display.replace("\n", " ")
     if len(display) > 180:
         display = display[:177] + "..."
+    # A dormant memory the cue matched starts at half the score, which the
+    # reader would otherwise have no way to read.
+    quiet = " (it had gone quiet)" if engram.state == "dormant" else ""
     return (
         f"- [{result.score:.2f}] {display}\n"
+        f"  id={engram.id} kind={engram.kind} confidence={engram.source.confidence:.2f}{quiet}"
+    )
+
+
+def _format_archived(engram: Engram) -> str:
+    """A memory recall found in the archive: no score, since recall's
+    resonance never reaches the archive; the query named it."""
+    display = (engram.impact or engram.content).replace("\n", " ")
+    if len(display) > 180:
+        display = display[:177] + "..."
+    return (
+        f"- {display}\n"
         f"  id={engram.id} kind={engram.kind} confidence={engram.source.confidence:.2f}"
     )
 
@@ -3943,6 +4091,42 @@ def format_legacy_summary(counts: Mapping[str, int] | None) -> str | None:
         f"{counts['hidden']:,} older memories from before scoping never reach recall "
         f"({', '.join(part for part in parts if part)}); see 'mnemos adopt-legacy'"
     )
+
+
+def _state_counts(stats: Mapping[str, Any]) -> dict[str, int]:
+    """The memory counts by state out of the store's stats."""
+    return {
+        "memories_active": int(stats.get("engrams_active", 0) or 0),
+        "memories_dormant": int(stats.get("engrams_dormant", 0) or 0),
+        "memories_archived": int(stats.get("archived", 0) or 0),
+    }
+
+
+def format_memory_counts(counts: Mapping[str, Any]) -> str:
+    """How many memories are active, dormant and archived, in the words the
+    health card and `mnemos doctor` both print."""
+    return (
+        f"{counts.get('memories_active', 0)} active, "
+        f"{counts.get('memories_dormant', 0)} dormant, "
+        f"{counts.get('memories_archived', 0)} archived"
+    )
+
+
+def format_unreachable_summary(unreachable: Mapping[str, Any] | None) -> str | None:
+    """One plain sentence about memories an ordinary recall never returns, and
+    the call that does, or None when there are none."""
+
+    count = int((unreachable or {}).get("count") or 0)
+    if not count:
+        return None
+    command = (unreachable or {}).get("command") or UNREACHABLE_COMMAND
+    return (
+        f"{count:,} faded {'memory is' if count == 1 else 'memories are'} stored in the "
+        f"archive, out of ordinary recall; {command} reaches "
+        f"{'it' if count == 1 else 'them'}"
+    )
+
+
 def describe_semantic(semantic: dict[str, Any]) -> tuple[str, list[str], list[str]]:
     """Say whether recall can seed by meaning, in plain words.
 
@@ -4107,6 +4291,8 @@ def format_health_card(data: dict[str, Any]) -> str:
 
     legacy = format_legacy_summary(data.get("legacy"))
     legacy_lines = [line("Hidden", legacy)] if legacy else []
+    unreachable = format_unreachable_summary(data.get("unreachable"))
+    unreachable_lines = [line("Unreachable", unreachable)] if unreachable else []
     semantic_headline, semantic_details, semantic_attention = describe_semantic(
         data.get("semantic") or {}
     )
@@ -4132,11 +4318,8 @@ def format_health_card(data: dict[str, Any]) -> str:
         line("Store", f"{store['db_path']} ({_human_size(store['size_bytes'])})"),
         line("Code", code_headline),
         line("Identity", describe_identity(data.get("identity"))),
-        line(
-            "Memories",
-            f"{counts['memories_active']} active, "
-            f"{counts['memories_archived']} archived",
-        ),
+        line("Memories", format_memory_counts(counts)),
+        *unreachable_lines,
         *legacy_lines,
         line(
             "Continuity",

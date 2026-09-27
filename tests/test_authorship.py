@@ -1089,3 +1089,25 @@ def test_health_and_doctor_name_this_sessions_own_introduction(tmp_path, monkeyp
     out = capsys.readouterr().out
     assert "Identity:     none this session" in out
     assert "grok" not in out.lower()
+
+
+def test_a_memory_restored_from_the_archive_is_traced_as_written(tmp_path):
+    """Recall with include_archived (WP-R06) brings a faded memory back: the
+    trace records it as shown and as written, since restoring changes it."""
+    db = tmp_path / "m.db"
+    runtime = _runtime(db)
+    try:
+        engram_id = _captured_id(runtime.capture("The harbour crane was repainted blue in May."))
+        assert runtime._store is not None
+        runtime._store.archive_engram(
+            runtime._store.get_engram(engram_id), reason="decay_below_threshold",
+        )
+        said = runtime.recall("harbour crane repainted", include_archived=True)
+    finally:
+        runtime.close()
+
+    assert "From the archive:" in said, said
+    [row] = _rows(db, "SELECT * FROM memory_trace WHERE tool = 'recall'")
+    assert engram_id in json.loads(row["read_ids"])
+    assert engram_id in json.loads(row["written_ids"])
+    assert _engram_row(db, engram_id)["state"] == "active"

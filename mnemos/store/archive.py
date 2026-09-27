@@ -56,33 +56,43 @@ def resharpen(
 
     Retrieves the archived engram, restores it to active state with
     the original content_at_encoding, and gives it a moderate accessibility
-    boost (since it was specifically requested).
+    boost (since it was specifically requested). Words softening had worn
+    down come back whole, at full resolution; the worn wording is kept as a
+    version. All of it lands in one transaction, the archive row's removal
+    included.
+
+    Which archived memories may come back is the caller's decision: recall
+    brings back only one that faded (``EngramStore.faded_engrams``), never
+    one the agent forgot or replaced, and only from current code.
 
     Args:
         store: The engram store.
         engram_id: The ID of the archived engram to restore.
 
     Returns:
-        The restored Engram, or None if not found in archive.
+        The restored Engram, or None if it is not in the archive (including
+        a memory an archive row still names but which is no longer archived).
     """
-    conn = store._get_conn()
-    archived = conn.execute(
-        "SELECT * FROM archive WHERE id = ?", (engram_id,)
-    ).fetchone()
-    if archived is None:
-        return None
-    engram = store.get_engram(engram_id)
-    if engram is None:
-        return None
-    engram.add_version(reason="resharpen")
-    engram.content = archived["content_at_encoding"] or archived["content"]
-    engram.content_at_encoding = archived["content_at_encoding"] or engram.content
-    engram.state = "active"
-    engram.accessibility = max(0.6, engram.accessibility)
-    engram.strength = max(0.5, engram.strength)
-    store.save_engram(engram)
-    conn.execute("DELETE FROM archive WHERE id = ?", (engram_id,))
-    conn.commit()
+    with store.transaction() as conn:
+        archived = conn.execute(
+            "SELECT * FROM archive WHERE id = ?", (engram_id,)
+        ).fetchone()
+        if archived is None:
+            return None
+        engram = store.get_engram(engram_id)
+        if engram is None or engram.state != "archived":
+            return None
+        original = archived["content_at_encoding"] or archived["content"]
+        engram.add_version(reason="resharpen")
+        if original != engram.content:
+            engram.resolution = 1.0
+        engram.content = original
+        engram.content_at_encoding = archived["content_at_encoding"] or engram.content
+        engram.state = "active"
+        engram.accessibility = max(0.6, engram.accessibility)
+        engram.strength = max(0.5, engram.strength)
+        store.save_engram(engram)
+        conn.execute("DELETE FROM archive WHERE id = ?", (engram_id,))
     return store.get_engram(engram_id)
 
 

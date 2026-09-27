@@ -37,11 +37,20 @@ notes waiting more than a day for recall's meaning index.
   that instead.
 - The `Recall index: not updated` line folds into the watchdog's line about the
   meaning index when that one is printed, so it is said once.
+- The continuity warnings follow the same rule, and no longer fire on the
+  ordinary state between sessions, which taught the reader to ignore ATTENTION.
+  A handoff waiting for the next session is flagged only after it has waited
+  more than a day while sessions started without it. The same goes for
+  continuity never handed to a starting session (not a new store's first day),
+  a week without a delivery (only if memory was written since), and sessions
+  without a capture (only once the last capture is more than a day old).
 
 Changed behaviour: the health card and `mnemos doctor` end with ATTENTION
 lines when something has stalled. `mnemos_health`'s structured result gains
 `watchdog` and `counts.continuity_notes_hidden`, and `continuity` gains
-`notes_hidden`.
+`notes_hidden`. "A session handoff is waiting but has not been delivered yet"
+is gone, and the four continuity warnings above now read as one sentence and
+a command.
 
 No migration and no code-version bump: nothing here writes.
 

@@ -18,6 +18,12 @@ pass used to read active memories only, so a dormant one was never touched
 again: it could neither fade on nor, since recall did not look either, come
 back.
 
+A memory the agent marked standing (how the human wants it to work in every
+session) is exempt while it is marked: the pass never reads it, so it neither
+fades nor moves. A standing rule is obeyed, not recalled, and fading it for
+disuse would take it away exactly because it is followed. Unmarked, it is
+read again and fades from where it stands, by the pass's usual elapsed time.
+
 Ported from Anima's salience.py and adapted for the dual-trace model.
 """
 
@@ -97,6 +103,7 @@ def run_decay_pass(
     engrams = store.get_engrams_in_states(
         ("active",), agent_id=agent_id, person_id=person_id,
         project_scope=project_scope, limit=ACTIVE_LIMIT, load_connections=True,
+        standing=False,
     )
 
     if not engrams:
@@ -126,14 +133,15 @@ def _dormant_engrams(
     person_id: str | None,
     project_scope: str | None,
 ) -> Iterator[Any]:
-    """Every dormant memory in the scope, a page at a time, in id order: a
-    walk the pass's own changes cannot make skip or repeat one."""
+    """Every dormant memory in the scope not marked standing, a page at a
+    time, in id order: a walk the pass's own changes cannot make skip or
+    repeat one."""
     after = ""
     while True:
         page = store.get_engrams_in_states(
             ("dormant",), agent_id=agent_id, person_id=person_id,
             project_scope=project_scope, limit=DORMANT_PAGE,
-            load_connections=True, after_id=after,
+            load_connections=True, after_id=after, standing=False,
         )
         if not page:
             return

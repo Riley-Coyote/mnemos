@@ -8,7 +8,10 @@ say is left out rather than announced empty:
 1. Where you left off: the reader's own handoff first, whole, then up to two
    notes other sessions left in the last three days, each signed with its
    model and age.
-2. Who you're with: the durable few foundational notes.
+2. Who you're with: first what the agent marked standing, how the human wants
+   it to work in every session: the newest mark first, up to five, one line
+   each in the memory's own words, with its id, and how to list the rest.
+   Then the durable few foundational notes.
 3. What you're carrying: up to three notes or lessons, ranked by the words they
    share with the folder and repository the session works in, then by recency.
    One of them is a concrete, dated episode whenever there is one.
@@ -63,6 +66,22 @@ PACKET_QUESTIONS = 1
 _FOUNDATIONAL_SHOWN = 3
 _CARRYING_SHOWN = 3
 _BELIEFS_SHOWN = 6
+
+# What the agent marked standing: how the human wants it to work in every
+# session, not just now. A standing rule is obeyed, not recalled, so no usage
+# signal (reinforcement, recency, recall) can be trusted to bring it here; the
+# agent's own mark does. The newest marks open "Who you're with", this many,
+# one line each, and the line says how to list the rest.
+STANDING_SHOWN = 5
+# How long a standing line may run, cut at a sentence boundary. Each is a rule
+# to follow in this session, so it is not shortened to make room: when the
+# packet must lose something, these are the last lines to go.
+STANDING_CHARS = 320
+STANDING_LABEL = "Standing, how the human wants you to work in every session:"
+STANDING_LIST_CALL = 'mnemos_recall(query="", standing=true)'
+# A capture keeps its context after its words, after a blank line. A standing
+# line is the words themselves.
+_CONTEXT_MARK = "\n\nContext: "
 
 # How long a note may run before it is cut, tried in turn until the packet fits.
 # A typical note on a real store is about a thousand characters.
@@ -131,12 +150,21 @@ def build_context_packet(
     handoffs = store.live_handoffs(**scope, reader_session=reader_session)
     handoff = handoffs[0] if handoffs else None
 
+    # Every standing memory in scope, the newest mark first. Each is said once,
+    # as its standing line: its note is not a foundational note or carried too.
+    standing = _standing(store, scope)
+    standing_ids = {item["id"] for item in standing}
     notes = [
         entry for entry in store.search_hypomnema(
             "", **scope, limit=_MAX_NOTES, exclude_kinds=("handoff", "maintenance_report"),
         )
         if DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
     ]
+    standing_notes: dict[str, list[str]] = {}
+    for entry in notes:
+        if entry.get("graduated_to_engram_id") in standing_ids:
+            standing_notes.setdefault(entry["graduated_to_engram_id"], []).append(entry["id"])
+    notes = [entry for entry in notes if entry.get("graduated_to_engram_id") not in standing_ids]
     foundational = sorted(
         (entry for entry in notes if entry.get("foundational")),
         key=lambda entry: (
@@ -149,7 +177,10 @@ def build_context_packet(
     place = place_words(workdir)
     carrying = _carrying(
         [_note_item(entry, place) for entry in notes if entry["id"] not in shown_ids]
-        + [_lesson_item(row, place) for row in _lessons(store, **scope)]
+        + [
+            _lesson_item(row, place) for row in _lessons(store, **scope)
+            if row["id"] not in standing_ids
+        ]
     )
 
     beliefs = [_serialize_belief(b) for b in store.get_beliefs(agent_id, active_only=True)]
@@ -182,6 +213,8 @@ def build_context_packet(
         "query": query,
         "handoff": handoff,
         "other_handoffs": handoffs[1:],
+        "standing": standing,
+        "standing_notes": standing_notes,
         "foundational": foundational,
         "carrying": carrying,
         "hypomnema": foundational + [item["entry"] for item in carrying if item["kind"] == "note"],
@@ -228,23 +261,30 @@ def format_context_packet(
 
 
 def carried_count(packet: dict[str, Any]) -> int:
-    """How many handoffs, notes, lessons and reports the packet showed after
-    its budget: 0 means the session started from nothing."""
+    """How many handoffs, standing memories, notes, lessons and reports the
+    packet showed after its budget: 0 means the session started from
+    nothing."""
     shown = packet.get("shown") or {}
     return (
         len(shown.get("handoffs") or [])
+        + len(shown.get("standing") or [])
         + len(shown.get("notes") or [])
         + int(bool(shown.get("report")))
     )
 
 
 def shown_ids(packet: dict[str, Any]) -> set[str]:
-    """The ids of everything the packet rendered: handoffs, notes, lessons (an
-    engram's id) and the report. Only what survived the budget counts; a note
-    selected but cut for room was not shown. A caller appending more to the
-    packet leaves these out, so nothing is shown twice."""
+    """The ids of everything the packet rendered: handoffs, standing memories
+    and the notes paired with them, notes, lessons (an engram's id) and the
+    report. Only what survived the budget counts; a note selected but cut for
+    room was not shown. A caller appending more to the packet leaves these
+    out, so nothing is shown twice."""
     shown = packet.get("shown") or {}
     ids = set(shown.get("handoffs") or []) | set(shown.get("notes") or [])
+    paired = packet.get("standing_notes") or {}
+    for engram_id in shown.get("standing") or []:
+        ids.add(engram_id)
+        ids.update(paired.get(engram_id) or [])
     if shown.get("report"):
         ids.add(shown["report"])
     return ids
@@ -462,6 +502,15 @@ def _lessons(store: "EngramStore", **scope: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _standing(store: "EngramStore", scope: dict[str, str]) -> list[dict[str, Any]]:
+    """The standing memories in scope, the newest mark first. A packet never
+    fails because of them: a store that cannot say has none here."""
+    try:
+        return store.standing_engrams(**scope)
+    except Exception:
+        return []
+
+
 def _carrying(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Up to three, by shared words with the place, then newest first. When none
     of them is an episode, the best-ranked episode takes the last place."""
@@ -504,9 +553,14 @@ def _render(packet: dict[str, Any], *, max_chars: int) -> tuple[str, dict[str, A
 
 
 def _drop_order(packet: dict[str, Any]) -> list[tuple[str, str]]:
+    """What leaves the packet first when it does not fit: other sessions'
+    notes, then what the reader is carrying, the foundational notes, the
+    report, the episode, the question and the beliefs. The standing lines go
+    last, the oldest mark first: they say how to work in this session."""
     carrying = packet.get("carrying") or []
     episodes = [item for item in carrying if item["episode"]]
     others = [item for item in carrying if not item["episode"]]
+    standing = (packet.get("standing") or [])[:STANDING_SHOWN]
     return [
         *(("other", entry["id"]) for entry in reversed(packet.get("other_handoffs") or [])),
         *(("carrying", item["id"]) for item in reversed(others)),
@@ -515,20 +569,19 @@ def _drop_order(packet: dict[str, Any]) -> list[tuple[str, str]]:
         *(("carrying", item["id"]) for item in episodes),
         ("question", ""),
         *(("belief", belief["id"]) for belief in reversed(packet.get("beliefs") or [])),
+        *(("standing", item["id"]) for item in reversed(standing)),
     ]
 
 
 def _compose(
     packet: dict[str, Any], chars: int, dropped: set[tuple[str, str]],
 ) -> tuple[str, dict[str, Any]]:
-    shown: dict[str, Any] = {"handoffs": [], "notes": [], "questions": [], "report": None}
+    shown: dict[str, Any] = {
+        "handoffs": [], "standing": [], "notes": [], "questions": [], "report": None,
+    }
     sections = [
         _format_left_off(packet, chars, dropped, shown),
-        _format_notes(
-            "Who you're with",
-            [_note_item(entry, set()) for entry in packet.get("foundational") or []],
-            "who", chars, dropped, shown,
-        ),
+        _format_who(packet, chars, dropped, shown),
         _format_notes(
             "What you're carrying", packet.get("carrying") or [],
             "carrying", chars, dropped, shown,
@@ -588,6 +641,53 @@ def _format_left_off(
     if relations & {_COLLEAGUE, _UNPLACED}:
         lines.append(COLLEAGUE_LINE)
     return "\n".join(lines)
+
+
+def _format_who(
+    packet: dict[str, Any], chars: int, dropped: set[tuple[str, str]], shown: dict[str, Any],
+) -> str:
+    """Who you're with: what the agent marked standing, then the foundational
+    notes.
+
+    The standing lines come first, the newest mark first, at most
+    ``STANDING_SHOWN``, each the memory's own words on one line, cut at a
+    sentence boundary, with the id that unmarks it or reads it whole. The
+    rest are counted, with the call that lists them all. Without a standing
+    memory the section is the foundational notes alone, as before.
+    """
+    standing = packet.get("standing") or []
+    lines: list[str] = []
+    if standing:
+        kept = [
+            item for item in standing[:STANDING_SHOWN]
+            if ("standing", item["id"]) not in dropped
+        ]
+        lines.append(STANDING_LABEL)
+        for item in kept:
+            lines.append(f"- {standing_words(item['content'])} ({item['id']})")
+            shown["standing"].append(item["id"])
+        more = len(standing) - len(kept)
+        if more and kept:
+            lines.append(f"And {more} more: {STANDING_LIST_CALL}")
+        elif more:
+            lines.append(f"{more} left out for room: {STANDING_LIST_CALL}")
+    notes = [
+        _note_item(entry, set()) for entry in packet.get("foundational") or []
+        if ("who", entry["id"]) not in dropped
+    ]
+    if notes and lines:
+        lines.append("Other notes:")
+    for item in notes:
+        lines.append(f"- {item['date']}, {item['by']}: {_cut_with_id(item, chars, key='shown')}")
+        shown["notes"].append(item["id"])
+    return "\n".join(["### Who you're with", *lines]) if lines else ""
+
+
+def standing_words(content: str) -> str:
+    """A standing memory as one line: its own words, without the context a
+    capture keeps after them, cut at a sentence boundary."""
+    words = (content or "").split(_CONTEXT_MARK, 1)[0]
+    return cut_at_sentence(words, STANDING_CHARS)[0]
 
 
 def _format_notes(
@@ -754,7 +854,7 @@ def _record_delivery(store: "EngramStore", scope: dict[str, str], shown: dict[st
             store.mark_reflections_surfaced(shown["questions"])
         except Exception:
             pass
-    if shown["handoffs"] or shown["notes"]:
+    if shown["handoffs"] or shown["notes"] or shown.get("standing"):
         store.set_meta(
             f"simple:{scope['agent_id']}:{scope['person_id']}:{scope['project_scope']}"
             ":last_context_delivery_at",

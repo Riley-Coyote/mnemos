@@ -41,12 +41,14 @@ from .interface.context_packet import (
     COLLEAGUE_LINE,
     PACKET_MAX_CHARS,
     PACKET_QUESTIONS,
+    STANDING_LABEL,
     build_context_packet,
     carried_count,
     fit_section,
     format_questions,
     room_after,
     shown_ids,
+    standing_words,
     whose_handoff,
 )
 from .retrieval.reactive import ReactiveRetriever, RetrievalResult
@@ -336,6 +338,12 @@ _CORRECTION_VERBS = frozenset(
 # The actions that make mnemos_correct forget what it names, rather than
 # replace it: the note and its memory are archived, and nothing is written.
 _FORGET_ACTIONS = frozenset({"forget", "archive", "remove", "delete"})
+
+# The actions that mark a memory standing (how the human wants the agent to
+# work in every session), or unmark it, by its id. They change the mark and its
+# signature and nothing else: no words, no version, no pair.
+_MARK_STANDING = "mark_standing"
+_STANDING_ACTIONS = frozenset({_MARK_STANDING, "unmark_standing"})
 
 
 def _named_by(query: str, text: str) -> int:
@@ -2967,6 +2975,7 @@ class MnemosRuntime:
         impact: str = "",
         impact_source: str = "agent",
         signed_as: str = "",
+        standing: bool = False,
     ) -> str:
         """Capture durable continuity without exposing Mnemos internals.
 
@@ -2984,7 +2993,14 @@ class MnemosRuntime:
 
         They are one object: saved in one transaction, the note pointing at
         the memory, so either id reaches both (``EngramStore.capture_pair``)
-        and a correction or a forget acts on both."""
+        and a correction or a forget acts on both.
+
+        ``standing`` is the agent saying this is how the human wants it to
+        work in every session, not just now. The memory is marked standing in
+        the same transaction, signed like the capture: it opens every
+        briefing and does not fade while marked. Only the agent's choice
+        marks it; nothing is read from the words. Code older than the store
+        records the words and leaves the mark, and says so."""
 
         if not content.strip():
             return "Nothing captured: content was empty."
@@ -3049,11 +3065,20 @@ class MnemosRuntime:
             author_model=author,
             author_session=session,
         )
+        # The agent's mark, signed as the capture is. Code older than the store
+        # records the words and leaves the mark: what a mark does is a rule
+        # newer code may have replaced.
+        mark = (
+            {"by": author, "session": session, "at": datetime.now(timezone.utc).isoformat()}
+            if standing and not older else None
+        )
         # One capture, one object: the memory and its note land together or
-        # not at all, the note pointing at the memory.
+        # not at all, the note pointing at the memory (and marked standing
+        # with them, when the agent said so).
         note_id = self._store.save_capture_pair(
             engram,
             content.strip(),
+            standing_mark=mark,
             agent_id=self.scope.agent_id,
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
@@ -3078,19 +3103,39 @@ class MnemosRuntime:
         self._set_meta("empty_context_streak", "0")
         maintenance = self.maintain(auto=True)
 
+        standing_line = ""
+        if mark is not None:
+            standing_line = (
+                "Standing: yes. It opens every briefing, and it doesn't fade "
+                "while it's marked.\n"
+            )
+        elif standing:
+            standing_line = (
+                "Standing: not marked. This session's code is older than the "
+                "store; after a restart, mark it with "
+                f'mnemos_correct(correction="", target_id="{engram.id}", '
+                f'action="{_MARK_STANDING}").\n'
+            )
         return (
             "Captured continuity.\n"
             f"Memory ID: {engram.id}\n"
             f"Continuity note ID: {note_id}\n"
             f"Scope: {self.scope.agent_id}/{self.scope.person_id}/{self.scope.project_scope}\n"
             f"{self._signed_line(author)}\n"
+            f"{standing_line}"
             "Maintenance:\n"
             f"{_indent(maintenance)}"
         )
 
     @_notice_when_older
     @_traced("recall")
-    def recall(self, query: str, max_results: int = 5, include_archived: bool = False) -> str:
+    def recall(
+        self,
+        query: str,
+        max_results: int = 5,
+        include_archived: bool = False,
+        standing: bool = False,
+    ) -> str:
         """Recall relevant continuity and durable memories.
 
         A dormant memory comes back when the query matches it well, and
@@ -3098,8 +3143,14 @@ class MnemosRuntime:
         archive and that the query names come back too, restored; one the
         agent forgot, or replaced with a correction, never does. A faded
         memory's id reaches it without the flag.
+
+        With ``standing``, every memory marked standing in this scope comes
+        back instead, however many: see ``_recall_standing``.
         """
 
+        if standing:
+            self._ensure_init()
+            return self._recall_standing(query)
         if not query.strip():
             return "Recall needs a query."
 
@@ -3167,6 +3218,48 @@ class MnemosRuntime:
         # Everything shown is one return, reinforced together: what came back
         # from the archive is linked with what recall found beside it.
         self._reinforce_returned(query, returned)
+        return "\n".join(lines)
+
+    def _recall_standing(self, query: str) -> str:
+        """Every memory marked standing in this scope: how the human wants
+        the agent to work in every session.
+
+        All of them, not a page: the briefing shows the newest five and sends
+        the reader here for the rest. Those whose words the query names come
+        first, then the newest mark; an empty query lists them newest mark
+        first. Each is its own words on one line, as the briefing shows it,
+        with its id and who marked it when.
+
+        This lists what the agent marked; it is not a recall for a cue. So,
+        like the briefing showing them, it reinforces and links nothing:
+        standing memories coming back together is the mark, not a sign they
+        belong together.
+        """
+        assert self._store is not None
+        rows = self._store.standing_engrams(**self._scope_args())
+        if not rows:
+            return (
+                "Nothing here is marked standing. Capture it with standing=true, "
+                f'or mark a memory by its id: mnemos_correct(correction="", '
+                f'target_id="<id>", action="{_MARK_STANDING}").'
+            )
+        terms = _named_terms(query)
+        named = [len(terms & _named_terms(row["content"] or "")) for row in rows]
+        order = sorted(range(len(rows)), key=lambda index: (-named[index], index))
+        heading = STANDING_LABEL[:-1] + f" ({len(rows)}"
+        heading += (
+            f', those naming "{query.strip()}" first):' if any(named)
+            else ", the newest mark first):"
+        )
+        lines = [heading]
+        for index in order:
+            row = rows[index]
+            quiet = " It has gone quiet." if row["state"] == "dormant" else ""
+            lines.append(f"- {standing_words(row['content'])}")
+            lines.append(
+                f"  id={row['id']} marked {_mark_signature(row['standing_by'], row['standing_at'])}.{quiet}"
+            )
+        self._traced_read(*(row["id"] for row in rows))
         return "\n".join(lines)
 
     # ── Correcting and forgetting ──
@@ -3373,9 +3466,10 @@ class MnemosRuntime:
         a ``supersedes`` link and lineage both ways, the old note's successor,
         and a version keeping the old words, signed by whoever corrected,
         written only when the words changed. An impact the agent gives
-        becomes a lesson about the mistake. Code older than the store does
-        none of that: it records the agent's words, retires what they name,
-        and changes nothing else.
+        becomes a lesson about the mistake. A standing mark on what it
+        replaces is carried to the replacement, signed as it was. Code older
+        than the store does none of that: it records the agent's words,
+        retires what they name, and changes nothing else.
         """
         assert self._store is not None
         assert self._encoder is not None
@@ -3386,6 +3480,12 @@ class MnemosRuntime:
         # memory first, then any other it still held.
         meanings = sorted(held, key=lambda memory: engram is None or memory.id != engram.id)
         meaning, meaning_source, kept = _replacement_impact(impact, placeholder, *meanings)
+        # A standing memory stays standing when its words are corrected: the
+        # replacement carries the mark in force, signed as it was. Without it,
+        # correcting a rule would quietly take it out of every briefing. Code
+        # older than the store leaves the mark with the memory it retires.
+        marks = [found for found in map(self._store.standing_mark, [m.id for m in held]) if found]
+        carried = max(marks, key=lambda found: found["at"]) if marks and not older else None
 
         text = correction.strip()
         replacement = self._encoder.prepare(
@@ -3433,7 +3533,8 @@ class MnemosRuntime:
                 notes, memories, action=action, corrector=corrector, session=session, query=query,
             )
             note_id = self._store.save_capture_pair(
-                replacement, text, **self._replacement_note(note, correction, corrector, session),
+                replacement, text, standing_mark=carried,
+                **self._replacement_note(note, correction, corrector, session),
             )
             if not older:
                 self._store.record_correction(
@@ -3463,6 +3564,15 @@ class MnemosRuntime:
         said_lines = []
         if kept:
             said_lines.append(kept)
+        if carried is not None:
+            said_lines.append("It stays standing: the replacement carries the mark.")
+        elif marks:
+            said_lines.append(
+                "It was standing, and this session's code leaves the mark with the "
+                "memory it replaced. After a restart, mark the new one: "
+                f'mnemos_correct(correction="", target_id="{replacement.id}", '
+                f'action="{_MARK_STANDING}").'
+            )
         if lesson_id:
             said_lines.append(f"What it means now became a lesson about the mistake: {lesson_id}")
         elif (impact or "").strip() and older:
@@ -3516,6 +3626,96 @@ class MnemosRuntime:
                 "The impact was not saved: this note does not hold one."
             )
         return f"Updated {closest}continuity note {note['id']}."
+
+    def _set_standing(
+        self,
+        target: str,
+        *,
+        mark: bool,
+        words_given: bool,
+        older: bool,
+        corrector: str,
+        session: str,
+    ) -> str:
+        """Mark the memory an id names standing, or unmark it.
+
+        Standing is how the human wants the agent to work in every session.
+        Only the flag and its signature (who, in which session, when) change:
+        no words, no version, no pair, no state. The id may be the memory's
+        or its note's, since the two are one capture; one a correction
+        replaced reaches its current version. Only a memory in use can be
+        marked: one forgotten stays forgotten, and one that faded into the
+        archive is brought back by recalling its id first. Code older than the
+        store changes nothing: what a mark does is a rule newer code may have
+        replaced. Words given with the call (a correction, an impact) are not
+        used, and the result says so.
+        """
+        assert self._store is not None
+        verb = "marked" if mark else "unmarked"
+        unused = (
+            f"Your words weren't used: {'marking' if mark else 'unmarking'} changes no words."
+            if words_given else ""
+        )
+
+        def said(*lines: str) -> str:
+            return "\n".join(line for line in (*lines, unused) if line)
+
+        if not target:
+            return said(f"Nothing was {verb}: give the memory's id as target_id.")
+        if target.startswith("belief_"):
+            return said(f"Nothing was {verb}: {target} is a belief, and only a memory can be standing.")
+        kind, note, engram, current = self._current_pair(target)
+        if kind is None:
+            return said(f"Nothing was {verb}: no note or memory {target} is held here.")
+        if kind == "other":
+            what = "handoff" if (note or {}).get("entry_kind") == "handoff" else "maintenance report"
+            return said(f"Nothing was {verb}: {target} is a {what}, not a memory.")
+        if engram is None:
+            return said(
+                f"Nothing was {verb}: note {current} has no memory of its own. "
+                "Correct it in the same words to give it one, then mark that."
+            )
+        followed = (
+            f"{'Note' if kind == 'note' else 'Memory'} {target} had been replaced by a "
+            f"correction; this acted on its current version."
+            if current != target else ""
+        )
+        if mark and engram.state == "archived":
+            if self._store.archive_reason(engram.id) in FADED_ARCHIVE_REASONS:
+                return said(
+                    f"Nothing was marked: memory {engram.id} has faded into the archive. "
+                    "Recall it by its id to bring it back, then mark it.",
+                    followed,
+                )
+            return said(f"Nothing was marked: memory {engram.id} was forgotten.", followed)
+        if older:
+            return said(
+                f"Nothing was {verb}: this session's code is older than the store, "
+                "and leaves standing marks to current Mnemos.",
+                followed,
+            )
+        before = self._store.standing_mark(engram.id)
+        if mark and before is not None:
+            return said(
+                f"Memory {engram.id} was already standing, marked "
+                f"{_mark_signature(before['by'], before['at'])}. Nothing changed.",
+                followed,
+            )
+        if not mark and before is None:
+            return said(f"Memory {engram.id} wasn't standing. Nothing changed.", followed)
+        self._store.set_standing(engram.id, mark, by=corrector, session=session)
+        self._traced_write(engram.id)
+        if mark:
+            head = (
+                f"Marked memory {engram.id} standing. It opens \"Who you're with\" in "
+                "every briefing, and it doesn't fade while it's marked."
+            )
+        else:
+            head = (
+                f"Unmarked memory {engram.id}: it's no longer standing, and it fades "
+                "like any other memory again."
+            )
+        return said(head, "Its words and history are unchanged.", followed, self._signed_line(corrector))
 
     def _correct_belief(
         self,
@@ -3625,6 +3825,11 @@ class MnemosRuntime:
         replacement keeps what the memory it replaces meant, and the result
         says so.
 
+        ``action`` 'mark_standing' or 'unmark_standing' marks the memory an
+        id names standing, or unmarks it (``_set_standing``): the mark and its
+        signature change, and nothing else. A correction of a standing memory
+        keeps it standing: the replacement carries the mark.
+
         Current code records what a correction replaced: a ``supersedes`` link
         and lineage both ways, the old note's successor, and a version keeping
         the old words, written only when the words changed. Code older than
@@ -3639,7 +3844,8 @@ class MnemosRuntime:
 
         action = (action or "").strip().lower() or "update"
         forget = action in _FORGET_ACTIONS
-        if not correction.strip() and not forget:
+        marking = action in _STANDING_ACTIONS
+        if not correction.strip() and not forget and not marking:
             return "Correction needs replacement text or a forget/archive action."
 
         self._ensure_init()
@@ -3655,6 +3861,15 @@ class MnemosRuntime:
         # replacement, without links to other memories, lineage, versions,
         # lessons, or a placeholder where its meaning would go.
         older = self._older_than_store() is not None
+
+        if marking:
+            return self._set_standing(
+                target,
+                mark=action == _MARK_STANDING,
+                words_given=bool(correction.strip() or (impact or "").strip()),
+                older=older,
+                **signing,
+            )
 
         if target.startswith("belief_"):
             return self._correct_belief(
@@ -4416,6 +4631,12 @@ def _age_text(timestamp: str) -> str:
         return f"{hours} hour{'s' if hours != 1 else ''} ago"
     days = hours // 24
     return f"{days} day{'s' if days != 1 else ''} ago"
+
+
+def _mark_signature(by: str, at: str | None) -> str:
+    """Who made a standing mark and when: "by Opus 5.5, 3 days ago"."""
+    name = display_name(by or "")
+    return f"{f'by {name}' if name else 'unsigned'}, {_age_text(at or '')}"
 
 
 def _working_folder() -> str:

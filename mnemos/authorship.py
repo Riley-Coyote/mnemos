@@ -39,7 +39,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
 
 _MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}")
 _SESSION_ID = re.compile(r"[0-9A-Za-z][0-9A-Za-z-]{7,63}")
@@ -228,23 +228,49 @@ def session_introduction_key(session_id: str) -> str:
     return f"{_SESSION_INTRODUCTION}{session_id}"
 
 
-def session_introduction_record(model: str) -> str:
-    """What a store keeps for a session's introduction: the model, and when."""
+def session_introduction_record(model: str, name: str = "") -> str:
+    """What a store keeps for a session's introduction: the model, the name
+    the agent goes by, and when."""
 
     return json.dumps(
-        {"model": model, "at": datetime.now(timezone.utc).isoformat()},
+        {"model": model, "name": name, "at": datetime.now(timezone.utc).isoformat()},
         sort_keys=True,
     )
+
+
+def introduced_as(record: str | None) -> tuple[str, str]:
+    """The model and name a stored session introduction names, or ``""``s."""
+
+    try:
+        value = json.loads(record or "")
+    except (TypeError, ValueError):
+        return "", ""
+    if not isinstance(value, dict):
+        return "", ""
+    name = value.get("name")
+    return clean_model_id(value.get("model")), name.strip() if isinstance(name, str) else ""
 
 
 def introduced_model(record: str | None) -> str:
     """The model a stored session introduction names, or ``""``."""
 
+    return introduced_as(record)[0]
+
+
+def session_introduction(
+    get_meta: Callable[[str], str | None], environ: Mapping[str, str] | None = None,
+) -> tuple[str, str]:
+    """The model and name the current harness session last introduced itself
+    as, from a store's record (``get_meta`` reads it); ``""``s when the
+    session isn't known or never introduced itself. Never another session's."""
+
+    session = harness_session(environ)
+    if not session:
+        return "", ""
     try:
-        value = json.loads(record or "")
-    except (TypeError, ValueError):
-        return ""
-    return clean_model_id(value.get("model")) if isinstance(value, dict) else ""
+        return introduced_as(get_meta(session_introduction_key(session)))
+    except Exception:
+        return "", ""
 
 
 def note_signature(entry: Mapping[str, object]) -> str:

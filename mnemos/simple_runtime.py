@@ -22,9 +22,9 @@ from .authorship import (
     clean_model_id,
     display_name,
     harness_session,
-    introduced_model,
     note_signature,
     resolve_author_model,
+    session_introduction,
     session_introduction_key,
     session_introduction_record,
     signature,
@@ -456,10 +456,12 @@ class MnemosRuntime:
         self._llm_client: Any | None = None
         self._use_dedicated_model = use_dedicated_model
         self._agent_model_hint: str | None = None
-        # The model that introduced itself in this session, if one did. Kept
-        # per runtime, not per scope: several models can share one scope, and
-        # the last introduction must not sign every other model's notes.
+        # The model that introduced itself in this session, if one did, and
+        # the name it goes by. Kept per runtime, not per scope: several models
+        # can share one scope, and the last introduction must not sign every
+        # other model's notes.
         self._session_author = ""
+        self._session_name = ""
         self._session_id: int | None = None
         self.last_dream_note_id: str | None = None
         self.last_dream_narrative: str | None = None
@@ -2308,29 +2310,32 @@ class MnemosRuntime:
 
         return resolve_author_model(self._session_introduction(), signed_as=signed_as)
 
-    def _session_introduction(self) -> str:
-        """The model this session last introduced itself as, or ``""``.
+    def session_identity(self) -> tuple[str, str]:
+        """The model and name this session last introduced itself as, or
+        ``""``s.
 
         Only this session's own introduction counts. One store is shared by
         many sessions and models, and the store-wide declaration once signed
         every session's writes with whichever model introduced itself last
         (a Grok session's, found live on 2026-09-26). With a harness session
         id, the store keeps each session's latest introduction, so every
-        process of the session (a restarted server, a CLI capture) signs the
-        same way; without one, only this process's own introduction counts.
+        process of the session (a restarted server, a CLI capture, `mnemos
+        doctor`) reads the same one; without one, only this process's own
+        introduction counts. Reading never creates a store.
         """
 
-        session = harness_session()
-        if session and self._store is not None:
-            try:
-                recorded = introduced_model(
-                    self._store.get_meta(session_introduction_key(session))
-                )
-            except sqlite3.Error:
-                recorded = ""
-            if recorded:
-                return recorded
-        return self._session_author
+        if self._store is None and self.db_path.exists():
+            self._ensure_init()
+        if harness_session() and self._store is not None:
+            model, name = session_introduction(self._store.get_meta)
+            if model or name:
+                return model, name
+        return self._session_author, self._session_name
+
+    def _session_introduction(self) -> str:
+        """The model this session last introduced itself as, or ``""``."""
+
+        return self.session_identity()[0]
 
     def _traced_read(self, *ids: Any) -> None:
         """Note ids the tool call under way showed or returned."""
@@ -2404,6 +2409,8 @@ class MnemosRuntime:
 
         self._set_meta("agent_model", model)
         self._session_author = clean_model_id(model)
+        name = agent_name.strip()
+        self._session_name = name
         session = harness_session()
         if session:
             # Written even when the id doesn't look like a model's, so an
@@ -2411,9 +2418,8 @@ class MnemosRuntime:
             assert self._store is not None
             self._store.set_meta(
                 session_introduction_key(session),
-                session_introduction_record(self._session_author),
+                session_introduction_record(self._session_author, name),
             )
-        name = agent_name.strip()
         if name:
             self._set_meta("agent_name", name)
 
@@ -3602,10 +3608,10 @@ class MnemosRuntime:
                 "beliefs_active": stats.get("beliefs_active", 0),
             },
             "last_cycle": last_cycle,
-            "identity": {
-                "declared_model": self._get_meta("agent_model"),
-                "declared_name": self._get_meta("agent_name"),
-            },
+            # This session's own introduction. The scope's last one belongs
+            # to whichever session made it (on a real store, a Grok session's)
+            # and says nothing about who is asking.
+            "identity": self._identity_health(),
             "onboarding": {
                 "stage": status["stage"],
                 "session": int(self._get_meta("session_counter", "0") or 0),
@@ -3625,6 +3631,15 @@ class MnemosRuntime:
             # thousands of quarantined memories reported a healthy few hundred.
             "legacy": self.legacy_counts(),
             "semantic": self.semantic_status(),
+        }
+
+    def _identity_health(self) -> dict[str, Any]:
+        """Who this session introduced itself as, for health and doctor."""
+        model, name = self.session_identity()
+        return {
+            "session": harness_session() or None,
+            "model": model or None,
+            "name": name or None,
         }
 
     def semantic_status(self, verify: bool = False) -> dict[str, Any]:
@@ -3922,7 +3937,7 @@ def format_legacy_summary(counts: Mapping[str, int] | None) -> str | None:
     parts = [
         f"{lessons:,} lesson{'' if lessons == 1 else 's'}" if lessons else "",
         f"{counts['other']:,} other" if counts.get("other") else "",
-        f"{counts['indexer']:,} from the transcript indexer" if counts.get("indexer") else "",
+        f"{counts['indexer']:,} written by a tool" if counts.get("indexer") else "",
     ]
     return (
         f"{counts['hidden']:,} older memories from before scoping never reach recall "
@@ -3977,6 +3992,21 @@ def describe_semantic(semantic: dict[str, Any]) -> tuple[str, list[str], list[st
                 "it cannot use (why: see Semantic)."
             )
     return headline, details, attention
+
+
+def describe_identity(identity: Mapping[str, Any] | None) -> str:
+    """The identity line of the health card and `mnemos doctor`: whom this
+    session introduced itself as, or that it hasn't. Shared, so the two can
+    never disagree."""
+    identity = identity or {}
+    model = str(identity.get("model") or "")
+    name = str(identity.get("name") or "")
+    if not model and not name:
+        return "none this session"
+    said = [signature(model)] if model else []
+    if name:
+        said.append(f"named {name}")
+    return f"{', '.join(said)} (introduced this session)"
 
 
 def describe_code(code: Mapping[str, Any] | None) -> tuple[str, str | None]:
@@ -4101,6 +4131,7 @@ def format_health_card(data: dict[str, Any]) -> str:
         ),
         line("Store", f"{store['db_path']} ({_human_size(store['size_bytes'])})"),
         line("Code", code_headline),
+        line("Identity", describe_identity(data.get("identity"))),
         line(
             "Memories",
             f"{counts['memories_active']} active, "

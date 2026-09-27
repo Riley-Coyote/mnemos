@@ -479,9 +479,10 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
     def mnemos_health() -> types.CallToolResult:
         """Report a human-relayable health card for this memory scope.
 
-        Read-only. Shows where memory lives, how much there is, who performed
-        the last maintenance cycle, onboarding
-        and verification progress, and the latest dream journal entry.
+        Read-only. Shows where memory lives, how much there is, whom this
+        session introduced itself as, who performed the last maintenance
+        cycle, onboarding and verification progress, and the latest dream
+        journal entry.
         """
 
         runtime = _get_runtime()

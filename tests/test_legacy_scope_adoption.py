@@ -175,7 +175,7 @@ def test_health_names_the_memories_the_scope_migration_hid(legacy_db):
     }
     card = format_health_card(data)
     assert "5 older memories from before scoping never reach recall" in card
-    assert "(1 lesson, 1 other, 3 from the transcript indexer)" in card
+    assert "(1 lesson, 1 other, 3 written by a tool)" in card
     assert "mnemos adopt-legacy" in card
 
 
@@ -256,7 +256,7 @@ def test_indexer_output_left_hidden_is_counted_but_not_an_alarm(legacy_db, capsy
         runtime.close()
     assert (
         "3 older memories from before scoping never reach recall "
-        "(3 from the transcript indexer)"
+        "(3 written by a tool)"
     ) in card
 
 

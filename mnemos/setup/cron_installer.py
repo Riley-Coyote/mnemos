@@ -36,20 +36,9 @@ _CRON_JOBS = [
     # ~7,058 engrams against 13 deliberate captures and buried the continuity
     # layer — and this generator must not contradict it. Indexing stays
     # available as the explicit `mnemos index` command.
-    {
-        "name": "substrate-tick",
-        "schedule": "0 */4 * * *",
-        "model": None,  # Uses default agent model
-        "timeout": 300,
-        "session_target": "isolated",
-        "prompt_template": (
-            "Run a substrate tick. Execute:\n"
-            "cd {workspace} && python3 -m mnemos.substrate.tick\n"
-            "Then report the summary (events produced, handled, decayed, modulators).\n"
-            "If any handlers fire or beliefs change, note what happened.\n"
-            "This is automated consolidation — do not encode new memories, just run the tick and report."
-        ),
-    },
+    # No substrate-tick job either: its handlers write memories in a model's
+    # words, not the agent's (setup/scheduler.py retires it the same way). It
+    # stays available as the explicit `mnemos substrate-tick` command.
     {
         "name": "memory-maintenance",
         "schedule": "0 */6 * * *",

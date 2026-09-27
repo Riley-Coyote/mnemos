@@ -98,6 +98,7 @@ If something emerges: {{"pattern": "<the pattern>", "significance": "<why it mat
         kind="semantic",
         tags=["initiation", "pattern"],
         skip_surprise_detection=True,
+        author_kind="tool",  # a model's words, not the agent's
     )
 
     return produced_events

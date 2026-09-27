@@ -17,9 +17,11 @@ became the store's declared model for everyone.
   `unknown`), `author_model` and `author_session` (the harness session,
   `CLAUDE_CODE_SESSION_ID`), when it is written. A later save never changes
   them. Captures, corrections, reflections, handoffs and lessons are the
-  agent's; the transcript indexer's output is a tool's; the deep reflection
-  pass's thoughts are a tool's (with a model) or Mnemos's (without). A path
-  that doesn't say is `unknown`, never guessed. Continuity notes already
+  agent's, and so is what it keeps through the advanced tools
+  (`mnemos_remember`, `mnemos_ingest`, which take `signed_as` too). The
+  transcript indexer's and the substrate's memories are a tool's; the deep
+  reflection pass's thoughts are a tool's (with a model) or Mnemos's
+  (without). A path that doesn't say is `unknown`, never guessed. Continuity notes already
   recorded their kind of writer (`authored_by`) and model; captures now also
   record the session.
 - The signature is resolved on every write, because the model can change
@@ -30,7 +32,9 @@ became the store's declared model for everyone.
   as (kept per harness session, so another process of the session signs the
   same way, and never another session's), then the session's transcript.
   The SessionStart hook finds its reader the same way when the harness names
-  no model.
+  no model. The health card and `mnemos doctor` show whom this session
+  introduced itself as (model and name), or "none this session"; they no
+  longer show the scope's last introduction, which named a Grok session.
 - Only the agent's own words make it who it is: identity (the identity pass,
   `mnemos identity diff`, the identity graph), belief questions and theme
   mining read only `author_kind = 'agent'`, and a lesson is drawn only from an
@@ -49,7 +53,8 @@ became the store's declared model for everyone.
   adopt-legacy --include indexer` brings them back with all the other
   tool-written memories the quarantine holds. It only runs by hand. On the
   copy it listed 103 (96 active, 7 dormant), moved them, and `--undo` restored
-  the scope to the same 469 ids.
+  the scope to the same 469 ids. The health card and `adopt-legacy` now call
+  that class "written by a tool".
 
 Migration (schema 12). The first open by this code adds the three columns,
 after the usual verified pre-migration backup, and labels what the store held
@@ -69,8 +74,14 @@ Changed behaviour, and what to do:
   belief questions and lessons.
 - `mnemos daemon install` no longer schedules `substrate-tick`, whose handlers
   write memories in a model's words; installing or uninstalling removes one an
-  earlier install scheduled. `mnemos substrate-tick` and `mnemos index` still
-  run by hand, and say that they write a model's words.
+  earlier install scheduled. Neither do the OpenClaw generators
+  (`mnemos setup-openclaw`, whose install replaces an earlier `mnemos-*`
+  substrate job, and the bootstrap's cron commands); the
+  `openclaw/crons/substrate-tick.md` template is gone. `mnemos
+  substrate-tick` and `mnemos index` still run by hand, and say that they
+  write a model's words.
+- `health()["identity"]` is now `{session, model, name}` for this session's
+  own introduction, in place of `declared_model` and `declared_name`.
 - The legacy quarantine counts lessons distilled from indexer output as the
   indexer's (they copy its words), so a default `mnemos adopt-legacy` leaves
   them hidden; name `--include indexer` to bring them back.

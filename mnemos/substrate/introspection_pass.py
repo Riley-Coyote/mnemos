@@ -261,6 +261,7 @@ def _encode_audit(
             source="reflection",
             agent_id=config.agent_id,
             skip_surprise_detection=True,
+            author_kind="tool",  # the substrate's audit, not the agent's words
         )
 
     except Exception as e:

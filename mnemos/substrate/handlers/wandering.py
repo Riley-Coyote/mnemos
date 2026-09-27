@@ -194,6 +194,7 @@ If something surfaces: {{"thought": "<the wandering thought>", "origin": "<which
         kind="episodic",
         tags=["wandering", "silence"],
         skip_surprise_detection=True,
+        author_kind="tool",  # a model's words, not the agent's
     )
 
     return produced_events

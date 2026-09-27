@@ -282,8 +282,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_quarantine = repair_sub.add_parser(
         "quarantine-tool-written",
-        help="Move the memories a tool wrote (the transcript indexer's output) "
-             "out of this scope into the legacy quarantine (dry run unless --write)",
+        help="Move the memories a tool wrote (the transcript indexer's and the "
+             "substrate's) out of this scope into the legacy quarantine "
+             "(dry run unless --write)",
     )
     p_quarantine.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
     p_quarantine.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
@@ -651,18 +652,9 @@ def _cmd_hook(args: argparse.Namespace) -> int:
             # then the session's own transcript (after a resume or compaction
             # it names the model). Never another session's introduction.
             try:
-                from .authorship import (
-                    harness_session,
-                    introduced_model,
-                    resolve_author_model,
-                    session_introduction_key,
-                )
+                from .authorship import resolve_author_model, session_introduction
 
-                session = harness_session(environ)
-                declared = reader_model or (
-                    introduced_model(store.get_meta(session_introduction_key(session)))
-                    if session else ""
-                )
+                declared = reader_model or session_introduction(store.get_meta, environ)[0]
                 reader_model = resolve_author_model(declared, environ)
             except Exception:
                 reader_model = ""
@@ -1490,16 +1482,11 @@ def _cmd_setup_openclaw(args: argparse.Namespace) -> int:
 
 # Said whenever a command that writes memories in a model's words runs. Neither
 # is scheduled any more (see setup/scheduler.py); running one by hand works.
-_INDEXER_NOTICE = (
-    "Note: the indexer writes memories in a model's words, not the agent's. "
-    "They are recorded as a tool's, so they stay out of the agent's identity, "
-    "beliefs and lessons, and 'mnemos repair quarantine-tool-written' moves "
-    "them out of recall."
-)
-_SUBSTRATE_NOTICE = (
-    "Note: the substrate's handlers write memories in a model's words, not the "
-    "agent's. They are not recorded as the agent's, so they stay out of its "
-    "identity, beliefs and lessons."
+_MODEL_TEXT_NOTICE = (
+    "Note: {writer} memories in a model's words, not the agent's. They are "
+    "recorded as a tool's, so they stay out of the agent's identity, beliefs "
+    "and lessons, and 'mnemos repair quarantine-tool-written' moves them out "
+    "of recall."
 )
 
 
@@ -1515,7 +1502,7 @@ def _cmd_substrate_tick(args: argparse.Namespace) -> int:
         )
         substrate = Substrate(config)
         print(f"Running substrate tick (agent: {_resolve_agent_id(args)})...")
-        print(_SUBSTRATE_NOTICE)
+        print(_MODEL_TEXT_NOTICE.format(writer="the substrate's handlers write"))
         result = substrate.tick()
         print(f"Tick complete: {json.dumps(result, indent=2, default=str)}")
         return 0
@@ -1536,7 +1523,7 @@ def _cmd_index(args: argparse.Namespace) -> int:
             agent_id=_resolve_agent_id(args),
             db_path=_resolve_db_path(args),
         )
-        print(_INDEXER_NOTICE)
+        print(_MODEL_TEXT_NOTICE.format(writer="the indexer writes"))
         if args.backfill:
             print("Running backfill (last 24h)...")
             result = indexer.backfill()
@@ -1831,7 +1818,7 @@ def _cmd_repair_quarantine_tool_written(args: argparse.Namespace) -> int:
 
     print(f"Memories a tool wrote in {agent} / {person} / {project}, {runtime.db_path}")
     print()
-    row(len(found), "written by a tool (the transcript indexer)")
+    row(len(found), "written by a tool (the indexer or the substrate)")
     row(len(movable), "in recall and the packet", "move to the quarantine")
     if linked:
         row(linked, "that a continuity note points at", "stay")
@@ -2071,7 +2058,7 @@ def _cmd_adopt_legacy(args: argparse.Namespace) -> int:
     labels = {
         "lessons": "lessons",
         "other": "written some other way",
-        "indexer": "from the transcript indexer",
+        "indexer": "written by a tool",
     }
     print(f"Legacy memories for {agent} in {runtime.db_path}")
     print("They predate scoping, so recall and maintenance never reach them.")
@@ -2116,8 +2103,8 @@ def _cmd_adopt_legacy(args: argparse.Namespace) -> int:
     )
     if "indexer" not in plan["include"]:
         print(
-            "Transcript-indexer output stays hidden unless named with "
-            "--include indexer: its volume is what buried continuity before."
+            "What a tool wrote stays hidden unless named with --include "
+            "indexer: the indexer's volume is what buried continuity before."
         )
     return 0
 
@@ -2163,6 +2150,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
         print("DB exists:    yes")
         _print_code_status(runtime)
+        _print_identity_status(runtime)
         print(f"Model:        {'dedicated provider configured' if runtime.has_dedicated_model else 'local baseline only'}")
         _print_background_status(runtime.scope)
         _print_semantic_status(runtime)
@@ -2191,6 +2179,22 @@ def _print_code_status(runtime) -> None:
     print(f"Code:         {headline}")
     if attention:
         print(f"  ATTENTION:  {attention}")
+
+
+def _print_identity_status(runtime) -> None:
+    """Say whom this session introduced itself as, as the health card does.
+
+    Only this session's own introduction: the scope's last one is whichever
+    session made it, and on a real store it named a Grok session.
+    """
+    from .simple_runtime import describe_identity
+
+    try:
+        said = describe_identity(runtime._identity_health())
+    except Exception as exc:
+        print(f"Identity:     unknown ({type(exc).__name__}: {exc})")
+        return
+    print(f"Identity:     {said}")
 
 
 def _print_semantic_status(runtime) -> None:

@@ -914,3 +914,178 @@ def test_the_trace_keeps_ninety_days(tmp_path):
     kept = [row["at"] for row in _rows(db, "SELECT at FROM memory_trace")]
     assert TRACE_KEEP_DAYS == 90
     assert old not in kept and recent in kept and len(kept) == 3
+
+
+# ── Round 2: every writer says so, and health names this session ──
+
+
+def test_the_advanced_tools_record_the_agents_own_words(tmp_path, monkeypatch):
+    """mnemos_remember and mnemos_ingest are the agent writing through its own
+    tools: its words, signed by the order the simple tools use."""
+    import mnemos.mcp_server as server
+    import mnemos.simple_mcp as simple
+
+    home = tmp_path / "home"
+    (home / ".mnemos").mkdir(parents=True)
+    (home / ".mnemos" / "config.json").write_text(json.dumps({"setup_complete": True}))
+    monkeypatch.setenv("HOME", str(home))
+    _as_session(monkeypatch, tmp_path, SESSION)
+    for name in ("_store", "_encoder", "_retriever", "_llm_client", "_embedding_index",
+                 "_shared_pool", "_config"):
+        monkeypatch.setattr(server, name, None, raising=False)
+    monkeypatch.setattr(server, "_default_agent_id", "nova")
+    monkeypatch.setattr(simple, "_runtime", None)
+    monkeypatch.setattr(simple, "_runtime_kwargs", {})
+    db = tmp_path / "advanced.db"
+    simple.configure_runtime(db_path=str(db), **SCOPE)
+    try:
+        # The session introduces itself through the simple tools the advanced
+        # server also serves.
+        simple._get_runtime().introduce(FABLE)
+        server._init_store(str(db))
+
+        said = server.mnemos_remember("Riley keeps the harbour ledger in ledger/2026.csv.",
+                                      agent_id="nova")
+        remembered = re.search(r"Remembered: (engram_\w+)", said).group(1)
+        assert _author(_engram_row(db, remembered)) == ("agent", FABLE, SESSION)
+
+        said = server.mnemos_ingest("The October tide table for the harbour.",
+                                    agent_id="nova", signed_as=OPUS)
+        ingested = re.search(r"Ingested: (engram_\w+)", said).group(1)
+        assert _author(_engram_row(db, ingested)) == ("agent", OPUS, SESSION)
+
+        # A client that names no session: this process's own introduction signs.
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
+        said = server.mnemos_remember("The harbour office opens early.", agent_id="nova")
+        unsessioned = re.search(r"Remembered: (engram_\w+)", said).group(1)
+        assert _author(_engram_row(db, unsessioned)) == ("agent", FABLE, "")
+    finally:
+        if server._store is not None:
+            server._store.close()
+        if simple._runtime is not None:
+            simple._runtime.close()
+
+
+def test_what_the_substrate_writes_is_a_tools(tmp_path, monkeypatch):
+    """Each substrate writer's memories are a tool's, so the quarantine can
+    move them as it moves the indexer's."""
+    home = tmp_path / "home"
+    (home / ".mnemos").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    from mnemos.substrate.config import SubstrateConfig
+    from mnemos.substrate.events import EventType, SubstrateEvent
+    from mnemos.substrate.handlers import dreaming, initiation, insight, surprise, wandering
+    from mnemos.substrate.introspection_pass import _encode_audit
+    from mnemos.substrate.modulators import ModulatorState
+
+    class _Model:
+        """Answers every handler's question at once."""
+
+        def structured_complete(self, system="", user="", temperature=0.7, **_):
+            return json.dumps({
+                "insight": "The ledger and the ferry keep the same clock.",
+                "pattern": "Everything here runs on the harbour's timetable.",
+                "dream": "A ledger floating out on the morning ferry.",
+                "reflection": "The ferry schedule moved and the ledger did not.",
+                "expectation_violated": "that timetables stay put",
+                "thought": "What else keeps harbour time?",
+                "origin": "the ledger",
+                "significance": "Schedules tie the work together.",
+            })
+
+    db = tmp_path / "substrate.db"
+    store = EngramStore(str(db))
+    try:
+        vivid = Engram(content="Riley keeps the harbour ledger in ledger/2026.csv.",
+                       accessibility=0.95, strength=0.95)
+        fading = Engram(content="The ferry left at seven that spring.",
+                        accessibility=0.05, strength=0.2)
+        for engram in (vivid, fading):
+            engram.author_kind = "agent"
+            store.save_engram(engram)
+        before = {row["id"] for row in _rows(db, "SELECT id FROM engrams")}
+        config = SubstrateConfig(agent_id="default", db_path=str(db))
+        model, calm = _Model(), ModulatorState()
+        insight.handle(SubstrateEvent(EventType.CONNECTION_DISCOVERED, {
+            "from_engram_id": vivid.id, "to_engram_id": fading.id}), config, calm, store, model)
+        initiation.handle(SubstrateEvent(EventType.SALIENCE_ACCUMULATED),
+                          config, calm, store, model)
+        dreaming.handle(SubstrateEvent(EventType.MEMORY_SOFTENED, {"engram_id": fading.id}),
+                        config, calm, store, model)
+        surprise.handle(SubstrateEvent(EventType.SURPRISE_DETECTED, {
+            "engram_id": vivid.id, "surprise_score": 0.7}), config, calm, store, model)
+        wandering.handle(SubstrateEvent(EventType.SILENCE_EXTENDED), config, calm, store, model)
+        _encode_audit({"mode": "heuristic", "pattern_score": 0.2, "reaching_score": 0.8,
+                       "assessment": "Reaching."}, config, store)
+    finally:
+        store.close()
+
+    written = [row for row in _rows(db, "SELECT * FROM engrams") if row["id"] not in before]
+    kinds = {row["content"].split("]", 1)[0].lstrip("["): row.get("author_kind") for row in written}
+    assert kinds == {
+        "insight": "tool", "initiation": "tool", "dream": "tool",
+        "surprise": "tool", "wandering": "tool", "introspection": "tool",
+    }
+
+
+def test_the_openclaw_schedules_leave_the_substrate_tick_out(tmp_path):
+    from mnemos.openclaw_cron import generate_cron_jobs, install_cron_jobs
+    from mnemos.setup.cron_installer import generate_install_commands, get_job_definitions
+
+    jobs = generate_cron_jobs(agent_id="nova")
+    assert jobs, "premise: the generator schedules maintenance"
+    assert "substrate" not in json.dumps(jobs).lower()
+    assert "substrate" not in json.dumps(
+        get_job_definitions(agent_name="Nova", workspace="~/nova")
+    ).lower()
+    assert "substrate" not in generate_install_commands(
+        agent_name="Nova", agent_id="nova", workspace="~/nova"
+    ).lower()
+
+    # Reinstalling retires the tick an earlier install added; others' jobs stay.
+    jobs_file = tmp_path / "jobs.json"
+    jobs_file.write_text(json.dumps([
+        {"name": "mnemos-substrate-tick", "payload": {"message": "mnemos substrate-tick"}},
+        {"name": "someone-elses-job"},
+    ]))
+    assert install_cron_jobs(jobs, jobs_file=str(jobs_file))["success"]
+    names = [job["name"] for job in json.loads(jobs_file.read_text())]
+    assert "mnemos-substrate-tick" not in names
+    assert "someone-elses-job" in names
+
+
+def test_health_and_doctor_name_this_sessions_own_introduction(tmp_path, monkeypatch, capsys):
+    """Found live 2026-09-26: health named the scope's last introduction, a
+    Grok session's, whoever asked."""
+    from mnemos.simple_runtime import format_health_card
+
+    db = tmp_path / "m.db"
+    _as_session(monkeypatch, tmp_path, OTHER_SESSION)
+    grok = _runtime(db)
+    try:
+        grok.introduce("grok-4.5", "Grok")
+    finally:
+        grok.close()
+
+    _as_session(monkeypatch, tmp_path, SESSION)
+    runtime = _runtime(db)
+    try:
+        before = runtime.health()
+        runtime.introduce(OPUS, "Nova")
+        after = runtime.health()
+    finally:
+        runtime.close()
+
+    assert "grok" not in json.dumps(before["identity"]).lower(), before["identity"]
+    assert "Identity:      none this session" in format_health_card(before)
+    assert after["identity"] == {"session": SESSION, "model": OPUS, "name": "Nova"}
+    said = "Opus 5.5 (claude-opus-5-5), named Nova (introduced this session)"
+    assert f"Identity:      {said}" in format_health_card(after)
+
+    assert main(["doctor", "--db-path", str(db), *SCOPE_ARGS]) == 0
+    assert f"Identity:     {said}" in capsys.readouterr().out
+    _as_session(monkeypatch, tmp_path, "sess-0c9d77e2-aa10")
+    assert main(["doctor", "--db-path", str(db), *SCOPE_ARGS]) == 0
+    out = capsys.readouterr().out
+    assert "Identity:     none this session" in out
+    assert "grok" not in out.lower()

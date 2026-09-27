@@ -43,7 +43,8 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from .authorship import harness_session, resolve_author_model
+from . import simple_mcp as _simple_mcp
+from .authorship import harness_session, resolve_author_model, session_introduction
 from .core.types import EngramKind, SourceType
 from .store.sqlite_store import EngramStore
 from .store.embedding_index import EmbeddingIndex
@@ -617,6 +618,23 @@ def _config_invalidate():
     _config = None
 
 
+def _agent_signature(signed_as: str = "") -> tuple[str, str]:
+    """Who is writing through these tools, by the order the simple tools use.
+
+    The model: the write's own ``signed_as``, the operator's
+    MNEMOS_AGENT_MODEL, the model this session last introduced itself as
+    (the store's record for this harness session, or an introduction made
+    through the simple tools this server also serves), then the session's
+    transcript. Never another session's introduction, never a guess. And
+    the harness session. Returns (model, session).
+    """
+    declared = session_introduction(_store.get_meta)[0] if _store is not None else ""
+    runtime = _simple_mcp._runtime
+    if not declared and runtime is not None:
+        declared = runtime.session_identity()[0]
+    return resolve_author_model(declared, signed_as=signed_as), harness_session()
+
+
 @mcp.tool()
 def mnemos_remember(
     content: str,
@@ -627,6 +645,7 @@ def mnemos_remember(
     source_type: str = "session",
     visibility: str = "private",
     skip_surprise_detection: bool = False,
+    signed_as: str = "",
 ) -> str:
     """Encode a new memory into the Mnemos living memory system.
 
@@ -644,6 +663,7 @@ def mnemos_remember(
         agent_id: Which agent's memory to store in. Default: "default".
         source_type: How the memory was captured — "session", "browser_extraction", etc.
         visibility: Memory visibility — "private", "shared", or "public". Default: "private".
+        signed_as: Your exact model id, as your system prompt gives it.
     """
     gate = _setup_gate()
     if gate:
@@ -651,6 +671,8 @@ def mnemos_remember(
     _ensure_store()
     agent_id = _effective_agent_id(agent_id)
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    # The agent's own words, through its own tool.
+    author, session = _agent_signature(signed_as)
 
     engram = _encoder.encode(  # type: ignore
         content=content,
@@ -660,6 +682,9 @@ def mnemos_remember(
         source=source_type,
         agent_id=agent_id,
         skip_surprise_detection=skip_surprise_detection,
+        author_kind="agent",
+        author_model=author,
+        author_session=session,
     )
 
     if visibility != "private":
@@ -685,6 +710,7 @@ def mnemos_ingest(
     encoding_depth: str = "moderate",
     confidence: float = 0.0,
     skip_surprise: bool = False,
+    signed_as: str = "",
 ) -> str:
     """Ingest content from an external source into Mnemos.
 
@@ -705,6 +731,7 @@ def mnemos_ingest(
               "moderate" (full pipeline), "deep" (full + belief check).
         confidence: Override confidence score (0.0 = use source-based default).
         skip_surprise: Skip surprise detection during encoding.
+        signed_as: Your exact model id, as your system prompt gives it.
     """
     gate = _setup_gate()
     if gate:
@@ -715,6 +742,8 @@ def mnemos_ingest(
 
     skip = skip_surprise or (encoding_depth == "shallow")
     override_conf = confidence if confidence > 0.0 else None
+    # The agent calls this tool, and what it ingests it chose to keep.
+    author, session = _agent_signature(signed_as)
 
     engram = _encoder.encode(  # type: ignore
         content=content,
@@ -725,6 +754,9 @@ def mnemos_ingest(
         agent_id=agent_id,
         override_confidence=override_conf,
         skip_surprise_detection=skip,
+        author_kind="agent",
+        author_model=author,
+        author_session=session,
     )
 
     if source_url:

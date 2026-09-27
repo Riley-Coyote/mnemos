@@ -49,6 +49,10 @@ AUTHORS_LABELED_KEY = "engram_authors_labeled"
 # before pairs were recorded have been paired with their memories (v13). Its
 # presence is what stops the linking from running again.
 CAPTURE_PAIRS_LINKED_KEY = "capture_pairs_linked"
+# A capture writes its memory and then its note in one call: seconds apart at
+# most, even when finding links waits on a model. A note written further from
+# a memory than this was not written with it, however alike their words.
+CAPTURE_WINDOW_SECONDS = 10
 # Where each memory `mnemos repair quarantine-tool-written` moved came from, so
 # `--undo` returns exactly those and nothing else the quarantine holds.
 QUARANTINED_KEY = "quarantined_tool_written"
@@ -613,6 +617,21 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _written_together(note_at: str | None, memory_at: str | None) -> bool:
+    """Whether a note and a memory were written within one capture call
+    (``CAPTURE_WINDOW_SECONDS`` of each other). An unreadable time proves
+    nothing, so it is not."""
+
+    moments = []
+    for timestamp in (note_at, memory_at):
+        try:
+            moment = datetime.fromisoformat(timestamp or "")
+        except (TypeError, ValueError):
+            return False
+        moments.append(moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc))
+    return abs((moments[0] - moments[1]).total_seconds()) <= CAPTURE_WINDOW_SECONDS
+
+
 def _written_since(timestamp: str | None, cutoff: datetime) -> bool:
     """Whether an ISO timestamp is at or after ``cutoff``; unreadable is not."""
 
@@ -1049,9 +1068,11 @@ class EngramStore:
         note with only ``related_engram_id`` may be a capture from before the
         pair was recorded, or a note that interprets or summarises a memory
         (the advanced tools write those), and nothing kept at write time tells
-        them apart. The words do: such a note is paired with the memory it
-        names when its own words are the memory's words as a capture writes
-        them (``_CAPTURED_AS``), in the same scope.
+        them apart. What a capture leaves does: such a note is paired with the
+        memory it names when its own words are the memory's words as a
+        capture writes them (``_CAPTURED_AS``), in the same scope, and the two
+        were written within one capture call (``CAPTURE_WINDOW_SECONDS``). A
+        note written later with the memory's very words only references it.
 
         Runs once per store, in one transaction with the record of what it
         linked (``CAPTURE_PAIRS_LINKED_KEY``), which keeps it from running
@@ -1069,7 +1090,8 @@ class EngramStore:
                 rows = conn.execute(
                     f"""
                     SELECT h.id, h.related_engram_id,
-                           h.agent_id || '/' || h.person_id || '/' || h.project_scope AS scope
+                           h.agent_id || '/' || h.person_id || '/' || h.project_scope AS scope,
+                           h.created_at, e.created_at
                     FROM hypomnema_entries h
                     JOIN engrams e ON e.id = h.related_engram_id
                     WHERE h.entry_kind = 'continuity'
@@ -1081,6 +1103,7 @@ class EngramStore:
                            OR {_CAPTURED_AS.format(text='e.content_at_encoding')})
                     """
                 ).fetchall()
+                rows = [row for row in rows if _written_together(row[3], row[4])]
                 conn.executemany(
                     "UPDATE hypomnema_entries SET graduated_to_engram_id = ? "
                     "WHERE id = ? AND graduated_to_engram_id IS NULL",
@@ -3278,6 +3301,7 @@ class EngramStore:
         limit: int = 8,
         include_inactive: bool = False,
         exclude_kinds: tuple[str, ...] = (),
+        live_only: bool = True,
     ) -> list[dict[str, Any]]:
         """Search scoped hypomnema entries by text, confidence, and salience.
 
@@ -3286,9 +3310,13 @@ class EngramStore:
         stored at full confidence and salience), so a caller that filters them
         out after ranking loses a slot to each one.
 
-        Only live notes are searched (``_NOTE_LIVE``): a note whose memory has
-        gone quiet or faded is left out with it, and comes back when it does.
-        ``include_inactive`` searches every note, live or not.
+        By default only live notes are searched (``_NOTE_LIVE``), for what is
+        shown: a note whose memory has gone quiet or faded is left out with
+        it, and comes back when it does. ``live_only=False`` searches every
+        active note, whatever its memory's state, for finding what a
+        correction or a forget names: a pair that went quiet still holds its
+        words, and waking it would bring them back. ``include_inactive``
+        searches every note.
         """
         conn = self._get_conn()
         sql = (
@@ -3297,7 +3325,7 @@ class EngramStore:
         )
         params: list[Any] = [agent_id, person_id, project_scope]
         if not include_inactive:
-            sql += f" AND {_NOTE_LIVE}"
+            sql += f" AND {_NOTE_LIVE}" if live_only else " AND h.active = 1"
         kinds = [kind for kind in exclude_kinds if kind in VALID_HYPO_ENTRY_KINDS]
         if kinds:
             sql += f" AND h.entry_kind NOT IN ({', '.join('?' for _ in kinds)})"

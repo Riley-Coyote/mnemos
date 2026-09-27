@@ -891,6 +891,96 @@ def test_a_summary_note_is_never_promoted_into_the_memory_it_references(tmp_path
     )] == [note_id]
 
 
+# ── 10. What a correction names is found whatever its memory's state ──
+#
+# A note shares its memory's fate only in what is shown (the briefing and
+# recall). A correction or a forget by query searches every active note, so a
+# pair whose memory went quiet or faded is still found and retired; left in
+# place, waking it would bring the old words back beside the correction.
+
+
+@pytest.mark.parametrize("action", ["update", "forget"])
+@pytest.mark.parametrize("fate", ["dormant", "faded by decay"])
+def test_a_correction_by_query_reaches_a_pair_whose_memory_went_quiet(tmp_path, fate, action):
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        memory_id, note_id = _captured(runtime.capture(ORIGINAL, impact=MEANING))
+        runtime.capture(OTHER, impact="Tuesdays belong to the choir.")
+    finally:
+        runtime.close()
+    if fate == "dormant":
+        assert _decay(db, memory_id, accessibility=0.06, hours=100) == "dormant"
+    else:
+        assert _decay(db, memory_id, accessibility=0.03, hours=720) == "archived"
+        assert _rows(db, "SELECT archive_reason FROM archive WHERE id = ?", (memory_id,)) == [
+            {"archive_reason": "decay_below_threshold"}
+        ]
+
+    runtime = _runtime(db)
+    try:
+        if action == "update":
+            result = runtime.correct(CORRECTED, query=QUERY)
+        else:
+            result = runtime.correct("", query=QUERY, action="forget")
+        woken = runtime.recall(memory_id)  # waking the old memory by its id
+        briefing = runtime.context()
+    finally:
+        runtime.close()
+
+    assert _note(db, note_id)["active"] == 0, f"the quiet pair's note stayed live:\n{result}"
+    assert _state(db, memory_id) == "archived"
+    assert OLD_WORDS not in woken, f"waking the old memory brought its words back:\n{woken}"
+    assert OLD_WORDS not in briefing
+    if action == "update":
+        assert result.startswith("Updated closest continuity note"), result
+        memory, note = _only_live_pair(db)
+        assert memory["content"] == note["content"] == CORRECTED
+        assert NEW_WORDS in briefing
+    else:
+        assert _live_memories(db) == [] and _live_notes(db) == []
+
+
+def test_a_reference_with_its_memorys_very_words_written_later_stays_a_reference(tmp_path):
+    """Equal words are not enough to pair an older note with its memory: one
+    capture call writes them seconds apart, and a note written through the
+    advanced tools a minute later, with the memory's very words, only
+    references it."""
+    db = tmp_path / "memory.db"
+    runtime = _runtime(db)
+    try:
+        memory_id, note_id = _captured(runtime.capture(ORIGINAL))
+    finally:
+        runtime.close()
+    store = EngramStore(str(db))
+    try:
+        reference_id = store.write_hypomnema_entry(
+            ORIGINAL,
+            source="synthesized",
+            agent_id=SCOPE["agent_id"],
+            person_id=SCOPE["person_id"],
+            project_scope=SCOPE["project_scope"],
+            related_engram_id=memory_id,
+        )
+    finally:
+        store.close()
+    [memory] = _rows(db, "SELECT created_at FROM engrams WHERE id = ?", (memory_id,))
+    later = (datetime.fromisoformat(memory["created_at"]) + timedelta(seconds=60)).isoformat()
+    _write(db, "UPDATE hypomnema_entries SET created_at = ? WHERE id = ?", (later, reference_id))
+    # A store from before pairs were recorded: the capture's own note names
+    # its memory only as a reference too.
+    _write(db, "UPDATE hypomnema_entries SET graduated_to_engram_id = NULL WHERE id = ?", (note_id,))
+    _write(db, "DELETE FROM meta WHERE key = 'capture_pairs_linked'")
+    _write(db, "UPDATE meta SET value = '12' WHERE key = 'schema_version'")
+
+    EngramStore(str(db)).close()  # the first open by this code migrates it
+
+    assert _note(db, reference_id)["graduated_to_engram_id"] is None, (
+        "a note written a minute after the memory was paired with it"
+    )
+    assert _note(db, note_id)["graduated_to_engram_id"] == memory_id, "the capture's own note was not paired"
+
+
 # ── A working local embedding backend, without torch (as the version tests use) ──
 
 

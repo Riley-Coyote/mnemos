@@ -3724,11 +3724,16 @@ class MnemosRuntime:
             # And it lands only on a note the query names. The closest note is
             # not close when nothing is: "forget the zeppelin schedule"
             # archived a note about a reading.
+            # Every active note is searched, whatever its memory's state: a
+            # pair that went quiet or faded still holds the words, and left in
+            # place it would come back beside the correction when woken. A
+            # pair an earlier correction retired has an inactive note.
             matches = _named_matches(query_text, self._store.search_hypomnema(
                 query_text,
                 **self._scope_args(),
                 limit=10,
                 exclude_kinds=("handoff",),
+                live_only=False,
             ), lambda note: note.get("content") or "")
             if matches:
                 match = matches[0]

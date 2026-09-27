@@ -49,9 +49,12 @@ replacement without a note.
 - A note shares its memory's fate. When decay takes the memory dormant or
   into the archive, the note stops showing (briefing, recall, counts); when
   the memory wakes or `resharpen` restores it, the note is back. Nothing is
-  copied between them. Recalling the note by its id brings its memory back
-  as recalling the memory's id would. The id of a note or memory a correction
-  replaced says so and names the version now in use, never the old words.
+  copied between them. This is only what is shown: a correction or a forget
+  by query still finds such a pair, and retires it, so waking it later
+  cannot bring the old words back. Recalling the note by its id brings its
+  memory back as recalling the memory's id would. The id of a note or memory
+  a correction replaced says so and names the version now in use, never the
+  old words.
 - `MAINTENANCE_CODE_VERSION` is 6. Code older than the store still records a
   correction in the agent's words and retires what it names, and writes no
   link, lineage, version, lesson or belief change.
@@ -61,7 +64,8 @@ Migration (schema 13). The first open by this code adds `author_model` and
 on the note-to-memory columns, after the usual verified pre-migration backup.
 Once per store (recorded in `meta.capture_pairs_linked`), it pairs a capture
 note that named its memory only as a reference, when the note's words are
-the memory's words as a capture writes them; no other row changes. On a fresh
+the memory's words as a capture writes them and the two were written within
+10 seconds of each other (one capture call); no other row changes. On a fresh
 copy of the real store it opened in under a second and paired none: its 200
 capture notes were already paired, and its 9 notes with only a reference are
 summaries whose words differ (all in `claude-field`).

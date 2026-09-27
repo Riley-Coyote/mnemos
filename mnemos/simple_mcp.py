@@ -296,10 +296,18 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             include_archived: bool = False,
             standing: bool = False,
         ) -> str:
-            """Recall relevant continuity and durable memories.
+            """Recall what memory holds for a question: memories, lessons and
+            handoffs, found by their words and by their meaning, best first.
 
-            Pass the id of a note the packet cut short (its
-            mnemos_recall("<id>")) as the query to read that note whole.
+            Each row carries up to 300 characters of its own words, usually
+            enough to use it. To read one whole, pass its id as the query:
+            a memory's, a note's or a handoff's, including the ids the
+            packet shows (mnemos_recall("<id>")).
+
+            Handoffs are searched with the memories: the ones in use and the
+            older ones a newer handoff replaced, each marked with who left
+            it and when. A capture comes back once, as its memory.
+            max_results counts every row, of every kind.
 
             A memory that has gone quiet comes back when the query matches it
             well, and wakes. One that faded further, into the archive, comes

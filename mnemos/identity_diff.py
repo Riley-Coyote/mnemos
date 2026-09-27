@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any
 import ulid as _ulid_mod
 
 from .core.identity import AgentIdentity, MemoryProfile
+from .store.fts import is_common
 
 if TYPE_CHECKING:
     from .simple_runtime import MnemosScope
@@ -278,29 +279,20 @@ def compute_graph_identity(store: EngramStore, agent_id: str) -> ComputedIdentit
 
 # ── Lexical comparison ───────────────────────────────────────────────
 
-_STOPWORDS = frozenset(
-    """a about after all also am an and any are as at be because been being but
-    by can did do does doing don for from had has have having he her here hers
-    him his how i if in into is it its itself just me more most my myself no
-    nor not of off on once only or other our ours out over own same she should
-    so some such than that the their theirs them then there these they this
-    those through to too under until up very was we were what when where which
-    while who whom why will with you your yours
-    agent agents exist exists thing things section work make makes made way
-    one two like get got really""".split()
-)
-
 STRONG_OVERLAP = 0.6
 WEAK_OVERLAP = 0.3
 
 
 def _tokens(text: str) -> set[str]:
+    """A text's words for comparison, without the common ones: the one list
+    (``store.fts``) recall and linking use too, so a word is noise everywhere
+    or nowhere."""
     words = re.findall(r"[a-z0-9][a-z0-9_-]+", text.lower())
     out = set()
     for w in words:
-        if w in _STOPWORDS:
+        if is_common(w):
             continue
-        if len(w) > 3 and w.endswith("s") and w[:-1] not in _STOPWORDS:
+        if len(w) > 3 and w.endswith("s") and not is_common(w[:-1]):
             w = w[:-1]
         out.add(w)
     return out

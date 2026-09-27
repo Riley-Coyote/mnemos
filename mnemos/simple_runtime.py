@@ -11,10 +11,11 @@ import functools
 import json
 import hashlib
 import heapq
+import logging
 import os
 import re
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -60,7 +61,12 @@ from .core.engram import Engram
 from .core.placeholders import TEMPLATED_IMPACTS, is_templated
 from .store.archive import resharpen
 from .store.fts import distinctive_terms, fts_words, meaningful_words, or_query
-from .store.sqlite_store import FADED_ARCHIVE_REASONS, EngramStore, ReadOnlyEngramStore
+from .store.sqlite_store import (
+    FADED_ARCHIVE_REASONS,
+    EngramStore,
+    ReadOnlyEngramStore,
+    handoff_retirement,
+)
 
 
 SIMPLE_TOOL_NAMES = (
@@ -97,6 +103,20 @@ LEGACY_DEFAULT_INCLUDE = ("lessons", "other")
 # The one call that reaches the memories an ordinary recall never returns:
 # those that faded into the archive. Named on the health card beside their count.
 UNREACHABLE_COMMAND = 'mnemos_recall("<its words>", include_archived=true)'
+
+# How much of its own words each row of a recall carries: enough to use it
+# without fetching it by its id. At 180, 38 of the 69 recall calls in the lab's
+# first baseline fetched a note by its id right after a list.
+ROW_CHARS = 300
+
+# Passages recall's meaning index may embed in one automatic maintenance (the
+# one a capture or a correction runs): at most a few seconds, so a store whose
+# lessons and handoffs were never indexed catches up over a few calls instead
+# of stalling one. An explicit mnemos_maintain indexes everything waiting.
+AUTO_INDEX_BUDGET = 64
+
+# What a capture appends to the agent's words when it gives context.
+_CAPTURE_CONTEXT = "\n\nContext: "
 
 
 # Hypomnema ids are uuid4 strings and engram ids are ULIDs after "engram_".
@@ -287,46 +307,21 @@ def _moment(timestamp: str | None) -> datetime | None:
     return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
-_STOPWORDS = {
-    "about",
-    "after",
-    "agent",
-    "before",
-    "continuity",
-    "context",
-    "durable",
-    "memory",
-    "mnemos",
-    "note",
-    "notes",
-    "should",
-    "that",
-    "this",
-    "when",
-    "with",
-}
-
-
-def _query_terms(query: str) -> set[str]:
-    return {
-        term
-        for term in re.findall(r"[a-zA-Z0-9]+", query.lower())
-        if len(term) >= 3 and term not in _STOPWORDS
-    }
-
-
 def _has_query_overlap(query: str, text: str) -> bool:
-    terms = _query_terms(query)
+    """Whether ``text`` shares a word with a query that names nothing: one made
+    only of common words, whose words are then all it has (as the search
+    keeps them)."""
+    terms = {word.lower() for word in fts_words(query)}
     if not terms:
         return True
-    text_terms = _query_terms(text)
-    return bool(terms & text_terms)
+    return bool(terms & {word.lower() for word in fts_words(text)})
 
 
 def _named_terms(text: str) -> set[str]:
-    """What a query or a note names: its meaningful words, less the words every
-    note here shares ("memory", "note", "continuity")."""
-    return meaningful_words(text) - _STOPWORDS
+    """What a query or a note names: its meaningful words. The one list of
+    common words (``store.fts``) leaves out the words every note here shares
+    ("memory", "note", "continuity"), as recall's search does."""
+    return meaningful_words(text)
 
 
 # Words that say what to do with a note, not which note it is: "forget the
@@ -376,22 +371,6 @@ def _filter_continuity(query: str, entries: list[dict[str, Any]]) -> list[dict[s
             else _has_query_overlap(query, entry.get("content", "")))
         or float(entry.get("score", 0.0)) >= 0.55
     ]
-
-
-def _filter_memories(query: str, results: list[Any]) -> list[Any]:
-    if not query.strip():
-        return results
-    filtered = []
-    for result in results:
-        engram = result.engram
-        searchable = " ".join([
-            engram.content or "",
-            engram.impact or "",
-            " ".join(engram.tags or []),
-        ])
-        if _has_query_overlap(query, searchable) or float(result.score) >= 1.35:
-            filtered.append(result)
-    return filtered
 
 
 def _notice_when_older(method: Any) -> Any:
@@ -1139,14 +1118,16 @@ class MnemosRuntime:
 
         if self._read_only:
             self._store = ReadOnlyEngramStore(self.scope.db_path)
-            # The index creates its table when it opens a store without one,
-            # so it only gets the path when the table is already there. With
-            # no table there are no stored vectors to count anyway.
+            # A read-only index opens the database read-only and creates no
+            # table. It only gets the path when a vector table is already
+            # there: with none there are no stored vectors to count anyway.
             has_vectors = self._store._get_conn().execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'embeddings'"
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name IN ('embeddings', 'passage_vectors')"
             ).fetchone() is not None
             self._embedding_index = EmbeddingIndex(
-                db_path=self.scope.db_path if has_vectors else None
+                db_path=self.scope.db_path if has_vectors else None,
+                read_only=True,
             )
         else:
             # Opening the store for writing records this code's version in it
@@ -1499,7 +1480,7 @@ class MnemosRuntime:
         # every word, the ask went to "only", "asked", "first" and "into".
         term_engrams: dict[str, list[str]] = {}
         for row in rows:  # newest first
-            for term in distinctive_terms(row["content"] or "") - _STOPWORDS:
+            for term in distinctive_terms(row["content"] or ""):
                 # Nearly every note starts with a date, and the tokenizer splits
                 # dates and times into digit-led runs ("2026", "24t22", "11pm"),
                 # so a year outranked every real theme. A number is not a theme;
@@ -2574,10 +2555,7 @@ class MnemosRuntime:
             if entry["id"] not in shown
             and DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
         ][:max_results]
-        memories = [
-            result for result in self._retrieve(query, max_results=max_results + len(shown))
-            if result.engram.id not in shown
-        ][:max_results]
+        memories = self._retrieve(query, max_results=max_results, exclude=shown)
 
         heading = f'### For "{query.strip()}"'
         if not continuity and not memories:
@@ -2626,6 +2604,9 @@ class MnemosRuntime:
             retire_crowded=self._older_than_store() is None,
         )
         self._traced_write(handoff_id)
+        # Recall finds it by its meaning from the next call on, once it has
+        # passages; by its words it is found at once.
+        self._index_for_recall(budget=None, only={handoff_id})
         if session:
             lasts = (
                 "It replaces only the handoff this session left before; notes "
@@ -3136,7 +3117,21 @@ class MnemosRuntime:
         include_archived: bool = False,
         standing: bool = False,
     ) -> str:
-        """Recall relevant continuity and durable memories.
+        """Recall what memory holds for ``query``: the memories, lessons and
+        handoffs it finds, by their words and by their meaning, best first.
+
+        One ranking (``ReactiveRetriever``): memories and handoffs matched by
+        words and by meaning, fused by reciprocal rank, then resonance among
+        the memories; filtered, then cut to ``max_results``. It is shown by
+        kind, each group in that order with its scores. A capture's note and
+        memory are one object, so a capture comes back once, as its memory.
+        Each row carries up to ``ROW_CHARS`` characters of its own words,
+        enough to use without fetching it by its id.
+
+        Every handoff in the scope is searched: the ones in use, and the older
+        ones a newer handoff replaced, which say so and who left them when.
+        One the agent forgot stays gone. A handoff is never a memory: it is
+        not reinforced, linked, or given resonance.
 
         A dormant memory comes back when the query matches it well, and
         wakes. With ``include_archived``, memories that faded into the
@@ -3164,34 +3159,36 @@ class MnemosRuntime:
             self._traced_read(query.strip())
             return whole
 
-        continuity = self._store.search_hypomnema(
-            query,
-            agent_id=self.scope.agent_id,
-            person_id=self.scope.person_id,
-            project_scope=self.scope.project_scope,
-            limit=max_results,
-            exclude_kinds=("handoff",),
-        )
-        continuity = _filter_continuity(query, continuity)
-        memories = self._retrieve(query, max_results=max_results)
+        found = self._retrieve(query, max_results=max_results, notes=self._recallable_notes())
+        memories = [result for result in found if result.engram is not None]
+        handoffs = [
+            result for result in found
+            if result.note is not None and result.note.get("entry_kind") == "handoff"
+        ]
+        notes = [
+            result for result in found
+            if result.note is not None and result.note.get("entry_kind") != "handoff"
+        ]
         faded = self._faded_matches(query, max_results) if include_archived else []
 
-        if not continuity and not memories and not faded:
+        if not found and not faded:
             if include_archived:
                 return "No relevant continuity found, in memory or in the archive."
             return "No relevant continuity found."
 
-        self._traced_read(
-            *(entry["id"] for entry in continuity),
-            *(result.engram.id for result in memories),
-        )
+        self._traced_read(*(result.item_id for result in found))
         lines = [f"Mnemos recall for: {query.strip()}"]
-        if continuity:
-            lines.extend(["", "Continuity notes:"])
-            lines.extend(_format_continuity(entry) for entry in continuity)
         if memories:
             lines.extend(["", "Durable memories:"])
             lines.extend(_format_memory(result) for result in memories)
+        if handoffs:
+            # Whose each one is depends on who reads it: resolved once here.
+            reader, session = self.author_model(), harness_session()
+            lines.extend(["", "Handoffs:"])
+            lines.extend(_format_handoff(result, reader, session) for result in handoffs)
+        if notes:
+            lines.extend(["", "Notes:"])
+            lines.extend(_format_note(result) for result in notes)
         returned = list(memories)
         if faded:
             restored = [self._restore_faded(engram) for engram in faded]
@@ -3219,6 +3216,65 @@ class MnemosRuntime:
         # from the archive is linked with what recall found beside it.
         self._reinforce_returned(query, returned)
         return "\n".join(lines)
+
+    def _recallable_notes(self) -> list[dict[str, Any]]:
+        """What recall ranks beside the memories that is not a memory: every
+        handoff in this scope, in use or older (never one forgotten), and any
+        live note with no memory of its own."""
+        assert self._store is not None
+        scope = self._scope_args()
+        return [*self._store.recallable_handoffs(**scope), *self._store.standalone_notes(**scope)]
+
+    def _index_for_recall(
+        self,
+        budget: int | None = AUTO_INDEX_BUDGET,
+        *,
+        only: Collection[str] | None = None,
+    ) -> dict[str, int]:
+        """Give what recall can return its passage vectors, so it can be found
+        by meaning: every handoff in this scope (those in use first), any note
+        with no memory of its own, then the memories live in it, newest first.
+
+        Capture gives a memory one vector of its whole text, which the model
+        reads only to about 1,000 characters, and lessons and handoffs never
+        had any: on a copy of the live store 176 live memories (all lessons)
+        and all 259 handoffs had none, so no question could find them by
+        meaning. Only what has no passages, or whose words changed since, is
+        embedded; at most ``budget`` passages (None: everything), and ``only``
+        limits it to those ids.
+
+        Nothing is indexed by a read-only runtime, without a working embedding
+        backend, or by code older than the store, since how memory is indexed
+        is a rule newer code may have replaced. It never raises: the index is
+        a cache, and the words still find everything.
+        """
+        done = {"items": 0, "passages": 0, "waiting": 0}
+        index = self._embedding_index
+        if (
+            self._read_only
+            or index is None
+            or not getattr(index, "available", False)
+            or not hasattr(index, "index_passages")
+        ):
+            return done
+        assert self._store is not None
+        if self._older_than_store() is not None:
+            return done
+        try:
+            items = [(note["id"], note.get("content") or "") for note in self._recallable_notes()]
+            items += [
+                (memory_id, content)
+                for memory_id, content, _state in self._store.live_memory_texts(**self._scope_args())
+            ]
+            if only is not None:
+                wanted = set(only)
+                items = [item for item in items if item[0] in wanted]
+            return index.index_passages(items, budget=budget)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "Recall's meaning index was not updated: %s: %s", type(exc).__name__, exc,
+            )
+            return done
 
     def _recall_standing(self, query: str) -> str:
         """Every memory marked standing in this scope: how the human wants
@@ -4084,12 +4140,17 @@ class MnemosRuntime:
         if self._host_mutation_active and pass_errors:
             summary = ", ".join(f"{key}={stats[key]}" for key in pass_errors)
             raise RuntimeError(f"host maintenance failed: {summary}")
+        # Recall's meaning index catches up on every call, whether or not the
+        # cycle ran (see _index_for_recall): a little at a time when automatic,
+        # everything waiting when asked for.
+        index_budget = AUTO_INDEX_BUDGET if auto else None
         if stats.get("skipped"):
             return "\n".join([
                 f"Requested: {'deep' if requested_deep else 'standard'}",
                 "Cycle: skipped",
                 "Completed: no maintenance needed yet (ran recently)",
                 "Passes: none",
+                *_index_lines(self._index_for_recall(index_budget)),
             ])
         promoted = self._promote_candidates(limit=3)
         # Maintenance proposes reflections; it never answers them.
@@ -4159,6 +4220,8 @@ class MnemosRuntime:
             f"Promoted continuity notes: {promoted}",
             f"Model path: {model_note}",
             f"Dream journal: {dream_status}",
+            # After the passes, so lessons this cycle distilled are indexed too.
+            *_index_lines(self._index_for_recall(index_budget)),
         ]
         errors = [key for key in stats if key.endswith("_error")]
         for key in errors:
@@ -4384,23 +4447,55 @@ class MnemosRuntime:
             }
         if verify:
             index.verify()
-        return index.status(candidate_ids=self._store.active_engram_ids(
+        status = index.status(candidate_ids=self._store.active_engram_ids(
             agent_id=self.scope.agent_id,
             person_id=self.scope.person_id,
             project_scope=self.scope.project_scope,
         ))
+        # Handoffs are found by meaning only once they have passages.
+        handoff_ids = [note["id"] for note in self._store.recallable_handoffs(**self._scope_args())]
+        status["handoffs"] = len(handoff_ids)
+        status["handoffs_searchable"] = (
+            len(index.passage_hashes(handoff_ids)) if status.get("active") else 0
+        )
+        return status
 
-    def _retrieve(self, query: str, max_results: int = 5) -> list[Any]:
-        """The memories recall finds for ``query``, after every filter.
+    def _retrieve(
+        self,
+        query: str,
+        max_results: int = 5,
+        *,
+        notes: list[dict[str, Any]] | None = None,
+        exclude: Collection[str] = (),
+    ) -> list[RetrievalResult]:
+        """What recall finds for ``query``, best first, at most
+        ``max_results``: memories, and ``notes`` ranked with them.
+
+        Filtered, then cut. The retriever drops what is not this scope's, or
+        is in ``exclude`` (already shown), before it takes the first
+        ``max_results``, so what a filter drops is replaced from the ranking.
+        Cut first, as it was, a recall asked for five could return one while
+        more matches waited below. A match found by meaning alone is kept like
+        any other: it used to be dropped unless it shared a word with the
+        query or scored 1.35, which one found by meaning seldom did.
 
         Finding changes nothing. Reconsolidating inside retrieval strengthened
-        results these filters then dropped, which no one was ever shown, so a
+        results a filter then dropped, which no one was ever shown, so a
         caller reinforces only what it returns, with ``_reinforce_returned``.
         """
         assert self._store is not None
         assert self._retriever is not None
         emotional_state = self._store.get_latest_emotional_state(self.scope.agent_id)
-        results = _filter_memories(query, self._retriever.retrieve(
+        excluded = set(exclude)
+
+        def keep(result: RetrievalResult) -> bool:
+            if result.item_id in excluded:
+                return False
+            if result.engram is None:
+                return True  # a note, read from this scope by id
+            return self._engram_visible_in_current_scope(result.engram.id)
+
+        return self._retriever.retrieve(
             cue=query,
             agent_id=self.scope.agent_id,
             person_id=self.scope.person_id,
@@ -4408,11 +4503,9 @@ class MnemosRuntime:
             max_results=max(1, max_results),
             emotional_state=emotional_state,
             reconsolidate_results=False,
-        ))
-        return [
-            result for result in results
-            if self._engram_visible_in_current_scope(result.engram.id)
-        ]
+            keep=keep,
+            notes=notes,
+        )
 
     def _reinforce_returned(self, query: str, memories: list[Any]) -> None:
         """Reconsolidate the memories a result shows the reader, and no others.
@@ -4559,41 +4652,90 @@ def _impact_for(content: str, domain: str) -> str:
     return "Durable continuity captured from the session."
 
 
+def _own_words(text: str, limit: int = ROW_CHARS) -> str:
+    """Up to ``limit`` characters of an item's own words, on one line: a
+    memory's words without the context its capture keeps after them, cut at a
+    word boundary and ended with "…" when there is more."""
+    words = " ".join((text or "").split(_CAPTURE_CONTEXT, 1)[0].split())
+    if len(words) <= limit:
+        return words
+    cut = words.rfind(" ", 0, limit)
+    cut = cut if cut > limit // 2 else limit - 1
+    return words[:cut].rstrip(" ,;:") + "…"
+
+
 def _format_continuity(entry: dict[str, Any]) -> str:
     score = entry.get("score", 0.0)
-    content = entry["content"].replace("\n", " ")
-    if len(content) > 180:
-        content = content[:177] + "..."
     return (
-        f"- [{score:.2f}] {content}\n"
+        f"- [{score:.2f}] {_own_words(entry['content'])}\n"
         f"  id={entry['id']} domain={entry['domain']} confidence={entry['confidence']:.2f} "
         f"{note_signature(entry)}"
     )
 
 
 def _format_memory(result: Any) -> str:
+    """A memory in a list: its own words (not the impact, which a lesson
+    already is and which is fetched by id), enough to use without fetching."""
     engram = result.engram
-    display = engram.impact or engram.content
-    display = display.replace("\n", " ")
-    if len(display) > 180:
-        display = display[:177] + "..."
     # A dormant memory the cue matched starts at half the score, which the
     # reader would otherwise have no way to read.
     quiet = " (it had gone quiet)" if engram.state == "dormant" else ""
     return (
-        f"- [{result.score:.2f}] {display}\n"
+        f"- [{result.score:.2f}] {_own_words(engram.content or engram.impact or '')}\n"
         f"  id={engram.id} kind={engram.kind} confidence={engram.source.confidence:.2f}{quiet}"
+    )
+
+
+def _format_handoff(result: Any, reader: str, session: str) -> str:
+    """A handoff recall found: its own words, whether it is still in use,
+    when it was left, and whose it is to this reader (as the packet says it:
+    yours, a colleague's, or unsigned)."""
+    note = result.note or {}
+    label, _whose = whose_handoff(note, reader, session)
+    retired = handoff_retirement(note)
+    if retired == "superseded":
+        kind = "older handoff, replaced by a newer one from its session"
+    elif retired == "retired":
+        kind = "older handoff, retired as newer sessions left theirs"
+    else:
+        kind = "handoff"
+    left = (note.get("created_at") or "")[:10]
+    return (
+        f"- [{result.score:.2f}] {_own_words(note.get('content') or '')}\n"
+        f"  id={note.get('id')} kind={kind}; left {left}: {label}"
+    )
+
+
+def _index_lines(indexed: Mapping[str, int]) -> list[str]:
+    """What maintenance says about recall's meaning index: nothing when it had
+    nothing to do."""
+    written, waiting = indexed.get("items", 0), indexed.get("waiting", 0)
+    if not written and not waiting:
+        return []
+    line = (
+        f"Recall index: {written} memories or handoffs made findable by meaning "
+        f"({indexed.get('passages', 0)} passages)"
+    )
+    return [f"{line}; {waiting} still waiting" if waiting else line]
+
+
+def _format_note(result: Any) -> str:
+    """A note recall found that has no memory of its own: a continuity note,
+    or one of Mnemos's reports."""
+    note = result.note or {}
+    kind = "report" if note.get("entry_kind") == "maintenance_report" else "note"
+    return (
+        f"- [{result.score:.2f}] {_own_words(note.get('content') or '')}\n"
+        f"  id={note.get('id')} kind={kind} {note_signature(note)}, "
+        f"{_age_text(note.get('created_at') or '')}"
     )
 
 
 def _format_archived(engram: Engram) -> str:
     """A memory recall found in the archive: no score, since recall's
     resonance never reaches the archive; the query named it."""
-    display = (engram.impact or engram.content).replace("\n", " ")
-    if len(display) > 180:
-        display = display[:177] + "..."
     return (
-        f"- {display}\n"
+        f"- {_own_words(engram.content or engram.impact or '')}\n"
         f"  id={engram.id} kind={engram.kind} confidence={engram.source.confidence:.2f}"
     )
 
@@ -4745,6 +4887,10 @@ def describe_semantic(semantic: dict[str, Any]) -> tuple[str, list[str], list[st
             headline += (
                 f", {semantic.get('memories_searchable', 0)} of {semantic['memories']} "
                 "active memories searchable by meaning"
+            )
+        if semantic.get("handoffs"):
+            headline += (
+                f" and {semantic.get('handoffs_searchable', 0)} of {semantic['handoffs']} handoffs"
             )
         if not semantic.get("verified"):
             details.append(

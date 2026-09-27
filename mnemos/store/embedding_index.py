@@ -14,22 +14,65 @@ Backend selection:
 
 Embeddings stored in SQLite alongside engrams. A vector is only ever
 compared with vectors from the same model.
+
+The local model loads from the files already on this machine and nowhere else
+(``local_files_only``). Loading it used to ask the Hugging Face Hub about it
+first: on 2026-09-26 `mnemos doctor` sat over two minutes in an SSL read while
+loading a model that was already cached, and every session's first meaning
+search makes the same load. Downloading is one explicit step,
+``mnemos embeddings download`` (``download_local_model``).
+
+Recall's meaning index is ``passage_vectors``: each memory recall can return,
+and each handoff, cut into passages the model reads whole (it reads about 256
+tokens, so one vector of a long text says nothing about its second half), with
+a vector for each. ``embeddings`` keeps one vector per memory's whole text, as
+capture writes it, for linking and for recall until a memory has passages.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 import struct
 import urllib.request
 import urllib.error
-from collections.abc import Collection
+from collections.abc import Collection, Iterable
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+# Recall's meaning index (schema v15, and created here too for an index opened
+# on a database no store has migrated). One row per passage of a memory or a
+# handoff; ``text_hash`` is the text the passages were cut from, so a text that
+# changed is cut and embedded again. Rebuildable from the words at any time; it
+# is never memory itself.
+PASSAGE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS passage_vectors (
+    item_id TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    part INTEGER NOT NULL,
+    text_hash TEXT NOT NULL,
+    dims INTEGER NOT NULL,
+    embedding BLOB NOT NULL,
+    PRIMARY KEY (item_id, model_name, part)
+)
+"""
+
+# A passage the local model reads whole: about 150 to 200 of its 256 tokens.
+PASSAGE_CHARS = 700
+# Passages kept for one text: its first ~16,000 characters. A capture can run
+# to 65,536; past this, the rest is found by its words.
+PASSAGE_LIMIT = 24
+# Ids asked about in one statement, well under SQLite's variable limit.
+_ID_CHUNK = 400
+
+_PARAGRAPHS = re.compile(r"\n\s*\n")
+_SENTENCES = re.compile(r"(?<=[.!?])\s+")
 
 # Failures already logged in this process. Each is said once, not on every
 # capture and recall that runs into it.
@@ -46,6 +89,49 @@ def _log_once(key: str, level: int, message: str, *args: Any) -> None:
 def _clip(text: str, limit: int = 600) -> str:
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def text_hash(text: str) -> str:
+    """Which text a set of passages was cut from."""
+    return hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:16]
+
+
+def passages(text: str) -> list[str]:
+    """``text`` cut into passages of at most ``PASSAGE_CHARS`` characters, at
+    paragraph breaks, then sentence ends, then spaces: each short enough for
+    the model to read whole. At most ``PASSAGE_LIMIT`` of them."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) <= PASSAGE_CHARS:
+        return [text]
+    pieces: list[str] = []
+    for paragraph in _PARAGRAPHS.split(text):
+        paragraph = " ".join(paragraph.split())
+        if not paragraph:
+            continue
+        if len(paragraph) <= PASSAGE_CHARS:
+            pieces.append(paragraph)
+            continue
+        for sentence in _SENTENCES.split(paragraph):
+            while len(sentence) > PASSAGE_CHARS:
+                cut = sentence.rfind(" ", 0, PASSAGE_CHARS + 1)
+                cut = cut if cut > 0 else PASSAGE_CHARS
+                pieces.append(sentence[:cut].strip())
+                sentence = sentence[cut:].strip()
+            if sentence:
+                pieces.append(sentence)
+    out: list[str] = []
+    current = ""
+    for piece in pieces:
+        if current and len(current) + 1 + len(piece) > PASSAGE_CHARS:
+            out.append(current)
+            current = piece
+        else:
+            current = f"{current} {piece}" if current else piece
+    if current:
+        out.append(current)
+    return out[:PASSAGE_LIMIT]
 
 
 def _describe_failure(exc: BaseException) -> str:
@@ -271,8 +357,7 @@ class _LocalEmbedder:
 
     def _get_model(self):
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(self._model_name)
+            self._model = _load_local_model(self._model_name)
         return self._model
     
     def embed(self, text: str) -> list[float] | None:
@@ -288,6 +373,95 @@ class _LocalEmbedder:
             return [None] * len(texts)
         vecs = model.encode(texts, normalize_embeddings=True, batch_size=32)
         return [v.tolist() for v in vecs]
+
+
+_DOWNLOAD_HINT = "if it was never downloaded, run: mnemos embeddings download"
+
+
+def _hub_repo(model_name: str) -> str:
+    """The Hub repository a sentence-transformers model name stands for."""
+    return model_name if "/" in model_name else f"sentence-transformers/{model_name}"
+
+
+def _load_local_model(model_name: str) -> Any:
+    """The local model, from files already on this machine, never the network.
+
+    A hanging network must not block recall, health or doctor, and the load
+    happens on a session's first meaning search. A model that is not on disk
+    fails at once, and semantic recall reports that it is off and why.
+    """
+    from sentence_transformers import SentenceTransformer
+
+    try:
+        return SentenceTransformer(model_name, local_files_only=True)
+    except TypeError:
+        # sentence-transformers before local_files_only: load the cached copy
+        # by its path, which never asks the Hub.
+        from huggingface_hub import snapshot_download
+
+        return SentenceTransformer(
+            snapshot_download(repo_id=_hub_repo(model_name), local_files_only=True)
+        )
+
+
+def download_local_model(model_name: str = "all-MiniLM-L6-v2") -> str:
+    """Download the local embedding model into the Hugging Face cache, and
+    return its name.
+
+    The one step that uses the network, taken only when someone asks for it
+    (``mnemos embeddings download``); every other load is local only.
+    """
+    if not _check_local_deps():
+        raise RuntimeError(_LOCAL_UNAVAILABLE or "sentence-transformers is unavailable")
+    from sentence_transformers import SentenceTransformer
+
+    SentenceTransformer(model_name)
+    return model_name
+
+
+def _similarities(
+    query_values: list[float], rows: list[tuple[str, bytes, int]],
+) -> list[tuple[str, float]]:
+    """Cosine similarity of the query with each stored vector: ``(id, sim)``.
+    A row of another size, or whose bytes disagree with its own dims, is
+    skipped, never scored (see ``EmbeddingIndex.search``)."""
+    dims = len(query_values)
+    usable = [
+        (item_id, blob) for item_id, blob, stored_dims in rows
+        if stored_dims == dims and len(blob) == struct.calcsize(f"{dims}f")
+    ]
+    if not usable:
+        return []
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+    if np is not None:
+        query = np.asarray(query_values, dtype=np.float64)
+        query_norm = float(np.linalg.norm(query))
+        if query_norm == 0:
+            return []
+        matrix = np.frombuffer(
+            b"".join(blob for _, blob in usable), dtype=np.float32,
+        ).reshape(len(usable), dims).astype(np.float64)
+        norms = np.linalg.norm(matrix, axis=1)
+        dots = matrix @ (query / query_norm)
+        return [
+            (item_id, float(dot / norm))
+            for (item_id, _), dot, norm in zip(usable, dots, norms)
+            if norm > 0
+        ]
+    query_norm = sum(v * v for v in query_values) ** 0.5
+    if query_norm == 0:
+        return []
+    unit = [v / query_norm for v in query_values]
+    scored = []
+    for item_id, blob in usable:
+        stored = struct.unpack(f"{dims}f", blob)
+        norm = sum(v * v for v in stored) ** 0.5
+        if norm:
+            scored.append((item_id, sum(q * s for q, s in zip(unit, stored)) / norm))
+    return scored
 
 
 # --- Main index class ---
@@ -311,8 +485,13 @@ class EmbeddingIndex:
         db_path: str | None = None,
         model_name: str | None = None,
         gemini_api_key: str | None = None,
+        *,
+        read_only: bool = False,
     ) -> None:
         self._db_path = db_path
+        # A read-only index (doctor, read-only runtimes) opens the database
+        # read-only, creates no table and writes no vector.
+        self._read_only = read_only
         self._conn: sqlite3.Connection | None = None
         self._embedder: _GeminiEmbedder | _LocalEmbedder | None = None
         self._available = False
@@ -340,7 +519,7 @@ class EmbeddingIndex:
                 f"no GEMINI_API_KEY is set, and {_LOCAL_UNAVAILABLE or 'local embeddings are unavailable'}"
             )
 
-        if self._available and db_path:
+        if self._available and db_path and not read_only:
             self._init_table()
 
     def _init_table(self) -> None:
@@ -354,13 +533,18 @@ class EmbeddingIndex:
                     dims INTEGER NOT NULL
                 )
             """)
+            conn.execute(PASSAGE_TABLE_SQL)
             conn.commit()
 
     def _get_conn(self) -> sqlite3.Connection | None:
         if not self._db_path:
             return None
         if self._conn is None:
-            self._conn = sqlite3.connect(str(Path(self._db_path).expanduser()))
+            path = Path(self._db_path).expanduser()
+            if self._read_only:
+                self._conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+            else:
+                self._conn = sqlite3.connect(str(path))
             self._conn.row_factory = sqlite3.Row
         return self._conn
 
@@ -391,10 +575,12 @@ class EmbeddingIndex:
         embedder = self._embedder
         if isinstance(embedder, _LocalEmbedder) and not embedder.loaded:
             # The model never loaded, so every later call would fail the same
-            # way, slowly. Stop trying, and say so.
+            # way, slowly. Stop trying, and say so. It loads only from files
+            # on this machine, so a model never downloaded fails here, at once.
             self._available = False
             self._unavailable_reason = (
-                f"the local model {embedder.model_name} failed to load: {detail}"
+                f"the local model {embedder.model_name} failed to load from this "
+                f"machine ({_DOWNLOAD_HINT}): {detail}"
             )
             _log_once(
                 "local-model-load", logging.WARNING,
@@ -470,6 +656,7 @@ class EmbeddingIndex:
             "embeddings_usable": by_model.get(model, 0) if model and self._available else 0,
             "embeddings_by_model": by_model,
         }
+        status["passages_stored"] = self._passages_stored(model) if model else 0
         if candidate_ids is not None:
             status["memories"] = len(candidate_ids)
             status["memories_searchable"] = (
@@ -477,6 +664,18 @@ class EmbeddingIndex:
                 if model and self._available else 0
             )
         return status
+
+    def _passages_stored(self, model: str) -> int:
+        conn = self._existing_conn()
+        if conn is None:
+            return 0
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM passage_vectors WHERE model_name = ?", (model,)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return 0  # no passage table: nothing was cut into passages here
+        return int(row[0]) if row else 0
 
     def _existing_conn(self) -> sqlite3.Connection | None:
         """The connection, but only for a database that already exists.
@@ -501,19 +700,24 @@ class EmbeddingIndex:
         return {row[0]: int(row[1]) for row in rows}
 
     def _ids_with_vectors(self, model: str) -> set[str]:
+        """Ids recall can compare with a query by this model: a whole-text
+        vector, or passages."""
         conn = self._existing_conn()
         if conn is None:
             return set()
-        try:
-            rows = conn.execute(
-                "SELECT engram_id FROM embeddings WHERE model_name = ?", (model,)
-            ).fetchall()
-        except sqlite3.OperationalError:
-            return set()
-        return {row[0] for row in rows}
+        ids: set[str] = set()
+        for sql in (
+            "SELECT engram_id FROM embeddings WHERE model_name = ?",
+            "SELECT DISTINCT item_id FROM passage_vectors WHERE model_name = ?",
+        ):
+            try:
+                ids.update(row[0] for row in conn.execute(sql, (model,)).fetchall())
+            except sqlite3.OperationalError:
+                continue  # that table was never created here
+        return ids
 
     def index_engram(self, engram_id: str, content: str) -> bool:
-        if not self._available or not self._embedder:
+        if not self._available or not self._embedder or self._read_only:
             return False
 
         values = self._embed(content)
@@ -599,8 +803,183 @@ class EmbeddingIndex:
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:k]
 
+    def search_candidates(
+        self,
+        query: str,
+        candidates: Collection[str],
+        *,
+        k: int = 30,
+        floor: float = 0.0,
+    ) -> list[tuple[str, float]]:
+        """The ``candidates`` closest in meaning to ``query``, best first, at
+        most ``k``, none below ``floor``.
+
+        Only the candidates are scored, and only then is the top taken. Recall
+        passes what it may return: the memories live in the caller's scope and
+        the handoffs. ``search`` takes its top over every stored vector; on a
+        real store 3,746 of them, 202 in scope, so across twelve cues 14 of 240
+        meaning hits survived the scope check afterwards.
+
+        Each candidate counts by its best vector from this model: its passages,
+        or its whole-text vector while it has no passages yet.
+        """
+        if not self._available or not self._embedder or not candidates:
+            return []
+        wanted = set(candidates)
+        conn = self._existing_conn()
+        if conn is None:
+            return []
+        query_values = self._embed(query)
+        if query_values is None:
+            return []
+        model = self._embedder.model_name
+        rows = self._rows_for(
+            conn, "SELECT item_id, embedding, dims FROM passage_vectors "
+            "WHERE model_name = ? AND item_id IN ({})", model, wanted,
+        )
+        without = wanted - {row[0] for row in rows}
+        if without:
+            rows += self._rows_for(
+                conn, "SELECT engram_id, embedding, dims FROM embeddings "
+                "WHERE model_name = ? AND engram_id IN ({})", model, without,
+            )
+        best: dict[str, float] = {}
+        for item_id, similarity in _similarities(query_values, rows):
+            if similarity > best.get(item_id, -2.0):
+                best[item_id] = similarity
+        ranked = sorted(
+            ((item_id, round(similarity, 4)) for item_id, similarity in best.items()
+             if similarity >= floor),
+            key=lambda item: -item[1],
+        )
+        return ranked[:k]
+
+    @staticmethod
+    def _rows_for(
+        conn: sqlite3.Connection, sql: str, model: str, ids: Collection[str],
+    ) -> list[tuple[str, bytes, int]]:
+        """``sql``'s rows for ``ids``, asked in chunks; none when the table
+        was never created here."""
+        rows: list[tuple[str, bytes, int]] = []
+        ordered = sorted(ids)
+        for start in range(0, len(ordered), _ID_CHUNK):
+            chunk = ordered[start:start + _ID_CHUNK]
+            try:
+                rows.extend(
+                    (row[0], row[1], row[2]) for row in conn.execute(
+                        sql.format(", ".join("?" for _ in chunk)), (model, *chunk),
+                    ).fetchall()
+                )
+            except sqlite3.OperationalError:
+                return rows
+        return rows
+
+    def passage_hashes(self, item_ids: Iterable[str]) -> dict[str, str]:
+        """For each of ``item_ids`` with passages from this model, the text
+        they were cut from (``text_hash``)."""
+        if not self._embedder:
+            return {}
+        conn = self._existing_conn()
+        if conn is None:
+            return {}
+        found: dict[str, str] = {}
+        ordered = sorted(set(item_ids))
+        for start in range(0, len(ordered), _ID_CHUNK):
+            chunk = ordered[start:start + _ID_CHUNK]
+            try:
+                found.update(
+                    (row[0], row[1]) for row in conn.execute(
+                        "SELECT item_id, text_hash FROM passage_vectors "
+                        f"WHERE model_name = ? AND part = 0 AND item_id IN ({', '.join('?' for _ in chunk)})",
+                        (self._embedder.model_name, *chunk),
+                    ).fetchall()
+                )
+            except sqlite3.OperationalError:
+                return found
+        return found
+
+    def index_passages(
+        self, items: Iterable[tuple[str, str]], *, budget: int | None = None,
+    ) -> dict[str, int]:
+        """Cut each ``(item_id, text)`` into passages and store a vector for
+        each, replacing what this model stored for that item before; items
+        whose passages already match their text are skipped.
+
+        ``budget`` bounds the passages embedded in one call; an item is never
+        half-written, and what is left waits for the next call. Returns how
+        many items and passages were written and how many items still wait.
+        """
+        done = {"items": 0, "passages": 0, "waiting": 0}
+        if not self._available or not self._embedder or self._read_only:
+            return done
+        conn = self._get_conn()
+        if conn is None:
+            return done
+        items = [(item_id, text) for item_id, text in items if (text or "").strip()]
+        stored = self.passage_hashes(item_id for item_id, _ in items)
+        todo: list[tuple[str, str, list[str]]] = []
+        planned = 0
+        for item_id, text in items:
+            digest = text_hash(text)
+            if stored.get(item_id) == digest:
+                continue
+            parts = passages(text)
+            if budget is not None and todo and planned + len(parts) > budget:
+                done["waiting"] += 1
+                continue
+            todo.append((item_id, digest, parts))
+            planned += len(parts)
+        if not todo:
+            return done
+        flat = [part for _, _, parts in todo for part in parts]
+        try:
+            vectors = self._embedder.batch_embed(flat)
+        except Exception as exc:
+            self._embedding_failed(_describe_failure(exc))
+            done["waiting"] += len(todo)
+            return done
+        model = self._embedder.model_name
+        position = 0
+        written = {"items": 0, "passages": 0}
+        try:
+            for item_id, digest, parts in todo:
+                values = vectors[position:position + len(parts)]
+                position += len(parts)
+                if len(values) != len(parts) or any(v is None for v in values):
+                    done["waiting"] += 1
+                    continue
+                conn.execute(
+                    "DELETE FROM passage_vectors WHERE item_id = ? AND model_name = ?",
+                    (item_id, model),
+                )
+                conn.executemany(
+                    "INSERT INTO passage_vectors "
+                    "(item_id, model_name, part, text_hash, dims, embedding) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    [
+                        (item_id, model, part, digest, len(v), self._to_bytes(v))
+                        for part, v in enumerate(values)
+                    ],
+                )
+                written["items"] += 1
+                written["passages"] += len(parts)
+            conn.commit()
+        except sqlite3.Error as exc:
+            # Another writer holds the lock, or the table is missing. Nothing
+            # of this call was kept; it waits for the next one, and recall
+            # meanwhile uses the whole-text vectors and the words.
+            conn.rollback()
+            _log_once(
+                "passages-write", logging.WARNING,
+                "Passage vectors were not written: %s", _describe_failure(exc),
+            )
+            done["waiting"] += written["items"]
+            return done
+        done.update(written)
+        return done
+
     def batch_index(self, items: list[tuple[str, str]]) -> int:
-        if not self._available or not self._embedder:
+        if not self._available or not self._embedder or self._read_only:
             return 0
 
         conn = self._get_conn()
@@ -629,6 +1008,8 @@ class EmbeddingIndex:
         return count
 
     def remove(self, engram_id: str) -> None:
+        if self._read_only:
+            return
         conn = self._get_conn()
         if conn:
             conn.execute("DELETE FROM embeddings WHERE engram_id = ?", (engram_id,))

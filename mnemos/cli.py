@@ -524,6 +524,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Replace an existing database after preserving a safety backup",
     )
 
+    # ── embeddings ──
+    p_embeddings = sub.add_parser(
+        "embeddings", help="The local embedding model semantic recall uses",
+    )
+    embeddings_sub = p_embeddings.add_subparsers(dest="embeddings_command")
+    embeddings_sub.add_parser(
+        "download",
+        help="Download the local embedding model (the one step that uses the network)",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -558,6 +568,7 @@ def main(argv: list[str] | None = None) -> int:
         "hooks": _cmd_hooks,
         "daemon": _cmd_daemon,
         "backup": _cmd_backup,
+        "embeddings": _cmd_embeddings,
     }
 
     handler = handlers.get(args.command)
@@ -1194,6 +1205,27 @@ def _cmd_init(args: argparse.Namespace) -> int:
     store.close()
     print(f"Initialized Mnemos database: {db_path}")
     print("Run 'mnemos stats' to verify.")
+    return 0
+
+
+def _cmd_embeddings(args: argparse.Namespace) -> int:
+    """Download the local embedding model, on request.
+
+    Mnemos loads the model only from files already on this machine, so a slow
+    or hanging network can never stall recall, health or doctor. Downloading
+    is this explicit step instead.
+    """
+    if getattr(args, "embeddings_command", None) != "download":
+        print("Usage: mnemos embeddings download")
+        return 1
+    from .store.embedding_index import download_local_model
+
+    try:
+        name = download_local_model()
+    except Exception as exc:
+        print(f"The embedding model was not downloaded: {type(exc).__name__}: {exc}")
+        return 1
+    print(f"Downloaded the local embedding model {name}; semantic recall can use it now.")
     return 0
 
 

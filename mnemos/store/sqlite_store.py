@@ -24,6 +24,7 @@ from typing import Any
 from ..authorship import AUTHOR_KINDS
 from ..code_version import MAINTENANCE_CODE_VERSION
 from ..file_security import secure_directory, secure_file
+from .embedding_index import PASSAGE_TABLE_SQL
 from .fts import is_common
 from ..core.engram import Connection, Engram, VersionRef
 from ..core.belief import Belief
@@ -31,8 +32,9 @@ from ..core.emotional_state import EmotionalState
 from ..core.identity import AgentIdentity
 
 
-# Schema version — increment when tables change
-SCHEMA_VERSION = 14
+# Schema version — increment when tables change. v15: passage_vectors, recall's
+# meaning index (see embedding_index.PASSAGE_TABLE_SQL).
+SCHEMA_VERSION = 15
 
 # The lowest maintenance code version still allowed to maintain this store,
 # raised by each newer version that opens it (see mnemos/code_version.py).
@@ -635,6 +637,8 @@ CREATE INDEX IF NOT EXISTS idx_functional_review
     WHERE is_deleted = 0 AND needs_confirmation = 1;
 CREATE INDEX IF NOT EXISTS idx_emotional_history_agent ON emotional_state_history(agent_id, timestamp);
 """
+# Recall's meaning index (v15), owned by the embedding index: see there.
+SQL_CREATE_TABLES += PASSAGE_TABLE_SQL.strip() + ";\n"
 
 
 def _utc_now() -> str:
@@ -666,6 +670,25 @@ def _written_since(timestamp: str | None, cutoff: datetime) -> bool:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     return moment >= cutoff
+
+
+def handoff_retirement(note: dict[str, Any]) -> str | None:
+    """Why a handoff is no longer in use, when recall still searches it:
+    ``superseded`` (a newer handoff from its session replaced it) or
+    ``retired`` (more sessions left handoffs than are kept). None for one in
+    use, and for one taken out of use on purpose: forgotten, or archived by a
+    correction. Read from its revision trail, which every retirement writes."""
+    if note.get("active"):
+        return None
+    revisions = note.get("revisions") or []
+    reason = str((revisions[-1] or {}).get("reason", "")) if revisions else ""
+    if reason.startswith("archived"):
+        return None
+    if reason.startswith("retired"):
+        return "retired"
+    if reason.startswith("superseded") or note.get("superseded_by"):
+        return "superseded"
+    return None
 
 
 def _new_id() -> str:
@@ -1483,6 +1506,36 @@ class EngramStore:
             (agent_id, person_id, project_scope),
         ).fetchall()
         return {row[0] for row in rows}
+
+    def live_engram_ids(
+        self, *, agent_id: str, person_id: str, project_scope: str
+    ) -> set[str]:
+        """IDs of the memories recall may return in one exact scope: active,
+        and dormant (found by its cue, and woken). What recall's meaning search
+        scores, before it takes its top."""
+        rows = self._get_conn().execute(
+            """SELECT id FROM engrams
+               WHERE state IN ('active', 'dormant') AND owner_agent_id = ?
+                 AND person_id = ? AND project_scope = ?""",
+            (agent_id, person_id, project_scope),
+        ).fetchall()
+        return {row[0] for row in rows}
+
+    def live_memory_texts(
+        self, *, agent_id: str, person_id: str, project_scope: str
+    ) -> list[tuple[str, str, str]]:
+        """``(id, content, state)`` of every memory recall may return in one
+        exact scope: the active ones and the dormant ones (a dormant memory is
+        found by its cue and wakes). Newest first. Recall's meaning search
+        scores exactly these, and its index is built from their words."""
+        rows = self._get_conn().execute(
+            """SELECT id, content, state FROM engrams
+               WHERE state IN ('active', 'dormant') AND owner_agent_id = ?
+                 AND person_id = ? AND project_scope = ?
+               ORDER BY created_at DESC, id DESC""",
+            (agent_id, person_id, project_scope),
+        ).fetchall()
+        return [(row[0], row[1] or "", row[2]) for row in rows]
 
     def get_engram_in_scope(
         self, engram_id: str, *, agent_id: str, person_id: str, project_scope: str
@@ -3192,6 +3245,68 @@ class EngramStore:
             if note["id"] != first["id"] and _written_since(note.get("created_at"), cutoff)
         ]
         return [first, *others[: max(0, int(limit) - 1)]]
+
+    def recallable_handoffs(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> list[dict[str, Any]]:
+        """Every handoff recall searches in this exact scope: the ones in use,
+        then the older ones, newest first.
+
+        An older handoff is one a newer handoff from its session replaced
+        (``superseded``), or one pushed out when more sessions left notes than
+        are kept (``retired``). Its words stay true of their day, and a
+        question about that day finds them. One the agent forgot, or archived
+        by a correction, stays gone. Before these were searched, a superseded
+        handoff was unreachable, and it led to a confident "no record".
+        """
+        rows = self._get_conn().execute(
+            """
+            SELECT * FROM hypomnema_entries
+            WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+              AND entry_kind = 'handoff'
+            ORDER BY active DESC, created_at DESC, rowid DESC
+            """,
+            (agent_id, person_id, project_scope),
+        ).fetchall()
+        handoffs = []
+        for row in rows:
+            note = self._hydrate_hypomnema_row(dict(row))
+            if not note.get("active") and handoff_retirement(note) is None:
+                continue
+            handoffs.append(note)
+        return handoffs
+
+    def standalone_notes(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> list[dict[str, Any]]:
+        """Live notes other than handoffs with no memory of their own, newest
+        first: continuity notes written some way other than a capture, and
+        Mnemos's reports (an identity divergence, a maintenance report).
+
+        A capture's note is one object with its memory (``capture_pair``), and
+        recall finds the pair through the memory. A note with no memory is
+        found only as itself, so recall ranks it with the memories by its
+        words and its meaning, as it searched every such note before.
+        """
+        rows = self._get_conn().execute(
+            f"""
+            SELECT h.* FROM hypomnema_entries h {_NOTE_MEMORY_JOIN}
+            WHERE h.agent_id = ? AND h.person_id = ? AND h.project_scope = ?
+              AND h.entry_kind != 'handoff' AND h.graduated_to_engram_id IS NULL
+              AND {_NOTE_LIVE}
+            ORDER BY h.created_at DESC, h.rowid DESC
+            """,
+            (agent_id, person_id, project_scope),
+        ).fetchall()
+        return [self._hydrate_hypomnema_row(dict(row)) for row in rows]
 
     def hypomnema_signers(
         self,

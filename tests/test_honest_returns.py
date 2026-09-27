@@ -187,7 +187,12 @@ def test_only_the_memories_a_result_shows_are_reinforced(tmp_path, call):
 
     runtime = _runtime(db)
     try:
-        shown = getattr(runtime, call)(CUE)
+        # Resonance ranks the garden note second; asked for one result, the
+        # reader is shown the ferry note alone. (Before R08 the runtime's word
+        # filter dropped the garden note instead: it shares no word with the
+        # cue. A match without a shared word is returned now, so the cut is
+        # what leaves it unseen.)
+        shown = getattr(runtime, call)(CUE, max_results=1)
     finally:
         runtime.close()
 
@@ -195,7 +200,7 @@ def test_only_the_memories_a_result_shows_are_reinforced(tmp_path, call):
     # context() shows the scope's notes before its results for the query, the
     # garden note among them; what it returned for the query comes after.
     returned = shown.split(f'### For "{CUE}"', 1)[-1]
-    assert "Marigolds" not in returned, "premise: the runtime's filter drops the garden note"
+    assert "Marigolds" not in returned, "premise: the cut leaves the garden note out"
     assert _accesses(db, ferry) == 1, "the memory shown was not reinforced"
     assert _row(db, garden, ACCESS) == garden_before, (
         "a memory the reader was never shown was reinforced"
@@ -511,7 +516,7 @@ def test_older_code_asks_for_no_reinforcement(tmp_path, monkeypatch):
 
     runtime = _runtime(db)
     try:
-        runtime.recall(CUE)
+        runtime.recall(CUE, max_results=1)  # shows the ferry note; the garden note is cut
     finally:
         runtime.close()
     assert asked == [ferry], "current code asked to reinforce what it did not show"
@@ -539,7 +544,7 @@ def test_older_code_spends_no_reinforcement(tmp_path, monkeypatch, session):
 
     runtime = _runtime(db)
     try:
-        assert "ferry timetable in the kitchen drawer" in runtime.recall(CUE)
+        assert "ferry timetable in the kitchen drawer" in runtime.recall(CUE, max_results=1)
     finally:
         runtime.close()
     assert _row(db, ferry) == before, "older code reinforced a memory"
@@ -548,7 +553,7 @@ def test_older_code_spends_no_reinforcement(tmp_path, monkeypatch, session):
     for _ in range(2):
         runtime = _runtime(db)
         try:
-            runtime.recall(CUE)
+            runtime.recall(CUE, max_results=1)  # the ferry note alone
         finally:
             runtime.close()
     # Had older code recorded the return, current code would reinforce nothing.

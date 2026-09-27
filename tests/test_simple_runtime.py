@@ -610,6 +610,9 @@ def test_health_returns_structured_dict(tmp_path):
         "unreachable",
         # Whether recall can seed by meaning here, and why not if not.
         "semantic",
+        # The last pass over what waits for recall's meaning index, by any
+        # process (the scheduled job included), and why it skipped if it did.
+        "recall_index",
         # The code version running here and the newest one the store has
         # seen: a session older than its store no longer maintains it.
         "code",

@@ -533,6 +533,10 @@ def main(argv: list[str] | None = None) -> int:
         "download",
         help="Download the local embedding model (the one step that uses the network)",
     )
+    embeddings_sub.add_parser(
+        "index",
+        help="Index everything waiting for recall's meaning search, and nothing else",
+    )
 
     args = parser.parse_args(argv)
 
@@ -1209,14 +1213,17 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
 
 def _cmd_embeddings(args: argparse.Namespace) -> int:
-    """Download the local embedding model, on request.
+    """The local embedding model: download it, or index what waits for it.
 
     Mnemos loads the model only from files already on this machine, so a slow
     or hanging network can never stall recall, health or doctor. Downloading
-    is this explicit step instead.
+    is the explicit step that uses the network.
     """
-    if getattr(args, "embeddings_command", None) != "download":
-        print("Usage: mnemos embeddings download")
+    command = getattr(args, "embeddings_command", None)
+    if command == "index":
+        return _embeddings_index(args)
+    if command != "download":
+        print("Usage: mnemos embeddings download | mnemos embeddings index")
         return 1
     from .store.embedding_index import download_local_model
 
@@ -1227,6 +1234,66 @@ def _cmd_embeddings(args: argparse.Namespace) -> int:
         return 1
     print(f"Downloaded the local embedding model {name}; semantic recall can use it now.")
     return 0
+
+
+def _embeddings_index(args: argparse.Namespace) -> int:
+    """Index everything waiting for recall's meaning search, in every scope of
+    the store, and do nothing else: no maintenance cycle, no decay, no links.
+
+    Sessions index as they write, and the scheduled job a bounded part each
+    run; code older than the store writes nothing to the index, so this is the
+    way to catch up at once (after an upgrade, say). The model loads only from
+    this machine. Running it again indexes nothing new. The store is opened
+    the way every writer opens it, so it records this code's version.
+    """
+    import time
+
+    from .code_version import MAINTENANCE_CODE_VERSION, OLDER_CODE_FIX, OLDER_CODE_MESSAGE
+    from .simple_runtime import index_for_recall
+    from .store.embedding_index import EmbeddingIndex
+    from .store.sqlite_store import EngramStore
+
+    db_path = Path(_resolve_db_path(args)).expanduser()
+    if not db_path.exists():
+        print(f"No store at {db_path}: nothing to index.")
+        return 1
+    store = EngramStore(str(db_path))
+    index = None
+    try:
+        minimum = store.min_code_version()
+        if minimum is not None and minimum > MAINTENANCE_CODE_VERSION:
+            print("Nothing indexed.")
+            print(f"This code is version {MAINTENANCE_CODE_VERSION}; the store needs {minimum} or newer.")
+            print(f"{OLDER_CODE_MESSAGE} {OLDER_CODE_FIX}")
+            return 1
+        index = EmbeddingIndex(db_path=str(db_path))
+        if not index.available:
+            print(f"Nothing indexed: semantic recall is off here: {index.unavailable_reason}")
+            return 1
+        started = time.monotonic()
+        totals = {"items": 0, "passages": 0, "waiting": 0}
+        print(f"Recall index for {db_path}, embedding with {index.backend}:")
+        for scope in store.recall_scopes():
+            done = index_for_recall(store, index, record="mnemos embeddings index", **scope)
+            if done["skipped"]:
+                print(f"Nothing indexed: {done['skipped']}")
+                return 1
+            for key in totals:
+                totals[key] += done[key]
+            print(
+                f"  {scope['agent_id']}/{scope['person_id']}/{scope['project_scope']}: "
+                f"{done['items']:,} indexed ({_passages(done['passages'])}), "
+                f"{done['waiting']:,} still waiting"
+            )
+        print(
+            f"Indexed {_items(totals['items'])} ({_passages(totals['passages'])}) "
+            f"in {time.monotonic() - started:.1f} s; {totals['waiting']:,} still waiting."
+        )
+        return 0
+    finally:
+        if index is not None:
+            index.close()
+        store.close()
 
 
 def _cmd_backup(args: argparse.Namespace) -> int:
@@ -1471,8 +1538,54 @@ def _cmd_consolidate(args: argparse.Namespace) -> int:
     for e in errors:
         print(f"  ERROR ({e}): {stats[e]}", file=sys.stderr)
 
+    _index_after_consolidating(store, args, scope)
     store.close()
     return 0
+
+
+def _index_after_consolidating(store, args: argparse.Namespace, scope) -> None:
+    """Index a bounded part of what waits for recall's meaning search in the
+    scope just consolidated (``SCHEDULED_INDEX_BUDGET``), after the cycle, so
+    what code older than the store writes is indexed within hours without any
+    session. Consolidation has already run and nothing here can undo or stop
+    it: without the model, indexing is skipped and says why, and the health
+    card says so too."""
+    try:
+        from .simple_runtime import SCHEDULED_INDEX_BUDGET, index_for_recall
+        from .store.embedding_index import EmbeddingIndex
+
+        index = EmbeddingIndex(db_path=_resolve_db_path(args))
+        try:
+            if not index.available:
+                print(f"Recall index: off, {index.unavailable_reason}")
+                return
+            done = index_for_recall(
+                store, index,
+                agent_id=scope.agent_id, person_id=scope.person_id,
+                project_scope=scope.project_scope,
+                budget=SCHEDULED_INDEX_BUDGET, record="mnemos consolidate",
+            )
+        finally:
+            index.close()
+    except Exception as exc:
+        print(f"Recall index: not updated ({type(exc).__name__}: {exc})")
+        return
+    if done["skipped"]:
+        print(f"Recall index: skipped: {done['skipped']}")
+    else:
+        print(
+            f"Recall index: {_items(done['items'])} indexed "
+            f"({_passages(done['passages'])}, at most {SCHEDULED_INDEX_BUDGET} a run); "
+            f"{done['waiting']} still waiting"
+        )
+
+
+def _items(count: int) -> str:
+    return f"{count:,} memory or handoff" if count == 1 else f"{count:,} memories and handoffs"
+
+
+def _passages(count: int) -> str:
+    return f"{count:,} passage" if count == 1 else f"{count:,} passages"
 
 
 def _cmd_export(args: argparse.Namespace) -> int:
@@ -2273,6 +2386,14 @@ def _print_semantic_status(runtime) -> None:
     print(f"Semantic:     {headline}")
     for detail in details:
         print(f"              {detail}")
+    from .simple_runtime import describe_recall_index
+
+    try:
+        recall_index = describe_recall_index(runtime.recall_index_status())
+    except Exception:
+        recall_index = None
+    if recall_index:
+        print(f"Recall index: {recall_index}")
     # Whether an import works depends on the interpreter, so say which one
     # answered. The MCP server reports its own answer in mnemos_health.
     print(f"              checked in Python {platform.python_version()} ({sys.executable})")

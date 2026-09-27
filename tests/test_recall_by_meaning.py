@@ -742,3 +742,116 @@ def test_a_handoff_and_a_capture_are_recalled_in_another_process(tmp_path):
     assert "The lighthouse keeper logs every storm in pencil." in done.stdout
     assert "Handoffs:" in done.stdout and "read the lighthouse storm log" in done.stdout
     assert Path(db).exists()
+
+
+# ── The index fills without sessions ──
+
+_SCOPE_ARGS = ["--db-path", "{db}", "--agent-id", "nova", "--person-id", "riley",
+               "--project-scope", "demo"]
+
+
+def _cli(db, *command: str) -> list[str]:
+    return [arg.format(db=db) for arg in _SCOPE_ARGS] + list(command)
+
+
+def _memory_id(said: str) -> str:
+    return re.search(r"Memory ID: (engram_[A-Za-z0-9]+)", said).group(1)
+
+
+def _state(db) -> dict:
+    """Everything a maintenance cycle would change: memories, links, the log."""
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        return {
+            "engrams": conn.execute(
+                "SELECT id, state, strength, stability, accessibility, access_count "
+                "FROM engrams ORDER BY id").fetchall(),
+            "connections": conn.execute("SELECT COUNT(*) FROM connections").fetchone(),
+            "cycles": conn.execute("SELECT COUNT(*) FROM consolidation_log").fetchone(),
+            "min_code_version": conn.execute(
+                "SELECT value FROM meta WHERE key = 'min_code_version'").fetchone(),
+        }
+    finally:
+        conn.close()
+
+
+def test_embeddings_index_indexes_what_waits_and_then_nothing(tmp_path, monkeypatch, capsys):
+    """Code older than the store, or a session without the model, leaves a
+    capture and a handoff without passages. The command indexes what waits,
+    and nothing else happens: no cycle, no decay, no links."""
+    db = tmp_path / "memory.db"
+    monkeypatch.setattr(ei, "_check_local_deps", lambda: False)  # written without the model
+    rt = _runtime(db)
+    memory_id = _memory_id(rt.capture("The beacon on the point burns all night."))
+    handoff_id = _handoff_id(rt.handoff("Next: fit the new lamp in the beacon."))
+    rt.close()
+    assert not _passages(db, memory_id) and not _passages(db, handoff_id)
+    conn = sqlite3.connect(str(db))
+    conn.execute("UPDATE meta SET value = '7' WHERE key = 'min_code_version'")
+    conn.commit()
+    conn.close()
+    before = _state(db)
+    monkeypatch.setattr(ei, "_check_local_deps", lambda: True)
+    monkeypatch.setattr(ei, "_LocalEmbedder", _ConceptEmbedder)
+
+    assert main(_cli(db, "embeddings", "index")) == 0
+    first = capsys.readouterr().out
+
+    assert _passages(db, memory_id) and _passages(db, handoff_id), first
+    indexed = int(re.search(r"Indexed (\d+) memor", first).group(1))
+    assert indexed >= 2 and "0 still waiting." in first, first
+    after = _state(db)
+    assert after["min_code_version"] == (str(MAINTENANCE_CODE_VERSION),), "opened without the stamp"
+    assert {k: v for k, v in after.items() if k != "min_code_version"} == {
+        k: v for k, v in before.items() if k != "min_code_version"
+    }, "the command did more than index"
+
+    passages_after_first = (_passages(db, memory_id), _passages(db, handoff_id))
+    assert main(_cli(db, "embeddings", "index")) == 0
+    second = capsys.readouterr().out
+    assert "Indexed 0 memories and handoffs (0 passages)" in second, second
+    assert (_passages(db, memory_id), _passages(db, handoff_id)) == passages_after_first
+
+
+def test_consolidate_indexes_within_its_budget(tmp_path, meaning, monkeypatch, capsys):
+    monkeypatch.setattr(simple_runtime, "SCHEDULED_INDEX_BUDGET", 3, raising=False)
+    db = tmp_path / "memory.db"
+    store = EngramStore(str(db))
+    lessons = [_memory(f"lesson {i}: check the beacon before the storm") for i in range(5)]
+    for lesson in lessons:
+        store.save_engram(lesson)
+    store.close()
+
+    assert main(_cli(db, "consolidate")) == 0
+    out = capsys.readouterr().out
+
+    assert "Passes:" in out, "the cycle did not run"
+    assert ("Recall index: 3 memories and handoffs indexed (3 passages, at most 3 a run); "
+            "2 still waiting") in out, out
+    assert sum(bool(_passages(db, lesson.id)) for lesson in lessons) == 3
+
+
+def test_a_missing_model_does_not_stop_consolidation(tmp_path, monkeypatch, capsys):
+    db = tmp_path / "memory.db"
+    store = EngramStore(str(db))
+    for i in range(2):
+        store.save_engram(_memory(f"lesson {i}: check the beacon before the storm"))
+    store.close()
+    release, calls = threading.Event(), []
+    _fake_sentence_transformers(monkeypatch, release=release, calls=calls)  # no model on disk
+    try:
+        assert main(_cli(db, "consolidate")) == 0
+    finally:
+        release.set()
+    out = capsys.readouterr().out
+
+    assert "Passes:" in out and _state(db)["cycles"][0] >= 1, "consolidation stopped"
+    assert ("Recall index: skipped: the local model all-MiniLM-L6-v2 could not be loaded "
+            "from this machine; run: mnemos embeddings download") in out, out
+    assert calls and all(call.get("local_files_only") for call in calls)
+    rt = _runtime(db)
+    card = simple_runtime.format_health_card(rt.health())
+    rt.close()
+    said = [line for line in card.splitlines() if line.startswith("Recall index:")]
+    assert len(said) == 1 and "mnemos consolidate" in said[0], card
+    assert "mnemos embeddings download" in said[0]

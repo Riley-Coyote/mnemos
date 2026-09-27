@@ -1507,6 +1507,27 @@ class EngramStore:
         ).fetchall()
         return {row[0] for row in rows}
 
+    def recall_scopes(self) -> list[dict[str, str]]:
+        """Every exact scope this store holds something recall can return in:
+        a live memory, a handoff or a note. Rows a migration could not place
+        (no person or project) are in none, since no scoped read reaches them.
+        Sorted, as ``agent_id``/``person_id``/``project_scope`` dicts."""
+        rows = self._get_conn().execute(
+            """
+            SELECT owner_agent_id, person_id, project_scope FROM engrams
+            WHERE state IN ('active', 'dormant')
+              AND person_id IS NOT NULL AND project_scope IS NOT NULL
+            UNION
+            SELECT agent_id, person_id, project_scope FROM hypomnema_entries
+            WHERE person_id IS NOT NULL AND project_scope IS NOT NULL
+            ORDER BY 1, 2, 3
+            """
+        ).fetchall()
+        return [
+            {"agent_id": row[0], "person_id": row[1], "project_scope": row[2]}
+            for row in rows
+        ]
+
     def live_engram_ids(
         self, *, agent_id: str, person_id: str, project_scope: str
     ) -> set[str]:

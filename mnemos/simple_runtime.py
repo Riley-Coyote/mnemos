@@ -118,6 +118,125 @@ AUTO_INDEX_BUDGET = 64
 # What a capture appends to the agent's words when it gives context.
 _CAPTURE_CONTEXT = "\n\nContext: "
 
+# Passages the scheduled job (`mnemos consolidate`: every four hours, and once
+# more at night, so seven runs a day) embeds per run. Once the store is indexed,
+# what waits is only what code older than the store wrote since (a session
+# keeps the code it started with, for days): a handoff is about 3 passages, a
+# capture 1 to 3, a lesson 1, so a busy day is a few dozen to a couple of
+# hundred. 256 a run clears about 1,800 a day, the whole live store as it
+# stood at this change (1,763 passages) within a day even if nobody runs
+# `mnemos embeddings index`. The job is a fresh process, so it pays the model's
+# load (about 3 s) only when something waits, and 256 passages add at most
+# about 1.3 s at the slowest rate measured here (193 a second, for passages
+# of 744 characters).
+SCHEDULED_INDEX_BUDGET = 256
+
+# The meta key (per scope) holding the last pass over everything waiting:
+# when, by what, what it indexed, what still waits, and why it was skipped
+# when it was. The health card reads it.
+RECALL_INDEX_META = "recall_index"
+
+
+def recall_index_meta_key(agent_id: str, person_id: str, project_scope: str) -> str:
+    """The meta key of a scope's last indexing pass (``MnemosRuntime._meta_key``)."""
+    return f"simple:{agent_id}:{person_id}:{project_scope}:{RECALL_INDEX_META}"
+
+
+def index_for_recall(
+    store: EngramStore,
+    index: Any,
+    *,
+    agent_id: str,
+    person_id: str,
+    project_scope: str,
+    budget: int | None = None,
+    only: Collection[str] | None = None,
+    record: str = "",
+) -> dict[str, Any]:
+    """Give what recall can return in one scope its passage vectors, so it can
+    be found by meaning: every handoff (those in use first), notes with no
+    memory of their own, then the live memories, newest first. Only what has no
+    passages, or whose words changed since, is embedded; at most ``budget``
+    passages (None: everything waiting); ``only`` limits it to those ids.
+
+    Capture gives a memory one vector of its whole text, which the model reads
+    only to about 1,000 characters, and lessons and handoffs had none: on a
+    copy of the live store 176 live memories (all lessons) and all 259
+    handoffs, so no question could find them by meaning. The runtime,
+    ``mnemos consolidate`` and ``mnemos embeddings index`` all index through
+    this, the same way.
+
+    Returns ``items``, ``passages`` and ``waiting``, and ``skipped``: why
+    nothing could be embedded when the embedding model failed (the local model
+    is not on this machine), else None. With no embedding backend at all (a
+    keyword-only install) nothing is done and nothing is skipped. Code older
+    than the store indexes nothing: how memory is indexed is a rule newer code
+    may have replaced. With ``record`` (the name of what ran it), the pass is
+    kept for the health card. Never raises: the index is a cache, and the words
+    still find everything.
+    """
+    done: dict[str, Any] = {"items": 0, "passages": 0, "waiting": 0, "skipped": None}
+    if (
+        index is None
+        or not getattr(index, "available", False)
+        or not hasattr(index, "index_passages")
+    ):
+        return done
+    minimum = store.min_code_version()
+    if minimum is not None and minimum > MAINTENANCE_CODE_VERSION:
+        return done
+    scope = {"agent_id": agent_id, "person_id": person_id, "project_scope": project_scope}
+    try:
+        items = [
+            (note["id"], note.get("content") or "")
+            for note in [*store.recallable_handoffs(**scope), *store.standalone_notes(**scope)]
+        ]
+        items += [(memory_id, content) for memory_id, content, _state in store.live_memory_texts(**scope)]
+        if only is not None:
+            wanted = set(only)
+            items = [item for item in items if item[0] in wanted]
+        done.update(index.index_passages(items, budget=budget))
+        if not index.available:
+            done["skipped"] = _index_unavailable(index)
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Recall's meaning index was not updated: %s: %s", type(exc).__name__, exc,
+        )
+        return done
+    if record:
+        try:
+            store.set_meta(recall_index_meta_key(**scope), json.dumps({
+                "at": datetime.now(timezone.utc).isoformat(),
+                "by": record,
+                "items": done["items"],
+                "passages": done["passages"],
+                "waiting": done["waiting"],
+                "skipped": done["skipped"],
+            }))
+        except sqlite3.Error:
+            pass  # another writer holds the lock; the next pass records
+    return done
+
+
+def _index_unavailable(index: Any) -> str:
+    """Why the embedding model could not index, in one short line."""
+    if str(getattr(index, "backend", "")).startswith("local"):
+        model = getattr(getattr(index, "_embedder", None), "model_name", "") or "embedding model"
+        return (
+            f"the local model {model} could not be loaded from this machine; "
+            "run: mnemos embeddings download"
+        )
+    return " ".join(str(getattr(index, "unavailable_reason", "") or "the embedding backend failed").split())[:200]
+
+
+def describe_recall_index(status: Mapping[str, Any] | None) -> str | None:
+    """The health card's one line about recall's meaning index: said only
+    when the last pass over everything waiting could not embed anything."""
+    if not status or not status.get("skipped"):
+        return None
+    when = str(status.get("at") or "")[:10]
+    return f"not updated ({status.get('by') or 'maintenance'}, {when}): {status['skipped']}"
+
 
 # Hypomnema ids are uuid4 strings and engram ids are ULIDs after "engram_".
 # Recall treats a query of exactly either shape as an id before it treats it
@@ -3230,51 +3349,23 @@ class MnemosRuntime:
         budget: int | None = AUTO_INDEX_BUDGET,
         *,
         only: Collection[str] | None = None,
-    ) -> dict[str, int]:
-        """Give what recall can return its passage vectors, so it can be found
-        by meaning: every handoff in this scope (those in use first), any note
-        with no memory of its own, then the memories live in it, newest first.
-
-        Capture gives a memory one vector of its whole text, which the model
-        reads only to about 1,000 characters, and lessons and handoffs never
-        had any: on a copy of the live store 176 live memories (all lessons)
-        and all 259 handoffs had none, so no question could find them by
-        meaning. Only what has no passages, or whose words changed since, is
-        embedded; at most ``budget`` passages (None: everything), and ``only``
-        limits it to those ids.
-
-        Nothing is indexed by a read-only runtime, without a working embedding
-        backend, or by code older than the store, since how memory is indexed
-        is a rule newer code may have replaced. It never raises: the index is
-        a cache, and the words still find everything.
-        """
-        done = {"items": 0, "passages": 0, "waiting": 0}
-        index = self._embedding_index
-        if (
-            self._read_only
-            or index is None
-            or not getattr(index, "available", False)
-            or not hasattr(index, "index_passages")
-        ):
-            return done
+    ) -> dict[str, Any]:
+        """Give what recall can return in this scope its passage vectors
+        (``index_for_recall``): at most ``budget`` passages (None: everything
+        waiting), or only the items ``only`` names. A read-only runtime indexes
+        nothing. A pass over everything waiting (no ``only``) is recorded for
+        the health card; indexing one handoff as it is written is not."""
+        if self._read_only:
+            return {"items": 0, "passages": 0, "waiting": 0, "skipped": None}
         assert self._store is not None
-        if self._older_than_store() is not None:
-            return done
-        try:
-            items = [(note["id"], note.get("content") or "") for note in self._recallable_notes()]
-            items += [
-                (memory_id, content)
-                for memory_id, content, _state in self._store.live_memory_texts(**self._scope_args())
-            ]
-            if only is not None:
-                wanted = set(only)
-                items = [item for item in items if item[0] in wanted]
-            return index.index_passages(items, budget=budget)
-        except Exception as exc:
-            logging.getLogger(__name__).warning(
-                "Recall's meaning index was not updated: %s: %s", type(exc).__name__, exc,
-            )
-            return done
+        return index_for_recall(
+            self._store,
+            self._embedding_index,
+            budget=budget,
+            only=only,
+            record="mnemos_maintain" if only is None else "",
+            **self._scope_args(),
+        )
 
     def _recall_standing(self, query: str) -> str:
         """Every memory marked standing in this scope: how the human wants
@@ -4389,7 +4480,21 @@ class MnemosRuntime:
             # thousands of quarantined memories reported a healthy few hundred.
             "legacy": self.legacy_counts(),
             "semantic": self.semantic_status(),
+            # The last pass over everything waiting for recall's meaning index,
+            # by whichever process ran it (the scheduled job, maintenance, the
+            # command): the card says when it could embed nothing.
+            "recall_index": self.recall_index_status(),
         }
+
+    def recall_index_status(self) -> dict[str, Any] | None:
+        """The last pass over everything waiting for recall's meaning index in
+        this scope (``index_for_recall``), or None when none has run. Reads."""
+        raw = self._get_meta(RECALL_INDEX_META)
+        try:
+            status = json.loads(raw) if raw else None
+        except (TypeError, ValueError):
+            return None
+        return status if isinstance(status, dict) else None
 
     def _identity_health(self) -> dict[str, Any]:
         """Who this session introduced itself as, for health and doctor."""
@@ -4706,9 +4811,11 @@ def _format_handoff(result: Any, reader: str, session: str) -> str:
     )
 
 
-def _index_lines(indexed: Mapping[str, int]) -> list[str]:
+def _index_lines(indexed: Mapping[str, Any]) -> list[str]:
     """What maintenance says about recall's meaning index: nothing when it had
     nothing to do."""
+    if indexed.get("skipped"):
+        return [f"Recall index: nothing indexed: {indexed['skipped']}"]
     written, waiting = indexed.get("items", 0), indexed.get("waiting", 0)
     if not written and not waiting:
         return []
@@ -5045,6 +5152,9 @@ def format_health_card(data: dict[str, Any]) -> str:
     )
     semantic_lines = [line("Semantic", semantic_headline)]
     semantic_lines += [f"{'':<15}{detail}" for detail in semantic_details]
+    recall_index = describe_recall_index(data.get("recall_index"))
+    if recall_index:
+        semantic_lines.append(line("Recall index", recall_index))
     if semantic_attention:
         continuity_lines = [
             "", f"ATTENTION — {semantic_attention[0]}", *continuity_lines,

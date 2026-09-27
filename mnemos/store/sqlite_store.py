@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from ..code_version import MAINTENANCE_CODE_VERSION
 from ..file_security import secure_directory, secure_file
 from .fts import is_common
 from ..core.engram import Connection, Engram, VersionRef
@@ -587,6 +588,25 @@ class EngramStore:
         # Versions written in the open transaction, marked stored on commit.
         self._versions_written: list[VersionRef] = []
         self._init_db()
+        self._record_code_version()
+
+    def _record_code_version(self) -> None:
+        """Raise the store's minimum code version to this code's, on every
+        writable open, after the migrations.
+
+        From then on, code older than this stops maintaining the store and
+        reinforcing its memories (see mnemos/code_version.py). Only the simple
+        runtime used to record it, while the session-start hook, `mnemos
+        search`, the bridge, the advanced server and the shared pool wrote
+        through their own stores by these rules, so a store could stay marked
+        for older code that then never stood down. The raise never lowers the
+        value. If another process holds the write lock, the store still opens,
+        and the next opener raises it. A read-only store records nothing.
+        """
+        try:
+            self.raise_min_code_version(MAINTENANCE_CODE_VERSION)
+        except sqlite3.OperationalError:
+            pass
 
     def _secure_sqlite_files(self) -> None:
         """Keep the database and transient WAL files private."""
@@ -3579,8 +3599,9 @@ class ReadOnlyEngramStore(EngramStore):
     """An existing store opened so that nothing can change it.
 
     Opening an ``EngramStore`` is itself a write: it migrates the schema and
-    stamps ``schema_version`` on every open, which rewrites the file even when
-    nothing else happens. A diagnostic has to leave the store exactly as it
+    stamps ``schema_version`` and the minimum code version on every open,
+    which can rewrite the file even when nothing else happens, and would tell
+    older code to stand down. A diagnostic has to leave the store exactly as it
     found it, so this skips all of that and asks SQLite for a read-only
     connection. Every read works as usual; any write raises
     ``sqlite3.OperationalError`` instead of landing. The store must exist:

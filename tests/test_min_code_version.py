@@ -277,6 +277,10 @@ def test_a_newer_server_raises_the_minimum_and_an_older_one_never_lowers_it(
         monkeypatch.setattr(
             "mnemos.simple_runtime.MAINTENANCE_CODE_VERSION", version, raising=False
         )
+        # The store records the version when it is opened for writing.
+        monkeypatch.setattr(
+            "mnemos.store.sqlite_store.MAINTENANCE_CODE_VERSION", version, raising=False
+        )
         runtime = _runtime(db)
         try:
             if fresh:

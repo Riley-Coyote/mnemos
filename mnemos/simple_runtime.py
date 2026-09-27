@@ -986,8 +986,10 @@ class MnemosRuntime:
                 db_path=self.scope.db_path if has_vectors else None
             )
         else:
+            # Opening the store for writing records this code's version in it
+            # (EngramStore._record_code_version), so a server still running
+            # older code stops maintaining it.
             self._store = EngramStore(self.scope.db_path)
-            self._announce_code_version()
             self._embedding_index = EmbeddingIndex(db_path=self.scope.db_path)
         # The agent's self-declared model, recorded for the record rather
         # than to gate anything. Read straight from the freshly created
@@ -1021,20 +1023,6 @@ class MnemosRuntime:
             self._store,
             embedding_index=self._embedding_index,
         )
-
-    def _announce_code_version(self) -> None:
-        """Raise the store's minimum code version to this code's, at startup.
-
-        From then on, a server still running older code stops maintaining the
-        store (see ``maintain``). The raise never lowers the value. If another
-        process holds the write lock right now, this server still starts; the
-        next one to open the store raises it.
-        """
-        assert self._store is not None
-        try:
-            self._store.raise_min_code_version(MAINTENANCE_CODE_VERSION)
-        except sqlite3.OperationalError:
-            pass
 
     def _older_than_store(self) -> int | None:
         """The store's minimum when this code is older than it, else None.

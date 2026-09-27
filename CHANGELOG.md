@@ -112,6 +112,14 @@ them.
 - `MAINTENANCE_CODE_VERSION` is 3. Code older than the store reinforces
   nothing on any path, and records no session's reinforcement, so current
   code still makes the one that session is due.
+- Every writable open of a store now records the code version, after its
+  migrations and only ever raising it. Only a simple-mode server recorded it,
+  when it started. The session-start hook, `mnemos search`, the prompt
+  builder, the bridge, the advanced server and the shared pool open their
+  own stores and reinforce by current rules, so a store they wrote could stay
+  marked for older code, and a server running that code never stood down. If
+  another process holds the write lock, the store still opens and the next
+  opener records it. A read-only open (`mnemos doctor`) records nothing.
 
 ### Beliefs change only for real reasons
 

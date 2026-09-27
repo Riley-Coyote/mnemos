@@ -307,16 +307,23 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
                 idempotent=False,
             )
         )
-        def mnemos_recall(query: str, max_results: int = 5) -> str:
+        def mnemos_recall(query: str, max_results: int = 5, include_archived: bool = False) -> str:
             """Recall relevant continuity and durable memories.
 
             Pass the id of a note the packet cut short (its
             mnemos_recall("<id>")) as the query to read that note whole.
+
+            A memory that has gone quiet comes back when the query matches it
+            well, and wakes. One that faded further, into the archive, comes
+            back only by its id, or when include_archived is true and the
+            query names it; either way it is restored. What you forgot or
+            replaced with a correction stays gone.
             """
 
             return _output(_get_runtime().recall(
                 query=_text("query", query, MAX_QUERY_CHARS, required=True),
                 max_results=_count("max_results", max_results, minimum=1, maximum=MAX_RESULTS),
+                include_archived=bool(include_archived),
             ))
 
     @server.tool(

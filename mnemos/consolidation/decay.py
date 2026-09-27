@@ -1,5 +1,6 @@
 """
-Decay pass: recalculate strength, stability, and accessibility for all active engrams.
+Decay pass: recalculate strength, stability, and accessibility for active and
+dormant engrams.
 
 Models the natural forgetting curve. The dual-trace model:
 - Strength: how well stored (slow to change)
@@ -9,6 +10,14 @@ Models the natural forgetting curve. The dual-trace model:
 Accessibility decays exponentially, modulated by stability. Higher stability
 means slower forgetting. Strength decays much more slowly (10x slower).
 
+A memory whose accessibility falls below the dormant threshold goes dormant,
+and below the archive threshold it moves to the archive. A dormant memory keeps
+fading by the same curve until it wakes or reaches the archive; the pass never
+raises one, because only a return wakes it (see retrieval/reactive.py). This
+pass used to read active memories only, so a dormant one was never touched
+again: it could neither fade on nor, since recall did not look either, come
+back.
+
 Ported from Anima's salience.py and adapted for the dual-trace model.
 """
 
@@ -17,6 +26,8 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
+
+from ..code_version import MAINTENANCE_CODE_VERSION
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -30,10 +41,11 @@ def run_decay_pass(
     project_scope: str | None = None,
     max_elapsed_hours: float | None = None,
 ) -> dict[str, Any]:
-    """Recalculate strength, stability, and accessibility for all active engrams.
+    """Recalculate strength, stability, and accessibility for active and
+    dormant engrams.
 
     Args:
-        store: The engram store containing active engrams.
+        store: The engram store containing the engrams.
         config: Configuration dict with decay parameters.
         agent_id: Which agent's engrams to decay. None = all agents
             (used for shared DB consolidation).
@@ -45,16 +57,27 @@ def run_decay_pass(
             only for the first pass, which is genuine catch-up.
 
     Returns:
-        Statistics dict with counts and accessibility changes.
+        Statistics dict with counts and accessibility changes. The counts and
+        averages that were there before describe active memories only;
+        ``engrams_dormant`` counts the ones that went dormant in this pass, and
+        ``engrams_archived`` every memory the pass archived, from either state.
+        ``dormant_processed`` and ``dormant_decayed`` count the dormant ones.
     """
     decay_rate = config.get("decay_rate", 0.01)
     dormant_threshold = config.get("dormant_threshold", 0.05)
     archive_threshold = config.get("archive_threshold", 0.01)
 
+    # Dormant memories keep fading, by rules this code version holds: code
+    # older than the store leaves them as they are, whoever calls the pass
+    # (the simple runtime runs no pass at all then).
+    states: tuple[str, ...] = ("active",)
+    if not _older_than(store):
+        states = ("active", "dormant")
+
     # load_connections=True because decay uses connection count for decay resistance
-    engrams = store.get_active_engrams(
-        agent_id=agent_id, person_id=person_id, project_scope=project_scope,
-        limit=10000, load_connections=True,
+    engrams = store.get_engrams_in_states(
+        states, agent_id=agent_id, person_id=person_id,
+        project_scope=project_scope, limit=10000, load_connections=True,
     )
 
     stats = {
@@ -64,6 +87,8 @@ def run_decay_pass(
         "engrams_archived": 0,
         "avg_accessibility_before": 0.0,
         "avg_accessibility_after": 0.0,
+        "dormant_processed": 0,
+        "dormant_decayed": 0,
     }
 
     if not engrams:
@@ -73,8 +98,12 @@ def run_decay_pass(
     total_after = 0.0
 
     for engram in engrams:
-        stats["engrams_processed"] += 1
-        total_before += engram.accessibility
+        was_dormant = engram.state == "dormant"
+        if was_dormant:
+            stats["dormant_processed"] += 1
+        else:
+            stats["engrams_processed"] += 1
+            total_before += engram.accessibility
 
         # age_hours is how long since this memory was last touched; it drives
         # the recency floor below. decay_hours is how much decay this pass is
@@ -118,15 +147,18 @@ def run_decay_pass(
         new_strength = max(0.0, engram.strength - strength_loss)
 
         # 3. ANTI-DECAY FLOORS
-        if "foundational" in engram.tags:
-            new_accessibility = max(0.5, new_accessibility)
-            new_strength = max(0.5, new_strength)
+        # They hold an active memory up. A dormant one only fades: the pass
+        # never raises it, since only a return wakes it.
+        if not was_dormant:
+            if "foundational" in engram.tags:
+                new_accessibility = max(0.5, new_accessibility)
+                new_strength = max(0.5, new_strength)
 
-        if "active_project" in engram.tags:
-            new_accessibility = max(0.6, new_accessibility)
+            if "active_project" in engram.tags:
+                new_accessibility = max(0.6, new_accessibility)
 
-        if age_hours < 72:
-            new_accessibility = max(0.4, new_accessibility)
+            if age_hours < 72:
+                new_accessibility = max(0.4, new_accessibility)
 
         # Track if anything changed
         changed = (
@@ -135,7 +167,7 @@ def run_decay_pass(
         )
 
         if changed:
-            stats["engrams_decayed"] += 1
+            stats["dormant_decayed" if was_dormant else "engrams_decayed"] += 1
 
         engram.accessibility = round(new_accessibility, 4)
         engram.strength = round(new_strength, 4)
@@ -145,11 +177,12 @@ def run_decay_pass(
             store.archive_engram(engram, reason="decay_below_threshold")
             stats["engrams_archived"] += 1
             continue
-        elif new_accessibility < dormant_threshold:
+        elif new_accessibility < dormant_threshold and not was_dormant:
             engram.state = "dormant"
             stats["engrams_dormant"] += 1
 
-        total_after += engram.accessibility
+        if not was_dormant:
+            total_after += engram.accessibility
 
         # 5. PERSIST
         store.save_engram(engram)
@@ -160,6 +193,12 @@ def run_decay_pass(
     stats["avg_accessibility_after"] = round(total_after / n, 4)
 
     return stats
+
+
+def _older_than(store: Any) -> bool:
+    """Whether code newer than this has opened ``store`` (see code_version)."""
+    minimum = store.min_code_version()
+    return minimum is not None and minimum > MAINTENANCE_CODE_VERSION
 
 
 def _hours_since(iso_timestamp: str) -> float:

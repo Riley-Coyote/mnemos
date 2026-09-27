@@ -121,15 +121,18 @@ _CAPTURE_CONTEXT = "\n\nContext: "
 
 # Passages the scheduled job (`mnemos consolidate`: every four hours, and once
 # more at night, so seven runs a day) embeds per run. Once the store is indexed,
-# what waits is only what code older than the store wrote since (a session
-# keeps the code it started with, for days): a handoff is about 3 passages, a
-# capture 1 to 3, a lesson 1, so a busy day is a few dozen to a couple of
-# hundred. 256 a run clears about 1,800 a day, the whole live store as it
-# stood at this change (1,763 passages) within a day even if nobody runs
-# `mnemos embeddings index`. The job is a fresh process, so it pays the model's
-# load (about 3 s) only when something waits, and 256 passages add at most
-# about 1.3 s at the slowest rate measured here (193 a second, for passages
-# of 744 characters).
+# what waits is only what sessions on older code wrote since (a session keeps
+# the code it started with, for days), unindexed or cut the old way. On the
+# live store a handoff is about 10 passages (8 to 15), a capture about 6 (4 to
+# 10), a lesson 1 to 3, and over the last 30 days a day's writes came to a
+# median of 89 passages, 540 at most. 256 a run clears about 1,800 a day. The
+# live store as it stood when passages became sentence windows (4,604
+# passages, every item waiting) takes 18 runs, about two and a half days, if
+# nobody runs `mnemos embeddings index` (6.6 s on a copy). The job is a fresh
+# process, so it pays the model's load (about 3 s) only when something waits,
+# and 256 passages add at most about 1.3 s at the slowest rate measured (193 a
+# second, for R08's passages of 744 characters; the longest passages cut now,
+# about 700 characters, ran at 463 a second).
 SCHEDULED_INDEX_BUDGET = 256
 
 # The meta key (per scope) holding the last pass over everything waiting:

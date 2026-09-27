@@ -293,9 +293,11 @@ def shown_ids(packet: dict[str, Any]) -> set[str]:
 def shown_memories(packet: dict[str, Any]) -> tuple[set[str], list[str]]:
     """What the briefing showed, as the cue must know it to never show it again
     in the session: every id ``shown_ids`` names, with the memory each shown
-    note is one object with (a capture's note and memory, R07); and the whole
-    words of each note, lesson and standing memory shown, since the same words
-    can sit under another id (a lesson, and the memory it was drawn from)."""
+    note is one object with (a capture's note and memory, R07), and every
+    memory its graph section showed (``--include-graph``); and the whole words
+    of each note, lesson, standing memory and graph memory shown, since the
+    same words can sit under another id (a lesson, and the memory it was drawn
+    from)."""
     ids = shown_ids(packet)
     shown = packet.get("shown") or {}
     rendered = set(shown.get("notes") or []) | set(shown.get("standing") or [])
@@ -314,6 +316,12 @@ def shown_memories(packet: dict[str, Any]) -> tuple[set[str], list[str]]:
         words = entry.get("content") or entry.get("text") or ""
         if words:
             texts.append(words.split(_CONTEXT_MARK, 1)[0])
+    # What the graph section kept: ``build_context_packet`` leaves only those.
+    for entry in packet.get("mnemos_engrams") or []:
+        ids.add(entry["id"])
+        for words in (entry.get("impact"), entry.get("content")):
+            if words:
+                texts.append(words.split(_CONTEXT_MARK, 1)[0])
     return ids, texts
 
 

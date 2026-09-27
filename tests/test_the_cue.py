@@ -343,6 +343,29 @@ def test_what_the_briefing_showed_is_never_offered_in_that_session(tmp_path, hom
     assert memory_id in _hook(db, MESSAGE, session="another-session")
 
 
+def test_what_the_briefings_graph_showed_is_never_offered_in_that_session(tmp_path, meaning, home):
+    """With --include-graph the briefing also shows long-term graph recall for
+    its cue. What that section showed is recorded with the rest: the cue never
+    offers it again in that session; another session is offered it."""
+    found = _gate_memories()
+    db = _store(tmp_path / "memory.db", *found.values())
+    payload = json.dumps({"session_id": "graph-session", "hook_event_name": "SessionStart",
+                          "source": "startup", "model": MODEL, "cwd": str(tmp_path)})
+
+    started = subprocess.run(
+        [sys.executable, "-m", "mnemos.cli", "hook", "session-start", "--db-path", str(db),
+         *SCOPE_ARGS, "--include-graph", "--query", "the keeper met the ferry at the pier"],
+        input=payload.encode(), capture_output=True, timeout=60,
+        env=_env(Path(os.environ["HOME"])),
+    )
+
+    assert started.returncode == 0, started.stderr
+    assert b"Meet the ferry early when a storm is coming." in started.stdout, started.stdout
+    assert found["worded"].id in _seen("graph-session", db)["shown"]
+    assert _hook(db, MESSAGE, session="graph-session") == ""
+    assert found["worded"].id in _hook(db, MESSAGE, session="another-session")
+
+
 def test_offered_is_not_used_nothing_is_reinforced(tmp_path, meaning, home):
     """The cue reads. Offering a memory changes nothing about it: not its
     strength, access count or state, no link, no version, no reinforcement."""

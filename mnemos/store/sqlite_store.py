@@ -32,7 +32,7 @@ from ..core.identity import AgentIdentity
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # The lowest maintenance code version still allowed to maintain this store,
 # raised by each newer version that opens it (see mnemos/code_version.py).
@@ -45,9 +45,25 @@ _AUTHOR_COLUMNS = frozenset({"author_kind", "author_model", "author_session"})
 # Set, with the counts, once the memories a store held before v12 have been
 # labelled. Its presence is what stops the labelling from running again.
 AUTHORS_LABELED_KEY = "engram_authors_labeled"
+# Set, with what it linked per scope, once the capture notes a store held from
+# before pairs were recorded have been paired with their memories (v13). Its
+# presence is what stops the linking from running again.
+CAPTURE_PAIRS_LINKED_KEY = "capture_pairs_linked"
+# A capture writes its memory and then its note in one call: seconds apart at
+# most, even when finding links waits on a model. A note written further from
+# a memory than this was not written with it, however alike their words.
+CAPTURE_WINDOW_SECONDS = 10
 # Where each memory `mnemos repair quarantine-tool-written` moved came from, so
 # `--undo` returns exactly those and nothing else the quarantine holds.
 QUARANTINED_KEY = "quarantined_tool_written"
+
+# The link a correction writes from the memory that replaces to the memory it
+# replaced (v13). Mechanism-formed, like co_activated: nothing classified it,
+# the agent's correction made it. It never carries activation, because what it
+# points at is archived and nothing reaches an archived memory through a link.
+SUPERSEDES = "supersedes"
+# What a correction's version entry says changed: the words it replaced.
+CORRECTION_VERSION_REASON = "correction"
 
 # How long memory_trace keeps a row: one per tool call, so "what did the agent
 # see" has an answer for as long as anyone is likely to ask it.
@@ -106,6 +122,39 @@ VALID_HYPO_DOMAINS = {
     "topical",
     "situational",
 }
+
+# A continuity note's memory, when it has one, for a query that joins it as
+# ``m`` to the note as ``h``: the memory it is paired with, which one capture
+# wrote together with it (``graduated_to_engram_id``; promotion pairs a note
+# with a memory made from its words the same way). ``related_engram_id`` is
+# only a reference: a note written through the advanced tools can name a
+# memory it interprets or summarises, and that memory is never its pair.
+_NOTE_MEMORY_JOIN = "LEFT JOIN engrams m ON m.id = h.graduated_to_engram_id"
+# A note shares its memory's fate. It is live while it is active and its
+# memory, if it has one, has neither gone quiet nor faded into the archive:
+# when decay takes the memory there the note stops showing, and when recall
+# wakes it or resharpen restores it the note is back. Nothing is copied from
+# one to the other, so the two cannot fall out of step. A note with no memory
+# of its own (a handoff, a report, an answer kept open, a note that only
+# references a memory) is live while it is active.
+_NOTE_LIVE = "h.active = 1 AND (m.id IS NULL OR m.state NOT IN ('dormant', 'archived'))"
+# A note's own words, for a query that holds it as ``h``: its content without
+# a reflection added to it later (the runtime appends one after a blank line,
+# as "What this changed: ...").
+_NOTE_WORDS = (
+    "CASE WHEN instr(h.content, char(10) || char(10) || 'What this changed:') > 0 "
+    "THEN rtrim(substr(h.content, 1, "
+    "instr(h.content, char(10) || char(10) || 'What this changed:') - 1)) "
+    "ELSE h.content END"
+)
+# Whether a memory's text (``{text}``) is a note's words as a capture writes
+# them: the same words, or the words and the context the capture adds after a
+# blank line ("Context: ...").
+_CAPTURED_AS = (
+    f"(trim({{text}}) = trim({_NOTE_WORDS}) "
+    f"OR substr({{text}}, 1, length({_NOTE_WORDS}) + 11) = "
+    f"{_NOTE_WORDS} || char(10) || char(10) || 'Context: ')"
+)
 
 # Allowed column names for engrams table — prevents SQL injection via to_dict() keys
 _ENGRAM_COLUMNS = frozenset({
@@ -177,6 +226,10 @@ _RECONCILABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("agent_id", "agent_id TEXT"),
         ("person_id", "person_id TEXT"),
         ("project_scope", "project_scope TEXT"),
+    ],
+    "versions": [
+        ("author_model", "author_model TEXT NOT NULL DEFAULT ''"),
+        ("author_session", "author_session TEXT NOT NULL DEFAULT ''"),
     ],
     "hypomnema_entries": [
         (
@@ -305,6 +358,10 @@ CREATE TABLE IF NOT EXISTS versions (
     resolution_at_version REAL NOT NULL,
     changed_at TEXT NOT NULL,
     change_reason TEXT NOT NULL DEFAULT 'reconsolidation',
+    -- Who made the change, when someone did (v13): a correction's version
+    -- entry is signed by whoever corrected. Empty for a change a pass made.
+    author_model TEXT NOT NULL DEFAULT '',
+    author_session TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (engram_id, version_num)
 );
 
@@ -531,6 +588,13 @@ CREATE INDEX IF NOT EXISTS idx_hypomnema_scope_revised
 CREATE INDEX IF NOT EXISTS idx_hypomnema_promotion
     ON hypomnema_entries(agent_id, project_scope, created_at)
     WHERE active = 1 AND graduated_to_engram_id IS NULL;
+-- A note records its pair (graduated_to_engram_id) and any memory it only
+-- references (related_engram_id); these make the memory-to-note direction a
+-- lookup (see EngramStore.capture_pair).
+CREATE INDEX IF NOT EXISTS idx_hypomnema_related_engram
+    ON hypomnema_entries(related_engram_id);
+CREATE INDEX IF NOT EXISTS idx_hypomnema_graduated_engram
+    ON hypomnema_entries(graduated_to_engram_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hypomnema_one_active_handoff
     ON hypomnema_entries(agent_id, person_id, project_scope, author_session)
     WHERE active = 1 AND entry_kind = 'handoff';
@@ -551,6 +615,21 @@ CREATE INDEX IF NOT EXISTS idx_emotional_history_agent ON emotional_state_histor
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _written_together(note_at: str | None, memory_at: str | None) -> bool:
+    """Whether a note and a memory were written within one capture call
+    (``CAPTURE_WINDOW_SECONDS`` of each other). An unreadable time proves
+    nothing, so it is not."""
+
+    moments = []
+    for timestamp in (note_at, memory_at):
+        try:
+            moment = datetime.fromisoformat(timestamp or "")
+        except (TypeError, ValueError):
+            return False
+        moments.append(moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc))
+    return abs((moments[0] - moments[1]).total_seconds()) <= CAPTURE_WINDOW_SECONDS
 
 
 def _written_since(timestamp: str | None, cutoff: datetime) -> bool:
@@ -758,6 +837,7 @@ class EngramStore:
         self._classify_legacy_hypomnema(conn)
         self._backfill_engram_scopes(conn)
         self._label_engram_authors(conn)
+        self._link_older_capture_pairs(conn)
         # Only ever raised. A store newer code has stamped keeps its version
         # when older code opens it, as min_code_version does: stamping this
         # code's version over it would tell the newer code its own migration
@@ -972,6 +1052,69 @@ class EngramStore:
                 conn.execute(
                     "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
                     (AUTHORS_LABELED_KEY, _encode_json({"at": _utc_now(), "counts": counts})),
+                )
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+
+    @staticmethod
+    def _link_older_capture_pairs(conn: sqlite3.Connection) -> None:
+        """Pair the capture notes that name their memory only as a reference
+        (v13).
+
+        A note and a memory are a pair only when one capture wrote them
+        together, and the pair is recorded as ``graduated_to_engram_id``. A
+        note with only ``related_engram_id`` may be a capture from before the
+        pair was recorded, or a note that interprets or summarises a memory
+        (the advanced tools write those), and nothing kept at write time tells
+        them apart. What a capture leaves does: such a note is paired with the
+        memory it names when its own words are the memory's words as a
+        capture writes them (``_CAPTURED_AS``), in the same scope, and the two
+        were written within one capture call (``CAPTURE_WINDOW_SECONDS``). A
+        note written later with the memory's very words only references it.
+
+        Runs once per store, in one transaction with the record of what it
+        linked (``CAPTURE_PAIRS_LINKED_KEY``), which keeps it from running
+        again: from then on a note is paired when it is written, or never.
+        """
+        done = "SELECT 1 FROM meta WHERE key = ?"
+        if conn.execute(done, (CAPTURE_PAIRS_LINKED_KEY,)).fetchone():
+            return
+        if conn.in_transaction:
+            conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Another process may have linked them while this one waited.
+            if not conn.execute(done, (CAPTURE_PAIRS_LINKED_KEY,)).fetchone():
+                rows = conn.execute(
+                    f"""
+                    SELECT h.id, h.related_engram_id,
+                           h.agent_id || '/' || h.person_id || '/' || h.project_scope AS scope,
+                           h.created_at, e.created_at
+                    FROM hypomnema_entries h
+                    JOIN engrams e ON e.id = h.related_engram_id
+                    WHERE h.entry_kind = 'continuity'
+                      AND h.graduated_to_engram_id IS NULL
+                      AND e.owner_agent_id = h.agent_id
+                      AND e.person_id = h.person_id
+                      AND e.project_scope = h.project_scope
+                      AND ({_CAPTURED_AS.format(text='e.content')}
+                           OR {_CAPTURED_AS.format(text='e.content_at_encoding')})
+                    """
+                ).fetchall()
+                rows = [row for row in rows if _written_together(row[3], row[4])]
+                conn.executemany(
+                    "UPDATE hypomnema_entries SET graduated_to_engram_id = ? "
+                    "WHERE id = ? AND graduated_to_engram_id IS NULL",
+                    [(row[1], row[0]) for row in rows],
+                )
+                linked: dict[str, int] = {}
+                for row in rows:
+                    linked[row[2]] = linked.get(row[2], 0) + 1
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                    (CAPTURE_PAIRS_LINKED_KEY, _encode_json({"at": _utc_now(), "linked": linked})),
                 )
             conn.commit()
         except BaseException:
@@ -3158,6 +3301,7 @@ class EngramStore:
         limit: int = 8,
         include_inactive: bool = False,
         exclude_kinds: tuple[str, ...] = (),
+        live_only: bool = True,
     ) -> list[dict[str, Any]]:
         """Search scoped hypomnema entries by text, confidence, and salience.
 
@@ -3165,18 +3309,26 @@ class EngramStore:
         must never touch. Handoffs rank near the top of every search (they are
         stored at full confidence and salience), so a caller that filters them
         out after ranking loses a slot to each one.
+
+        By default only live notes are searched (``_NOTE_LIVE``), for what is
+        shown: a note whose memory has gone quiet or faded is left out with
+        it, and comes back when it does. ``live_only=False`` searches every
+        active note, whatever its memory's state, for finding what a
+        correction or a forget names: a pair that went quiet still holds its
+        words, and waking it would bring them back. ``include_inactive``
+        searches every note.
         """
         conn = self._get_conn()
         sql = (
-            "SELECT * FROM hypomnema_entries "
-            "WHERE agent_id = ? AND person_id = ? AND project_scope = ?"
+            f"SELECT h.* FROM hypomnema_entries h {_NOTE_MEMORY_JOIN} "
+            "WHERE h.agent_id = ? AND h.person_id = ? AND h.project_scope = ?"
         )
         params: list[Any] = [agent_id, person_id, project_scope]
         if not include_inactive:
-            sql += " AND active = 1"
+            sql += f" AND {_NOTE_LIVE}" if live_only else " AND h.active = 1"
         kinds = [kind for kind in exclude_kinds if kind in VALID_HYPO_ENTRY_KINDS]
         if kinds:
-            sql += f" AND entry_kind NOT IN ({', '.join('?' for _ in kinds)})"
+            sql += f" AND h.entry_kind NOT IN ({', '.join('?' for _ in kinds)})"
             params.extend(kinds)
         # Every note in scope is scored. A cap applied *before* scoring is a
         # silent amnesia: at 200 notes the old `LIMIT 100` made half of an
@@ -3187,7 +3339,7 @@ class EngramStore:
         # has grown past the ceiling below has a different problem than
         # ranking.
         sql += (
-            " ORDER BY foundational DESC, last_revised_at DESC"
+            " ORDER BY h.foundational DESC, h.last_revised_at DESC"
             f" LIMIT {_MAX_HYPOMNEMA_CANDIDATES}"
         )
         rows = conn.execute(sql, params).fetchall()
@@ -3408,8 +3560,14 @@ class EngramStore:
         agent_id: str = "default",
         person_id: str = "user",
         project_scope: str = "global",
+        revised_by: str = "",
+        author_session: str = "",
     ) -> str:
-        """Deactivate a scoped hypomnema entry while preserving its revision trail."""
+        """Deactivate a scoped hypomnema entry while preserving its revision trail.
+
+        ``revised_by`` and ``author_session`` record who took it out of use (the
+        model and harness session of whoever corrected or forgot it), when known.
+        """
         if not reason.strip():
             raise ValueError("Archive reason cannot be empty")
 
@@ -3425,13 +3583,16 @@ class EngramStore:
 
         now = _utc_now()
         revisions = list(row["revisions"])
-        revisions.append(
-            {
-                "at": now,
-                "prior_content": row["content"],
-                "reason": f"archived: {reason.strip()}",
-            }
-        )
+        revision: dict[str, Any] = {
+            "at": now,
+            "prior_content": row["content"],
+            "reason": f"archived: {reason.strip()}",
+        }
+        if (revised_by or "").strip():
+            revision["revised_by"] = revised_by.strip()
+        if (author_session or "").strip():
+            revision["revised_by_session"] = author_session.strip()
+        revisions.append(revision)
         conn = self._get_conn()
         conn.execute(
             """
@@ -3456,6 +3617,232 @@ class EngramStore:
         )
         self._commit()
 
+    # ── Capture pairs ──
+    #
+    # A capture is one object kept in two layers: the continuity note the
+    # briefing is built from, and the memory the graph holds. Both are written
+    # in one transaction, and the note records the pair
+    # (``graduated_to_engram_id``). That row is the pair's only record, and it
+    # is read both ways: ``capture_pair`` reaches the note and the memory from
+    # either one's id. A second copy of the link, kept on the memory, could
+    # disagree with the first, which is the split pairs exist to end.
+    #
+    # Only one capture writing them together makes a note and a memory a
+    # pair (promotion pairs a note with a memory made from its own words the
+    # same way). ``related_engram_id`` is a reference: a capture's note names
+    # the memory it was captured as there too, but a note written through the
+    # advanced tools can name a memory it only interprets or summarises, and
+    # that memory is never its pair. Captures from before the pair was
+    # recorded are linked once, when the store is opened by this code
+    # (``_link_older_capture_pairs``).
+
+    def save_capture_pair(self, engram: Engram, content: str, **note: Any) -> str:
+        """Save a capture's memory and its continuity note together, and
+        return the note's id.
+
+        One transaction: both land or neither does. The note is paired with
+        the memory (``graduated_to_engram_id``), so it is never promoted into
+        a second one, and names it as the memory it was captured as
+        (``related_engram_id``), unless ``related_engram_id`` is given: a note
+        that replaces one referencing another memory keeps that reference.
+        ``note`` takes ``write_hypomnema_entry``'s keywords. The memory's
+        vector is not written here: see ``Encoder.finish``.
+        """
+        note["related_engram_id"] = note.get("related_engram_id") or engram.id
+        with self.transaction() as conn:
+            self.save_engram(engram)
+            note_id = self.write_hypomnema_entry(content, **note)
+            conn.execute(
+                "UPDATE hypomnema_entries SET graduated_to_engram_id = ? WHERE id = ?",
+                (engram.id, note_id),
+            )
+        return note_id
+
+    @staticmethod
+    def pair_memory_id(note: dict[str, Any]) -> str | None:
+        """The memory a continuity note is paired with, or None: never a
+        memory it only references."""
+        return note.get("graduated_to_engram_id") or None
+
+    def notes_for_engram(
+        self,
+        engram_id: str,
+        *,
+        agent_id: str,
+        person_id: str,
+        project_scope: str,
+        active_only: bool = True,
+    ) -> list[dict[str, Any]]:
+        """The continuity notes in one exact scope paired with a memory,
+        active ones first, then the most recently revised. A note that only
+        references the memory is not among them."""
+        sql = (
+            "SELECT * FROM hypomnema_entries "
+            "WHERE agent_id = ? AND person_id = ? AND project_scope = ? "
+            "AND graduated_to_engram_id = ?"
+        )
+        if active_only:
+            sql += " AND active = 1"
+        rows = self._get_conn().execute(
+            sql + " ORDER BY active DESC, last_revised_at DESC",
+            (agent_id, person_id, project_scope, engram_id),
+        ).fetchall()
+        return [self._hydrate_hypomnema_row(dict(row)) for row in rows]
+
+    def capture_pair(
+        self,
+        pair_id: str,
+        *,
+        agent_id: str,
+        person_id: str,
+        project_scope: str,
+    ) -> tuple[dict[str, Any] | None, Engram | None]:
+        """The continuity note and the memory one capture wrote, reached from
+        either one's id, in one exact scope, in whatever state they are.
+
+        ``(note, None)`` for a note with no memory of its own (a note that
+        only references one, and a handoff or a report, which are never half
+        of a pair), ``(None, engram)`` for a memory no note is paired with,
+        and ``(None, None)`` when the id names neither here. From a memory,
+        its note is the active one paired with it, else the one most
+        recently retired with it.
+        """
+        scope = {"agent_id": agent_id, "person_id": person_id, "project_scope": project_scope}
+        note = self.get_hypomnema_entry(pair_id, **scope)
+        if note is not None:
+            memory_id = self.pair_memory_id(note) if note.get("entry_kind") == "continuity" else None
+            engram = self.get_engram_in_scope(memory_id, **scope) if memory_id else None
+            return note, engram
+        engram = self.get_engram_in_scope(pair_id, **scope)
+        if engram is None:
+            return None, None
+        notes = self.notes_for_engram(engram.id, **scope, active_only=False)
+        return (notes[0] if notes else None), engram
+
+    def successor(
+        self, pair_id: str, *, agent_id: str, person_id: str, project_scope: str,
+    ) -> str | None:
+        """The note or memory that replaced this one through a correction,
+        in the same scope, or None: a note's ``superseded_by``, a memory's
+        ``lineage.superseded_by``."""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT superseded_by FROM hypomnema_entries "
+            "WHERE id = ? AND agent_id = ? AND person_id = ? AND project_scope = ?",
+            (pair_id, agent_id, person_id, project_scope),
+        ).fetchone()
+        if row is not None:
+            return row[0] or None
+        row = conn.execute(
+            "SELECT lineage FROM engrams "
+            "WHERE id = ? AND owner_agent_id = ? AND person_id = ? AND project_scope = ?",
+            (pair_id, agent_id, person_id, project_scope),
+        ).fetchone()
+        if row is None:
+            return None
+        lineage = _decode_json(row[0], {})
+        return (lineage.get("superseded_by") or None) if isinstance(lineage, dict) else None
+
+    def retire_engram(self, engram: Engram, *, reason: str) -> bool:
+        """Archive a memory a correction replaced or the agent forgot, and
+        say whether this changed anything.
+
+        Its words stay, in the memory and the archive: nothing is deleted.
+        One already archived for a reason like this stays exactly as it is.
+        One that had only faded there is archived again with ``reason``, so
+        recall no longer brings it back: it has been replaced or forgotten.
+        """
+        if engram.state == "archived" and self.archive_reason(engram.id) not in FADED_ARCHIVE_REASONS:
+            return False
+        self.archive_engram(engram, reason=reason)
+        return True
+
+    def _merge_lineage(
+        self,
+        conn: sqlite3.Connection,
+        engram_id: str,
+        *,
+        supersedes: list[str] | None = None,
+        superseded_by: str | None = None,
+    ) -> None:
+        """Add to one memory's lineage in place, keeping what it holds."""
+        row = conn.execute("SELECT lineage FROM engrams WHERE id = ?", (engram_id,)).fetchone()
+        if row is None:
+            return
+        lineage = _decode_json(row[0], {})
+        if not isinstance(lineage, dict):
+            lineage = {}
+        if supersedes:
+            lineage["supersedes"] = list(dict.fromkeys([*(lineage.get("supersedes") or []), *supersedes]))
+        if superseded_by:
+            lineage["superseded_by"] = superseded_by
+        conn.execute(
+            "UPDATE engrams SET lineage = ? WHERE id = ?", (_encode_json(lineage), engram_id)
+        )
+
+    def record_correction(
+        self,
+        *,
+        note_id: str,
+        engram_id: str,
+        replaced_notes: list[str],
+        replaced_engrams: list[str],
+        words_before: str | None,
+        resolution_before: float = 1.0,
+        author_model: str = "",
+        author_session: str = "",
+    ) -> bool:
+        """Write what a correction replaced, in one transaction, and say
+        whether a version entry was written.
+
+        The replacement pair (``note_id``, ``engram_id``) and the pair it
+        replaced stay linked both ways: each replaced memory gets a
+        ``supersedes`` link from the replacement and a
+        ``lineage.superseded_by`` naming it, the replacement's lineage lists
+        what it supersedes, and each replaced note's ``superseded_by`` names
+        the replacement note. The replacement's history gains a version
+        keeping ``words_before``, signed by whoever corrected, but only when
+        they differ from the replacement's words: a version is written only
+        when the words change.
+        """
+        written = False
+        with self.transaction() as conn:
+            for old_id in replaced_engrams:
+                self._save_connection_no_commit(
+                    conn,
+                    engram_id,
+                    Connection(target_id=old_id, relation=SUPERSEDES, strength=1.0, formed_by="correction"),
+                )
+                self._merge_lineage(conn, old_id, superseded_by=engram_id)
+            if replaced_engrams:
+                self._merge_lineage(conn, engram_id, supersedes=list(replaced_engrams))
+            for old_note in replaced_notes:
+                conn.execute(
+                    "UPDATE hypomnema_entries SET superseded_by = ? WHERE id = ?",
+                    (note_id, old_note),
+                )
+            row = conn.execute("SELECT content FROM engrams WHERE id = ?", (engram_id,)).fetchone()
+            before = (words_before or "").strip()
+            if row is not None and before and before != (row[0] or "").strip():
+                conn.execute(
+                    "INSERT INTO versions "
+                    "(engram_id, version_num, content_snapshot, resolution_at_version, "
+                    "changed_at, change_reason, author_model, author_session) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        engram_id,
+                        self._next_version_num(conn, engram_id),
+                        words_before,
+                        resolution_before,
+                        _utc_now(),
+                        CORRECTION_VERSION_REASON,
+                        (author_model or "").strip(),
+                        (author_session or "").strip(),
+                    ),
+                )
+                written = True
+        return written
+
     def get_hypomnema_promotion_candidates(
         self,
         *,
@@ -3464,7 +3851,12 @@ class EngramStore:
         project_scope: str = "global",
         limit: int = 10,
     ) -> list[dict[str, Any]]:
-        """List stable hypomnema entries ready to become Mnemos engrams."""
+        """List stable hypomnema entries ready to become Mnemos engrams.
+
+        A note that references a memory it interprets or summarises
+        (``related_engram_id``) is never one: promoting it would pair it with
+        a memory no capture wrote together with it.
+        """
         conn = self._get_conn()
         rows = conn.execute(
             """
@@ -3473,6 +3865,7 @@ class EngramStore:
               AND active = 1
               AND entry_kind = 'continuity'
               AND graduated_to_engram_id IS NULL
+              AND related_engram_id IS NULL
               AND confidence >= 0.82
               AND salience >= 0.65
               AND (revision_count >= 1 OR foundational = 1)
@@ -3490,7 +3883,12 @@ class EngramStore:
         person_id: str | None = None,
         project_scope: str | None = None,
     ) -> dict[str, int]:
-        """Count hypomnema entries for a scope."""
+        """Count hypomnema entries for a scope.
+
+        ``hypomnema_active`` and ``hypomnema_foundational`` count live notes
+        (``_NOTE_LIVE``), the ones a reader is shown: a note whose memory has
+        gone quiet or faded is not counted until it comes back.
+        """
         conn = self._get_conn()
         where = ["agent_id = ?"]
         params: list[Any] = [agent_id]
@@ -3501,15 +3899,16 @@ class EngramStore:
             where.append("project_scope = ?")
             params.append(project_scope)
         where_sql = " AND ".join(where)
+        noted_sql = " AND ".join(f"h.{condition}" for condition in where)
         row = conn.execute(
             f"""
             SELECT
               COUNT(*) AS total,
-              SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END) AS active,
-              SUM(CASE WHEN foundational = 1 AND active = 1 THEN 1 ELSE 0 END) AS foundational,
-              SUM(CASE WHEN graduated_to_engram_id IS NOT NULL THEN 1 ELSE 0 END) AS promoted
-            FROM hypomnema_entries
-            WHERE {where_sql}
+              SUM(CASE WHEN {_NOTE_LIVE} THEN 1 ELSE 0 END) AS active,
+              SUM(CASE WHEN h.foundational = 1 AND {_NOTE_LIVE} THEN 1 ELSE 0 END) AS foundational,
+              SUM(CASE WHEN h.graduated_to_engram_id IS NOT NULL THEN 1 ELSE 0 END) AS promoted
+            FROM hypomnema_entries h {_NOTE_MEMORY_JOIN}
+            WHERE {noted_sql}
             """,
             params,
         ).fetchone()
@@ -3519,6 +3918,7 @@ class EngramStore:
             "AND active = 1 "
             "AND entry_kind = 'continuity' "
             "AND graduated_to_engram_id IS NULL "
+            "AND related_engram_id IS NULL "
             "AND confidence >= 0.82 "
             "AND salience >= 0.65 "
             "AND (revision_count >= 1 OR foundational = 1)"

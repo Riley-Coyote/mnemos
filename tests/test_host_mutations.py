@@ -65,7 +65,8 @@ def test_capture_replay_returns_original_result_once(tmp_path):
 
 @pytest.mark.parametrize(
     "stage",
-    ["save_engram", "write_hypomnema_entry", "mark_hypomnema_promoted"],
+    # The memory, its note, and the pair they make (which links them).
+    ["save_engram", "write_hypomnema_entry", "save_capture_pair"],
 )
 def test_capture_crash_after_each_multitable_stage_rolls_back(tmp_path, monkeypatch, stage):
     db = tmp_path / f"{stage}.db"

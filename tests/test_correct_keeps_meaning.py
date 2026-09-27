@@ -170,20 +170,29 @@ def test_a_placeholder_is_never_carried_as_meaning(db, path, impact, impact_sour
     assert "Kept what it meant" not in result, result
 
 
-def test_an_impact_for_a_continuity_note_is_not_dropped_silently(db):
-    """A note is revised in place and holds no impact, so say it was not saved."""
+def test_an_impact_given_by_note_id_is_what_the_correction_means(db):
+    """A note and its memory are one capture, so correcting by the note's id
+    replaces its memory too, and the impact has a memory to hold it. The same
+    id given again reaches the version now in use, and keeps its meaning."""
     rt = _runtime(db)
     try:
         captured = rt.capture(content=ORIGINAL, impact=MEANING)
         note_id = re.search(r"Continuity note ID: (\S+)", captured).group(1)
         result = rt.correct(correction=CORRECTED, target_id=note_id, impact=NEW_MEANING)
-        without = rt.correct(correction=CORRECTED, target_id=note_id)
+        given = _live(db, "five weeks")
+        again = rt.correct(
+            correction="She got a writing residency in Lisbon: four weeks, starting in March.",
+            target_id=note_id,
+        )
     finally:
         rt.close()
 
     assert result.startswith(f"Updated continuity note {note_id}."), result
-    assert "The impact was not saved" in result, result
-    assert without == f"Updated continuity note {note_id}.", without
+    assert "The impact was not saved" not in result, result
+    assert given == (NEW_MEANING, "agent")
+    assert "had already been replaced by a correction" in again, again
+    assert f'Kept what it meant: "{NEW_MEANING}"' in again, again
+    assert _live(db, "four weeks") == (NEW_MEANING, "agent")
 
 
 @pytest.mark.parametrize("module", ["mnemos.simple_mcp:simple_mcp", "mnemos.mcp_server:mcp"])

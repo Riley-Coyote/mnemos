@@ -875,8 +875,15 @@ def test_every_tool_call_leaves_one_trace_row(tmp_path, monkeypatch):
     assert handoff_id in json.loads(by_tool["context"]["read_ids"])
     assert handoff_id in json.loads(by_tool["handoff"]["written_ids"])
     assert json.loads(by_tool["reflect"]["read_ids"]) == [engram_id]
+    # A correction acts on the whole capture: it retires the memory and its
+    # note, and writes the replacement memory and note.
     corrected = json.loads(by_tool["correct"]["written_ids"])
-    assert engram_id in corrected and len(corrected) == 2, corrected
+    [note] = _rows(db, "SELECT id FROM hypomnema_entries WHERE related_engram_id = ?", (engram_id,))
+    [replacement] = _rows(db, "SELECT id, related_engram_id FROM hypomnema_entries WHERE active = 1 "
+                              "AND content LIKE '%ledger/2026.csv%'")
+    assert sorted(corrected) == sorted(
+        [engram_id, note["id"], replacement["related_engram_id"], replacement["id"]]
+    ), corrected
     for row in trace:
         assert "harbour" not in row["read_ids"] + row["written_ids"], "a trace holds text"
 

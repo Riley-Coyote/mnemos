@@ -191,12 +191,20 @@ class TestSigning:
                 "", agent_id="claude-code", person_id="user", project_scope="global", limit=1,
             )[0]
             opus.correct("The route still returns 404; it is not live.", target_id=note["id"])
-            revised = opus._store.get_hypomnema_entry(
+            # The correction is a new note, in Opus's words and signed by
+            # Opus; the note it replaced keeps Fable's words and signature,
+            # and records that Opus retired it.
+            retired = opus._store.get_hypomnema_entry(
                 note["id"], agent_id="claude-code", person_id="user", project_scope="global",
             )
-            assert revised["author_model"] == "claude-opus-5-5"
-            assert revised["revisions"][-1]["prior_author_model"] == "claude-fable-5-1"
-            assert revised["revisions"][-1]["revised_by"] == "claude-opus-5-5"
+            corrected = opus._store.get_hypomnema_entry(
+                retired["superseded_by"], agent_id="claude-code", person_id="user",
+                project_scope="global",
+            )
+            assert corrected["content"] == "The route still returns 404; it is not live."
+            assert corrected["author_model"] == "claude-opus-5-5"
+            assert not retired["active"] and retired["author_model"] == "claude-fable-5-1"
+            assert retired["revisions"][-1]["revised_by"] == "claude-opus-5-5"
         finally:
             fable.close()
             opus.close()

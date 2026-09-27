@@ -2,6 +2,72 @@
 
 ## 0.3.1 (unreleased)
 
+### One capture, one object; corrections that land once
+
+A capture writes two things, a continuity note (what the briefing is built
+from) and a memory (what the graph holds), and each correction path updated
+one and not the other. Correcting by the note's id left the memory saying the
+old thing; correcting by the memory's id left the note saying it in the
+briefing; two corrections of one note left two live replacements; correcting
+and then forgetting left the corrected memory live. No correction recorded
+what it replaced. The capture itself committed the memory, the note and the
+link between them separately, so a failure between them left half a pair. On
+a copy of a real store (2026-09-27), `claude-code/user/global` held one pair
+whose note and memory said different things (a note corrected by its id), and
+three live notes over memories a correction by memory id had replaced, each
+replacement without a note.
+
+- A capture saves its memory and its note in one transaction, the note
+  pointing at the memory; the memory's vector is written once that
+  transaction commits (inside it, the vector's own connection would wait on
+  the lock and fail, and encoding swallows that failure). Either id reaches
+  both.
+- Every correction path (the note's id, the memory's id, a query) retires the
+  note and its memory together and writes the replacement pair, in one
+  transaction; a forget retires both and writes nothing. The old pair is kept,
+  archived, never deleted. An id a correction already replaced reaches its
+  current version, so correcting or forgetting twice never leaves two live.
+- A correction records what it replaced: a `supersedes` link from the new
+  memory to the old, `lineage.supersedes` / `lineage.superseded_by` on both,
+  the old note's `superseded_by`, and a version on the new memory keeping the
+  old words (`change_reason` 'correction'), written only when the words
+  change. The replacement pair and its version are signed with the
+  corrector's model and session; a retired note's revision records who
+  retired it (`revised_by`, `revised_by_session`).
+- An impact given with a correction becomes a lesson about the mistake,
+  drawn from the replacement (only the agent's own words make one).
+- A correction never moves a belief by the words it shares with one: the
+  word-overlap heuristic is gone. `mnemos_correct(target_id="belief_...")`
+  retires a belief the agent stated (`action=forget`), or replaces it with the
+  agent's words, formed at 40% as a stated belief is, the old one retired and
+  pointing at it.
+- A note shares its memory's fate. When decay takes the memory dormant or
+  into the archive, the note stops showing (briefing, recall, counts); when
+  the memory wakes or `resharpen` restores it, the note is back. Nothing is
+  copied between them. Recalling the note by its id brings its memory back
+  as recalling the memory's id would. The id of a note or memory a correction
+  replaced says so and names the version now in use, never the old words.
+- `MAINTENANCE_CODE_VERSION` is 6. Code older than the store still records a
+  correction in the agent's words and retires what it names, and writes no
+  link, lineage, version, lesson or belief change.
+
+Migration (schema 13). The first open by this code adds `author_model` and
+`author_session` to `versions` (empty for every existing row) and two indexes
+on the note-to-memory columns, after the usual verified pre-migration backup.
+No row is changed. On a copy of the real store it opened in 1.6 seconds.
+
+Changed behaviour, and what to do:
+
+- A correction by note id now answers with the new note's and memory's ids
+  ("Continuity note ID", "Memory ID"); the note id changes, as the memory id
+  always did. An impact given that way is saved.
+- Correcting a belief needs its id; words alone no longer retire or lower one.
+- Notes over dormant or archived memories leave the briefing. On the copy,
+  its live notes went from 200 to 181: 16 over dormant memories and 3 over
+  memories replaced by a correction.
+- Pairs split before this change stay as they are; repairing them is a
+  separate, approved step.
+
 ### Every memory says who wrote it
 
 The memory could not tell the agent's words from a tool's. No memory recorded

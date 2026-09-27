@@ -333,6 +333,10 @@ _CORRECTION_VERBS = frozenset(
     "forget archive remove delete update supersede replace correct correction".split()
 )
 
+# The actions that make mnemos_correct forget what it names, rather than
+# replace it: the note and its memory are archived, and nothing is written.
+_FORGET_ACTIONS = frozenset({"forget", "archive", "remove", "delete"})
+
 
 def _named_by(query: str, text: str) -> int:
     """How many of a correction query's meaningful words a note or memory holds,
@@ -2643,6 +2647,12 @@ class MnemosRuntime:
         would reinforce it: a dormant one wakes, and one that faded into the
         archive is brought back first (``resharpen``). Its id is the one way
         to reach a faded memory without asking recall to search the archive.
+
+        A note and its memory are one capture, and a note shares its memory's
+        fate, so the note's id reaches the memory too: a note whose memory has
+        gone quiet or faded brings it back exactly as the memory's id would.
+        The id of a note or memory a correction replaced says so and names
+        the version now in use, and never shows the words it replaced.
         """
         assert self._store is not None
         scope = {
@@ -2665,11 +2675,15 @@ class MnemosRuntime:
                     )
                 return "\n".join(lines)
             if not note.get("active"):
+                return self._replaced_by(note_id, "Note")
+            brought = self._bring_back_memory_of(note)
+            if brought is None:
                 return ""
-            return "\n".join([
+            lines = [
                 f"Note {note_id}, {note_signature(note)}, {_age_text(note['created_at'])}:",
                 note["content"],
-            ])
+            ]
+            return "\n".join(lines + ([brought] if brought else []))
         if _ENGRAM_ID.fullmatch(note_id):
             engram = self._store.get_engram_in_scope(note_id, **scope)
             if engram is None:
@@ -2677,9 +2691,10 @@ class MnemosRuntime:
             faded = engram.state == "archived"
             if faded:
                 # Only decay's door opens back. What the agent forgot, or
-                # replaced with a correction, it closed on purpose.
+                # replaced with a correction, it closed on purpose; a
+                # replaced one names what replaced it.
                 if self._store.archive_reason(note_id) not in FADED_ARCHIVE_REASONS:
-                    return ""
+                    return self._replaced_by(note_id, "Memory")
                 engram = self._restore_faded(engram)
             quiet = engram.state == "dormant"
             kind = "Lesson" if {"lesson", "distilled"} & set(engram.tags or []) else "Memory"
@@ -2694,6 +2709,13 @@ class MnemosRuntime:
                 )
             elif quiet:
                 lines.append("It had gone quiet.")
+            # A correction remembers what it replaced, by id: the words stay
+            # with the memory it replaced, out of recall.
+            if engram.lineage.supersedes:
+                lines.append(
+                    f"It replaced {_id_list('memory', engram.lineage.supersedes)} "
+                    "through a correction."
+                )
             # Asking for a memory by its id is a use, as a query that returns
             # it is: reinforced the same way, once a session and never by
             # code older than the store, and a dormant one wakes as it would
@@ -2704,6 +2726,66 @@ class MnemosRuntime:
                 )
             return "\n".join(lines)
         return ""
+
+    def _bring_back_memory_of(self, note: dict[str, Any]) -> str | None:
+        """Read a note's memory as its id would be read, since the note shares
+        its fate: one that went quiet wakes, and one that faded into the
+        archive is restored, by the rules recall by the memory's id follows
+        (never by code older than the store). Returns the line saying what
+        happened, ``""`` when the memory is in use or the note has none, and
+        None when it was forgotten or replaced, which leaves the note out of
+        use with it."""
+        assert self._store is not None
+        scope = self._scope_args()
+        engram = None
+        for engram_id in self._store.note_memory_ids(note):
+            engram = self._store.get_engram_in_scope(engram_id, **scope)
+            if engram is not None:
+                break
+        if engram is None or engram.state not in ("dormant", "archived"):
+            return ""
+        faded = engram.state == "archived"
+        if faded:
+            if self._store.archive_reason(engram.id) not in FADED_ARCHIVE_REASONS:
+                return None
+            engram = self._restore_faded(engram)
+        if engram.state in ("active", "dormant"):
+            self._reinforce_returned(
+                note["id"], [RetrievalResult(engram=engram, score=1.0, retrieval_path="id")],
+            )
+        back = self._store.engram_state_in_scope(engram.id, **scope) == "active"
+        older = self._older_than_store() is not None
+        if faded:
+            if back:
+                return "Its memory had faded into the archive; recalling the note brought it back."
+            return "Its memory has faded into the archive, and this session's code leaves it there."
+        if back:
+            return "Its memory had gone quiet; recalling the note woke it."
+        if older:
+            return "Its memory has gone quiet, and this session's code leaves it there."
+        return "Its memory has gone quiet."
+
+    def _replaced_by(self, pair_id: str, label: str) -> str:
+        """What reading a replaced note or memory by its id says: that a
+        correction replaced it, and the id of its version now in use. Never
+        its words: what a correction replaced stays out of recall, kept as a
+        trace. ``""`` for one that was forgotten, and for one whose line of
+        corrections ends in something forgotten."""
+        assert self._store is not None
+        current = self._latest(pair_id)
+        if current == pair_id:
+            return ""
+        note, engram = self._store.capture_pair(current, **self._scope_args())
+        if label == "Note":
+            live = note is not None and bool(note.get("active"))
+        else:
+            live = engram is not None and engram.state != "archived"
+        if not live:
+            return ""
+        return (
+            f"{label} {pair_id} was replaced by a correction. Its current version "
+            f"is {label.lower()} {current}; recall that id to read it."
+        )
 
     def _restore_faded(self, engram: Engram) -> Engram:
         """Bring a memory that faded into the archive back (``resharpen``), and
@@ -2900,7 +2982,11 @@ class MnemosRuntime:
         The memory and its note are the agent's words (``author_kind``
         'agent'), signed with ``signed_as`` when the agent gives its model id,
         and otherwise as ``author_model`` resolves it, and marked with the
-        harness session."""
+        harness session.
+
+        They are one object: saved in one transaction, the note pointing at
+        the memory, so either id reaches both (``EngramStore.capture_pair``)
+        and a correction or a forget acts on both."""
 
         if not content.strip():
             return "Nothing captured: content was empty."
@@ -2937,7 +3023,9 @@ class MnemosRuntime:
         # other memories: no weighing against beliefs, no links.
         older = self._older_than_store() is not None
 
-        engram = self._encoder.encode(
+        # Finding links and weighing surprise read the store and may call a
+        # model, so they happen before the pair's transaction opens.
+        engram = self._encoder.prepare(
             content=full_content,
             impact=impact,
             impact_source=impact_source if impact else "",
@@ -2963,7 +3051,10 @@ class MnemosRuntime:
             author_model=author,
             author_session=session,
         )
-        note_id = self._store.write_hypomnema_entry(
+        # One capture, one object: the memory and its note land together or
+        # not at all, the note pointing at the memory.
+        note_id = self._store.save_capture_pair(
+            engram,
             content.strip(),
             agent_id=self.scope.agent_id,
             person_id=self.scope.person_id,
@@ -2979,10 +3070,10 @@ class MnemosRuntime:
             confidence=confidence,
             salience=salience,
             foundational=domain in {"foundational", "identity"},
-            related_engram_id=engram.id,
         )
+        # The vector, once the pair has committed (see Encoder.finish).
+        self._encoder.finish(engram)
         self._traced_write(engram.id, note_id)
-        self._store.mark_hypomnema_promoted(note_id, engram.id)
         self._record_first_capture(note_id, engram.id, content)
         # Continuity just arrived, so any run of empty packets is over.
         self._set_meta("last_capture_session", str(self._current_session()))
@@ -3080,54 +3171,425 @@ class MnemosRuntime:
         self._reinforce_returned(query, returned)
         return "\n".join(lines)
 
-    def _maybe_correct_belief(self, correction: str, query: str, action: str) -> str:
-        """Retire or downweight an agent-authored belief the correction names.
+    # ── Correcting and forgetting ──
+    #
+    # A capture is one object: its continuity note and its memory (see
+    # EngramStore.save_capture_pair). Every path that corrects or forgets
+    # reaches both from whichever one it names, and acts on both, in one
+    # transaction, so neither is left saying what the other no longer does.
 
-        Matches the correction text against active beliefs the agent itself
-        stated (``source == 'agent'``) by token overlap, above a conservative
-        threshold so a memory correction that merely brushes a belief does not
-        move it. Forget/archive → supersede (hidden from every read path);
-        otherwise → erode confidence toward the floor. Returns a note if it
-        acted, else ''.
+    def _scope_args(self) -> dict[str, str]:
+        return {
+            "agent_id": self.scope.agent_id,
+            "person_id": self.scope.person_id,
+            "project_scope": self.scope.project_scope,
+        }
+
+    def _latest(self, pair_id: str) -> str:
+        """The id a line of corrections has reached from ``pair_id``: the
+        note or memory now standing where it stood, or ``pair_id`` itself when
+        no correction replaced it."""
+        assert self._store is not None
+        scope = self._scope_args()
+        current, seen = pair_id, {pair_id}
+        while True:
+            later = self._store.successor(current, **scope)
+            if not later or later in seen:
+                return current
+            seen.add(later)
+            current = later
+
+    def _current_pair(
+        self, pair_id: str,
+    ) -> tuple[str | None, dict[str, Any] | None, Engram | None, str]:
+        """What a correction's id names: ``(kind, note, memory, id acted on)``.
+
+        ``kind`` is 'note' or 'memory' for the half the id names, 'other' for
+        a handoff or a report (never half of a pair, never followed), and
+        None when nothing in this scope has the id. A note or memory a
+        correction already replaced is followed to its current version, so
+        an old id reaches the pair in use now and never leaves a second
+        replacement live beside the first.
         """
         assert self._store is not None
-        text = query.strip() or correction.strip()
-        terms = _query_terms(text)
-        if not terms:
-            return ""
-        beliefs = [
-            b for b in self._store.get_beliefs(self.scope.agent_id, active_only=True)
-            if b.source == "agent"
-        ]
-        best, best_overlap = None, 0.0
-        for belief in beliefs:
-            bterms = _query_terms(belief.content)
-            # Half the words in common is not enough when the half is "what"
-            # and "she": the belief must hold the words that mean something.
-            if not bterms or not _named_by(text, belief.content):
-                continue
-            overlap = len(terms & bterms) / len(terms)
-            if overlap > best_overlap:
-                best, best_overlap = belief, overlap
-        if best is None or best_overlap < 0.5:
-            return ""
+        scope = self._scope_args()
+        note, engram = self._store.capture_pair(pair_id, **scope)
+        if note is None and engram is None:
+            return None, None, None, pair_id
+        if note is not None and note.get("entry_kind") != "continuity":
+            return "other", note, None, pair_id
+        kind = "note" if note is not None and note["id"] == pair_id else "memory"
+        current = self._latest(pair_id)
+        if current != pair_id:
+            note, engram = self._store.capture_pair(current, **scope)
+        return kind, note, engram, current
 
-        if action in {"forget", "archive", "remove", "delete"}:
-            self._store.supersede_belief(best.id, reason=f"agent correction: {text[:80]}")
-            self._traced_write(best.id)
-            return (
-                f'Retired the belief "{best.content[:80]}". '
-                "It will no longer shape your context."
-            )
-        new_conf = max(0.05, best.confidence - 0.3)
-        self._store.revise_belief(
-            best.id, new_conf, reason=f"agent correction: {text[:80]}"
-        )
-        self._traced_write(best.id)
+    def _pair_members(
+        self, note: dict[str, Any] | None, engram: Engram | None,
+    ) -> tuple[list[dict[str, Any]], list[Engram]]:
+        """Everything holding one pair's words: its note and every active
+        note pointing at its memory, its memory and every memory those notes
+        point at. A correction or a forget takes them out of use together, so
+        none stays live beside the rest (an older correction could leave a
+        note pointing at two)."""
+        assert self._store is not None
+        scope = self._scope_args()
+        notes: dict[str, dict[str, Any]] = {}
+        memories: dict[str, Engram] = {}
+        if note is not None:
+            notes[note["id"]] = note
+        if engram is not None:
+            memories[engram.id] = engram
+            for other in self._store.notes_for_engram(engram.id, **scope):
+                notes.setdefault(other["id"], other)
+        for held in list(notes.values()):
+            for engram_id in self._store.note_memory_ids(held):
+                if engram_id not in memories:
+                    found = self._store.get_engram_in_scope(engram_id, **scope)
+                    if found is not None:
+                        memories[engram_id] = found
+        return list(notes.values()), list(memories.values())
+
+    def _still_held(self, engram: Engram) -> bool:
+        """Whether a memory is still there to replace or forget: in use, or
+        only faded into the archive. One forgotten or already replaced was
+        closed on purpose, and nothing reopens it: its words are never
+        carried or copied again."""
+        assert self._store is not None
         return (
-            f'Lowered confidence in the belief "{best.content[:80]}" '
-            f"to {int(new_conf * 100)}%."
+            engram.state != "archived"
+            or self._store.archive_reason(engram.id) in FADED_ARCHIVE_REASONS
         )
+
+    def _retire(
+        self,
+        notes: list[dict[str, Any]],
+        memories: list[Engram],
+        *,
+        action: str,
+        corrector: str,
+        session: str,
+        query: str = "",
+    ) -> tuple[list[str], list[str]]:
+        """Take a pair out of use, in the transaction under way: its active
+        notes and the memories it still holds. Both are kept, archived, never
+        deleted; each note's revision records who retired it. Returns the
+        ids of the notes and the memories retired."""
+        assert self._store is not None
+        reason = f"simple correction action={action}" + (f"; query={query}" if query else "")
+        retired_notes = []
+        for held in notes:
+            if held.get("active"):
+                self._store.archive_hypomnema_entry(
+                    held["id"],
+                    reason=reason,
+                    revised_by=corrector,
+                    author_session=session,
+                    **self._scope_args(),
+                )
+                retired_notes.append(held["id"])
+        retired_memories = [
+            engram.id for engram in memories
+            if self._store.retire_engram(engram, reason=f"simple_correction_{action}")
+        ]
+        self._traced_write(*retired_notes, *retired_memories)
+        return retired_notes, retired_memories
+
+    def _forget_pair(
+        self,
+        note: dict[str, Any] | None,
+        engram: Engram | None,
+        *,
+        action: str,
+        corrector: str,
+        session: str,
+        query: str = "",
+    ) -> tuple[list[str], list[str]]:
+        """Forget acts on the pair: the note and its memory are archived
+        together, in one transaction, and nothing is written in their place."""
+        assert self._store is not None
+        notes, memories = self._pair_members(note, engram)
+        with self._store.transaction():
+            return self._retire(
+                notes, memories, action=action, corrector=corrector, session=session, query=query,
+            )
+
+    def _note_head(self, note: dict[str, Any] | None) -> str:
+        """A note's own words, without a reflection added to them."""
+        if note is None:
+            return ""
+        content = note.get("content") or ""
+        return content.split(f"\n\n{self._REFLECTION_MARKER}")[0].strip()
+
+    def _replacement_note(
+        self, note: dict[str, Any] | None, correction: str, corrector: str, session: str,
+    ) -> dict[str, Any]:
+        """How a correction's note is written: the agent's words, signed, in
+        the place the note it replaces held (its domain, tags, and standing
+        as foundational), or classified afresh when it replaces no note."""
+        domain = (note or {}).get("domain") or _classify_domain(correction)
+        return {
+            **self._scope_args(),
+            "source": "observed",
+            "entry_kind": "continuity",
+            "authored_by": "agent",
+            "author_id": self.scope.agent_id,
+            "author_model": corrector,
+            "author_session": session,
+            "domain": domain,
+            "tags": list((note or {}).get("tags") or _simple_tags(correction)),
+            "confidence": 0.92,
+            "salience": max(0.75, float((note or {}).get("salience") or 0.0)),
+            "foundational": (
+                bool(note.get("foundational")) if note is not None
+                else domain in {"foundational", "identity"}
+            ),
+            "related_session_id": (note or {}).get("related_session_id"),
+        }
+
+    def _replace_pair(
+        self,
+        note: dict[str, Any] | None,
+        engram: Engram | None,
+        correction: str,
+        impact: str,
+        *,
+        action: str,
+        placeholder: str,
+        corrector: str,
+        session: str,
+        older: bool,
+        query: str = "",
+    ) -> dict[str, Any]:
+        """Retire a pair and write the pair that replaces it, in the agent's
+        words, in one transaction.
+
+        Current code also records what was replaced (``record_correction``):
+        a ``supersedes`` link and lineage both ways, the old note's successor,
+        and a version keeping the old words, signed by whoever corrected,
+        written only when the words changed. An impact the agent gives
+        becomes a lesson about the mistake. Code older than the store does
+        none of that: it records the agent's words, retires what they name,
+        and changes nothing else.
+        """
+        assert self._store is not None
+        assert self._encoder is not None
+        notes, memories = self._pair_members(note, engram)
+        held = [memory for memory in memories if self._still_held(memory)]
+        live_notes = [entry for entry in notes if entry.get("active")]
+        # What it meant, carried unless the agent says otherwise: this pair's
+        # memory first, then any other it still held.
+        meanings = sorted(held, key=lambda memory: engram is None or memory.id != engram.id)
+        meaning, meaning_source, kept = _replacement_impact(impact, placeholder, *meanings)
+
+        text = correction.strip()
+        replacement = self._encoder.prepare(
+            content=text,
+            impact=meaning,
+            impact_source=meaning_source,
+            kind=_classify_kind(correction),
+            tags=sorted({"continuity", "correction", *_simple_tags(correction)}),
+            source=SourceType.SESSION,
+            agent_id=self.scope.agent_id,
+            person_id=self.scope.person_id,
+            project_scope=self.scope.project_scope,
+            override_confidence=0.92,
+            skip_surprise_detection=True,
+            discover_connections=not older,
+            author_kind="agent",
+            author_model=corrector,
+            author_session=session,
+        )
+        # Found before it is archived, what this replaces could be linked to
+        # its replacement as merely related. The supersedes link says what
+        # joins them.
+        replaced = {memory.id for memory in memories}
+        replacement.connections = [
+            link for link in replacement.connections if link.target_id not in replaced
+        ]
+
+        words_before: str | None = None
+        resolution_before = 1.0
+        if not older:
+            # Set on the memory itself, so a later save of it keeps it.
+            replacement.lineage.supersedes = [memory.id for memory in held]
+            # The words it replaces, taken only from what is still held: a
+            # memory already forgotten or replaced is never copied again.
+            said = {self._note_head(note), (engram.content or "").strip() if engram else ""}
+            if text not in said:
+                if engram is not None and engram.id in {memory.id for memory in held}:
+                    words_before, resolution_before = engram.content, engram.resolution
+                elif note is not None and note["id"] in {entry["id"] for entry in live_notes}:
+                    words_before = self._note_head(note)
+
+        lesson_id: str | None = None
+        with self._store.transaction():
+            retired_notes, retired_memories = self._retire(
+                notes, memories, action=action, corrector=corrector, session=session, query=query,
+            )
+            note_id = self._store.save_capture_pair(
+                replacement, text, **self._replacement_note(note, correction, corrector, session),
+            )
+            if not older:
+                self._store.record_correction(
+                    note_id=note_id,
+                    engram_id=replacement.id,
+                    replaced_notes=retired_notes,
+                    replaced_engrams=retired_memories,
+                    words_before=words_before,
+                    resolution_before=resolution_before,
+                    author_model=corrector,
+                    author_session=session,
+                )
+                if (impact or "").strip():
+                    # A lesson about the mistake, in the agent's own words
+                    # (only those make a lesson), drawn from the correction,
+                    # which its supersedes link joins to the memory it fixed.
+                    from .consolidation.softening import _create_or_reinforce_lesson
+
+                    lesson_id = _create_or_reinforce_lesson(
+                        replacement, self._store, {},
+                        author_model=corrector, author_session=session,
+                    )
+        # The vector, once everything above has committed (Encoder.finish).
+        self._encoder.finish(replacement)
+        self._traced_write(replacement.id, note_id, lesson_id)
+
+        said_lines = []
+        if kept:
+            said_lines.append(kept)
+        if lesson_id:
+            said_lines.append(f"What it means now became a lesson about the mistake: {lesson_id}")
+        elif (impact or "").strip() and older:
+            said_lines.append("Filing it as a lesson waits for current Mnemos.")
+        if not retired_notes and not retired_memories:
+            said_lines.append("Nothing in use still held the old words, so nothing was archived.")
+        return {"note_id": note_id, "engram_id": replacement.id, "lines": said_lines}
+
+    def _correct_other_note(
+        self,
+        note: dict[str, Any],
+        correction: str,
+        action: str,
+        impact: str,
+        *,
+        corrector: str,
+        session: str,
+        query: str = "",
+    ) -> str:
+        """A handoff or a report a correction names: changed in place, as
+        before. Neither is half of a capture's pair."""
+        assert self._store is not None
+        closest = "closest " if query else ""
+        if action in _FORGET_ACTIONS:
+            if not note.get("active"):
+                return f"Nothing was archived: note {note['id']} is no longer active."
+            self._store.archive_hypomnema_entry(
+                note["id"],
+                reason=f"simple correction action={action}" + (f"; query={query}" if query else ""),
+                revised_by=corrector,
+                author_session=session,
+                **self._scope_args(),
+            )
+            self._traced_write(note["id"])
+            return f"Archived {closest}continuity note {note['id']}."
+        self._store.revise_hypomnema_entry(
+            note["id"],
+            correction,
+            reason="simple correction" + (f" query={query}" if query else ""),
+            **self._scope_args(),
+            confidence=0.92,
+            salience=0.75,
+            author_model=corrector,
+            revised_by=corrector,
+            author_session=session,
+        )
+        self._traced_write(note["id"])
+        if (impact or "").strip():
+            return (
+                f"Updated {closest}continuity note {note['id']}.\n"
+                "The impact was not saved: this note does not hold one."
+            )
+        return f"Updated {closest}continuity note {note['id']}."
+
+    def _correct_belief(
+        self,
+        belief_id: str,
+        correction: str,
+        action: str,
+        impact: str,
+        *,
+        signed_as: str,
+        older: bool,
+    ) -> str:
+        """Correct a belief the correction names by its id: the one way a
+        correction changes a belief. A word shared with a belief never does.
+
+        Forget retires it; a correction replaces it with the agent's words,
+        formed as a belief the agent states is formed (at 40%), the old one
+        retired and pointing at it. Only a belief the agent stated can be
+        changed this way. Code older than the store changes no belief: the
+        words are captured as continuity, and the belief is left as it is.
+        """
+        assert self._store is not None
+        from .core.belief import Belief
+
+        belief = self._store.get_belief(belief_id)
+        if belief is None or belief.agent_id != self.scope.agent_id:
+            return f"Nothing was changed: no belief {belief_id} is held here."
+        shown = " ".join((belief.content or "").split())[:80]
+        if belief.superseded_by:
+            return f'Nothing was changed: the belief "{shown}" was already retired.'
+        if belief.source != "agent":
+            return (
+                f'Nothing was changed: the belief "{shown}" is not one you '
+                "stated, so a correction cannot retire or rewrite it."
+            )
+        text = correction.strip()
+        left = f'The belief "{shown}" is left as it is: this session\'s code changes no belief.'
+        if older:
+            if not text:
+                return left
+            captured = self.capture(
+                text,
+                context=f"Correction of the belief {belief_id}.",
+                importance="high",
+                impact=impact,
+                signed_as=signed_as,
+            )
+            return f"{left} Your words were captured as continuity.\n{captured}"
+        if action in _FORGET_ACTIONS:
+            self._store.supersede_belief(
+                belief.id,
+                reason="retired by the agent's correction" + (f": {text}" if text else ""),
+            )
+            self._traced_write(belief.id)
+            return (
+                f'Retired the belief "{shown}". It no longer shapes your '
+                "context; it is kept, with its history."
+            )
+        replacement = Belief(
+            agent_id=self.scope.agent_id,
+            content=text,
+            confidence=0.4,
+            domain=belief.domain,
+            supporting_engram_ids=list(belief.supporting_engram_ids),
+            source="agent",
+        )
+        belief.revise(0.0, f"corrected by the agent: {text}")
+        belief.superseded_by = replacement.id
+        with self._store.transaction():
+            self._store.save_belief(replacement)
+            self._store.save_belief(belief)
+        self._traced_write(belief.id, replacement.id)
+        lines = [
+            f'Replaced the belief "{shown}" with your words: "{text}".',
+            f"Belief ID: {replacement.id}. It starts at 40%, as a belief formed "
+            "from your words does; the old one is kept, retired, with its history.",
+        ]
+        if (impact or "").strip():
+            lines.append("The impact was not saved: a belief does not hold one.")
+        return "\n".join(lines)
 
     @_notice_when_older
     @_traced("correct")
@@ -3142,16 +3604,37 @@ class MnemosRuntime:
     ) -> str:
         """Correct, supersede, or archive stale memory.
 
-        ``impact`` is what the corrected memory means now, in the agent's own
-        words. Left empty, the replacement keeps what the memory it replaces
-        meant, and the result says so.
+        What a capture wrote is one object, its continuity note and its
+        memory, and every path reaches both from whichever one it names: the
+        note's id, the memory's id, or a query whose words name the note (or,
+        to forget, the memory). A correction retires the pair and writes the
+        replacement pair in the agent's words; a forget retires the pair and
+        writes nothing. Either happens in one transaction. The old pair is
+        kept, archived, never deleted. An id a correction already replaced
+        reaches its current version, so correcting or forgetting twice never
+        leaves two live. A belief changes only when named by its id
+        (``belief_...``).
 
-        The correction is the agent's words: its replacement memory and any
-        note it rewrites are signed with ``signed_as`` when the agent gives
-        its model id, and marked with the harness session.
+        ``impact`` is what the corrected memory means now, in the agent's own
+        words, and it becomes a lesson about the mistake. Left empty, the
+        replacement keeps what the memory it replaces meant, and the result
+        says so.
+
+        Current code records what a correction replaced: a ``supersedes`` link
+        and lineage both ways, the old note's successor, and a version keeping
+        the old words, written only when the words changed. Code older than
+        the store records the agent's words and retires what they name, and
+        changes nothing else.
+
+        The correction is the agent's words: the replacement pair and its
+        version are signed with ``signed_as`` when the agent gives its model
+        id, and marked with the harness session, as is each retired note's
+        revision.
         """
 
-        if not correction.strip() and action not in {"forget", "archive", "remove", "delete"}:
+        action = (action or "").strip().lower() or "update"
+        forget = action in _FORGET_ACTIONS
+        if not correction.strip() and not forget:
             return "Correction needs replacement text or a forget/archive action."
 
         self._ensure_init()
@@ -3160,122 +3643,72 @@ class MnemosRuntime:
         corrector = self.author_model(signed_as)
         session = harness_session()
         self._traced_author(corrector)
-
-        action = action.strip().lower() or "update"
+        signing = {"corrector": corrector, "session": session}
         target = target_id.strip()
-
-        # Belief correction (agent-authored only). Checked before the memory
-        # paths, on the free-text / query form, so "forget that I believe X"
-        # can retire a belief the agent stated — not only a note. Restricted to
-        # source=='agent' so a seed or model belief can't be erased by mistake.
-        # This is one of the few deliberate downward moves in a graph whose
-        # stability otherwise only ratchets up.
-        #
-        # Code older than the store skips it: which belief a correction names
-        # is decided by token overlap, a rule newer code may have replaced, and
-        # older code never moves a belief by any path. The correction still
-        # lands on the memory it names, below, saved without links to other
-        # memories and without a placeholder where its meaning would go.
+        # Code older than the store records the agent's words and applies no
+        # rules: a correction still retires what it names and writes its
+        # replacement, without links to other memories, lineage, versions,
+        # lessons, or a placeholder where its meaning would go.
         older = self._older_than_store() is not None
-        if not target and not older:
-            belief_note = self._maybe_correct_belief(correction, query, action)
-            if belief_note:
-                return belief_note
+
+        if target.startswith("belief_"):
+            return self._correct_belief(
+                target, correction, action, impact, signed_as=signed_as, older=older,
+            )
 
         if target:
-            hypo = self._store.get_hypomnema_entry(
-                target,
-                agent_id=self.scope.agent_id,
-                person_id=self.scope.person_id,
-                project_scope=self.scope.project_scope,
-            )
-            if hypo is not None:
-                if action in {"forget", "archive", "remove", "delete"}:
-                    self._store.archive_hypomnema_entry(
-                        target,
-                        reason=f"simple correction action={action}",
-                        agent_id=self.scope.agent_id,
-                        person_id=self.scope.person_id,
-                        project_scope=self.scope.project_scope,
+            kind, note, engram, current = self._current_pair(target)
+            if kind == "other":
+                return self._correct_other_note(note, correction, action, impact, **signing)
+            if kind is not None:
+                label = "Note" if kind == "note" else "Memory"
+                followed = (
+                    f"{label} {target} had already been replaced by a correction; "
+                    "this acted on its current version."
+                    if current != target else ""
+                )
+                if forget:
+                    retired_notes, retired_memories = self._forget_pair(
+                        note, engram, action=action, **signing,
                     )
-                    self._traced_write(target)
-                    related_engram_id = hypo.get("related_engram_id") or hypo.get("graduated_to_engram_id")
-                    if related_engram_id:
-                        related = self._store.get_engram(related_engram_id)
-                        if related is not None:
-                            self._store.archive_engram(related, reason=f"simple_correction_{action}")
-                            self._traced_write(related.id)
-                    return f"Archived continuity note {target}."
+                    if not retired_notes and not retired_memories:
+                        lines = [f"Nothing was archived: {label.lower()} {current} was already archived."]
+                    elif kind == "note":
+                        lines = [f"Archived continuity note {current}."]
+                        if retired_memories:
+                            lines.append(f"Its memory {', '.join(retired_memories)} was archived with it.")
+                    else:
+                        lines = [f"Archived memory {current}."]
+                        if retired_notes:
+                            lines.append(f"Its continuity note {', '.join(retired_notes)} was archived with it.")
+                    return "\n".join(lines + ([followed] if followed else []))
 
-                self._store.revise_hypomnema_entry(
-                    target,
-                    correction,
-                    reason="simple correction",
-                    agent_id=self.scope.agent_id,
-                    person_id=self.scope.person_id,
-                    project_scope=self.scope.project_scope,
-                    confidence=0.92,
-                    salience=0.75,
-                    author_model=corrector,
-                    revised_by=corrector,
-                    author_session=session,
+                by_note = kind == "note"
+                result = self._replace_pair(
+                    note, engram, correction, impact,
+                    action=action,
+                    # A correction by note id wrote no memory before, so it
+                    # never gets the server's placeholder where its meaning
+                    # would go: the agent's words, carried, or nothing.
+                    placeholder="" if older or by_note else "Correction to earlier continuity.",
+                    older=older,
+                    **signing,
                 )
-                self._traced_write(target)
-                if (impact or "").strip():
-                    # A note is revised in place and has no impact of its own,
-                    # so a meaning given here would otherwise vanish silently.
-                    return (
-                        f"Updated continuity note {target}.\n"
-                        "The impact was not saved: a continuity note does not "
-                        "hold one. To change what a memory means, correct it "
-                        "by its memory ID."
-                    )
-                return f"Updated continuity note {target}."
-
-            engram = self._store.get_engram_in_scope(
-                target, agent_id=self.scope.agent_id,
-                person_id=self.scope.person_id,
-                project_scope=self.scope.project_scope,
-            )
-            if engram is not None:
-                if action in {"forget", "archive", "remove", "delete"}:
-                    self._store.archive_hypomnema_for_engram(
-                        engram.id,
-                        reason=f"simple correction action={action}",
-                        agent_id=self.scope.agent_id,
-                        person_id=self.scope.person_id,
-                        project_scope=self.scope.project_scope,
-                    )
-                self._store.archive_engram(engram, reason=f"simple_correction_{action}")
-                self._traced_write(engram.id)
-                if action in {"forget", "archive", "remove", "delete"} and not correction.strip():
-                    return f"Archived memory {target}."
-                meaning, meaning_source, kept = _replacement_impact(
-                    impact, "" if older else "Correction to earlier continuity.", engram
-                )
-                replacement = self._encoder.encode(
-                    content=correction.strip(),
-                    impact=meaning,
-                    impact_source=meaning_source,
-                    kind=_classify_kind(correction),
-                    tags=["continuity", "correction"],
-                    source=SourceType.SESSION,
-                    agent_id=self.scope.agent_id,
-                    person_id=self.scope.person_id,
-                    project_scope=self.scope.project_scope,
-                    override_confidence=0.92,
-                    skip_surprise_detection=True,
-                    discover_connections=not older,
-                    author_kind="agent",
-                    author_model=corrector,
-                    author_session=session,
-                )
-                self._traced_write(replacement.id)
-                return (
-                    f"Archived memory {target} and captured correction {replacement.id}.\n"
-                    f"Correction: {correction.strip()}"
-                    + (f"\n{kept}" if kept else "")
-                )
+                if by_note:
+                    lines = [
+                        f"Updated continuity note {current}.",
+                        f"Continuity note ID: {result['note_id']}",
+                        f"Memory ID: {result['engram_id']}",
+                    ]
+                else:
+                    lines = [
+                        f"Archived memory {current} and captured correction {result['engram_id']}.",
+                        f"Correction: {correction.strip()}",
+                        f"Continuity note ID: {result['note_id']}",
+                    ]
+                if followed:
+                    lines.insert(1, followed)
+                return "\n".join(lines + result["lines"])
 
         search_text = query.strip() or correction.strip()
         query_text = query.strip()
@@ -3288,116 +3721,48 @@ class MnemosRuntime:
             # archived a note about a reading.
             matches = _named_matches(query_text, self._store.search_hypomnema(
                 query_text,
-                agent_id=self.scope.agent_id,
-                person_id=self.scope.person_id,
-                project_scope=self.scope.project_scope,
+                **self._scope_args(),
                 limit=10,
                 exclude_kinds=("handoff",),
             ), lambda note: note.get("content") or "")
             if matches:
                 match = matches[0]
-                if action in {"forget", "archive", "remove", "delete"}:
-                    self._store.archive_hypomnema_entry(
-                        match["id"],
-                        reason=f"simple correction action={action}; query={query_text}",
-                        agent_id=self.scope.agent_id,
-                        person_id=self.scope.person_id,
-                        project_scope=self.scope.project_scope,
+                note, engram = self._store.capture_pair(match["id"], **self._scope_args())
+                if note is not None and note.get("entry_kind") != "continuity":
+                    said = self._correct_other_note(
+                        note, correction, action, impact, query=query_text, **signing,
                     )
-                    self._traced_write(match["id"])
-                    related_engram_id = match.get("related_engram_id") or match.get("graduated_to_engram_id")
-                    if related_engram_id:
-                        related = self._store.get_engram(related_engram_id)
-                        if related is not None:
-                            self._store.archive_engram(related, reason=f"simple_correction_{action}")
-                            self._traced_write(related.id)
                     maintenance = self.maintain(auto=True)
-                    return (
-                        f"Archived closest continuity note {match['id']}.\n"
-                        "Maintenance:\n"
-                        f"{_indent(maintenance)}"
+                    return f"{said}\nMaintenance:\n{_indent(maintenance)}"
+                if forget:
+                    _retired_notes, retired_memories = self._forget_pair(
+                        note, engram, action=action, query=query_text, **signing,
                     )
+                    maintenance = self.maintain(auto=True)
+                    lines = [f"Archived closest continuity note {match['id']}."]
+                    if retired_memories:
+                        lines.append(f"Its memory {', '.join(retired_memories)} was archived with it.")
+                    return "\n".join([*lines, "Maintenance:", _indent(maintenance)])
 
-                note_id = match["id"]
-                if action in {"supersede", "replace"}:
-                    note_id = self._store.supersede_hypomnema_entry(
-                        match["id"],
-                        correction,
-                        reason=f"simple correction action={action}; query={query_text}",
-                        agent_id=self.scope.agent_id,
-                        person_id=self.scope.person_id,
-                        project_scope=self.scope.project_scope,
-                        author_model=corrector,
-                        author_session=session,
-                    )
-                else:
-                    self._store.revise_hypomnema_entry(
-                        match["id"],
-                        correction,
-                        reason=f"simple correction query={query_text}",
-                        agent_id=self.scope.agent_id,
-                        person_id=self.scope.person_id,
-                        project_scope=self.scope.project_scope,
-                        confidence=0.92,
-                        salience=0.75,
-                        author_model=corrector,
-                        revised_by=corrector,
-                        author_session=session,
-                    )
-                self._traced_write(match["id"], note_id)
-
-                # The note's memories, newest first: each correction points
-                # graduated_to_engram_id at its replacement, while
-                # related_engram_id stays on the memory first captured.
-                meaning, meaning_source, kept = _replacement_impact(
-                    impact,
-                    "" if older else "Corrected continuity for future interactions.",
-                    *(
-                        self._store.get_engram(engram_id)
-                        for engram_id in (
-                            match.get("graduated_to_engram_id"),
-                            match.get("related_engram_id"),
-                        )
-                        if engram_id
-                    ),
+                result = self._replace_pair(
+                    note, engram, correction, impact,
+                    action=action,
+                    placeholder="" if older else "Corrected continuity for future interactions.",
+                    older=older,
+                    query=query_text,
+                    **signing,
                 )
-
-                related_engram_id = match.get("related_engram_id") or match.get("graduated_to_engram_id")
-                if related_engram_id:
-                    related = self._store.get_engram(related_engram_id)
-                    if related is not None:
-                        self._store.archive_engram(related, reason=f"simple_correction_{action}")
-                        self._traced_write(related.id)
-
-                replacement = self._encoder.encode(
-                    content=correction.strip(),
-                    impact=meaning,
-                    impact_source=meaning_source,
-                    kind=_classify_kind(correction),
-                    tags=sorted(set(["continuity", "correction", *_simple_tags(correction)])),
-                    source=SourceType.SESSION,
-                    agent_id=self.scope.agent_id,
-                    person_id=self.scope.person_id,
-                    project_scope=self.scope.project_scope,
-                    override_confidence=0.92,
-                    skip_surprise_detection=True,
-                    discover_connections=not older,
-                    author_kind="agent",
-                    author_model=corrector,
-                    author_session=session,
-                )
-                self._traced_write(replacement.id)
-                self._store.mark_hypomnema_promoted(note_id, replacement.id)
                 maintenance = self.maintain(auto=True)
-                return (
-                    f"Updated closest continuity note {note_id}.\n"
-                    f"Memory ID: {replacement.id}\n"
-                    + (f"{kept}\n" if kept else "")
-                    + "Maintenance:\n"
-                    + _indent(maintenance)
-                )
+                return "\n".join([
+                    f"Updated closest continuity note {match['id']}.",
+                    f"Memory ID: {result['engram_id']}",
+                    f"Continuity note ID: {result['note_id']}",
+                    *result["lines"],
+                    "Maintenance:",
+                    _indent(maintenance),
+                ])
 
-        if action in {"forget", "archive", "remove", "delete"}:
+        if forget:
             # Finding a memory in order to forget it is not returning it to
             # anyone, so nothing here is reinforced.
             matches = _named_matches(
@@ -3407,16 +3772,13 @@ class MnemosRuntime:
             )
             if matches:
                 engram = matches[0].engram
-                self._store.archive_hypomnema_for_engram(
-                    engram.id,
-                    reason=f"simple correction action={action}",
-                    agent_id=self.scope.agent_id,
-                    person_id=self.scope.person_id,
-                    project_scope=self.scope.project_scope,
+                retired_notes, _retired_memories = self._forget_pair(
+                    None, engram, action=action, **signing,
                 )
-                self._store.archive_engram(engram, reason=f"simple_correction_{action}")
-                self._traced_write(engram.id)
-                return f"Archived closest matching memory {engram.id}."
+                lines = [f"Archived closest matching memory {engram.id}."]
+                if retired_notes:
+                    lines.append(f"Its continuity note {', '.join(retired_notes)} was archived with it.")
+                return "\n".join(lines)
             # Forgetting acts only on what the words name, and never captures.
             if not search_text:
                 return "Nothing was archived: give the ID as target_id, or a query that names it."
@@ -4014,6 +4376,15 @@ def _format_archived(engram: Engram) -> str:
 
 def _indent(text: str) -> str:
     return "\n".join(f"  {line}" if line else "" for line in text.splitlines())
+
+
+def _id_list(noun: str, ids: list[str]) -> str:
+    """'memory X', or 'memories X and Y'."""
+    ids = list(ids)
+    if len(ids) == 1:
+        return f"{noun} {ids[0]}"
+    plural = "memories" if noun == "memory" else f"{noun}s"
+    return f"{plural} {', '.join(ids[:-1])} and {ids[-1]}"
 
 
 def _age_text(timestamp: str) -> str:

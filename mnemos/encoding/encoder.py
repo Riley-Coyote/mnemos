@@ -193,6 +193,64 @@ class Encoder:
         Returns:
             The fully-formed, persisted Engram with connections attached.
         """
+        engram = self.prepare(
+            content=content,
+            impact=impact,
+            kind=kind,
+            tags=tags,
+            source=source,
+            session_id=session_id,
+            agent_id=agent_id,
+            person_id=person_id,
+            project_scope=project_scope,
+            emotional_state=emotional_state,
+            override_confidence=override_confidence,
+            override_confidence_source=override_confidence_source,
+            skip_surprise_detection=skip_surprise_detection,
+            impact_source=impact_source,
+            discover_connections=discover_connections,
+            author_kind=author_kind,
+            author_model=author_model,
+            author_session=author_session,
+        )
+
+        # 7. Persist
+        self._store.save_engram(engram)
+        self.finish(engram)
+        return engram
+
+    def prepare(
+        self,
+        content: str,
+        impact: str = "",
+        kind: str = EngramKind.EPISODIC,
+        tags: list[str] | None = None,
+        source: str = SourceType.SESSION,
+        session_id: str | None = None,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        emotional_state: dict[str, float] | None = None,
+        override_confidence: float | None = None,
+        override_confidence_source: str | None = None,
+        skip_surprise_detection: bool = False,
+        impact_source: str = "",
+        discover_connections: bool = True,
+        author_kind: str = "unknown",
+        author_model: str = "",
+        author_session: str = "",
+    ) -> Engram:
+        """Everything ``encode`` does before it saves: the engram with its
+        confidence, context, links and surprise, not yet stored. Takes
+        ``encode``'s arguments.
+
+        For a caller that stores the engram in a transaction of its own, with
+        other rows that must land with it or not at all (a capture saves its
+        memory and its continuity note together). Finding links and weighing
+        surprise read the store and may call a model, so they happen here,
+        before that transaction opens rather than while it holds the write
+        lock. Once it has committed, the caller calls ``finish``.
+        """
         if not content or not content.strip():
             raise ValueError("Cannot encode empty content")
         if author_kind not in AUTHOR_KINDS:
@@ -273,9 +331,18 @@ class Encoder:
             engram.strength = min(1.0, engram.strength + 0.15 * surprise)
             engram.stability = min(1.0, engram.stability + 0.10 * surprise)
 
-        # 7. Persist
-        self._store.save_engram(engram)
+        return engram
 
+    def finish(self, engram: Engram) -> None:
+        """What encoding does once the engram is stored: index its vector, and
+        share it if it qualifies.
+
+        The vector is written through the embedding index's own connection,
+        which cannot write while another transaction holds the store's write
+        lock: it waits five seconds, fails, and the failure is swallowed, so
+        the memory would be stored without a vector and nothing would say so.
+        Call this after the transaction that saved the engram has committed.
+        """
         # 8. Auto-index embedding (if embedding index available)
         if self._embedding_index:
             try:
@@ -288,8 +355,6 @@ class Encoder:
             engram.visibility = Visibility.SHARED
             self._store.save_engram(engram)  # update visibility in private DB
             self._shared_pool.publish(engram)
-
-        return engram
 
     def _score_confidence(
         self,

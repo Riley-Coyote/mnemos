@@ -99,33 +99,45 @@ class TestBeliefDownweight:
 
 
 class TestAgentCanCorrectItsOwnBelief:
+    """A correction changes a belief only when it names the belief's id: words
+    it happens to share with a belief never move one (see
+    tests/test_one_capture_one_object.py)."""
+
     def test_forget_retires_an_agent_belief(self, db):
         rt = _runtime(db)
         rt._ensure_init()
-        rt._store.save_belief(Belief(agent_id="t", content="Riley prefers dark roast coffee",
-                                     confidence=0.7, source="agent"))
-        out = rt.correct(correction="", query="dark roast coffee", action="forget")
+        belief = Belief(agent_id="t", content="Riley prefers dark roast coffee",
+                        confidence=0.7, source="agent")
+        rt._store.save_belief(belief)
+        out = rt.correct(correction="", target_id=belief.id, action="forget")
         assert "Retired" in out, out
         assert rt._store.get_beliefs("t", active_only=True) == []
 
-    def test_update_lowers_confidence(self, db):
+    def test_update_replaces_it_with_the_agents_words(self, db):
         rt = _runtime(db)
         rt._ensure_init()
-        rt._store.save_belief(Belief(agent_id="t", content="Riley works best at night",
-                                     confidence=0.8, source="agent"))
-        out = rt.correct(correction="less sure about night work", query="works best at night")
-        assert "Lowered confidence" in out, out
-        assert rt._store.get_beliefs("t")[0].confidence < 0.8
+        belief = Belief(agent_id="t", content="Riley works best at night",
+                        confidence=0.8, source="agent")
+        rt._store.save_belief(belief)
+        out = rt.correct(correction="Riley works best in the early morning", target_id=belief.id)
+        assert "Replaced the belief" in out, out
+        [held] = rt._store.get_beliefs("t")
+        assert held.content == "Riley works best in the early morning"
+        assert rt._store.get_belief(belief.id).superseded_by == held.id
 
     def test_a_seed_belief_is_protected(self, db):
         """The agent must not be able to erase a belief it did not author."""
         rt = _runtime(db)
         rt._ensure_init()
-        rt._store.save_belief(Belief(agent_id="t", content="Riley prefers dark roast coffee",
-                                     confidence=0.7, source="seed"))
-        out = rt.correct(correction="", query="dark roast coffee", action="forget")
-        assert "Retired" not in out
-        assert rt._store.get_beliefs("t", active_only=True), "a seed belief was erased"
+        seed = Belief(agent_id="t", content="Riley prefers dark roast coffee",
+                      confidence=0.7, source="seed")
+        rt._store.save_belief(seed)
+        for out in (
+            rt.correct(correction="", query="dark roast coffee", action="forget"),
+            rt.correct(correction="", target_id=seed.id, action="forget"),
+        ):
+            assert "Retired" not in out
+            assert rt._store.get_beliefs("t", active_only=True), "a seed belief was erased"
 
 
 class TestAgentAuthoredEdgeIsRemovable:

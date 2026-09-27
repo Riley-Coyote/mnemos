@@ -461,6 +461,15 @@ def main(argv: list[str] | None = None) -> int:
             "reconstruct from anywhere else."
         ),
     )
+    p_hook_prompt = hook_sub.add_parser(
+        "prompt",
+        help="Print, for the model, the memories that may bear on a message (UserPromptSubmit)",
+    )
+    # SUPPRESS, so the scope given before `hook` is not overwritten by None.
+    p_hook_prompt.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+    p_hook_prompt.add_argument("--person-id", default=argparse.SUPPRESS, help="Person/relationship scope")
+    p_hook_prompt.add_argument("--project-scope", default=argparse.SUPPRESS, help="Project scope")
+    p_hook_prompt.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
 
     # ── hooks ──
     p_hooks = sub.add_parser("hooks", help="Install session-start memory injection")
@@ -484,6 +493,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_hooks_install.add_argument(
         "--write", action="store_true", help="Write the settings file instead of printing it"
+    )
+    p_hooks_install.add_argument(
+        "--prompt",
+        action="store_true",
+        help=(
+            "Also install the UserPromptSubmit hook that brings the memories "
+            "that may bear on each message (Claude Code only; off by default)"
+        ),
     )
 
     # ── daemon ──
@@ -539,6 +556,10 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+    # Whether this process is the command itself (the console script, or
+    # `python -m mnemos.cli`), not a host that called main() with arguments.
+    # Only the command itself may end its own process (see _hook_prompt).
+    args.command_line = argv is None
 
     if args.command is None:
         parser.print_help()
@@ -590,8 +611,10 @@ def _cmd_hook(args: argparse.Namespace) -> int:
     ships with the package and upgrades with it, instead of going stale in
     a copy someone's harness wrote out months ago.
     """
+    if getattr(args, "hook_command", None) == "prompt":
+        return _hook_prompt(args)
     if getattr(args, "hook_command", None) != "session-start":
-        print("Usage: mnemos hook session-start", file=sys.stderr)
+        print("Usage: mnemos hook session-start|prompt", file=sys.stderr)
         return 1
 
     # A memory hiccup must never cost someone their session. Every failure
@@ -689,6 +712,22 @@ def _cmd_hook(args: argparse.Namespace) -> int:
         finally:
             store.close()
         text = (packet.get("prompt") or "").strip()
+        if text and reader_session:
+            # What the briefing showed, so the prompt hook's cue never shows it
+            # again in this session. Outside the store; never fails the hook.
+            from .cue import record_briefing
+            from .interface.context_packet import shown_memories
+
+            ids, texts = shown_memories(packet)
+            record_briefing(
+                reader_session,
+                db_path=scope.db_path,
+                agent_id=scope.agent_id,
+                person_id=scope.person_id,
+                project_scope=scope.project_scope,
+                ids=ids,
+                texts=texts,
+            )
     except Exception as exc:
         print(f"[mnemos hook] {type(exc).__name__}: {exc}", file=sys.stderr)
         return 0
@@ -703,6 +742,76 @@ def _cmd_hook(args: argparse.Namespace) -> int:
         }
     }))
     return 0
+
+
+def _hook_prompt(args: argparse.Namespace) -> int:
+    """What an installed UserPromptSubmit hook runs (``mnemos hook prompt``):
+    the memories that may bear on the message the human just sent, printed for
+    the model, or nothing (see ``mnemos.cue``).
+
+    It never blocks or breaks a prompt. Any error, an unexpected payload, or
+    running out of time prints nothing and exits 0. Every wait is bounded by a
+    deadline (``cue.HOOK_BUDGET`` after it starts, which with the process's own
+    start keeps it under ``cue.HOOK_SECONDS``); and run as the command itself,
+    the process also ends at that deadline whatever it is doing. The block is
+    written whole, in one write, or not at all.
+    """
+    import time
+
+    from . import cue
+
+    started = time.monotonic()
+    finished = cue.arm_hard_stop(cue.HOOK_BUDGET) if getattr(args, "command_line", False) else None
+    try:
+        raw = cue.read_payload(sys.stdin, deadline=started + 0.25)
+        payload = json.loads(raw.decode("utf-8")) if raw.strip() else None
+        if not isinstance(payload, dict):
+            return 0
+        scope = _cli_scope(args)
+        block = cue.prompt_hook(
+            payload,
+            db_path=scope.db_path,
+            agent_id=scope.agent_id,
+            person_id=scope.person_id,
+            project_scope=scope.project_scope,
+            deadline=started + cue.HOOK_BUDGET - cue.HOOK_MARGIN,
+        )
+        if block:
+            out = json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": block,
+                }
+            }, ensure_ascii=False)
+            if finished is not None:
+                finished.set()
+            _write_whole(out + "\n")
+    except BaseException as exc:  # a hook never breaks a prompt, even on Ctrl-C
+        if not isinstance(exc, cue.HookTimeout):
+            print(f"[mnemos hook] {type(exc).__name__}: {exc}", file=sys.stderr)
+    finally:
+        if finished is not None:
+            finished.set()
+    return 0
+
+
+def _write_whole(text: str) -> None:
+    """Write ``text`` to stdout in one system call when stdout is a real file
+    (a pipe takes up to 4 KiB whole), else through ``sys.stdout``."""
+    data = text.encode("utf-8")
+    try:
+        fd = sys.stdout.fileno()
+    except (AttributeError, OSError, ValueError):
+        fd = None
+    if fd is None:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        return
+    sys.stdout.flush()
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        view = view[written:]
 
 
 def _scope_args(args: argparse.Namespace) -> tuple[str, ...]:
@@ -1022,16 +1131,31 @@ def _codex_hooks_path() -> Path:
     return Path.home() / ".codex" / "hooks.json"
 
 
+# Claude Code's own timeout for the prompt hook, in seconds. The hook stops
+# itself well before this (``cue.HOOK_SECONDS``); a prompt waits on its hooks,
+# so this only bounds a hook that could not stop itself.
+PROMPT_HOOK_TIMEOUT = 2
+
+
 def _cmd_hooks(args: argparse.Namespace) -> int:
-    """Install the SessionStart hook that injects memory before turn one."""
+    """Install the SessionStart hook that injects memory before turn one, and,
+    with ``--prompt`` (Claude Code only; off by default), the UserPromptSubmit
+    hook that brings the memories that may bear on each message."""
     if getattr(args, "hooks_command", None) != "install":
         print(
-            "Usage: mnemos hooks install [claude-code|codex] [--write]",
+            "Usage: mnemos hooks install [claude-code|codex] [--prompt] [--write]",
+            file=sys.stderr,
+        )
+        return 1
+    prompt = bool(getattr(args, "prompt", False))
+    if prompt and args.client != "claude-code":
+        print(
+            "The prompt hook is for Claude Code: mnemos hooks install claude-code --prompt",
             file=sys.stderr,
         )
         return 1
 
-    command_parts = [_mnemos_command(), "hook", "session-start"]
+    scope_flags: list[str] = []
     for flag, value in (
         ("--agent-id", args.agent_id),
         ("--person-id", args.person_id),
@@ -1042,7 +1166,8 @@ def _cmd_hooks(args: argparse.Namespace) -> int:
         ("--db-path", str(Path(args.db_path).expanduser()) if args.db_path else None),
     ):
         if value:
-            command_parts.extend([flag, value])
+            scope_flags.extend([flag, value])
+    command_parts = [_mnemos_command(), "hook", "session-start", *scope_flags]
 
     handler = {
             "type": "command",
@@ -1064,6 +1189,19 @@ def _cmd_hooks(args: argparse.Namespace) -> int:
         ),
         "hooks": [handler],
     }
+    installing = {"SessionStart": entry}
+    if prompt:
+        installing["UserPromptSubmit"] = {
+            "hooks": [{
+                "type": "command",
+                # A prompt hook that exits 2 blocks the prompt and erases it.
+                # `hook prompt` itself always exits 0; the guard covers a Mnemos
+                # that cannot run it at all (rolled back to a version without
+                # it, or moved), which argparse would answer with a 2.
+                "command": shlex.join([_mnemos_command(), "hook", "prompt", *scope_flags]) + " || true",
+                "timeout": PROMPT_HOOK_TIMEOUT,
+            }],
+        }
 
     default_path = (
         _codex_hooks_path()
@@ -1073,7 +1211,9 @@ def _cmd_hooks(args: argparse.Namespace) -> int:
     path = Path(args.settings).expanduser() if args.settings else default_path
 
     if not args.write:
-        print(json.dumps({"hooks": {"SessionStart": [entry]}}, indent=2))
+        print(json.dumps(
+            {"hooks": {event: [item] for event, item in installing.items()}}, indent=2,
+        ))
         print()
         print(f"Merge this into {path}, or re-run with --write to do it automatically.")
         return 0
@@ -1100,15 +1240,15 @@ def _cmd_hooks(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    session_start = hooks.setdefault("SessionStart", [])
-    if not isinstance(session_start, list):
-        print(
-            f"Refusing to overwrite {path}: hooks.SessionStart must be a list",
-            file=sys.stderr,
-        )
-        return 1
+    for event in installing:
+        if not isinstance(hooks.setdefault(event, []), list):
+            print(
+                f"Refusing to overwrite {path}: hooks.{event} must be a list",
+                file=sys.stderr,
+            )
+            return 1
 
-    def is_mnemos_session_start(candidate: Any) -> bool:
+    def is_mnemos_hook(candidate: Any, subcommand: str) -> bool:
         if not isinstance(candidate, dict):
             return False
         for configured_hook in candidate.get("hooks", []):
@@ -1124,26 +1264,28 @@ def _cmd_hooks(args: argparse.Namespace) -> int:
             if (
                 len(parts) >= 3
                 and Path(parts[0]).stem.lower().startswith("mnemos")
-                and parts[1:3] == ["hook", "session-start"]
+                and parts[1:3] == ["hook", subcommand]
             ):
                 return True
         return False
 
-    existing = [
-        e for e in session_start
-        if is_mnemos_session_start(e)
-    ]
-    for stale in existing:
-        session_start.remove(stale)
-    session_start.append(entry)
+    actions: dict[str, str] = {}
+    for event, item in installing.items():
+        subcommand = "session-start" if event == "SessionStart" else "prompt"
+        listed = hooks[event]
+        existing = [e for e in listed if is_mnemos_hook(e, subcommand)]
+        for stale in existing:
+            listed.remove(stale)
+        listed.append(item)
+        actions[event] = "Replaced" if existing else "Installed"
 
     atomic_write_text(
         path, json.dumps(settings, indent=2) + "\n", backup_existing=True
     )
 
-    action = "Replaced" if existing else "Installed"
-    print(f"{action} the Mnemos SessionStart hook in {path}")
-    print(f"  Command: {entry['hooks'][0]['command']}")
+    for event, item in installing.items():
+        print(f"{actions[event]} the Mnemos {event} hook in {path}")
+        print(f"  Command: {item['hooks'][0]['command']}")
     if args.client == "codex":
         print(
             "In Codex, open /hooks and complete the normal review before "
@@ -1158,6 +1300,12 @@ def _cmd_hooks(args: argparse.Namespace) -> int:
             "Start a new session — memory is injected before the first turn "
             "and after compaction."
         )
+        if prompt:
+            print(
+                "Each message then brings up to three memories that may bear on "
+                "it, found by meaning once the session's Mnemos server has its "
+                "model loaded, by words until then."
+            )
     return 0
 
 

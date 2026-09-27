@@ -162,6 +162,18 @@ def recall_index_items(
     return items
 
 
+def recall_index_lessons(
+    store: EngramStore, *, agent_id: str, person_id: str, project_scope: str,
+) -> dict[str, str]:
+    """The lessons the agent wrote in the impacts of the memories recall's
+    meaning index holds for one scope: each is one more passage of its memory
+    (``EmbeddingIndex.index_passages``), so a memory is found by what it
+    taught. Reads."""
+    return store.live_memory_lessons(
+        agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+    )
+
+
 def index_for_recall(
     store: EngramStore,
     index: Any,
@@ -178,7 +190,9 @@ def index_for_recall(
     be found by meaning: every handoff (those in use first), notes with no
     memory of their own, then the live memories, newest first. Only what has no
     passages, or whose words changed since, is embedded; at most ``budget``
-    passages (None: everything waiting); ``only`` limits it to those ids.
+    passages (None: everything waiting); ``only`` limits it to those ids. A
+    memory's lesson, when the agent wrote one its words don't already say, is
+    one more passage of it, and a new or changed lesson has it cut again.
 
     Capture gives a memory one vector of its whole text, which the model reads
     only to about 1,000 characters, and lessons and handoffs had none: on a
@@ -216,7 +230,9 @@ def index_for_recall(
         if only is not None:
             wanted = set(only)
             items = [item for item in items if item[0] in wanted]
-        done.update(index.index_passages(items, budget=budget, seconds=seconds))
+        done.update(index.index_passages(
+            items, lessons=recall_index_lessons(store, **scope), budget=budget, seconds=seconds,
+        ))
         if not index.available:
             done["skipped"] = _index_unavailable(index)
     except Exception as exc:
@@ -257,6 +273,116 @@ def describe_recall_index(status: Mapping[str, Any] | None) -> str | None:
         return None
     when = str(status.get("at") or "")[:10]
     return f"not updated ({status.get('by') or 'maintenance'}, {when}): {status['skipped']}"
+
+
+def cue_memories(
+    store: EngramStore,
+    index: Any,
+    text: str,
+    *,
+    agent_id: str,
+    person_id: str,
+    project_scope: str,
+    exclude: Collection[str] = (),
+    exclude_texts: Collection[str] = (),
+    floor: float | None = None,
+    word_floor: float | None = None,
+    words_shared: int | None = None,
+    limit: int | None = None,
+    pool: int | None = None,
+) -> list[dict[str, Any]]:
+    """The memories that may bear on a message the human just sent: at most
+    ``CUE_LINES`` of them, lessons first, each as the line the cue shows.
+
+    Recall's own ranking finds them (``ReactiveRetriever``: words and meaning
+    fused by reciprocal rank, R08), from the first ``CUE_POOL``; the cue adds a
+    gate. With meaning (``index``, the warm answerer's), a memory must reach
+    cosine ``floor`` with the message, or ``word_floor`` while sharing a
+    distinctive word with it. Without (``index`` None: the hook alone), it must
+    share ``words_shared`` distinctive words with the message.
+
+    Standing memories never come (the briefing carries them), nor what
+    ``exclude`` names or ``exclude_texts`` keys (``cue.text_key``): what this
+    session was already shown. The same words under two ids (a lesson and the
+    memory it was drawn from) come once. A message with fewer than
+    ``CUE_MIN_WORDS`` content words gets nothing.
+
+    Reads only: nothing is reinforced, woken or counted as used.
+    Each result holds ``id``, ``text`` (cut at a sentence under
+    ``CUE_LINE_CHARS``), ``date``, ``key`` (``text_key`` of the whole line),
+    ``lesson``, ``similarity``, ``shared`` and ``rank`` (in the ranking).
+    """
+    from . import cue
+
+    floor = cue.CUE_FLOOR if floor is None else floor
+    word_floor = cue.CUE_WORD_FLOOR if word_floor is None else word_floor
+    words_shared = cue.CUE_WORDS_SHARED if words_shared is None else words_shared
+    limit = cue.CUE_LINES if limit is None else limit
+    if len(meaningful_words(text)) < cue.CUE_MIN_WORDS:
+        return []
+    scope = {"agent_id": agent_id, "person_id": person_id, "project_scope": project_scope}
+    meaning = index is not None and getattr(index, "available", False)
+    try:
+        standing = {row["id"] for row in store.standing_engrams(**scope)}
+    except sqlite3.Error:
+        standing = set()
+    excluded = set(exclude) | standing
+
+    def keep(result: RetrievalResult) -> bool:
+        return (
+            result.engram is not None
+            and result.engram.id not in excluded
+            and store.engram_visible_in_scope(result.engram.id, **scope)
+        )
+
+    found = ReactiveRetriever(store, embedding_index=index if meaning else None).retrieve(
+        cue=text,
+        max_results=cue.CUE_POOL if pool is None else pool,
+        emotional_state=store.get_latest_emotional_state(agent_id),
+        reconsolidate_results=False,
+        keep=keep,
+        **scope,
+    )
+    similarity: dict[str, float] = {}
+    if meaning and found:
+        ids = [result.engram.id for result in found]
+        similarity = dict(index.search_candidates(text, ids, k=len(ids), floor=-1.0))
+    asked = distinctive_terms(text)
+    known = set(exclude_texts)
+    chosen: dict[str, dict[str, Any]] = {}
+    for rank, result in enumerate(found, start=1):
+        engram = result.engram
+        shared = sorted(asked & distinctive_terms(f"{engram.content} {engram.impact}"))
+        sim = similarity.get(engram.id)
+        if meaning:
+            if sim is None or not (sim >= floor or (shared and sim >= word_floor)):
+                continue
+        elif len(shared) < words_shared:
+            continue
+        words, lesson = cue.memory_line(engram)
+        key = cue.text_key(words)
+        if not words or key in known:
+            continue
+        drawn = bool({"lesson", "distilled"} & set(engram.tags or []))
+        date, line = cue.line_parts(words, engram.created_at)
+        entry = {
+            "id": engram.id, "text": line, "date": date, "key": key, "lesson": lesson,
+            "similarity": None if sim is None else round(float(sim), 4),
+            "shared": shared, "rank": rank, "drawn": drawn,
+        }
+        if key in chosen:
+            # The same words twice: a lesson, and the memory it was drawn from,
+            # whose impact it copies. The line stays where the better one
+            # ranked, under the memory's id: recalled, it gives the lesson and
+            # what happened.
+            if chosen[key]["drawn"] and not drawn:
+                chosen[key] = {**entry, "rank": chosen[key]["rank"]}
+            continue
+        chosen[key] = entry
+    ranked = sorted(chosen.values(), key=lambda item: (not item["lesson"], item["rank"]))
+    for item in ranked:
+        del item["drawn"]
+    return ranked[:limit]
 
 
 # Hypomnema ids are uuid4 strings and engram ids are ULIDs after "engram_".

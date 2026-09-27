@@ -597,14 +597,22 @@ def _authorship(store: EngramStore, scope: dict[str, str], now: datetime, index:
 
 def _recall_index(store: EngramStore, scope: dict[str, str], now: datetime, index: Any) -> dict:
     """What waits for recall's meaning index (R08), and since when."""
-    from .simple_runtime import recall_index_items, recall_index_meta_key  # imports this module
+    from .simple_runtime import (  # imports this module
+        recall_index_items,
+        recall_index_lessons,
+        recall_index_meta_key,
+    )
 
     embedder = getattr(index, "_embedder", None)
     if index is None or embedder is None or not hasattr(index, "passage_hashes"):
         return {"seen": "no embedding backend here: recall finds by words only", "waiting": 0}
     items = [(item_id, text) for item_id, text in recall_index_items(store, **scope) if (text or "").strip()]
-    stored = index.passage_hashes(item_id for item_id, _ in items)
-    waiting = [item_id for item_id, text in items if stored.get(item_id) != text_hash(text)]
+    if hasattr(index, "waiting"):
+        # The index's own rule: an item waits when its words or its lesson changed.
+        waiting = index.waiting(items, lessons=recall_index_lessons(store, **scope))
+    else:
+        stored = index.passage_hashes(item_id for item_id, _ in items)
+        waiting = [item_id for item_id, text in items if stored.get(item_id) != text_hash(text)]
     written = _words_written_at(store, waiting)
     late = sorted(at for at in written.values() if _older_than(at, now, STALL))
     oldest = min(written.values()) if written else None

@@ -28,9 +28,11 @@ found by its best one. The model reads about 256 tokens, so one vector of a
 long text says nothing about its second half; and it is trained on sentence
 pairs and averages what it reads, so one vector of several ideas is a blur of
 them. So a text is read twice over: in windows of a few sentences, and as a
-whole (its first 700 characters). ``embeddings`` keeps one vector per memory's
-whole text, as capture writes it, for linking and for recall until a memory
-has passages.
+whole (its first 700 characters). A memory whose impact holds a lesson the
+agent wrote has that lesson as one more passage (``LESSON_PART``): it is found
+by what it taught as well as by what happened. ``embeddings`` keeps one vector
+per memory's whole text, as capture writes it, for linking and for recall
+until a memory has passages.
 """
 
 from __future__ import annotations
@@ -75,14 +77,24 @@ CREATE TABLE IF NOT EXISTS passage_vectors (
 #      (R08). A row written by code that names no scheme was cut this way.
 #   2  windows of whole sentences, about 300 characters, each overlapping the
 #      next by one sentence; and the text's first 700 characters, whole.
+#   3  the same, and a memory's lesson (the impact the agent wrote, when its
+#      words don't already say it) as one more passage, part ``LESSON_PART``.
 # A row cut by an older scheme is stale: its item waits to be indexed again and
 # is never found by it. On a copy of the live store, a standing rule of 548
 # characters was one scheme-1 passage, which scored 0.24 against "plain
 # language, brief replies, no jargon", under the floor (0.3 then); the window
 # of its first three sentences scores 0.52, above anything else the query
-# meets.
-# A newer scheme's rows count here, and this code never cuts them again.
-PASSAGE_SCHEME = 2
+# meets. Under scheme 2, on a copy of the live store, 29 of the 172 active
+# memories with a lesson of the agent's had no lesson memory holding the same
+# words; asked with each lesson's first sentence, recall's top ten held 15 of
+# them, and under scheme 3 all 29.
+# A newer scheme's rows count here, and this code never cuts them again. The
+# text's own passages keep the hash of the text alone, as scheme 2 wrote it,
+# so code on scheme 2 reads scheme-3 rows as current and never cuts them back.
+PASSAGE_SCHEME = 3
+# The part number of a memory's lesson passage: far above any text's own
+# passages (0 to PASSAGE_LIMIT - 1). Its row's text_hash is the lesson's.
+LESSON_PART = 1000
 _FIRST_SCHEME = 1
 _SCHEME_COLUMN = f"scheme INTEGER NOT NULL DEFAULT {_FIRST_SCHEME}"
 # A window: whole sentences, together at most this long. A sentence longer
@@ -145,6 +157,11 @@ def text_hash(text: str) -> str:
     return hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:16]
 
 
+def _lesson_hash(lesson: str | None) -> str | None:
+    """Which lesson a lesson passage was cut from; None for no lesson."""
+    return text_hash(lesson) if (lesson or "").strip() else None
+
+
 def passages(text: str) -> list[str]:
     """``text`` as recall's meaning index reads it (scheme 2): first the whole
     text, as far as its first ``PASSAGE_CHARS`` characters; then windows of
@@ -165,6 +182,16 @@ def passages(text: str) -> list[str]:
     if windows == [whole]:
         return windows
     return [whole, *windows][:PASSAGE_LIMIT]
+
+
+def lesson_passage(lesson: str) -> str:
+    """A memory's lesson as one passage: on one line, its first
+    ``PASSAGE_CHARS`` characters, like a text's whole-text passage."""
+    whole = " ".join((lesson or "").split())
+    if len(whole) > PASSAGE_CHARS:
+        cut = whole.rfind(" ", 0, PASSAGE_CHARS + 1)
+        whole = whole[:cut if cut > 0 else PASSAGE_CHARS]
+    return whole
 
 
 def _sentences(text: str) -> list[str]:
@@ -531,13 +558,12 @@ def download_local_model(model_name: str = "all-MiniLM-L6-v2") -> str:
     return model_name
 
 
-def _batches(
-    todo: list[tuple[str, str, list[str]]], size: int,
-) -> list[list[tuple[str, str, list[str]]]]:
-    """``todo`` in order, in batches of whole items holding at most ``size``
-    passages each (an item with more is a batch of its own)."""
-    batches: list[list[tuple[str, str, list[str]]]] = []
-    current: list[tuple[str, str, list[str]]] = []
+def _batches(todo: list[tuple[Any, ...]], size: int) -> list[list[tuple[Any, ...]]]:
+    """``todo`` (items whose third member is their passages) in order, in
+    batches of whole items holding at most ``size`` passages each (an item
+    with more is a batch of its own)."""
+    batches: list[list[tuple[Any, ...]]] = []
+    current: list[tuple[Any, ...]] = []
     count = 0
     for item in todo:
         if current and count + len(item[2]) > size:
@@ -1067,8 +1093,16 @@ class EmbeddingIndex:
     def passage_hashes(self, item_ids: Iterable[str]) -> dict[str, str]:
         """For each of ``item_ids`` with passages from this model, cut by this
         scheme or a newer one, the text they were cut from (``text_hash``).
-        An item missing here waits to be indexed: every count of what waits
-        (indexing, health, the watchdog) asks this."""
+        An item missing here waits to be indexed. Whether an item waits is
+        ``waiting``'s to say: it also asks about the lesson."""
+        return self._part_hashes(item_ids, 0)
+
+    def lesson_hashes(self, item_ids: Iterable[str]) -> dict[str, str]:
+        """For each of ``item_ids`` with a lesson passage from this model, cut
+        by this scheme or a newer one, the lesson it was cut from."""
+        return self._part_hashes(item_ids, LESSON_PART)
+
+    def _part_hashes(self, item_ids: Iterable[str], part: int) -> dict[str, str]:
         if not self._embedder:
             return {}
         conn = self._existing_conn()
@@ -1077,22 +1111,47 @@ class EmbeddingIndex:
         return {
             item_id: digest for item_id, digest in self._rows_for(
                 conn, "SELECT item_id, text_hash FROM passage_vectors "
-                "WHERE model_name = ? AND part = 0 AND scheme >= ? AND item_id IN ({})",
-                (self._embedder.model_name, PASSAGE_SCHEME), set(item_ids),
+                "WHERE model_name = ? AND part = ? AND scheme >= ? AND item_id IN ({})",
+                (self._embedder.model_name, part, PASSAGE_SCHEME), set(item_ids),
             )
         }
+
+    def waiting(
+        self,
+        items: Iterable[tuple[str, str]],
+        *,
+        lessons: Mapping[str, str] | None = None,
+    ) -> list[str]:
+        """The ids of ``items`` (``(id, text)``) whose passages from this model,
+        cut by this scheme or a newer one, are not those of their words now:
+        none, cut from other words, or without the lesson ``lessons`` gives the
+        item (or with one it no longer has, or another). Every count of what
+        waits (indexing, health, the watchdog) asks this."""
+        items = [(item_id, text) for item_id, text in items if (text or "").strip()]
+        ids = [item_id for item_id, _ in items]
+        stored, taught = self.passage_hashes(ids), self.lesson_hashes(ids)
+        lessons = lessons or {}
+        return [
+            item_id for item_id, text in items
+            if stored.get(item_id) != text_hash(text)
+            or taught.get(item_id) != _lesson_hash(lessons.get(item_id))
+        ]
 
     def index_passages(
         self,
         items: Iterable[tuple[str, str]],
         *,
+        lessons: Mapping[str, str] | None = None,
         budget: int | None = None,
         seconds: float | None = None,
     ) -> dict[str, int]:
         """Cut each ``(item_id, text)`` into passages and store a vector for
         each, marked with this scheme, replacing what this model stored for
         that item before; items whose passages already match their text, cut
-        by this scheme or a newer one, are skipped.
+        by this scheme or a newer one, are skipped (``waiting``). ``lessons``
+        gives a memory's lesson (``written_lesson``), stored as one more
+        passage, part ``LESSON_PART``, with its own hash: an item whose lesson
+        changed is cut again although its words did not.
 
         ``budget`` bounds the passages embedded in one call. An item is never
         half-written: one whose passages do not fit in what is left of the
@@ -1120,20 +1179,23 @@ class EmbeddingIndex:
             # wrote would count as an older cut. Everything waits for the next.
             done["waiting"] = len(items)
             return done
-        stored = self.passage_hashes(item_id for item_id, _ in items)
-        todo: list[tuple[str, str, list[str]]] = []
+        lessons = lessons or {}
+        stale = set(self.waiting(items, lessons=lessons))
+        todo: list[tuple[str, str, list[str], str | None]] = []
         planned = 0
         for item_id, text in items:
-            digest = text_hash(text)
-            if stored.get(item_id) == digest:
+            if item_id not in stale:
                 continue
             parts = passages(text)
+            taught = _lesson_hash(lessons.get(item_id))
+            if taught is not None:
+                parts = [*parts, lesson_passage(lessons[item_id])]
             if budget is not None and planned + len(parts) > budget:
-                # Up to 160 passages (a long handoff) against 64 on a
+                # Up to 161 passages (a long handoff) against 64 on a
                 # capture's automatic pass: it waits, and what fits goes on.
                 done["waiting"] += 1
                 continue
-            todo.append((item_id, digest, parts))
+            todo.append((item_id, text_hash(text), parts, taught))
             planned += len(parts)
         if not todo:
             return done
@@ -1154,12 +1216,12 @@ class EmbeddingIndex:
             # a network backend, each given all of it: a provider that never
             # answered held a 2 s write for 4 s.
             deadline = time.monotonic() + seconds
-        embedded: list[tuple[str, str, list[list[float]]]] = []
+        embedded: list[tuple[str, str, list[list[float]], str | None]] = []
         for number, batch in enumerate(batches):
             if deadline is not None and time.monotonic() >= deadline:
                 done["waiting"] += sum(len(rest) for rest in batches[number:])
                 break
-            flat = [part for _, _, parts in batch for part in parts]
+            flat = [part for _, _, parts, _ in batch for part in parts]
             try:
                 vectors = self._embed_many(flat, deadline=deadline)
             except Exception as exc:
@@ -1168,13 +1230,13 @@ class EmbeddingIndex:
                 break
             position = 0
             kept = 0
-            for item_id, digest, parts in batch:
+            for item_id, digest, parts, taught in batch:
                 values = vectors[position:position + len(parts)]
                 position += len(parts)
                 if len(values) != len(parts) or any(v is None for v in values):
                     done["waiting"] += 1
                     continue
-                embedded.append((item_id, digest, values))
+                embedded.append((item_id, digest, values, taught))
                 kept += 1
             if not kept:
                 failure = getattr(self._embedder, "last_error", None)
@@ -1189,18 +1251,23 @@ class EmbeddingIndex:
         model = self._embedder.model_name
         written = {"items": 0, "passages": 0}
         try:
-            for item_id, digest, values in embedded:
+            for item_id, digest, values, taught in embedded:
                 conn.execute(
                     "DELETE FROM passage_vectors WHERE item_id = ? AND model_name = ?",
                     (item_id, model),
                 )
+                # The text's own passages keep the text's hash, as scheme 2
+                # wrote it; the lesson's row keeps the lesson's.
+                rows = [(part, digest, v) for part, v in enumerate(values)]
+                if taught is not None:
+                    rows[-1] = (LESSON_PART, taught, values[-1])
                 conn.executemany(
                     "INSERT INTO passage_vectors "
                     "(item_id, model_name, part, text_hash, dims, embedding, scheme) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     [
-                        (item_id, model, part, digest, len(v), self._to_bytes(v), PASSAGE_SCHEME)
-                        for part, v in enumerate(values)
+                        (item_id, model, part, hashed, len(v), self._to_bytes(v), PASSAGE_SCHEME)
+                        for part, hashed, v in rows
                     ],
                 )
                 written["items"] += 1

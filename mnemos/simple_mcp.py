@@ -511,6 +511,38 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
 register_simple_tools(simple_mcp)
 
 
+def start_cue_answerer() -> Any:
+    """Keep the embedding model warm for this session's prompt hook, and answer
+    its cue queries on a unix socket (``mnemos.cue.CueAnswerer``): the model
+    loads in a background thread, and the socket appears once it can embed.
+
+    The answerer reads its own read-only copy of the configured store and
+    changes nothing. It is stopped at exit. Returns it, or None when it did not
+    start; the server runs the same either way, and a prompt hook without an
+    answerer finds memories by their words alone.
+    """
+    try:
+        import atexit
+
+        from .cue import CueAnswerer
+        from .simple_scope import resolve_scope
+
+        scope = resolve_scope(**_runtime_kwargs)
+        answerer = CueAnswerer(
+            scope.db_path,
+            agent_id=scope.agent_id,
+            person_id=scope.person_id,
+            project_scope=scope.project_scope,
+        )
+        if not answerer.start():
+            return None
+        atexit.register(answerer.stop)
+        return answerer
+    except Exception as exc:
+        logger.warning("The cue's answerer did not start: %s: %s", type(exc).__name__, exc)
+        return None
+
+
 def run_simple_server(
     *,
     db_path: str | None = None,
@@ -526,9 +558,12 @@ def run_simple_server(
         person_id=person_id,
         project_scope=project_scope,
     )
+    answerer = start_cue_answerer()
 
     def _shutdown(signum, frame):
         logger.info("Shutting down Mnemos simple MCP server...")
+        if answerer is not None:
+            answerer.stop()
         if _runtime is not None:
             _runtime.close()
         sys.exit(0)

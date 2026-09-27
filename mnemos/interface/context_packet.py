@@ -290,6 +290,41 @@ def shown_ids(packet: dict[str, Any]) -> set[str]:
     return ids
 
 
+def shown_memories(packet: dict[str, Any]) -> tuple[set[str], list[str]]:
+    """What the briefing showed, as the cue must know it to never show it again
+    in the session: every id ``shown_ids`` names, with the memory each shown
+    note is one object with (a capture's note and memory, R07), and every
+    memory its graph section showed (``--include-graph``); and the whole words
+    of each note, lesson, standing memory and graph memory shown, since the
+    same words can sit under another id (a lesson, and the memory it was drawn
+    from)."""
+    ids = shown_ids(packet)
+    shown = packet.get("shown") or {}
+    rendered = set(shown.get("notes") or []) | set(shown.get("standing") or [])
+    texts: list[str] = []
+    entries = [
+        *(packet.get("foundational") or []),
+        *(item.get("entry") or item for item in packet.get("carrying") or []),
+        *(packet.get("standing") or []),
+    ]
+    for entry in entries:
+        if entry.get("id") not in rendered:
+            continue
+        paired = entry.get("graduated_to_engram_id")
+        if paired:
+            ids.add(paired)
+        words = entry.get("content") or entry.get("text") or ""
+        if words:
+            texts.append(words.split(_CONTEXT_MARK, 1)[0])
+    # What the graph section kept: ``build_context_packet`` leaves only those.
+    for entry in packet.get("mnemos_engrams") or []:
+        ids.add(entry["id"])
+        for words in (entry.get("impact"), entry.get("content")):
+            if words:
+                texts.append(words.split(_CONTEXT_MARK, 1)[0])
+    return ids, texts
+
+
 def fit_section(
     heading: str, groups: list[tuple[str, list[tuple[Any, str]]]], room: int,
 ) -> tuple[str, list[Any]]:

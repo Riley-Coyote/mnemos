@@ -166,9 +166,9 @@ def build_context_packet(
     if report is not None and not changed_something(report):
         report = None
 
-    engrams: list[dict[str, Any]] = []
+    found: list[RetrievalResult] = []
     if include_engrams and query.strip():
-        engrams = _graph_recall(store, query, scope, max_engrams)
+        found = _graph_recall(store, query, scope, max_engrams)
 
     packet: dict[str, Any] = {
         "include_engrams": include_engrams,
@@ -188,12 +188,30 @@ def build_context_packet(
         "reflections": questions,
         "maintenance_report": report,
         "maintenance_reports": [report] if report else [],
-        "mnemos_engrams": engrams,
+        "mnemos_engrams": [_serialize_retrieval_result(result) for result in found],
     }
 
-    text, shown = _render(packet, max_chars=_max_chars(token_budget))
+    max_chars = _max_chars(token_budget)
+    text, shown = _render(packet, max_chars=max_chars)
+    packet["shown"] = shown
+    # What the briefing rendered is what it showed: the ids a later section
+    # must not repeat, and nothing it selected but cut for room.
+    text, kept = _append_graph(packet, text, max_chars)
+    packet["mnemos_engrams"] = kept
     if mark_surfaced:
         _record_delivery(store, scope, shown)
+    if kept:
+        # Recall for a cue is a use, and only what the reader was shown is
+        # reinforced: once per session, never by code older than the store
+        # (see ReactiveRetriever.reinforce). The briefing's own sections
+        # reinforce nothing.
+        shown_ids_kept = {entry["id"] for entry in kept}
+        ReactiveRetriever(store).reinforce(
+            [result for result in found if result.engram.id in shown_ids_kept],
+            query,
+            agent_id=agent_id,
+            session=reader_session or None,
+        )
     if include_prompt:
         packet["prompt"] = text
     return packet
@@ -203,30 +221,67 @@ def format_context_packet(
     packet: dict[str, Any], *, token_budget: int = DEFAULT_TOKEN_BUDGET,
 ) -> str:
     """The briefing text for a packet ``build_context_packet`` returned."""
-    return _render(packet, max_chars=_max_chars(token_budget))[0]
+    max_chars = _max_chars(token_budget)
+    text, shown = _render(packet, max_chars=max_chars)
+    return _append_graph({**packet, "shown": shown}, text, max_chars)[0]
 
 
 def carried_count(packet: dict[str, Any]) -> int:
-    """How many handoffs, notes and reports a packet carries: 0 means the
-    session started from nothing."""
+    """How many handoffs, notes, lessons and reports the packet showed after
+    its budget: 0 means the session started from nothing."""
+    shown = packet.get("shown") or {}
     return (
-        int(packet.get("handoff") is not None)
-        + len(packet.get("other_handoffs") or [])
-        + len(packet.get("foundational") or [])
-        + len(packet.get("carrying") or [])
-        + int(packet.get("maintenance_report") is not None)
+        len(shown.get("handoffs") or [])
+        + len(shown.get("notes") or [])
+        + int(bool(shown.get("report")))
     )
 
 
-def shown_note_ids(packet: dict[str, Any]) -> set[str]:
-    """The ids of the notes and handoffs a packet shows, so a caller appending
-    more doesn't repeat them."""
-    ids = {item["id"] for item in packet.get("carrying") or []}
-    ids.update(entry["id"] for entry in packet.get("foundational") or [])
-    ids.update(entry["id"] for entry in packet.get("other_handoffs") or [])
-    if packet.get("handoff"):
-        ids.add(packet["handoff"]["id"])
+def shown_ids(packet: dict[str, Any]) -> set[str]:
+    """The ids of everything the packet rendered: handoffs, notes, lessons (an
+    engram's id) and the report. Only what survived the budget counts; a note
+    selected but cut for room was not shown. A caller appending more to the
+    packet leaves these out, so nothing is shown twice."""
+    shown = packet.get("shown") or {}
+    ids = set(shown.get("handoffs") or []) | set(shown.get("notes") or [])
+    if shown.get("report"):
+        ids.add(shown["report"])
     return ids
+
+
+def fit_section(
+    heading: str, groups: list[tuple[str, list[tuple[Any, str]]]], room: int,
+) -> tuple[str, list[Any]]:
+    """A section of whole entries that fits in ``room`` characters.
+
+    ``groups`` are ``(label, [(key, entry text), ...])`` in rank order; a label
+    is printed only above an entry kept under it ("" prints none). An entry
+    that doesn't fit is dropped whole, never cut, and later ones may still
+    fit. Returns the text and the keys of the entries kept, or ``("", [])``
+    when none fits.
+    """
+    lines = [heading]
+    used = len(heading)
+    kept: list[Any] = []
+    for label, entries in groups:
+        labelled = not label
+        for key, text in entries:
+            cost = len(text) + 1 + (0 if labelled else len(label) + 1)
+            if used + cost > room:
+                continue
+            if not labelled:
+                lines.append(label)
+                labelled = True
+            lines.append(text)
+            used += cost
+            kept.append(key)
+    return ("\n".join(lines), kept) if kept else ("", [])
+
+
+def room_after(text: str, max_chars: int) -> int:
+    """How long a section appended after ``text`` may be, separator included,
+    for the whole to stay under ``max_chars``."""
+    return max_chars - 1 - len(text) - (2 if text else 0)
 
 
 # ── Whose note is it ──
@@ -432,19 +487,19 @@ def _render(packet: dict[str, Any], *, max_chars: int) -> tuple[str, dict[str, A
 
     Notes are cut shorter until the packet fits; then, if it still doesn't,
     whole items are left out, least needed first. The reader's handoff is
-    never cut. Opted-in graph recall is appended after the briefing.
+    never cut. What comes back as shown is what was rendered.
     """
     dropped: set[tuple[str, str]] = set()
     for chars in _NOTE_CHARS:
         text, shown = _compose(packet, chars, dropped)
         if len(text) < max_chars:
-            return _with_graph(packet, text), shown
+            return text, shown
     for victim in _drop_order(packet):
         dropped.add(victim)
         text, shown = _compose(packet, _NOTE_CHARS[-1], dropped)
         if len(text) < max_chars:
             break
-    return _with_graph(packet, text), shown
+    return text, shown
 
 
 def _drop_order(packet: dict[str, Any]) -> list[tuple[str, str]]:
@@ -465,7 +520,7 @@ def _drop_order(packet: dict[str, Any]) -> list[tuple[str, str]]:
 def _compose(
     packet: dict[str, Any], chars: int, dropped: set[tuple[str, str]],
 ) -> tuple[str, dict[str, Any]]:
-    shown: dict[str, Any] = {"handoffs": [], "notes": [], "questions": []}
+    shown: dict[str, Any] = {"handoffs": [], "notes": [], "questions": [], "report": None}
     sections = [
         _format_left_off(packet, chars, dropped, shown),
         _format_notes(
@@ -485,11 +540,25 @@ def _compose(
     return (f"{_HEADER}\n\n{body}" if body else ""), shown
 
 
-def _with_graph(packet: dict[str, Any], text: str) -> str:
-    graph = _format_engrams(packet)
-    if not graph:
-        return text
-    return f"{text}\n\n{graph}" if text else f"{_HEADER}\n\n{graph}"
+def _append_graph(
+    packet: dict[str, Any], text: str, max_chars: int,
+) -> tuple[str, list[dict[str, Any]]]:
+    """The briefing with opted-in graph recall appended in the room left under
+    the budget, leaving out what the briefing already showed: the text, and
+    the graph entries kept."""
+    if not packet.get("include_engrams"):
+        return text, []
+    shown = shown_ids(packet)
+    entries = [entry for entry in packet.get("mnemos_engrams") or [] if entry["id"] not in shown]
+    prefix = text or _HEADER
+    section, kept = fit_section(
+        "### Mnemos Graph",
+        [("", [(entry, _graph_line(entry)) for entry in entries])],
+        room_after(prefix, max_chars),
+    )
+    if not section:
+        return text, []
+    return f"{prefix}\n\n{section}", kept
 
 
 def _format_left_off(
@@ -613,18 +682,12 @@ def _format_away(
     )
 
 
-def _format_engrams(packet: dict[str, Any]) -> str:
-    engrams = packet.get("mnemos_engrams") or []
-    if not packet.get("include_engrams") or not engrams:
-        return ""
-    lines = ["### Mnemos Graph"]
-    for item in engrams:
-        confidence = int(float(item["confidence"]) * 100)
-        lines.append(
-            f"- {item['display']} "
-            f"[{item['kind']}, score {float(item['score']):.2f}, confidence {confidence}%]"
-        )
-    return "\n".join(lines)
+def _graph_line(item: dict[str, Any]) -> str:
+    confidence = int(float(item["confidence"]) * 100)
+    return (
+        f"- {item['display']} "
+        f"[{item['kind']}, score {float(item['score']):.2f}, confidence {confidence}%]"
+    )
 
 
 # ── Cutting a note ──
@@ -693,19 +756,20 @@ def _record_delivery(store: "EngramStore", scope: dict[str, str], shown: dict[st
 
 def _graph_recall(
     store: "EngramStore", query: str, scope: dict[str, str], max_engrams: int,
-) -> list[dict[str, Any]]:
+) -> list[RetrievalResult]:
+    """Graph recall for ``query``. Finding changes nothing: the caller
+    reinforces only what it goes on to show."""
     retriever = ReactiveRetriever(store)
     results = retriever.retrieve(
         cue=query,
         **scope,
         max_results=max_engrams,
         emotional_state=store.get_latest_emotional_state(scope["agent_id"]),
+        reconsolidate_results=False,
     )
-    # A defensive scope check at serialization, although retrieval filters
-    # before graph traversal and reconsolidation.
+    # A defensive scope check, although retrieval filters before traversal.
     return [
-        _serialize_retrieval_result(result)
-        for result in results
+        result for result in results
         if store.engram_visible_in_scope(result.engram.id, **scope)
     ]
 

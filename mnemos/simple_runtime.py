@@ -35,14 +35,17 @@ from .encoding.encoder import Encoder
 from .identity_svg import build_timeline, render_identity_svg, short_label
 from .interface.context_packet import (
     COLLEAGUE_LINE,
+    PACKET_MAX_CHARS,
     PACKET_QUESTIONS,
     build_context_packet,
     carried_count,
+    fit_section,
     format_questions,
-    shown_note_ids,
+    room_after,
+    shown_ids,
     whose_handoff,
 )
-from .retrieval.reactive import ReactiveRetriever
+from .retrieval.reactive import ReactiveRetriever, RetrievalResult
 # Re-exported: MnemosScope and resolve_scope moved to simple_scope but
 # remain importable from here for existing consumers.
 from .simple_scope import MnemosScope, resolve_scope  # noqa: F401
@@ -2194,9 +2197,9 @@ class MnemosRuntime:
         The shared packet comes first. After it, only what belongs to this
         call: the first-session ritual while onboarding lasts, the one-time
         MEMORY VERIFIED block, and, when ``query`` is given, what else in
-        memory matches it (at most ``max_results`` of each kind). Building the
-        packet runs no maintenance; that rides on captures, corrections and
-        mnemos_maintain.
+        memory matches it (at most ``max_results`` of each kind), in the room
+        left under the packet's budget. Building the packet runs no
+        maintenance; that rides on captures, corrections and mnemos_maintain.
         """
 
         self._ensure_init()
@@ -2216,7 +2219,10 @@ class MnemosRuntime:
         if verification:
             parts.append(verification)
         if query.strip():
-            parts.append(self._query_results(query, max_results, shown_note_ids(packet)))
+            room = room_after("\n\n".join(parts), PACKET_MAX_CHARS)
+            section = self._query_results(query, max_results, shown_ids(packet), room)
+            if section:
+                parts.append(section)
         if not parts:
             parts.append(
                 "Nothing has carried over yet: no handoff, notes or beliefs in this "
@@ -2253,9 +2259,11 @@ class MnemosRuntime:
             older_than_store=self._older_than_store() is not None,
         )
 
-    def _query_results(self, query: str, max_results: int, shown: set[str]) -> str:
-        """What else matches ``query``, after the packet: notes it didn't show,
-        then durable memories, as recall finds them."""
+    def _query_results(self, query: str, max_results: int, shown: set[str], room: int) -> str:
+        """What else matches ``query``, after the packet: notes, then durable
+        memories, as recall finds them, leaving out everything the packet
+        showed. Whole entries only, in ``room`` characters; ``""`` when none
+        fits. Only the memories kept are reinforced."""
         assert self._store is not None
         continuity = self._store.search_hypomnema(
             query,
@@ -2270,19 +2278,27 @@ class MnemosRuntime:
             if entry["id"] not in shown
             and DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
         ][:max_results]
-        memories = self._retrieve(query, max_results=max_results)
+        memories = [
+            result for result in self._retrieve(query, max_results=max_results + len(shown))
+            if result.engram.id not in shown
+        ][:max_results]
 
-        lines = [f'### For "{query.strip()}"']
-        if continuity:
-            lines.append("Continuity notes:")
-            lines.extend(_format_continuity(entry) for entry in continuity)
-        if memories:
-            lines.append("Relevant memories:")
-            lines.extend(_format_memory(result) for result in memories)
-            self._reinforce_returned(query, memories)
-        if len(lines) == 1:
-            lines.append("Nothing else in memory matches this.")
-        return "\n".join(lines)
+        heading = f'### For "{query.strip()}"'
+        if not continuity and not memories:
+            said = f"{heading}\nNothing else in memory matches this."
+            return said if len(said) <= room else ""
+        section, kept = fit_section(
+            heading,
+            [
+                ("Continuity notes:", [(("note", entry["id"]), _format_continuity(entry)) for entry in continuity]),
+                ("Relevant memories:", [(("memory", index), _format_memory(result)) for index, result in enumerate(memories)]),
+            ],
+            room,
+        )
+        self._reinforce_returned(
+            query, [memories[index] for kind, index in kept if kind == "memory"],
+        )
+        return section
 
     @_notice_when_older
     def handoff(self, text: str) -> str:
@@ -2331,7 +2347,8 @@ class MnemosRuntime:
         The packet cuts long notes and gives each cut one its id. A handoff
         comes back framed as the packet framed it, active or not. A continuity
         note or a durable memory comes back only while it is live: one that was
-        forgotten stays forgotten.
+        forgotten stays forgotten. A durable memory read this way is
+        reinforced as a recall would reinforce it.
         """
         assert self._store is not None
         scope = {
@@ -2367,6 +2384,15 @@ class MnemosRuntime:
             lines = [f"{kind} {note_id}, {_age_text(engram.created_at)}:", engram.content]
             if engram.impact and engram.impact != engram.content:
                 lines.append(f"What it changed: {engram.impact}")
+            # Asking for a memory by its id is a use, as a query that returns
+            # it is: reinforced the same way, once a session and never by
+            # code older than the store. Only an active memory, as recall by
+            # query returns only active ones; waking a dormant one is a rule
+            # of its own. A note has no reinforcement.
+            if engram.state == "active":
+                self._reinforce_returned(
+                    note_id, [RetrievalResult(engram=engram, score=1.0, retrieval_path="id")],
+                )
             return "\n".join(lines)
         return ""
 

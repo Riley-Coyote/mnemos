@@ -706,3 +706,186 @@ def test_a_session_start_raises_the_stores_code_version(tmp_path):
     _write(db, "INSERT OR REPLACE INTO meta (key, value) VALUES ('min_code_version', '999')")
     _hook(db, tmp_path)
     assert _read(db, minimum) == [("999",)]
+
+
+# ── A use, what was shown, and one budget (review of #84) ──
+
+TRACE = (
+    "SELECT access_count, last_accessed, reconsolidation_count, strength, stability, "
+    "accessibility FROM engrams WHERE id = ?"
+)
+ALL_TRACES = (
+    "SELECT id, access_count, reconsolidation_count, strength, stability, accessibility "
+    "FROM engrams ORDER BY id"
+)
+
+
+def _accessed(db: Path, engram_id: str) -> int:
+    return _read(db, "SELECT access_count FROM engrams WHERE id = ?", (engram_id,))[0][0]
+
+
+def _recall_in(monkeypatch, db: Path, session: str, what: str) -> str:
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", session)
+    runtime = _runtime(db)
+    try:
+        return runtime.recall(what)
+    finally:
+        runtime.close()
+
+
+def test_recalling_a_memory_by_its_id_is_a_use_once_a_session(tmp_path, monkeypatch):
+    db, ids = _briefing_store(tmp_path)
+    lesson = ids["lesson"]
+    accessed = _accessed(db, lesson)
+
+    for _ in range(2):
+        assert LESSON in _recall_in(monkeypatch, db, OWN, lesson)
+    assert _accessed(db, lesson) == accessed + 1, "recalling it by its id was not a use"
+    assert LESSON in _recall_in(monkeypatch, db, SIBLING, lesson)
+    assert _accessed(db, lesson) == accessed + 2, "another session's use was not counted"
+
+    # A note has no reinforcement: reading one whole by its id changes no memory.
+    before = _read(db, ALL_TRACES)
+    assert SETTINGS_NOTE in _recall_in(monkeypatch, db, FABLE_SESSION, ids["settings"])
+    assert _read(db, ALL_TRACES) == before
+
+    # Code older than the store reads the memory and changes nothing.
+    _write(db, "INSERT OR REPLACE INTO meta (key, value) VALUES ('min_code_version', '999')")
+    assert LESSON in _recall_in(monkeypatch, db, OLD_SESSION, lesson)
+    assert _read(db, ALL_TRACES) == before
+
+
+def test_the_packet_showing_a_memory_is_not_a_use(tmp_path, monkeypatch):
+    db, ids = _briefing_store(tmp_path)
+    folder = _folder(tmp_path, "ferry-app")
+    lesson = ids["lesson"]
+    before = _read(db, TRACE, (lesson,))
+    links = (
+        "SELECT COUNT(*) FROM connections WHERE relation = 'co_activated' "
+        "AND (source_id = ? OR target_id = ?)"
+    )
+    assert _read(db, links, (lesson, lesson)) == [(0,)]
+
+    packets = [
+        _hook(db, tmp_path, cwd=folder),
+        _hook(db, tmp_path, cwd=folder, extra=("--include-graph", "--query", "live ferry page")),
+    ]
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", OWN)
+    monkeypatch.chdir(folder)
+    runtime = _runtime(db)
+    try:
+        packets.append(runtime.context())
+        packets.append(runtime.context("live ferry page"))
+    finally:
+        runtime.close()
+
+    for packet in packets:
+        assert f"- 2026-09-21, lesson: {LESSON}" in _section(packet, "What you're carrying")
+    assert _read(db, TRACE, (lesson,)) == before, "the packet's own pick was reinforced"
+    assert _read(db, links, (lesson, lesson)) == [(0,)]
+
+
+def test_what_the_packet_carries_is_not_repeated_after_it(tmp_path, monkeypatch):
+    db, _ = _briefing_store(tmp_path)
+    folder = _folder(tmp_path, "ferry-app")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", OWN)
+    monkeypatch.chdir(folder)
+    runtime = _runtime(db)
+    try:
+        asked = runtime.context("live ferry page")
+    finally:
+        runtime.close()
+    graph = _hook(db, tmp_path, cwd=folder, extra=("--include-graph", "--query", "live ferry page"))
+
+    for packet, heading in (
+        (asked, '### For "live ferry page"'), (graph, "### Mnemos Graph"),
+    ):
+        assert heading in packet, "premise: something else was found"
+        carried, after = packet.split(heading, 1)
+        assert LESSON in carried, "premise: the lesson is carried"
+        assert LESSON not in after, f"the carried lesson was repeated under {heading!r}"
+        assert QUESTION_ON in after, "premise: the rest of what the query finds is there"
+
+
+LIGHTHOUSE = "the lighthouse lamp wants a new wick before winter."
+
+
+def test_a_note_left_out_for_room_still_comes_back_for_a_query(tmp_path, monkeypatch):
+    db = tmp_path / "memory.db"
+    store = EngramStore(db)
+    try:
+        # The session's own handoff is never cut. This one leaves room for the
+        # briefing's first section only: the note it carries and its question
+        # are left out, and a few hundred characters remain.
+        handoff = store.write_handoff(
+            ("Where I stopped: the harbour ledger, checked page by page. " * 100)[:5601],
+            **SCOPE, author_model=OPUS, author_session=OWN,
+        )
+        _note(store, LIGHTHOUSE)
+        asked_about = _engram(
+            store,
+            "Riley and I spent the evening sorting the tide tables by season, then by "
+            "port, then by the hour the tide turns, so that every table reads the same "
+            "way from the first page to the last page of the book.",
+        )
+        store.enqueue_reflection(
+            "impact", asked_about,
+            "What did this change in how you understand things? One sentence.", **SCOPE,
+        )
+    finally:
+        store.close()
+    _dated(db, handoff, _ago(hours=2, minutes=30))
+
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", OWN)
+    monkeypatch.setenv("MNEMOS_AGENT_MODEL", OPUS)
+    runtime = _runtime(db)
+    try:
+        asked = runtime.context("lighthouse wick")
+    finally:
+        runtime.close()
+
+    packet, heading, results = asked.partition('### For "lighthouse wick"\n')
+    assert heading, f"no results were appended:\n{asked[-300:]}"
+    assert LIGHTHOUSE not in packet and "### One question" not in packet, (
+        "premise: the budget left the note and the question out"
+    )
+    assert LIGHTHOUSE in results, "a note the packet didn't show was treated as shown"
+    assert len(asked) < 6000
+
+
+def test_graph_recall_after_the_packet_stays_within_the_budget(tmp_path):
+    db, _ = _briefing_store(tmp_path)
+    store = EngramStore(db)
+    try:
+        store.write_handoff(
+            ("Where I stopped: the harbour ledger, checked page by page. " * 50)[:2700],
+            **SCOPE, author_model=OPUS, author_session=OWN,
+        )
+        found = {
+            _engram(
+                store,
+                f"Harbour ledger entry {n}: Riley and I matched the berth fees against the "
+                "receipts for the whole summer, one line at a time, and marked every line "
+                "that disagreed with the ledger so the harbour office can look again.",
+            ): n
+            for n in range(6)
+        }
+    finally:
+        store.close()
+    before = {engram_id: _accessed(db, engram_id) for engram_id in found}
+
+    for budget, extra in ((6000, ()), (4000, ("--token-budget", "1000"))):
+        packet = _hook(db, tmp_path, extra=("--include-graph", "--query", "harbour ledger", *extra))
+        assert len(packet) < budget, f"{len(packet)} characters against a budget of {budget}"
+        if budget == 6000:
+            graph = packet.split("### Mnemos Graph\n", 1)[1].splitlines()
+            assert 0 < len(graph) < len(found), "premise: some entries fit and some don't"
+            assert all(line.endswith("%]") for line in graph), "an entry was cut"
+            shown = {
+                engram_id for engram_id, n in found.items()
+                if f"Harbour ledger entry {n}:" in packet
+            }
+            # Only what the reader was shown is a use.
+            assert {
+                engram_id for engram_id in found if _accessed(db, engram_id) > before[engram_id]
+            } == shown

@@ -37,10 +37,19 @@ middle of its question, and 117 reports were active at once.
   scope. One of the three is always a concrete, dated episode (a note that
   names someone or something and something specific) when there is one.
 - The packet stays under 6,000 characters (`--token-budget` now defaults to
-  1500 tokens). The reader's handoff is never cut. Notes are cut at a sentence
-  boundary and end with their id, and `mnemos_recall("<id>")` returns any note
-  the packet cut, a handoff, a continuity note or a lesson, whole. A forgotten
-  note does not come back by its id.
+  1500 tokens), and so does anything appended to it: `--include-graph` recall
+  and `mnemos_context`'s results for a query get only the room left, and an
+  entry that doesn't fit is left out whole. The reader's handoff is never cut.
+  Notes are cut at a sentence boundary and end with their id, and
+  `mnemos_recall("<id>")` returns any note the packet cut, a handoff, a
+  continuity note or a lesson, whole. A forgotten note does not come back by
+  its id.
+- Asking for a memory by its id is a use: `mnemos_recall("<engram id>")`
+  reinforces an active memory as a query that returns it would, once a
+  session and never on code older than the store. A note read by its id is
+  not reinforced (notes have no reinforcement), and the packet showing a
+  memory is not a use: the briefing reinforces nothing. Graph recall
+  reinforces only the entries it shows.
 - The maintenance report is found by its tag, so each new report replaces the
   last again. Reports that piled up stay as they are.
 - Code older than the store shows no question and spends no showing on the
@@ -51,7 +60,9 @@ Changed behaviour, and what to do:
 - `mnemos_context` runs no maintenance. Upkeep still rides on captures and
   corrections, and `mnemos_maintain` runs it on demand. The tool is no longer
   annotated destructive. With a query, it appends what else matches after the
-  packet (`### For "<query>"`), as recall finds it.
+  packet (`### For "<query>"`), as recall finds it, leaving out everything the
+  packet rendered (notes, handoffs and lessons); what the budget left out of
+  the packet can come back here.
 - The packet no longer shows the identity summary, functional memory, the
   review queue, the scope or identity-divergence notes (`mnemos recall` finds
   those). `build_context_packet` no longer returns `identity`, `signers`,

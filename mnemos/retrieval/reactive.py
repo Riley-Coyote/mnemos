@@ -2,13 +2,15 @@
 Core retrieval for Mnemos: found by words and by meaning, then resonance.
 
 Pipeline:
-1. SEED from four ranked lists, each over only what the caller may be shown:
+1. SEED from three ranked lists, each over only what the caller may be shown:
    - words among memories: the ones live in its scope that hold the cue's
-     words (FTS5 bm25; active, then up to ``DORMANT_SEED_LIMIT`` dormant, on
-     one scale);
-   - words among their lessons: the impacts the agent wrote that the memory's
-     words don't already say (bm25 over those lessons), so a memory is found
-     by what it taught as well as by what happened;
+     words, in their own words (FTS5 bm25; active, then up to
+     ``DORMANT_SEED_LIMIT`` dormant, on one scale) or in their lessons (the
+     impacts the agent wrote that a memory's words don't already say; bm25
+     over those lessons), so a memory is found by what it taught as well as
+     by what happened. Each memory is in this list once, at the better of its
+     two ranks (``better_rank``): two votes for the same words would put it
+     above a memory whose words match better;
    - words among the notes the caller passes (handoffs; bm25 over those notes);
    - meaning: memories and notes alike, each by its closest passage (a
      memory's lesson is one of them), above a similarity floor, and only then
@@ -112,6 +114,19 @@ def fuse(lists: Iterable[tuple[Sequence[str], float]], k: int = FUSION_K) -> dic
     return scores
 
 
+def better_rank(*lists: Sequence[str]) -> list[str]:
+    """One ranking from several rankings of the same kind of item: each item
+    once, at its best rank in any of them, a tie going to the earlier list.
+    A memory matched by its own words and by its lesson's words is one match
+    by words, not two."""
+    best: dict[str, tuple[int, int]] = {}
+    for order, ids in enumerate(lists):
+        for rank, item_id in enumerate(ids, start=1):
+            if item_id not in best or (rank, order) < best[item_id]:
+                best[item_id] = (rank, order)
+    return sorted(best, key=best.__getitem__)
+
+
 def _log_seed_failure_once(exc: Exception) -> None:
     global _EMBEDDING_SEED_FAILURE_LOGGED
     if _EMBEDDING_SEED_FAILURE_LOGGED:
@@ -171,8 +186,8 @@ _RELATION_WEIGHTS: dict[str, float] = {
 class ReactiveRetriever:
     """Memory retrieval: found by words and by meaning, then resonance.
 
-    Four ranked lists (memories by their words, by their lessons' words,
-    notes by their words, all by their meaning) are fused by reciprocal rank
+    Three ranked lists (memories by their words or their lessons' words,
+    notes by their words, both by their meaning) are fused by reciprocal rank
     into seeds, activation spreads from the seeds through typed connections,
     and what lights up is ranked, filtered and cut.
 
@@ -217,7 +232,7 @@ class ReactiveRetriever:
         """Retrieve memories for ``cue``, best first.
 
         Pipeline:
-        1. Seeds from four ranked lists, fused by reciprocal rank (see the
+        1. Seeds from three ranked lists, fused by reciprocal rank (see the
            module docstring): each seed starts at its fused score relative to
            the best.
         2. Resonance, among memories only: from memories newly reached, each
@@ -264,7 +279,8 @@ class ReactiveRetriever:
         # 1a'. WORDS among their lessons: the impacts the agent wrote, which
         # the full-text index doesn't hold. A memory whose content is about a
         # report and whose lesson says "avoid jargon" is found by "avoid
-        # jargon". Only live memories in the scope have them here.
+        # jargon". Only live memories in the scope have them here. Each
+        # memory then counts once by words, at the better of its two ranks.
         lesson_words: list[str] = []
         lessons_of = getattr(self._store, "live_memory_lessons", None)
         lessons = lessons_of(**scope) if lessons_of is not None else {}
@@ -276,6 +292,7 @@ class ReactiveRetriever:
                         continue
                     engrams[item_id] = engram
                 lesson_words.append(item_id)
+        memory_words = better_rank(memory_words, lesson_words)
 
         # Shared memories (cross-agent), ranked by words within their own search
         shared_words: list[str] = []
@@ -329,7 +346,6 @@ class ReactiveRetriever:
         # half of that, so an equal active match comes first.
         fused = fuse([
             (memory_words, WORDS_WEIGHT),
-            (lesson_words, WORDS_WEIGHT),
             (shared_words, WORDS_WEIGHT),
             (note_words, WORDS_WEIGHT),
             (meaning, MEANING_WEIGHT),
@@ -400,7 +416,7 @@ class ReactiveRetriever:
 
         # 4. LOAD, then FILTER, then CUT
         words_rank: dict[str, int] = {}
-        for ranked_ids in (memory_words, lesson_words, shared_words, note_words):
+        for ranked_ids in (memory_words, shared_words, note_words):
             for rank, item_id in enumerate(ranked_ids, start=1):
                 words_rank.setdefault(item_id, rank)
         meaning_rank = {item_id: rank for rank, item_id in enumerate(meaning, start=1)}

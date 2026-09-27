@@ -13,8 +13,9 @@ each lesson's first sentence, recall's top ten held 15 of them.
 
 - A memory's lesson is one more passage of it in the meaning index (passage
   scheme 3), and the lessons in the scope are ranked by their words beside the
-  memories' own words, fused as one more list (weight 0.3, as words are).
-  Asked the same way, recall's top ten now hold all 29.
+  memories' own words. A memory counts once by words, at the better of its
+  two ranks: two votes for the same words would put it above a memory whose
+  words match better. Asked the same way, recall's top ten now hold all 29.
 - Only the agent's lessons: an impact the server filled in, one a configured
   model extracted, or one that only repeats the memory's words is neither
   indexed nor matched.
@@ -76,12 +77,12 @@ changed nothing. Memory that works doesn't wait to be asked.
   would block the prompt.
 
 Measured over the lab's 20 development prompts, three rounds, with the real
-model: warm, p50 133 ms and p95 174 ms end to end; from words alone, p50 106 ms
-and p95 112 ms. With real Claude Code, `/clear` gave the session a new id while
+model: warm, p50 134 ms and p95 158 ms end to end; from words alone, p50 106 ms
+and p95 113 ms. With real Claude Code, `/clear` gave the session a new id while
 its Mnemos server kept running under the old one, and the hook reached the
 server by meaning before and after. On a copy of the lab's snapshot, the cue
 showed 38 or 39 lines for those prompts at every floor from 0.30 to 0.50 (what
-a higher floor turns away, the word path lets back in), 8 of them holding a
+a higher floor turns away, the word path lets back in), 9 of them holding a
 fact for the task; six prompts have fewer than four content words.
 
 Changed behaviour: `mnemos serve` starts a background thread for the cue, and

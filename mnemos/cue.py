@@ -72,14 +72,14 @@ CUE_POOL = 10
 # The meaning floor: the cosine a memory must reach with the message (the
 # starting floor, chosen for the lab's L06). A memory sharing a distinctive
 # word with the message needs only CUE_WORD_FLOOR. On the lab's 20 development
-# prompts every floor from 0.30 to 0.50 showed 38 or 39 lines, 8 of them holding
+# prompts every floor from 0.30 to 0.50 showed 38 or 39 lines, 9 of them holding
 # a fact for the task: what a higher floor turns away, the word path lets back.
 CUE_FLOOR = 0.40
 CUE_WORD_FLOOR = 0.25
 # Without meaning (no answerer, or one whose model is still loading): how many
 # distinctive words a memory must share with the message. On the same prompts,
-# 2 words showed 42 lines, 8 of them holding a fact (1 word: the same; 3
-# words: 21 lines, 7).
+# 2 showed the most lines holding a fact for the task: 11 of 40 (1 word: 10 of
+# 42; 3 words: 9 of 21).
 CUE_WORDS_SHARED = 2
 # Fewer content words than this ("ok", "yes", "beautiful") get nothing.
 CUE_MIN_WORDS = 4

@@ -289,3 +289,34 @@ def test_code_on_the_previous_scheme_reads_the_new_rows_as_current(tmp_path, mea
     rows = _rows(db, taught.id)
     first = next(row for row in rows if row[0] == 0)
     assert first[2] == ei.text_hash(REPORT)
+
+
+# ── One vote for the same words ──
+
+
+def test_a_memory_matched_by_its_words_and_its_lesson_counts_once(tmp_path):
+    """A memory whose own words and whose lesson both hold the cue's words is
+    one match by words, at the better of its two ranks, not two: two votes
+    for the same words put it above a memory whose words match better. The
+    best match by its own words stays first, and the other's fused score is
+    one words contribution, at its better rank."""
+    from mnemos.retrieval.reactive import FUSION_K, WORDS_WEIGHT, ReactiveRetriever
+
+    db = tmp_path / "memory.db"
+    store = EngramStore(str(db))
+    best = _memory("The lighthouse storm log: lighthouse storm log, every lighthouse storm.")
+    both = _memory("The lighthouse keeper wrote in the log.",
+                   impact="Keep the lighthouse storm log every night.", impact_source="agent")
+    for engram in (best, both):
+        store.save_engram(engram)
+
+    found = ReactiveRetriever(store, reconsolidation_enabled=False).retrieve(
+        "lighthouse storm log", **SCOPE,
+    )
+    store.close()
+
+    names = {best.id: "best by its words", both.id: "words and lesson"}
+    assert [names[r.engram.id] for r in found] == ["best by its words", "words and lesson"]
+    by_id = {r.engram.id: r for r in found}
+    assert by_id[best.id].score_breakdown["words_rank"] == 1
+    assert by_id[both.id].score_breakdown["fused"] == round(WORDS_WEIGHT / (FUSION_K + 2), 6)

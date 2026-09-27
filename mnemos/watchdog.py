@@ -37,11 +37,6 @@ STALL = timedelta(days=1)
 WINDOW = timedelta(days=7)
 # How long a lesson question may wait to be shown before it counts as starved.
 LESSON_WAIT = timedelta(days=14)
-# Automatic maintenance skips a cycle when one ran a few minutes before (the
-# activity gate, `min_idle_minutes`), so a capture just after a cycle can wait
-# for the next one. Captures this close to the last cycle are not counted as
-# left without maintenance.
-GATE_TOLERANCE = timedelta(hours=1)
 # memory_trace arrived with maintenance code version 5 (#86). From the first
 # open by such code (when it labelled the store's authors), every tool call by
 # code at least as new as the store leaves a trace row. A session whose writes
@@ -213,7 +208,7 @@ def _questions(store: EngramStore, scope: dict[str, str], now: datetime, index: 
     """Questions shown as often as they ever will be, still unanswered."""
     shown_max = EngramStore.MAX_SURFACINGS
     rows = _rows(store._get_conn(), """
-        SELECT target_id, surfaced_count, created_at, expires_at, answered_at
+        SELECT target_id, kind, prompt, surfaced_count, created_at, expires_at, answered_at
         FROM reflection_queue
         WHERE agent_id = ? AND person_id = ? AND project_scope = ?
         ORDER BY created_at ASC
@@ -249,21 +244,34 @@ def _questions(store: EngramStore, scope: dict[str, str], now: datetime, index: 
             f"{_times(shown_max)} and never answered, and {answered} of {total} "
             f"{_was(total)} ever answered ({rate}%)."
         )
-        # A question past its showings can still be answered by its id: the
-        # newest one is where to start.
-        result["command"] = f'mnemos_reflect(target_id="{stalled[-1]["target_id"]}", text="…")'
+        result["command"] = _answer_call(rows, stalled[-1]["target_id"])
     return result
+
+
+def _answer_call(rows: Sequence[Any], target: str) -> str:
+    """The call that answers the question asked about ``target``, as the
+    briefing shows it. A question past its showings can still be answered by
+    its id, and mnemos_reflect answers the oldest open one about it. A belief,
+    reaffirmation or contradiction question is settled only by a verdict:
+    answered without one, its words are kept and it stays open, and so would
+    the flag. So those get the verdict-bearing call (``verdict_call_lines``)."""
+    from .simple_runtime import verdict_call_lines  # the runtime imports this module
+
+    ask = next(row for row in rows if row["target_id"] == target and not row["answered_at"])
+    call = verdict_call_lines(dict(ask))
+    return "; ".join(call) if call else f'mnemos_reflect(target_id="{target}", text="…")'
 
 
 def _report(store: EngramStore, scope: dict[str, str], now: datetime, index: Any) -> dict:
     """The newest report the briefing finds, against the maintenance since."""
     report = latest_dream_entry(store, **scope)  # the briefing's own finder
     report_at = _at(report.get("last_revised_at") or report.get("created_at")) if report else None
-    since = max(report_at, now - WINDOW) if report_at else now - WINDOW
     # A cycle the dream journal would have told about (its own rule) that
-    # finished after the newest report is one the briefing never tells.
+    # finished after the newest report is one the briefing never tells. Every
+    # such cycle counts, however long ago (with no report, every cycle): a
+    # change the briefing never told does not stop being untold after a week.
     untold = [
-        at for at, stats in _cycles(store, scope, since)
+        at for at, stats in _cycles(store, scope, report_at)
         if compose_dream_narrative(stats) is not None
         and (report_at is None or at > report_at)
     ]
@@ -297,21 +305,23 @@ def _report(store: EngramStore, scope: dict[str, str], now: datetime, index: Any
 
 
 def _maintenance(store: EngramStore, scope: dict[str, str], now: datetime, index: Any) -> dict:
-    """Cycles in the window and how many changed anything; captures left
-    without any cycle after them."""
+    """Cycles in the window and how many changed anything; captures no cycle
+    has followed; and a run of cycles that changed nothing, which is a stall
+    only with evidence that there was work to do (``_idle_evidence``)."""
     cycles = _cycles(store, scope, now - WINDOW)
     changed = [at for at, stats in cycles if _changed(stats)]
-    # The newest run of cycles that changed nothing, oldest first, and the
-    # passes that failed in it.
-    idle: list[datetime] = []
-    errors: set[str] = set()
+    # The newest run of cycles that changed nothing, oldest first.
+    idle: list[tuple[datetime, dict[str, Any]]] = []
     for at, stats in reversed(cycles):
         if _changed(stats):
             break
-        idle.insert(0, at)
-        errors.update(key for key in stats if key.endswith("_error"))
+        idle.insert(0, (at, stats))
     last_cycle = _last_cycle(store, scope)
-    waiting = _captures_after(store, scope, (last_cycle + GATE_TOLERANCE) if last_cycle else None)
+    # Every capture since the last cycle waits for one. The activity gate can
+    # hold a capture back for a few minutes after a cycle, and the day's grace
+    # (STALL) covers that: past it, a capture no cycle has followed counts,
+    # however soon after the last cycle it came.
+    waiting = _captures_after(store, scope, last_cycle)
     seen = (
         f"{_count(len(cycles), 'cycle')} in the last {WINDOW.days} days, "
         f"{len(changed)} changed something"
@@ -321,7 +331,11 @@ def _maintenance(store: EngramStore, scope: dict[str, str], now: datetime, index
     else:
         seen += "; no cycle is recorded"
     unmaintained = bool(waiting) and _older_than(min(waiting), now, STALL)
-    idle_stalled = len(idle) >= 2 and (idle[-1] - idle[0]) > STALL
+    # A stable store's cycles can legitimately find nothing to change, so a
+    # long idle run is a stall only with evidence that there was work to do.
+    long_idle = len(idle) >= 2 and (idle[-1][0] - idle[0][0]) > STALL
+    evidence = _idle_evidence(store, scope, idle) if long_idle else {}
+    idle_stalled = long_idle and any(evidence.values())
     result: dict[str, Any] = {
         "seen": seen,
         "cycles": len(cycles),
@@ -329,7 +343,7 @@ def _maintenance(store: EngramStore, scope: dict[str, str], now: datetime, index
         "last_cycle_at": last_cycle.isoformat() if last_cycle else None,
         "last_change_at": max(changed).isoformat() if changed else None,
         "idle_cycles": len(idle),
-        "pass_errors": sorted(errors),
+        "idle_evidence": evidence,
         "captures_without_cycle": len(waiting),
         "stalled": unmaintained or idle_stalled,
     }
@@ -341,14 +355,90 @@ def _maintenance(store: EngramStore, scope: dict[str, str], now: datetime, index
         )
         result["command"] = "mnemos consolidate"
     elif idle_stalled:
-        passes = [key[: -len("_error")].replace("_", " ") for key in sorted(errors)]
-        failing = f"; its log shows these passes failing: {', '.join(passes)}" if passes else ""
+        found = []
+        if evidence["pass_errors"]:
+            passes = [key[: -len("_error")].replace("_", " ") for key in evidence["pass_errors"]]
+            found.append(f"its log shows these passes failing: {', '.join(passes)}")
+        if evidence["memories_never_read"]:
+            unread = evidence["memories_never_read"]
+            found.append(f"it never read the {_count(unread, 'memory', 'memories')} it keeps")
+        if evidence["lessons_never_asked"]:
+            asked = len(evidence["lessons_never_asked"])
+            found.append(
+                f"{_count(asked, 'fading memory', 'fading memories')} it found "
+                f"{_has(asked)} never been asked what {'it' if asked == 1 else 'they'} taught"
+            )
         result["flag"] = (
-            f"Maintenance has run {_times(len(idle))} since {_day(idle[0])} "
-            f"without changing anything{failing}."
+            f"Maintenance has run {_times(len(idle))} since {_day(idle[0][0])} "
+            f"without changing anything; {'; '.join(found)}."
         )
-        result["command"] = "mnemos consolidate"
+        # Maintenance in a session is the path that asks the lesson questions;
+        # the command prints what each pass did, and its failures.
+        result["command"] = (
+            "mnemos_maintain" if evidence["lessons_never_asked"] else "mnemos consolidate"
+        )
     return result
+
+
+def _idle_evidence(
+    store: EngramStore, scope: Mapping[str, str], idle: Sequence[tuple[datetime, dict[str, Any]]],
+) -> dict[str, Any]:
+    """What shows a run of cycles that changed nothing had work it left
+    undone, from the cycles' own log and the store as it is:
+
+    - ``pass_errors``: passes whose failure the log records;
+    - ``memories_never_read``: memories the scope kept all through the run
+      (active, not standing, there before it began) while its decay pass read
+      none at all;
+    - ``lessons_never_asked``: fading memories the softening pass named as
+      waiting for their lesson question (``awaiting_impact``) that are still
+      active and were never asked one.
+
+    None of it is a cycle finding nothing to do: floors hold memories still,
+    and a question once asked, answered or not, is never asked again."""
+    errors = sorted({key for _at_, stats in idle for key in stats if key.endswith("_error")})
+    decay = [stats["decay"] for _at_, stats in idle if isinstance(stats.get("decay"), Mapping)]
+    unread = 0
+    if decay and not any(int(section.get("engrams_processed") or 0) for section in decay):
+        kept = """
+            SELECT COUNT(*) FROM engrams
+            WHERE owner_agent_id = ? AND person_id = ? AND project_scope = ?
+              AND state = 'active' AND created_at < ?{standing}
+        """
+        params = (*_scope_tuple(scope), idle[0][0].isoformat())
+        try:  # decay never reads a standing memory
+            unread = int(_rows(store._get_conn(), kept.format(standing=" AND standing = 0"), params)[0][0])
+        except sqlite3.OperationalError:  # a store from before standing (v14) has none
+            unread = int(_rows(store._get_conn(), kept.format(standing=""), params)[0][0])
+    named: list[str] = []
+    for _at_, stats in idle:
+        softening = stats.get("softening")
+        if isinstance(softening, Mapping):
+            for memory in softening.get("awaiting_impact") or []:
+                if isinstance(memory, str) and memory not in named:
+                    named.append(memory)
+    never_asked = []
+    if named:
+        conn = store._get_conn()
+        for start in range(0, len(named), 400):
+            chunk = named[start:start + 400]
+            marks = ", ".join("?" for _ in chunk)
+            waiting = {row[0] for row in _rows(conn, f"""
+                SELECT e.id FROM engrams e
+                WHERE e.id IN ({marks}) AND e.state = 'active'
+                  AND e.owner_agent_id = ? AND e.person_id = ? AND e.project_scope = ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM reflection_queue q
+                    WHERE q.target_id = e.id AND q.kind = 'lesson'
+                      AND q.agent_id = ? AND q.person_id = ? AND q.project_scope = ?
+                  )
+            """, (*chunk, *_scope_tuple(scope), *_scope_tuple(scope)))}
+            never_asked += [memory for memory in chunk if memory in waiting]
+    return {
+        "pass_errors": errors,
+        "memories_never_read": unread,
+        "lessons_never_asked": never_asked,
+    }
 
 
 def _lesson_questions(store: EngramStore, scope: dict[str, str], now: datetime, index: Any) -> dict:
@@ -582,17 +672,20 @@ def _scope_tuple(scope: Mapping[str, str]) -> tuple[str, str, str]:
 
 
 def _cycles(
-    store: EngramStore, scope: Mapping[str, str], since: datetime,
+    store: EngramStore, scope: Mapping[str, str], since: datetime | None,
 ) -> list[tuple[datetime, dict[str, Any]]]:
-    """This scope's logged maintenance cycles finished since ``since``, oldest
-    first, with their stats."""
-    cycles = []
-    for row in _rows(store._get_conn(), """
+    """This scope's logged maintenance cycles finished since ``since`` (all of
+    them, with None), oldest first, with their stats."""
+    sql = """
         SELECT completed_at, stats FROM consolidation_log
         WHERE pass_name = 'cycle' AND agent_id = ? AND person_id = ? AND project_scope = ?
-          AND completed_at >= ?
-        ORDER BY completed_at ASC
-    """, (*_scope_tuple(scope), since.isoformat())):
+    """
+    params: list[Any] = list(_scope_tuple(scope))
+    if since is not None:
+        sql += " AND completed_at >= ?"
+        params.append(since.isoformat())
+    cycles = []
+    for row in _rows(store._get_conn(), sql + " ORDER BY completed_at ASC", params):
         at = _at(row["completed_at"])
         if at is not None:
             cycles.append((at, _decode(row["stats"])))

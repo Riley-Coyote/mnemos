@@ -185,6 +185,41 @@ def test_questions_shown_three_times_and_never_answered_are_flagged(tmp_path, ca
     assert check["unanswered_after_showings"] == check["unanswered_after_showings_ever"] == 2
 
 
+def test_following_the_printed_call_answers_a_belief_question(tmp_path):
+    """A belief question answered without a verdict keeps the words and stays
+    open, and the flag with it. The call printed has to be one that settles it."""
+    db = _healthy(tmp_path)
+    memory = _memory_id(db)
+    _write(db, "DELETE FROM reflection_queue")
+    _ask(db, "belief", memory, created=_ago(days=2), shown=3)
+
+    _card_text, data = _card(db)
+    [flag] = [flag for flag in data["watchdog"]["flags"] if flag["check"] == "questions"]
+    command = flag["command"]
+
+    # Follow it as printed: the id it names, and a verdict it lists.
+    target = re.search(r'target_id="([^"]+)"', command).group(1)
+    listed = re.search(r"verdict: (.+)$", command)
+    verdicts = [v.strip() for v in re.split(r",| or ", listed.group(1))] if listed else []
+    runtime = _runtime(db)
+    try:
+        runtime.reflect(
+            target_id=target, text="A habit of this project, not a belief of mine.",
+            verdict="decline" if "decline" in verdicts else "",
+        )
+    finally:
+        runtime.close()
+
+    _card_text, after = _card(db)
+    assert after["watchdog"]["checks"]["questions"]["stalled"] is False, (
+        f"following {command!r} left the question open"
+    )
+    assert command == (
+        f'mnemos_reflect(target_id="{memory}", text="…", verdict="…"); '
+        "verdict: hold, decline or not_now"
+    )
+
+
 def test_a_question_is_not_stalled_before_a_day_or_once_answered(tmp_path):
     db = _healthy(tmp_path)
     memory = _memory_id(db)
@@ -216,6 +251,24 @@ def test_maintenance_the_briefing_never_reports_is_flagged(tmp_path, capsys):
 
     said = (
         f"Maintenance changed memory on {_day(days=2)}, but the briefing finds no "
+        "report of it. Run: mnemos_context"
+    )
+    assert f"ATTENTION — {said}" in card, card
+    assert said in out, out
+
+
+def test_a_missing_report_stays_flagged_after_a_week(tmp_path, capsys):
+    db = _healthy(tmp_path)
+    _write(db, "DELETE FROM hypomnema_entries WHERE entry_kind = 'maintenance_report'")
+    _write(db, "DELETE FROM consolidation_log")
+    # Eight days ago a cycle linked three memories, and no report of it exists.
+    _cycle(db, _ago(days=8), connection_discovery={"connections_created": 3})
+
+    card, _data = _card(db)
+    out = _doctor(db, capsys)
+
+    said = (
+        f"Maintenance changed memory on {_day(days=8)}, but the briefing finds no "
         "report of it. Run: mnemos_context"
     )
     assert f"ATTENTION — {said}" in card, card
@@ -264,26 +317,76 @@ def test_a_report_written_after_the_maintenance_is_not_flagged(tmp_path):
 # ── Maintenance that changes nothing, or never runs ──
 
 
-def test_maintenance_that_changes_nothing_for_over_a_day_is_flagged(tmp_path, capsys):
+def _stable(tmp_path: Path) -> tuple[Path, str]:
+    """A store whose memories have sat still for days: written five days ago,
+    each already asked what it taught (its question long since answered)."""
     db = _healthy(tmp_path)
+    memory = _memory_id(db)
+    _write(db, "UPDATE engrams SET created_at = ?", (_ago(days=5),))
+    _write(db, "DELETE FROM reflection_queue")
     _write(db, "DELETE FROM consolidation_log")
-    idle = {"decay": {"engrams_processed": 2, "engrams_decayed": 0},
-            "connection_discovery": {"engrams_processed": 2, "connections_created": 0}}
-    _cycle(db, _ago(hours=60), connection_discovery={"connections_created": 2})
+    _ask(db, "lesson", memory, created=_ago(days=4), shown=1, answered=True)
+    return db, memory
+
+
+def _idle(memory: str | None = None, *, processed: int = 2) -> dict:
+    """What a cycle that changed nothing logs: it read the memories, found
+    nothing to link, decay moved nothing past its floor, and softening named
+    ``memory`` as waiting for its lesson question, when given."""
+    return {
+        "decay": {"engrams_processed": processed, "engrams_decayed": 0},
+        "connection_discovery": {"engrams_processed": processed, "connections_created": 0},
+        "softening": {"engrams_evaluated": processed, "engrams_softened": 0,
+                      **({"awaiting_impact": [memory]} if memory else {})},
+    }
+
+
+def test_a_stable_store_whose_cycles_find_nothing_prints_nothing(tmp_path, capsys):
+    db, memory = _stable(tmp_path)
+    _cycle(db, _ago(hours=60), decay={"engrams_decayed": 2})
     for hours in (50, 26, 2):
-        _cycle(db, _ago(hours=hours), **idle)
+        # Its fading memory was asked what it taught long ago: nothing is owed.
+        _cycle(db, _ago(hours=hours), **_idle(memory))
+
+    card, data = _card(db)
+    out = _doctor(db, capsys)
+
+    check = data["watchdog"]["checks"]["maintenance"]
+    assert (check["cycles"], check["cycles_changed"], check["idle_cycles"]) == (4, 1, 3)
+    assert check["stalled"] is False, check
+    assert "ATTENTION" not in card, card
+    assert "ATTENTION" not in out, out
+
+
+def test_idle_cycles_that_leave_a_lesson_question_unasked_are_flagged(tmp_path, capsys):
+    db, memory = _stable(tmp_path)
+    _write(db, "DELETE FROM reflection_queue")  # its lesson question was never asked
+    for hours in (40, 3):
+        _cycle(db, _ago(hours=hours), **_idle(memory))
 
     card, data = _card(db)
     out = _doctor(db, capsys)
 
     said = (
-        f"Maintenance has run three times since {_day(hours=50)} without changing "
-        "anything. Run: mnemos consolidate"
+        f"Maintenance has run twice since {_day(hours=40)} without changing anything; "
+        "1 fading memory it found has never been asked what it taught. Run: mnemos_maintain"
     )
     assert f"ATTENTION — {said}" in card, card
     assert said in out, out
-    check = data["watchdog"]["checks"]["maintenance"]
-    assert (check["cycles"], check["cycles_changed"], check["idle_cycles"]) == (4, 1, 3)
+    assert data["watchdog"]["checks"]["maintenance"]["idle_evidence"]["lessons_never_asked"] == [memory]
+
+
+def test_idle_cycles_that_never_read_the_memories_are_flagged(tmp_path):
+    db, _memory = _stable(tmp_path)
+    for hours in (40, 3):
+        _cycle(db, _ago(hours=hours), **_idle(processed=0))
+
+    card, _data = _card(db)
+
+    assert (
+        f"Maintenance has run twice since {_day(hours=40)} without changing anything; "
+        "it never read the 2 memories it keeps. Run: mnemos consolidate"
+    ) in card, card
 
 
 def test_idle_maintenance_names_the_passes_that_failed(tmp_path):
@@ -314,6 +417,26 @@ def test_captures_that_no_maintenance_followed_are_flagged(tmp_path, capsys):
     said = (
         f"2 memories captured since {_day(days=2)} have had no maintenance cycle; "
         "no cycle is recorded. Run: mnemos consolidate"
+    )
+    assert f"ATTENTION — {said}" in card, card
+    assert said in out, out
+
+
+def test_a_capture_just_after_the_last_cycle_counts_once_a_day_passes(tmp_path, capsys):
+    db = _healthy(tmp_path)
+    _write(db, "DELETE FROM consolidation_log")
+    _cycle(db, _ago(hours=49), decay={"engrams_decayed": 2})
+    # Captured half an hour after that cycle, when the activity gate can hold
+    # a cycle back; then no cycle for two days.
+    _write(db, "UPDATE engrams SET created_at = ? WHERE json_extract(source, '$.type') = 'session'",
+           (_ago(hours=48, minutes=30),))
+
+    card, _data = _card(db)
+    out = _doctor(db, capsys)
+
+    said = (
+        f"2 memories captured since {_day(hours=48, minutes=30)} have had no maintenance "
+        f"cycle; the last ran {_day(hours=49)}. Run: mnemos consolidate"
     )
     assert f"ATTENTION — {said}" in card, card
     assert said in out, out

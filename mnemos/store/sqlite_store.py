@@ -93,6 +93,20 @@ _ENGRAM_COLUMNS = frozenset({
     "last_accessed", "access_count", "reconsolidation_count",
 })
 
+# Set on each VersionRef: the store files that hold it as a version row.
+_VERSION_STORED_IN = "_mnemos_stored_in"
+
+
+def _mark_version_stored(version: VersionRef, store_key: str) -> None:
+    stored_in = getattr(version, _VERSION_STORED_IN, frozenset())
+    if store_key not in stored_in:
+        setattr(version, _VERSION_STORED_IN, stored_in | {store_key})
+
+
+def _version_stored_in(version: VersionRef, store_key: str) -> bool:
+    return store_key in (getattr(version, _VERSION_STORED_IN, None) or ())
+
+
 # Allowed column names for beliefs table
 _BELIEF_COLUMNS = frozenset({
     "id", "agent_id", "content", "confidence", "domain", "created_at",
@@ -258,6 +272,15 @@ CREATE TABLE IF NOT EXISTS versions (
     changed_at TEXT NOT NULL,
     change_reason TEXT NOT NULL DEFAULT 'reconsolidation',
     PRIMARY KEY (engram_id, version_num)
+);
+
+-- Which named session has already reinforced which memory: a memory is
+-- reinforced at most once per session (retrieval/reconsolidation.py).
+CREATE TABLE IF NOT EXISTS session_reinforcements (
+    session_id TEXT NOT NULL,
+    engram_id TEXT NOT NULL,
+    reinforced_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, engram_id)
 );
 
 -- Beliefs
@@ -561,6 +584,8 @@ class EngramStore:
         secure_directory(self.db_path.parent, force=owned_directory)
         self._conn: sqlite3.Connection | None = None
         self._transaction_depth = 0
+        # Versions written in the open transaction, marked stored on commit.
+        self._versions_written: list[VersionRef] = []
         self._init_db()
 
     def _secure_sqlite_files(self) -> None:
@@ -902,12 +927,24 @@ class EngramStore:
 
         if self._transaction_depth == 0:
             self._get_conn().commit()
+            self._mark_versions_written()
 
     def _rollback(self) -> None:
         """Roll back a method-local transaction, or let the outer owner do it."""
 
         if self._transaction_depth == 0:
             self._get_conn().rollback()
+            self._versions_written = []
+
+    def _mark_versions_written(self) -> None:
+        """Mark the versions this transaction wrote as held by this store,
+        now that they are; a rolled-back one is written by the next save."""
+        written = getattr(self, "_versions_written", None)
+        if written:
+            key = self._version_store_key()
+            for version in written:
+                _mark_version_stored(version, key)
+            self._versions_written = []
 
     def get_host_mutation(
         self, host_namespace: str, idempotency_key: str
@@ -978,6 +1015,13 @@ class EngramStore:
 
         All operations (engram table, FTS index, connections, versions) are
         wrapped in a single transaction for atomicity.
+
+        Versions are history, so they are only ever appended: the versions
+        this store already holds are never written again, and a version the
+        engram gained since it was loaded is numbered after the last one
+        stored. A version is written only when the save changes the memory's
+        content, impact or resolution (or first stores the memory); a snapshot
+        taken without such a change records nothing, and is dropped.
         """
         conn = self._get_conn()
         data = engram.to_dict()
@@ -990,6 +1034,16 @@ class EngramStore:
 
         try:
             self._begin_immediate()
+
+            before = conn.execute(
+                "SELECT content, impact, resolution FROM engrams WHERE id = ?",
+                (engram.id,),
+            ).fetchone()
+            changed = before is None or (
+                before["content"] != engram.content
+                or (before["impact"] or "") != (engram.impact or "")
+                or before["resolution"] != engram.resolution
+            )
 
             conn.execute(
                 f"INSERT INTO engrams ({columns}) VALUES ({placeholders}) "
@@ -1008,9 +1062,10 @@ class EngramStore:
             for conn_obj in engram.connections:
                 self._save_connection_no_commit(conn, engram.id, conn_obj)
 
-            # Save versions
-            for version in engram.versions:
-                self._save_version_no_commit(conn, engram.id, version)
+            # Append the versions this store does not hold yet. Every save
+            # used to write the whole history again: one maintenance cycle on
+            # a copy of a real store rewrote 29,379 version rows.
+            self._append_versions_no_commit(conn, engram, changed=changed)
 
             self._commit()
         except Exception:
@@ -1450,19 +1505,51 @@ class EngramStore:
         return visited
 
     # ── Versions ──
+    #
+    # A version row is history: once written it is never written again. Each
+    # VersionRef loaded from a store, or written to it by a committed
+    # transaction, carries that store's file in ``_VERSION_STORED_IN``, so a
+    # save appends only what the store lacks, whatever list the engram arrived
+    # with (a partial engram's is empty).
+
+    def _version_store_key(self) -> str:
+        key = getattr(self, "_version_key", None)
+        if key is None:
+            try:
+                key = str(self.db_path.resolve())
+            except OSError:
+                key = str(self.db_path)
+            self._version_key = key
+        return key
 
     def _save_version(self, engram_id: str, version: VersionRef) -> None:
-        """Save a version snapshot (with auto-commit)."""
+        """Append a version snapshot (with auto-commit)."""
         conn = self._get_conn()
-        self._save_version_no_commit(conn, engram_id, version)
-        self._commit()
+        self._begin_immediate()
+        try:
+            version.version_num = self._next_version_num(conn, engram_id)
+            self._save_version_no_commit(conn, engram_id, version)
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
+
+    def _next_version_num(self, conn: sqlite3.Connection, engram_id: str) -> int:
+        row = conn.execute(
+            "SELECT MAX(version_num) FROM versions WHERE engram_id = ?", (engram_id,)
+        ).fetchone()
+        return int(row[0] or 0) + 1
 
     def _save_version_no_commit(
         self, conn: sqlite3.Connection, engram_id: str, version: VersionRef
     ) -> None:
-        """Save a version snapshot without committing (for use in transactions)."""
+        """Write one new version row without committing (for use in transactions).
+
+        A plain INSERT: a row already written is never replaced. The version
+        counts as held by this store once the transaction commits.
+        """
         conn.execute(
-            "INSERT OR REPLACE INTO versions "
+            "INSERT INTO versions "
             "(engram_id, version_num, content_snapshot, resolution_at_version, "
             "changed_at, change_reason) VALUES (?, ?, ?, ?, ?, ?)",
             (
@@ -1474,6 +1561,37 @@ class EngramStore:
                 version.change_reason,
             ),
         )
+        if getattr(self, "_versions_written", None) is None:
+            self._versions_written = []
+        self._versions_written.append(version)
+
+    def _append_versions_no_commit(
+        self, conn: sqlite3.Connection, engram: Engram, *, changed: bool
+    ) -> None:
+        """Append the engram's versions this store does not hold yet.
+
+        They are numbered after the last version stored, not by their place
+        in the engram's list, which may be partial. When the save changes
+        none of content, impact or resolution, they are dropped instead.
+        """
+        where = self._version_store_key()
+        # Written earlier in this still-open transaction: held, once it commits.
+        pending = {id(v) for v in getattr(self, "_versions_written", None) or ()}
+
+        def held(version: VersionRef) -> bool:
+            return id(version) in pending or _version_stored_in(version, where)
+
+        new = [v for v in engram.versions if not held(v)]
+        if not new:
+            return
+        if not changed:
+            engram.versions = [v for v in engram.versions if held(v)]
+            return
+        next_num = self._next_version_num(conn, engram.id)
+        for version in new:
+            version.version_num = next_num
+            self._save_version_no_commit(conn, engram.id, version)
+            next_num += 1
 
     def _get_versions(self, engram_id: str) -> list[VersionRef]:
         """Get version history for an engram."""
@@ -1482,7 +1600,125 @@ class EngramStore:
             "SELECT * FROM versions WHERE engram_id = ? ORDER BY version_num",
             (engram_id,),
         ).fetchall()
-        return [VersionRef.from_dict(dict(r)) for r in rows]
+        stored_here = frozenset((self._version_store_key(),))
+        versions = [VersionRef.from_dict(dict(r)) for r in rows]
+        for version in versions:
+            setattr(version, _VERSION_STORED_IN, stored_here)
+        return versions
+
+    def duplicate_versions(self) -> dict[str, Any]:
+        """Version rows in this store that repeat the row before them.
+
+        Until a return stopped writing versions, every reconsolidation
+        appended a full snapshot of a memory that had not changed. A row
+        counts only when a return wrote it (reason ``reconsolidation``) and
+        its content and resolution equal the row just before it in the same
+        memory's history. The first row of every run stays, so every state
+        the history recorded is kept, as is every row written for another
+        reason (softening, repairs). Read-only.
+        """
+        conn = self._get_conn()
+        total, memories = conn.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT engram_id) FROM versions"
+        ).fetchone()
+        rows = conn.execute(
+            """SELECT engram_id, version_num FROM (
+                   SELECT engram_id, version_num, change_reason,
+                          content_snapshot, resolution_at_version,
+                          LAG(version_num) OVER history AS before_num,
+                          LAG(content_snapshot) OVER history AS before_content,
+                          LAG(resolution_at_version) OVER history AS before_resolution
+                   FROM versions
+                   WINDOW history AS (PARTITION BY engram_id ORDER BY version_num)
+               )
+               WHERE change_reason = 'reconsolidation'
+                 AND before_num IS NOT NULL
+                 AND content_snapshot = before_content
+                 AND resolution_at_version = before_resolution
+               ORDER BY engram_id, version_num"""
+        ).fetchall()
+        duplicates = [(row[0], int(row[1])) for row in rows]
+        per_memory: dict[str, int] = {}
+        for engram_id, _ in duplicates:
+            per_memory[engram_id] = per_memory.get(engram_id, 0) + 1
+        return {
+            "rows": int(total),
+            "memories": int(memories),
+            "duplicates": duplicates,
+            "memories_with_duplicates": len(per_memory),
+            "most_repeated": sorted(
+                per_memory.items(), key=lambda item: (-item[1], item[0])
+            )[:3],
+        }
+
+    def remove_versions(self, keys: list[tuple[str, int]]) -> int:
+        """Delete these version rows (engram id, version number), and only
+        these. Returns how many went. Used only by ``mnemos repair-versions``."""
+        conn = self._get_conn()
+        self._begin_immediate()
+        try:
+            cursor = conn.executemany(
+                "DELETE FROM versions WHERE engram_id = ? AND version_num = ?",
+                keys,
+            )
+            removed = cursor.rowcount
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
+        return max(0, removed)
+
+    # ── Returns ──
+
+    def claim_return(self, engram_id: str, session_id: str) -> bool:
+        """Record that ``session_id`` reinforces this memory now; False if it
+        already has. Run it in the transaction that writes the reinforcement,
+        so two processes of one session cannot both reinforce."""
+        conn = self._get_conn()
+        self._begin_immediate()
+        try:
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO session_reinforcements "
+                "(session_id, engram_id, reinforced_at) VALUES (?, ?, ?)",
+                (session_id, engram_id, _utc_now()),
+            )
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
+        return cursor.rowcount == 1
+
+    def record_return(self, engram: Engram, links: list[Connection]) -> None:
+        """Write what returning a memory changed, in place.
+
+        The access record and trace dynamics on the engram's row, and the
+        co-activation links the return formed or strengthened. Never content,
+        the text index, other links, or a version: a return changes none of
+        what those hold.
+        """
+        conn = self._get_conn()
+        self._begin_immediate()
+        try:
+            conn.execute(
+                "UPDATE engrams SET access_count = ?, last_accessed = ?, "
+                "reconsolidation_count = ?, strength = ?, stability = ?, "
+                "accessibility = ? WHERE id = ?",
+                (
+                    engram.access_count,
+                    engram.last_accessed,
+                    engram.reconsolidation_count,
+                    engram.strength,
+                    engram.stability,
+                    engram.accessibility,
+                    engram.id,
+                ),
+            )
+            for link in links:
+                self._save_connection_no_commit(conn, engram.id, link)
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
 
     # ── Archive ──
 

@@ -20,6 +20,9 @@ A memory reached through the graph instead (a resonance result) was loaded
 whole and reinforced correctly, so the same link strengthened or reset
 depending on how the memory was found. On a copy of a real store, one recall
 left a seed's co_activated links at 0.3 and a resonance result's at 1.0.
+
+A recall no longer writes a version at all: a return changes nothing a
+version records. History already written stays exactly as written.
 """
 
 from __future__ import annotations
@@ -123,17 +126,27 @@ def test_seed_gets_the_connection_bonus_for_its_stored_links(tmp_path):
     assert gain_linked - gain_bare == pytest.approx(3 * 0.002)
 
 
-def test_each_recall_appends_a_version_instead_of_overwriting_the_first(tmp_path):
+def test_recalls_leave_the_history_exactly_as_written(tmp_path, monkeypatch):
     db = str(tmp_path / "recall.db")
     seed = Engram(content="The lighthouse keeper logs every storm in the green ledger.")
     _save(db, seed)
-
-    assert _recall(db)[seed.id].retrieval_path == "fts"
+    # One real change, so the memory has a version 1 to protect.
+    changed = _stored(db, seed.id)
+    changed.add_version(reason="softening")
+    changed.content = "The lighthouse keeper logs storms in the green ledger."
+    _save(db, changed)
     first = _stored(db, seed.id).versions
-    _recall(db)
+
+    # Two sessions, so both recalls reinforce the memory.
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "session-one")
+    assert _recall(db)[seed.id].retrieval_path == "fts"
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "session-two")
+    assert seed.id in _recall(db)
     second = _stored(db, seed.id).versions
 
+    assert _stored(db, seed.id).reconsolidation_count == 2, "premise: both recalls reinforced"
     assert [v.version_num for v in first] == [1]
-    assert [v.version_num for v in second] == [1, 2]
-    # Version 1 is history once written; a later recall must not rewrite it.
-    assert second[0].changed_at == first[0].changed_at
+    # A return adds no version, and version 1 is history once written.
+    assert [(v.version_num, v.changed_at, v.content_snapshot) for v in second] == [
+        (v.version_num, v.changed_at, v.content_snapshot) for v in first
+    ]

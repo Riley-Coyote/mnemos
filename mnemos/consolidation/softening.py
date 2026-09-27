@@ -557,10 +557,11 @@ def _create_or_reinforce_lesson(
         if ("lesson" in candidate.tags or "distilled" in candidate.tags) and _same_lesson(
             mine, distinctive_terms(candidate.content)
         ):
-            # Reinforce existing lesson
+            # Reinforce existing lesson. Not an access: maintenance reading its
+            # own lessons is not the agent reading them, and counting it made
+            # lessons nobody had been shown look like the most-read memories.
             candidate.strength = min(1.0, candidate.strength + 0.1)
             candidate.stability = min(1.0, candidate.stability + 0.05)
-            candidate.record_access()
             store.save_engram(candidate)
             # A second experience teaching the same lesson must also be
             # linked to it, or the lesson's evidence stays invisible.

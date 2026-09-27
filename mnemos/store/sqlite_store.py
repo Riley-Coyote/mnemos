@@ -32,7 +32,7 @@ from ..core.identity import AgentIdentity
 
 
 # Schema version — increment when tables change
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 # The lowest maintenance code version still allowed to maintain this store,
 # raised by each newer version that opens it (see mnemos/code_version.py).
@@ -56,6 +56,19 @@ CAPTURE_WINDOW_SECONDS = 10
 # Where each memory `mnemos repair quarantine-tool-written` moved came from, so
 # `--undo` returns exactly those and nothing else the quarantine holds.
 QUARANTINED_KEY = "quarantined_tool_written"
+
+# A standing memory (v14) is how the human wants the agent to work in every
+# session, not just now. Only the agent marks one, as a typed choice: nothing
+# reads it from the words. It opens the briefing and is exempt from decay while
+# it is marked. A standing rule is obeyed, not recalled, so every usage signal
+# (reinforcement, recency, recall) works against it; the mark is what keeps it.
+#
+# The mark lives only in these columns, signed by whoever last marked or
+# unmarked it, and when. They are not part of ``Engram.to_dict()``, so no save
+# of a memory, by this code or by older code, ever writes them: only a capture
+# that marks, ``set_standing``, and a correction carrying the mark to the
+# memory that replaces it do.
+STANDING_COLUMNS = ("standing", "standing_by", "standing_session", "standing_at")
 
 # The link a correction writes from the memory that replaces to the memory it
 # replaced (v13). Mechanism-formed, like co_activated: nothing classified it,
@@ -218,6 +231,10 @@ _RECONCILABLE_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("state", "state TEXT NOT NULL DEFAULT 'active'"),
         ("access_count", "access_count INTEGER NOT NULL DEFAULT 0"),
         ("reconsolidation_count", "reconsolidation_count INTEGER NOT NULL DEFAULT 0"),
+        ("standing", "standing INTEGER NOT NULL DEFAULT 0"),
+        ("standing_by", "standing_by TEXT NOT NULL DEFAULT ''"),
+        ("standing_session", "standing_session TEXT NOT NULL DEFAULT ''"),
+        ("standing_at", "standing_at TEXT"),
     ],
     "beliefs": [
         ("source", "source TEXT NOT NULL DEFAULT ''"),
@@ -330,7 +347,14 @@ CREATE TABLE IF NOT EXISTS engrams (
     created_at TEXT NOT NULL,
     last_accessed TEXT NOT NULL,
     access_count INTEGER NOT NULL DEFAULT 0,
-    reconsolidation_count INTEGER NOT NULL DEFAULT 0
+    reconsolidation_count INTEGER NOT NULL DEFAULT 0,
+    -- Standing (v14): the agent marked this as how the human wants it to work
+    -- in every session. A typed choice, never read from the words; signed by
+    -- whoever last marked or unmarked it, and when (NULL: never marked).
+    standing INTEGER NOT NULL DEFAULT 0,
+    standing_by TEXT NOT NULL DEFAULT '',
+    standing_session TEXT NOT NULL DEFAULT '',
+    standing_at TEXT
 );
 
 -- Full-text search on engram content
@@ -1778,6 +1802,7 @@ class EngramStore:
         project_scope: str | None = None,
         after_id: str | None = None,
         author_kind: str | None = None,
+        standing: bool | None = None,
     ) -> list[Engram]:
         """Engrams in any of ``states`` for an agent, the most accessible
         first, as ``get_active_engrams`` returns active ones.
@@ -1788,7 +1813,9 @@ class EngramStore:
         such a walk skip or repeat one. Decay walks dormant memories this way,
         apart from the active ones, so no dormant memory waits behind a limit
         the active ones fill. With ``author_kind``, only engrams whose words
-        that kind of writer wrote.
+        that kind of writer wrote. With ``standing``, only engrams marked
+        standing (True) or only those not marked (False): decay passes over
+        the marked ones.
         """
         conn = self._get_conn()
         states = tuple(dict.fromkeys(states))
@@ -1805,6 +1832,9 @@ class EngramStore:
         if author_kind is not None:
             where.append("author_kind = ?")
             params.append(author_kind)
+        if standing is not None:
+            where.append("standing = ?")
+            params.append(1 if standing else 0)
         order = "accessibility DESC"
         if after_id is not None:
             where.append("id > ?")
@@ -3636,7 +3666,14 @@ class EngramStore:
     # recorded are linked once, when the store is opened by this code
     # (``_link_older_capture_pairs``).
 
-    def save_capture_pair(self, engram: Engram, content: str, **note: Any) -> str:
+    def save_capture_pair(
+        self,
+        engram: Engram,
+        content: str,
+        *,
+        standing_mark: dict[str, str] | None = None,
+        **note: Any,
+    ) -> str:
         """Save a capture's memory and its continuity note together, and
         return the note's id.
 
@@ -3647,6 +3684,10 @@ class EngramStore:
         that replaces one referencing another memory keeps that reference.
         ``note`` takes ``write_hypomnema_entry``'s keywords. The memory's
         vector is not written here: see ``Encoder.finish``.
+
+        ``standing_mark`` (``by``, ``session``, ``at``) marks the memory
+        standing in the same transaction, signed as given: the agent said so
+        when it captured it, or it replaces a memory that was.
         """
         note["related_engram_id"] = note.get("related_engram_id") or engram.id
         with self.transaction() as conn:
@@ -3656,6 +3697,14 @@ class EngramStore:
                 "UPDATE hypomnema_entries SET graduated_to_engram_id = ? WHERE id = ?",
                 (engram.id, note_id),
             )
+            if standing_mark is not None:
+                self.set_standing(
+                    engram.id,
+                    True,
+                    by=standing_mark.get("by", ""),
+                    session=standing_mark.get("session", ""),
+                    at=standing_mark.get("at") or None,
+                )
         return note_id
 
     @staticmethod
@@ -3842,6 +3891,95 @@ class EngramStore:
                 )
                 written = True
         return written
+
+    # ── Standing memories ──
+    #
+    # How the human wants the agent to work in every session (see
+    # STANDING_COLUMNS). The agent marks one when it captures it, or later by
+    # the memory's id. A mark or an unmark is signed and dated, and changes
+    # nothing else: no words, no version, no link.
+
+    def standing_mark(self, engram_id: str) -> dict[str, str] | None:
+        """Who marked this memory standing, in which session, and when
+        (``by``, ``session``, ``at``); None when it is not standing."""
+        if not self.has_engram_column("standing"):
+            return None
+        row = self._get_conn().execute(
+            f"SELECT {', '.join(STANDING_COLUMNS)} FROM engrams WHERE id = ?",
+            (engram_id,),
+        ).fetchone()
+        if row is None or not row["standing"]:
+            return None
+        return {
+            "by": row["standing_by"] or "",
+            "session": row["standing_session"] or "",
+            "at": row["standing_at"] or "",
+        }
+
+    def set_standing(
+        self,
+        engram_id: str,
+        standing: bool,
+        *,
+        by: str = "",
+        session: str = "",
+        at: str | None = None,
+    ) -> bool:
+        """Mark a memory standing, or unmark it, signed by ``by`` (the model)
+        and ``session``, at ``at`` (now, unless given), and say whether that
+        changed it.
+
+        Only the flag and its signature are written: never the words, a
+        version, a link or the memory's state. Marking a memory that is
+        already marked, or unmarking one that is not, writes nothing, so the
+        signature keeps saying who made the mark in force and when.
+        """
+        value = 1 if standing else 0
+        conn = self._get_conn()
+        self._begin_immediate()
+        try:
+            cursor = conn.execute(
+                "UPDATE engrams SET standing = ?, standing_by = ?, standing_session = ?, "
+                "standing_at = ? WHERE id = ? AND standing != ?",
+                (
+                    value,
+                    (by or "").strip(),
+                    (session or "").strip(),
+                    at or _utc_now(),
+                    engram_id,
+                    value,
+                ),
+            )
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
+        return cursor.rowcount == 1
+
+    def standing_engrams(
+        self, *, agent_id: str, person_id: str, project_scope: str,
+    ) -> list[dict[str, Any]]:
+        """The memories marked standing in one exact scope that are still in
+        use, the newest mark first: each one's ``id``, ``content``, ``state``,
+        ``created_at`` and mark (``standing_by``, ``standing_session``,
+        ``standing_at``).
+
+        One gone quiet is among them: decay leaves a marked memory where it
+        is, and the mark is the agent's word that it belongs in every session.
+        One forgotten, replaced by a correction or faded into the archive is
+        not. A store opened read-only from before the mark existed has none.
+        """
+        if not self.has_engram_column("standing"):
+            return []
+        rows = self._get_conn().execute(
+            "SELECT id, content, state, created_at, "
+            "standing_by, standing_session, standing_at FROM engrams "
+            "WHERE owner_agent_id = ? AND person_id = ? AND project_scope = ? "
+            "AND standing = 1 AND state IN ('active', 'dormant') "
+            "ORDER BY standing_at DESC, id DESC",
+            (agent_id, person_id, project_scope),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_hypomnema_promotion_candidates(
         self,

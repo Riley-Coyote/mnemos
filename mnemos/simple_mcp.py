@@ -247,6 +247,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         importance: str | float = "auto",
         impact: str = "",
         signed_as: str = "",
+        standing: bool = False,
     ) -> str:
         """Capture durable continuity from the current conversation.
 
@@ -267,6 +268,8 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
                 is what it meant. Leave it out rather than padding it; your
                 memory will ask you later if it needs one.
             signed_as: Your exact model id, as your system prompt gives it.
+            standing: True when this is how the human wants you to work in
+                every session, not just now.
         """
 
         return _output(_get_runtime().capture(
@@ -275,6 +278,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             importance=importance,
             impact=_text("impact", impact, MAX_REFLECTION_CHARS),
             signed_as=_text("signed_as", signed_as, MAX_ID_CHARS),
+            standing=bool(standing),
         ))
 
     if include_recall:
@@ -286,7 +290,12 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
                 idempotent=False,
             )
         )
-        def mnemos_recall(query: str, max_results: int = 5, include_archived: bool = False) -> str:
+        def mnemos_recall(
+            query: str,
+            max_results: int = 5,
+            include_archived: bool = False,
+            standing: bool = False,
+        ) -> str:
             """Recall relevant continuity and durable memories.
 
             Pass the id of a note the packet cut short (its
@@ -297,12 +306,19 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             back only by its id, or when include_archived is true and the
             query names it; either way it is restored. What you forgot or
             replaced with a correction stays gone.
+
+            Args:
+                standing: True to list every memory marked standing, how the
+                    human wants you to work in every session: all of them,
+                    whatever max_results says, the ones the query names first.
+                    The query may be empty.
             """
 
             return _output(_get_runtime().recall(
-                query=_text("query", query, MAX_QUERY_CHARS, required=True),
+                query=_text("query", query, MAX_QUERY_CHARS, required=not standing),
                 max_results=_count("max_results", max_results, minimum=1, maximum=MAX_RESULTS),
                 include_archived=bool(include_archived),
+                standing=bool(standing),
             ))
 
     @server.tool(
@@ -328,6 +344,13 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         two), or nothing is changed. Set action to forget/archive/remove/delete
         to archive it. A correction that names nothing is captured as fresh
         high-confidence continuity.
+
+        Set action to mark_standing, with a memory's id as target_id, when it
+        is how the human wants you to work in every session, not just now: it
+        opens every briefing and doesn't fade while it's marked.
+        unmark_standing undoes that. Neither changes its words or writes a
+        version, and the correction and impact are not used. Correcting a
+        standing memory keeps it standing.
 
         Args:
             impact: What the corrected memory means now, in your own words.

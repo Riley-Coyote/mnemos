@@ -2,6 +2,40 @@
 
 ## 0.3.1 (unreleased)
 
+### Standing preferences, marked by the agent
+
+A standing rule is obeyed, not recalled, and nothing marked one. The
+`preference` tag and the `foundational` domain are word matches, and on a
+copy of a real store the plain-words rule (captured 2026-08-26) had never
+been reinforced, corrected or versioned, never reached the briefing, and was
+fading for disuse.
+
+- `mnemos_capture(standing=true)` marks a memory as how the human wants the
+  agent to work in every session, not just now. The mark is a typed choice,
+  signed with the model, session and time, and never read from the words.
+- `mnemos_correct` takes `action="mark_standing"` or `"unmark_standing"`
+  with a memory's id (or its note's). Only the mark and its signature
+  change: no words, no version.
+- "Who you're with" opens with the standing memories: the newest mark first,
+  up to five, one line each in the memory's own words with its id, then
+  `And N more: mnemos_recall(query="", standing=true)`.
+- `mnemos_recall(standing=true)` lists every standing memory. The query only
+  orders them, and may be empty.
+- A standing memory is exempt from decay while it is marked, and a
+  correction keeps it standing.
+- `MAINTENANCE_CODE_VERSION` is 7. Code older than the store records the
+  words and ignores the mark.
+
+Changed behaviour: once a memory is marked, "Who you're with" starts with the
+line `Standing, how the human wants you to work in every session:` and the
+foundational notes follow `Other notes:`. Without one, it reads as before.
+
+Migration (schema 14). The first open by this code adds `standing`,
+`standing_by`, `standing_session` and `standing_at` to `engrams`, with every
+existing memory unmarked, after the usual verified pre-migration backup. On a
+copy of a real store it took 1.05 s, backup included. The migration marks
+nothing: the agent marks its standing rules itself.
+
 ### Every rule reaches the model; beliefs carry their ids
 
 Claude Code shows a model only the first 2,048 characters of an MCP server's

@@ -26,6 +26,10 @@ def _isolate_mnemos_env(monkeypatch):
         # suite would be signed by whatever model is running the developer's
         # session, while CI left them unsigned.
         "CLAUDE_CODE_SESSION_ID", "CLAUDE_CONFIG_DIR",
+        # Claude Code's own pid, which the prompt hook uses to find its
+        # session's answerer: a test run inside a session would otherwise
+        # look for that session's server.
+        "CLAUDE_PID",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("MNEMOS_DISABLE_DOTENV", "1")

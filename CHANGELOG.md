@@ -2,6 +2,65 @@
 
 ## 0.3.1 (unreleased)
 
+### Experience that comes to the cue
+
+Memory waited to be asked. In the lab, with a notebook present, the agent
+searched Mnemos about 4 times a question instead of 7, and lessons for new
+situations fell from 82% to 35%; telling it to search for what it learned
+changed nothing. Memory that works doesn't wait to be asked.
+
+- `mnemos hook prompt` is a Claude Code `UserPromptSubmit` hook. For each
+  message the human sends it prints, for the model, at most three memories
+  that may bear on it, one line each: the agent's lesson when the memory has
+  one, else the memory's own words, cut at a sentence under 200 characters,
+  with its date and its id; lessons first. Or nothing, which is the usual
+  answer. A message with fewer than four content words ("ok", "yes",
+  "beautiful") gets nothing.
+- The gate: a memory must be among the first ten of recall's own ranking
+  (words and meaning fused) and reach cosine 0.40 with the message, or 0.25
+  while sharing a distinctive word with it. Standing memories never come (the
+  briefing carries them), and the same words under two ids (a lesson and the
+  memory it was drawn from) come once, under the memory's id.
+- Never twice in a session: the session-start hook records what its briefing
+  showed and the cue what it offers, in a small file per session under
+  `~/.mnemos/run` (0600, the folder 0700). Files older than 7 days are removed
+  on the way. Compaction keeps the session, so what was shown stays shown;
+  `/clear` starts a new session with an empty context, and what the new
+  briefing shows is recorded there.
+- Shown is not used: each offer is counted as offered in that file (the
+  offers, their ids, how they were found and how long it took), and reinforces
+  nothing. Recalling a line's memory by id afterwards is a use, as before.
+- The session's own `mnemos serve` keeps the embedding model warm and answers
+  the hook on a unix socket named for the Claude Code process that spawned it
+  (`~/.mnemos/run/cue-<pid>-<scope>.sock`, 0600). The hook finds it by
+  `CLAUDE_PID`, which Claude Code gives every hook and `/clear` does not
+  change. With no answerer, a slow one, or one on another protocol version,
+  the hook answers from words: two shared distinctive words.
+- The server loads the model at start only where the hook has run in the last
+  week; elsewhere it loads it when a cue first asks. A server that never sees
+  the hook stays as it was (76 MB at start, measured; 512 MB with the model).
+- It never blocks or breaks a prompt: any error, an unexpected payload or a
+  locked store prints nothing and exits 0, and the hook stops itself 0.7 s
+  after it starts. It imports no torch and writes nothing to the store.
+- `mnemos hooks install --prompt` adds the hook to a Claude Code settings file
+  beside the session-start hook. Off by default. The installed command ends in
+  `|| true`, so a Mnemos too old to know `hook prompt` can't exit 2, which
+  would block the prompt.
+
+Measured over the lab's 20 development prompts, three rounds, with the real
+model: warm, p50 129 ms and p95 161 ms end to end; from words alone, p50 98 ms
+and p95 104 ms. With real Claude Code, `/clear` gave the session a new id while
+its Mnemos server kept running under the old one, and the hook reached the
+server by meaning before and after. On a copy of the lab's snapshot, the cue
+showed 39 lines for those prompts at every floor from 0.30 to 0.50 (what a
+higher floor turns away, the word path lets back in), 10 of them holding a
+fact for the task; six prompts have fewer than four content words.
+
+Changed behaviour: `mnemos serve` starts a background thread for the cue, and
+the session-start hook writes its per-session file under `~/.mnemos/run`. The
+prompt hook itself runs only once installed. No schema or code-version change:
+the cue only reads.
+
 ### Passages the model can read
 
 Recall's meaning index cut each text into passages of up to 700 characters.

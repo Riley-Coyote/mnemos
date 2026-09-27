@@ -672,3 +672,37 @@ def test_building_the_packet_runs_no_maintenance(tmp_path, monkeypatch):
 
     _hook(db, tmp_path)
     assert _count(db, "consolidation_log") == cycles, "the hook ran a maintenance cycle"
+
+
+def test_a_session_start_raises_the_stores_code_version(tmp_path):
+    """The hook is the first thing a new session runs, and the store learns
+    there that newer code has arrived: an older server still running stops
+    maintaining it from then on, not only once the new session makes its
+    first tool call."""
+    from mnemos.code_version import MAINTENANCE_CODE_VERSION
+
+    minimum = "SELECT value FROM meta WHERE key = 'min_code_version'"
+    for left_by in ("2", None):  # older code's mark, or a store from before marks
+        db = tmp_path / f"memory-{left_by}.db"
+        store = EngramStore(db)
+        try:
+            store.write_handoff(OWN_NOTE, **SCOPE, author_model=OPUS, author_session=OWN)
+        finally:
+            store.close()
+        if left_by is None:
+            _write(db, "DELETE FROM meta WHERE key = 'min_code_version'")
+        else:
+            _write(db, "INSERT OR REPLACE INTO meta (key, value) VALUES ('min_code_version', ?)",
+                   (left_by,))
+        assert _read(db, minimum) == ([(left_by,)] if left_by else []), "premise"
+
+        packet = _hook(db, tmp_path)
+        assert OWN_NOTE in packet
+        assert _read(db, minimum) == [(str(MAINTENANCE_CODE_VERSION),)], (
+            f"the hook left the store's minimum at {left_by!r}"
+        )
+
+    # Only ever raised: a store newer code has opened keeps its mark.
+    _write(db, "INSERT OR REPLACE INTO meta (key, value) VALUES ('min_code_version', '999')")
+    _hook(db, tmp_path)
+    assert _read(db, minimum) == [("999",)]

@@ -16,10 +16,10 @@ disagreed: "notes" and "mnemos" were noise to recall's filters but still seeded
 its search, and "whatever" was noise to recall but a word to identity.
 
 A word no list names can still be common in one store: a name, a project, a
-year. ``word_shares`` measures it there, from the index (WP-R08c). On a copy of
-the live store "riley" is in 268 of the 464 live memories of its scope (58%),
-"2026" in 52% and "real" in 28%: the words outside the lists over
-``COMMON_SHARE``.
+year. ``word_shares`` measures it there, in the memories' words and lessons
+(WP-R08c). On a copy of the live store "riley" is in 270 of the 464 live
+memories of its scope (58%), "2026" in 239 (52%) and "real" in 158 (34%): the
+words outside the lists over ``COMMON_SHARE``.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ import sqlite3
 import weakref
 from collections import Counter
 from collections.abc import Collection, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 # letters and digits; underscore separates, as it does for unicode61
@@ -131,10 +131,11 @@ def search_words(cue: str) -> list[str]:
 # for "how does Riley like to be told about mistakes" matched by words on
 # "Riley" alone (none holds "mistakes"; one was 18th by meaning), and the best
 # words match was a note about a page footer's link. Left out, all five come
-# by meaning. The cut is 25%, not lower: the 50 words between 8% and 25% of
+# by meaning. The cut is 25%, not lower: the 72 words between 8% and 25% of
 # that scope ("polyphonic", "room", "sanctuary", "page") name the work itself.
-# Cut at 8%, they cost the cue 5 of the 20 lines that bore on the lab's
-# development prompts and changed none of the lab's 29 facts.
+# Cut at 8% (counting words alone), such words cost the cue 5 of the 20 lines
+# that bore on the lab's development prompts and changed none of the lab's 29
+# facts.
 COMMON_SHARE = 0.25
 # Below this many live memories in a scope no word is cut: a share of a handful
 # of memories is noise (of 10 memories, a word 3 of them hold is over a
@@ -145,12 +146,32 @@ COMMON_MIN_MEMORIES = 100
 @dataclass
 class _Counted:
     """Word counts for one scope, as one connection saw the store at one
-    write generation."""
+    write generation. ``lessons`` holds the live memories' lessons (read on
+    first need, or given by recall, which reads them anyway), ``lowered``
+    the same lower-cased, and ``lesson_words`` each one's words, split only
+    when a word searched for is in its text at all."""
 
     conn: Any
     generation: tuple[int, int]
     live: int
     counts: dict[str, int]
+    lessons: dict[str, str] | None = None
+    lowered: dict[str, str] = field(default_factory=dict)
+    lesson_words: dict[str, set[str]] = field(default_factory=dict)
+
+    def lessons_holding(self, word: str) -> set[str]:
+        """The memories whose lesson holds ``word``, split into words as
+        ``rank_by_words`` splits a lesson."""
+        holding = set()
+        for memory_id, lesson in (self.lessons or {}).items():
+            if word not in self.lowered[memory_id]:
+                continue  # not even inside another word: no need to split it
+            words = self.lesson_words.get(memory_id)
+            if words is None:
+                words = self.lesson_words[memory_id] = {w.lower() for w in _TOKEN.findall(lesson)}
+            if word in words:
+                holding.add(memory_id)
+        return holding
 
 
 # Each word's count of live memories, for this process: per store (held
@@ -184,15 +205,21 @@ def word_shares(
     agent_id: str,
     person_id: str,
     project_scope: str,
+    lessons: Mapping[str, str] | None = None,
 ) -> dict[str, float]:
     """Each of ``words``' share of the live memories (active and dormant) in
-    one scope, lower-cased: how many of them hold it, as the full-text index
-    matches it, over how many there are.
+    one scope, lower-cased: how many of them hold it, in their words as the
+    full-text index matches it or in their lesson (``live_memory_lessons``:
+    what recall ranks beside their words, and the cue reads), each memory
+    once, over how many there are. The index holds no lesson, so a word most
+    lessons hold would otherwise count as rare.
 
-    Counted from the index and cached for this process, per store and scope,
-    until anything is written to the store, by any connection. Empty when the
-    scope holds fewer than ``COMMON_MIN_MEMORIES`` live memories, or the index
-    can't be read: then no word is common by its share. Reads only."""
+    Counted and cached for this process, per store and scope, until anything
+    is written to the store, by any connection. ``lessons`` are the scope's
+    ``live_memory_lessons`` when the caller has just read them from this
+    store. Empty when the scope holds fewer than ``COMMON_MIN_MEMORIES`` live
+    memories, or the index can't be read: then no word is common by its
+    share. Reads only."""
     wanted = list(dict.fromkeys(word.lower() for word in words if word))
     if not wanted:
         return {}
@@ -214,15 +241,39 @@ def word_shares(
             return {}
         for word in wanted:
             if word not in counted.counts:
+                if counted.lessons is None:
+                    counted.lessons = {
+                        memory_id: lesson or ""
+                        for memory_id, lesson in (
+                            lessons if lessons is not None else _live_lessons(store, *scope)
+                        ).items()
+                    }
+                    counted.lowered = {
+                        memory_id: lesson.lower() for memory_id, lesson in counted.lessons.items()
+                    }
                 phrase = '"' + word.replace('"', '""') + '"'
-                counted.counts[word] = conn.execute(
-                    "SELECT COUNT(DISTINCT e.id) FROM engrams_fts f JOIN engrams e ON e.id = f.id "
-                    f"WHERE engrams_fts MATCH ? AND {_LIVE_IN_SCOPE}",
-                    (phrase, *scope),
-                ).fetchone()[0]
+                holding = {
+                    row[0] for row in conn.execute(
+                        "SELECT DISTINCT e.id FROM engrams_fts f JOIN engrams e ON e.id = f.id "
+                        f"WHERE engrams_fts MATCH ? AND {_LIVE_IN_SCOPE}",
+                        (phrase, *scope),
+                    )
+                }
+                counted.counts[word] = len(holding | counted.lessons_holding(word))
     except (sqlite3.Error, AttributeError, TypeError):
         return {}
     return {word: counted.counts[word] / counted.live for word in wanted}
+
+
+def _live_lessons(
+    store: Any, agent_id: str, person_id: str, project_scope: str,
+) -> Mapping[str, str]:
+    """The live memories' lessons in one scope (``live_memory_lessons``);
+    none from a store that can't give them."""
+    lessons_of = getattr(store, "live_memory_lessons", None)
+    if lessons_of is None:
+        return {}
+    return lessons_of(agent_id=agent_id, person_id=person_id, project_scope=project_scope)
 
 
 def common_words(
@@ -233,12 +284,14 @@ def common_words(
     person_id: str,
     project_scope: str,
     share: float = COMMON_SHARE,
+    lessons: Mapping[str, str] | None = None,
 ) -> set[str]:
     """Which of ``words`` (lower-cased) are in more than ``share`` of the live
     memories in the scope (``word_shares``). Below ``COMMON_MIN_MEMORIES``
     live memories, none is."""
     shares = word_shares(
         store, words, agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        lessons=lessons,
     )
     return {word for word, part in shares.items() if part > share}
 

@@ -559,6 +559,72 @@ def test_a_lesson_without_its_own_vector_is_searched_by_every_word(tmp_path, mea
     assert current.id not in by_words
 
 
+# "tidewater" is in the lessons of 40 of the 120 memories below and in none of
+# their words: the full-text index holds no lesson.
+_TIDEWATER_MESSAGE = "The lighthouse keeper asked whether the tidewater gauge reads high tonight"
+
+
+def _lesson_store(db: Path, *extra: Engram) -> list[Engram]:
+    """120 memories about the harbour, 40 of whose lessons name the
+    tidewater, and ``extra``: each memory with its words and its lesson cut
+    into passages, so meaning can find every one."""
+    tide = [_memory(f"The ferry waited at pier {i}.", impact="Check the tidewater first.",
+                    impact_source="agent") for i in range(40)]
+    memories = [*tide, *_timetables(80), *extra]
+    store = EngramStore(str(db))
+    for engram in memories:
+        store.save_engram(engram)
+    lessons = store.live_memory_lessons(**SCOPE)
+    store.close()
+    index = EmbeddingIndex(db_path=str(db))
+    index.index_passages([(engram.id, engram.content) for engram in memories], lessons=lessons)
+    index.close()
+    return tide
+
+
+def test_a_word_most_lessons_hold_is_cut_from_the_lesson_ranking(tmp_path, meaning):
+    """A word's share counts the memories holding it in their words or in
+    their lesson, each once. "tidewater", in the lessons of 40 of 120
+    memories and in no memory's words, is common, and no memory is found by
+    it."""
+    db = tmp_path / "memory.db"
+    tide = _lesson_store(db)
+
+    found = _retrieve(db, "tidewater", max_results=None)
+
+    assert not {r.engram.id for r in found if r.retrieval_path == "fts"} & {t.id for t in tide}
+    store = ReadOnlyEngramStore(str(db))
+    index = EmbeddingIndex(db_path=str(db), read_only=True)
+    try:
+        assert word_shares(store, ["tidewater"], **SCOPE) == {"tidewater": 40 / 120}
+        retriever = ReactiveRetriever(store, embedding_index=index)
+        assert retriever.search_terms("tidewater", **SCOPE) == ([], ["tidewater"])
+    finally:
+        index.close()
+        store.close()
+
+
+def test_a_word_most_lessons_hold_does_not_open_the_word_path(tmp_path, meaning):
+    """A memory at cosine 0.37 with the message, under the cue's floor,
+    shares one word with it, "tidewater", in its lesson. Common by the
+    lessons, the word can't open the path meant for rare ones."""
+    near = _memory(_WORD_PATH, impact="Read the tidewater first.", impact_source="agent")
+    db = tmp_path / "memory.db"
+    _lesson_store(db, near)
+    assert 0.35 < cosine(_TIDEWATER_MESSAGE, _WORD_PATH) < 0.40
+    store = ReadOnlyEngramStore(str(db))
+    index = EmbeddingIndex(db_path=str(db), read_only=True)
+    try:
+        lines = cue_memories(store, index, _TIDEWATER_MESSAGE, **SCOPE)
+        in_the_pool = cue_memories(store, index, _TIDEWATER_MESSAGE, floor=0.35, **SCOPE)
+    finally:
+        index.close()
+        store.close()
+
+    assert near.id not in [line["id"] for line in lines]
+    assert near.id in [line["id"] for line in in_the_pool], "meaning found it: it is in the pool"
+
+
 def test_a_correction_that_swaps_words_refreshes_the_shares(tmp_path):
     """"Riley" is in 30 of 110 memories (27%). Four corrections put "Casey"
     in its place, leaving 110 live memories: 26 of 110 (24%), under the

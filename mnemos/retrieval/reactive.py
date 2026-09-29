@@ -238,6 +238,7 @@ class ReactiveRetriever:
 
     def search_terms(
         self, cue: str, *, agent_id: str, person_id: str, project_scope: str,
+        lessons: dict[str, str] | None = None,
     ) -> tuple[list[str], list[str]]:
         """The words of ``cue`` recall searches for (``search_words``), and
         those it leaves out: the ones in more than ``common_share`` of the
@@ -261,7 +262,7 @@ class ReactiveRetriever:
             return words, []
         common = common_words(
             self._store, words, agent_id=agent_id, person_id=person_id,
-            project_scope=project_scope, share=self._common_share,
+            project_scope=project_scope, share=self._common_share, lessons=lessons,
         )
         return (
             [word for word in words if word.lower() not in common],
@@ -340,8 +341,13 @@ class ReactiveRetriever:
         # word left out and meaning able to find everything, there are no
         # words lists, and meaning decides alone. A cue with no word to search
         # is searched as a phrase, as before.
+        # The lessons, read once: ranked by their words below, and counted in
+        # each word's share (a word most lessons hold is common too).
+        lessons_of = getattr(self._store, "live_memory_lessons", None)
+        lessons = lessons_of(**scope) if lessons_of is not None else {}
         terms, common = (
-            self.search_terms(cue, **scope) if vector is not None else (search_words(cue), [])
+            self.search_terms(cue, lessons=lessons, **scope)
+            if vector is not None else (search_words(cue), [])
         )
         every_word = _to_fts_query(cue)
         note_by_id = {str(note["id"]): note for note in notes or []}
@@ -387,8 +393,6 @@ class ReactiveRetriever:
         # jargon". Only live memories in the scope have them here. Each
         # memory then counts once by words, at the better of its two ranks.
         lesson_words: list[str] = []
-        lessons_of = getattr(self._store, "live_memory_lessons", None)
-        lessons = lessons_of(**scope) if lessons_of is not None else {}
         if lessons:
             # A lesson is found by meaning only by its own passage, cut from
             # its words now: one written after the capture waits for it.

@@ -305,6 +305,8 @@ def cue_memories(
     ``words_shared`` distinctive words with the message. A shared word is
     distinctive only while it is in at most ``COMMON_SHARE`` of them
     (``word_shares``; a scope under ``COMMON_MIN_MEMORIES`` counts every one).
+    A memory shares the words of its content and of its lesson (the impact
+    the agent wrote), which is what the shares count.
     ``length_penalty`` is λ of recall's ranking (None: the index's own); the
     gate reads each memory's best similarity, which λ never lowers. The
     message is embedded once, first: when that fails (a network backend that
@@ -323,6 +325,7 @@ def cue_memories(
     ``lesson``, ``similarity``, ``shared`` and ``rank`` (in the ranking).
     """
     from . import cue
+    from .core.placeholders import written_lesson
     from .store.fts import COMMON_SHARE, word_shares
 
     floor = cue.CUE_FLOOR if floor is None else floor
@@ -376,8 +379,11 @@ def cue_memories(
     chosen: dict[str, dict[str, Any]] = {}
     for rank, result in enumerate(found, start=1):
         engram = result.engram
+        # Its words and its lesson, as the shares count them: an impact the
+        # server filled in or a model extracted is not the memory's to share.
+        lesson = written_lesson(engram.content, engram.impact, engram.impact_source or "")
         shared = sorted(
-            word for word in asked & distinctive_terms(f"{engram.content} {engram.impact}")
+            word for word in asked & distinctive_terms(f"{engram.content} {lesson}")
             if shares.get(word, 0.0) <= COMMON_SHARE
         )
         rare = [word for word in shared if shares.get(word, 0.0) <= word_cut]

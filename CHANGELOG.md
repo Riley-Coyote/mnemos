@@ -2,6 +2,55 @@
 
 ## 0.3.1 (unreleased)
 
+### Fair ranking
+
+Recall fuses its words list and its meaning list by reciprocal rank, which
+keeps each list's order and none of bm25's weight, so a words match on a word
+most memories hold counted as much as one on a rare word. On a copy of the
+live store "Riley" is in 268 of the 464 live memories of its scope (58%), and
+53 words no common-word list names are in more than 8% of them. Each of the
+five memories recall returned for "how does Riley like to be told about
+mistakes" matched by words on "Riley" alone (none holds "mistakes"; one was
+18th by meaning). The cue had the same blind spot: every meaning floor from
+0.30 to 0.50 showed 38 or 39 lines on the lab's development prompts, because
+a shared word such as "page" (in 20% of the memories) let back in what a
+higher floor turned away.
+
+- With meaning to decide, a word in more than 8% of the live memories in the
+  scope is left out of every words list (memories, lessons, handoffs). When
+  every word of a cue is left out, there is no words list and meaning decides
+  alone. The shares are counted from the full-text index and kept for the
+  process until the scope's count of live memories changes.
+- Nothing is cut below 100 live memories in a scope, where a share is a
+  handful of memories, nor without meaning (a keyword-only install, or an
+  embedding model that failed): there the words are all there is.
+- The cue counts a word it shares with a message as distinctive only at or
+  under that 8%, and its word path (cosine 0.25 with a shared word) needs a
+  word at or under `CUE_WORD_CUT`: 0.08, as close to the old gate as the cut
+  allows. 0.05 and 0.02 were measured beside it; which one holds is Riley's
+  decision.
+- An item's meaning score can pay for its length: its best passage less
+  λ · ln(its passages) (`LENGTH_PENALTY`, and a `length_penalty` parameter
+  on the index, the retriever and the cue). λ is 0: scoring is unchanged
+  until it is chosen from the measured grid (0, 0.01, 0.02, 0.03).
+
+Measured on copies: the lab's 29 development facts reach the top ten 22 times
+before and after; for the "mistakes" question all five results now come by
+meaning, and across R08's twelve cues the results found by meaning alone go
+from 5 to 16 of 58. Recall latency on the live copy, two interleaved runs of
+132 recalls: p50 74.6 and 79.9 ms before, 71.6 and 74.9 after; p95 108.1 and
+118.2 before, 99.3 and 109.6 after.
+
+Changed behaviour: the cue's lines change. On the lab's 20 development
+prompts it shows 39 lines against 38; 15 of the 20 lines labelled as bearing
+on their message remain (the other five still clear the gate but rank lower
+once topical words like "polyphonic" and "room" stop counting, and other
+lessons take the three places), and 10 of the 39 are new. The cue's protocol
+is 2: a hook on this code does not trust an answerer still running the old
+gate and answers from words until that session's server restarts. No schema
+change, and no change to `MAINTENANCE_CODE_VERSION`: how memory is written
+and maintained is unchanged.
+
 ### Lesson questions that aren't starved
 
 When the agent's own memories fade without a lesson, maintenance asks what up

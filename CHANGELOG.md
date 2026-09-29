@@ -23,11 +23,15 @@ a long handoff had up to 160 chances to match where a short memory had one.
   A cut at 8% was measured too: it also took words that name the work
   ("polyphonic", "room", "sanctuary", "page"), cost the cue 5 of its 20 good
   lines and changed none of the lab's 29 facts.
-- The cut holds only for what meaning can find. A memory or a handoff with
-  no vector of the index's model (not indexed yet, failed, or indexed by
-  another model) is searched with every word, and so is a shared store,
-  which meaning never searches and whose words this scope's shares say
-  nothing about.
+- The cut holds only for what meaning can find, and only when meaning runs.
+  The cue is embedded first: when that fails (a network backend that timed
+  out, a model that won't load), nothing is cut, in recall and in the cue,
+  which then answers from words as it does without meaning. A memory or a
+  handoff with no vector of the index's model (not indexed yet, failed, or
+  indexed by another model), and a lesson without its own current passage
+  (written or rewritten since its memory was indexed), is searched with
+  every word, and so is a shared store, which meaning never searches and
+  whose words this scope's shares say nothing about.
 - The shares are counted from the full-text index and kept for the process
   until anything is written to the store, by any process (SQLite's
   `data_version` and the connection's own changes), so a correction that

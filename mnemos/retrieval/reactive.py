@@ -280,6 +280,7 @@ class ReactiveRetriever:
         reconsolidate_results: bool = True,
         keep: Callable[[RetrievalResult], bool] | None = None,
         notes: Iterable[dict[str, Any]] | None = None,
+        query_vector: Sequence[float] | None = None,
     ) -> list[RetrievalResult]:
         """Retrieve memories for ``cue``, best first.
 
@@ -305,11 +306,28 @@ class ReactiveRetriever:
         are ranked with the memories, by their words and their meaning. They
         come back as results with ``note`` set and no engram, and never take
         part in resonance: they relay nothing and receive nothing.
+
+        ``query_vector`` is the cue's own vector, when the caller has it
+        (``EmbeddingIndex.embed_query``); otherwise the cue is embedded here,
+        once, before anything is decided. With no vector (the embedding
+        failed), meaning is off for this cue: nothing is cut from the words.
         """
         if not cue or not cue.strip():
             return []
         scope = {"agent_id": agent_id, "person_id": person_id, "project_scope": project_scope}
         engrams: dict[str, Engram] = {}
+
+        # The cue's vector first. The words cut hands the decision to meaning,
+        # so it holds only when meaning runs for this cue: a remote timeout or
+        # a model that won't load leaves no vector, and then every word is
+        # searched, as if meaning were off. An index that embeds only inside
+        # its own search (a stand-in) can't say, so nothing is cut for it.
+        index = self._embedding_index
+        vector = query_vector
+        embeds_first = index is not None and hasattr(index, "embed_query")
+        if vector is None and embeds_first and getattr(index, "available", False):
+            vector = self._cue_vector(cue)
+        meaning_runs = index is not None and (vector is not None or not embeds_first)
 
         # 1a. WORDS among memories: the live ones in scope holding the cue's
         # words that mean something (_to_fts_query), active then dormant. Both
@@ -322,7 +340,9 @@ class ReactiveRetriever:
         # word left out and meaning able to find everything, there are no
         # words lists, and meaning decides alone. A cue with no word to search
         # is searched as a phrase, as before.
-        terms, common = self.search_terms(cue, **scope)
+        terms, common = (
+            self.search_terms(cue, **scope) if vector is not None else (search_words(cue), [])
+        )
         every_word = _to_fts_query(cue)
         note_by_id = {str(note["id"]): note for note in notes or []}
         note_texts = {item_id: note.get("content") or "" for item_id, note in note_by_id.items()}
@@ -370,8 +390,13 @@ class ReactiveRetriever:
         lessons_of = getattr(self._store, "live_memory_lessons", None)
         lessons = lessons_of(**scope) if lessons_of is not None else {}
         if lessons:
+            # A lesson is found by meaning only by its own passage, cut from
+            # its words now: one written after the capture waits for it.
+            every_lesson_word = set(unseen)
+            if common:
+                every_lesson_word |= set(lessons) - self._lessons_found_by_meaning(lessons)
             for item_id, _score in rank_by_words(
-                cue, lessons, limit=WORD_SEEDS, terms=terms, every_word_for=unseen,
+                cue, lessons, limit=WORD_SEEDS, terms=terms, every_word_for=every_lesson_word,
             ):
                 if item_id not in engrams:
                     engram = self._store.get_engram_in_scope(item_id, **scope)
@@ -410,10 +435,10 @@ class ReactiveRetriever:
         # top taken. Kept apart so results say which came by meaning.
         similarity: dict[str, float] = {}
         meaning: list[str] = []
-        if self._embedding_index is not None:
+        if meaning_runs:
             try:
                 candidates = (live if live is not None else self._store.live_engram_ids(**scope)) | set(note_by_id)
-                for item_id, sim in self._meaning_hits(cue, candidates, note_texts):
+                for item_id, sim in self._meaning_hits(cue, candidates, note_texts, vector):
                     if item_id not in note_by_id and item_id not in engrams:
                         engram = self._store.get_engram_in_scope(item_id, **scope)
                         if engram is None or engram.state not in ("active", "dormant"):
@@ -576,6 +601,27 @@ class ReactiveRetriever:
 
         return top
 
+    def _cue_vector(self, cue: str) -> list[float] | None:
+        """The cue's vector from the index, or None when embedding it failed."""
+        try:
+            return self._embedding_index.embed_query(cue)
+        except Exception as exc:
+            _log_seed_failure_once(exc)
+            return None
+
+    def _lessons_found_by_meaning(self, lessons: dict[str, str]) -> set[str]:
+        """The memories whose lesson meaning can find by the lesson's own
+        passage (``EmbeddingIndex.lessons_searchable``). An index that can't
+        say finds none."""
+        found = getattr(self._embedding_index, "lessons_searchable", None)
+        if found is None:
+            return set()
+        try:
+            return found(lessons)
+        except Exception as exc:
+            _log_seed_failure_once(exc)
+            return set()
+
     def _unseen_by_meaning(
         self, live: Collection[str], note_texts: dict[str, str],
     ) -> tuple[set[str], set[str]]:
@@ -605,6 +651,7 @@ class ReactiveRetriever:
 
     def _meaning_hits(
         self, cue: str, candidates: Collection[str], texts: dict[str, str] | None = None,
+        vector: Sequence[float] | None = None,
     ) -> list[tuple[str, float]]:
         """The candidates closest in meaning to ``cue``, at most ``MEANING_SEEDS``,
         none below ``MEANING_FLOOR``, scored before the top is taken. ``texts``
@@ -614,9 +661,13 @@ class ReactiveRetriever:
         by default); the floor reads the best passage itself."""
         index = self._embedding_index
         if hasattr(index, "search_candidates"):
-            penalty = {} if self._length_penalty is None else {"length_penalty": self._length_penalty}
+            extra: dict[str, Any] = {}
+            if self._length_penalty is not None:
+                extra["length_penalty"] = self._length_penalty
+            if vector is not None:
+                extra["query_vector"] = vector
             return index.search_candidates(
-                cue, candidates, k=MEANING_SEEDS, floor=MEANING_FLOOR, texts=texts, **penalty,
+                cue, candidates, k=MEANING_SEEDS, floor=MEANING_FLOOR, texts=texts, **extra,
             )
         if not hasattr(index, "search"):
             return []

@@ -474,6 +474,91 @@ def test_a_memory_meaning_cannot_find_is_searched_by_every_word(tmp_path, meanin
     assert not by_words & {f.id for f in fillers}
 
 
+class _NoQueryVector(_ConceptEmbedder):
+    """A backend that indexed everything, then can't embed a cue: a network
+    that times out, a model that won't load."""
+
+    def embed(self, text):
+        raise TimeoutError("the embedding service did not answer")
+
+
+class _EmptyQueryVector(_ConceptEmbedder):
+    def embed(self, text):
+        return None
+
+
+@pytest.mark.parametrize("failing", [_NoQueryVector, _EmptyQueryVector])
+def test_when_the_cue_cannot_be_embedded_nothing_is_cut(tmp_path, meaning, monkeypatch, failing):
+    """Every memory has a vector, but the cue's own embedding fails, so
+    meaning doesn't run for it. "Riley", in 41 of 121 memories, is searched
+    all the same, and the memory only it matches is found by its words."""
+    only_riley = _memory("Riley, at last.")
+    db = _store(tmp_path / "memory.db", [only_riley, *_riley_at_the_harbour(40), *_timetables(80)])
+    monkeypatch.setattr(ei, "_LocalEmbedder", failing)
+
+    found = _retrieve(db, "Riley", max_results=None)
+
+    assert only_riley.id in {r.engram.id for r in found if r.retrieval_path == "fts"}
+
+
+@pytest.mark.parametrize("failing", [_NoQueryVector, _EmptyQueryVector])
+def test_when_the_message_cannot_be_embedded_the_cue_answers_from_words(
+    tmp_path, meaning, monkeypatch, failing,
+):
+    """The same for the cue: its message can't be embedded, so it answers
+    as it does without meaning, from words alone (two distinctive words
+    shared), instead of offering nothing."""
+    lock = _memory("A brass lock for the harbour gate.")
+    db = _store(tmp_path / "memory.db", [lock, *_riley_at_the_harbour(40), *_timetables(80)])
+    monkeypatch.setattr(ei, "_LocalEmbedder", failing)
+    store = ReadOnlyEngramStore(str(db))
+    index = EmbeddingIndex(db_path=str(db), read_only=True)
+    try:
+        lines = cue_memories(store, index, "Riley asked whether the brass lock is fixed", **SCOPE)
+    finally:
+        index.close()
+        store.close()
+
+    assert [line["id"] for line in lines] == [lock.id]
+    assert lines[0]["similarity"] is None and lines[0]["shared"] == ["brass", "lock"]
+
+
+def test_a_lesson_without_its_own_vector_is_searched_by_every_word(tmp_path, meaning):
+    """Three memories whose words are about the harbour and whose lessons
+    name Riley, who is in 40 of 123 memories. Each memory's words have a
+    vector. Meaning can find only one lesson by the lesson itself: one was
+    written after its memory was indexed, one was rewritten since. Those two
+    are found by the common word in their lessons; the third, whose lesson
+    meaning can find, is left to meaning."""
+    unindexed = _memory("The ferry timetable changed at pier 7.",
+                        impact="Riley wants the times written on the board.", impact_source="agent")
+    rewritten = _memory("The harbour boat log for pier 9.",
+                        impact="Keep the boat log dry.", impact_source="agent")
+    current = _memory("The ferry ropes at pier 3.",
+                      impact="Riley checks the ropes before a storm.", impact_source="agent")
+    db = _store(tmp_path / "memory.db", [unindexed, *_riley_at_the_harbour(40), *_timetables(80)])
+    store = EngramStore(str(db))
+    for engram in (rewritten, current):
+        store.save_engram(engram)
+    store.close()
+    index = EmbeddingIndex(db_path=str(db))
+    index.index_passages(
+        [(rewritten.id, rewritten.content), (current.id, current.content)],
+        lessons={rewritten.id: rewritten.impact, current.id: current.impact},
+    )
+    index.close()
+    store = EngramStore(str(db))
+    rewritten.impact = "Riley keeps the boat log now."
+    store.save_engram(rewritten)
+    store.close()
+
+    found = _retrieve(db, "Riley", max_results=None)
+
+    by_words = {r.engram.id for r in found if r.retrieval_path == "fts"}
+    assert {unindexed.id, rewritten.id} <= by_words, [r.engram.content for r in found]
+    assert current.id not in by_words
+
+
 def test_a_correction_that_swaps_words_refreshes_the_shares(tmp_path):
     """"Riley" is in 30 of 110 memories (27%). Four corrections put "Casey"
     in its place, leaving 110 live memories: 26 of 110 (24%), under the

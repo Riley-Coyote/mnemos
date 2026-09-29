@@ -306,7 +306,10 @@ def cue_memories(
     distinctive only while it is in at most ``COMMON_SHARE`` of them
     (``word_shares``; a scope under ``COMMON_MIN_MEMORIES`` counts every one).
     ``length_penalty`` is λ of recall's ranking (None: the index's own); the
-    gate reads each memory's best similarity, which λ never lowers.
+    gate reads each memory's best similarity, which λ never lowers. The
+    message is embedded once, first: when that fails (a network backend that
+    timed out, a model that won't load), the cue answers as it does without
+    meaning, from words alone, with none of them cut.
 
     Standing memories never come (the briefing carries them), nor what
     ``exclude`` names or ``exclude_texts`` keys (``cue.text_key``): what this
@@ -331,6 +334,13 @@ def cue_memories(
         return []
     scope = {"agent_id": agent_id, "person_id": person_id, "project_scope": project_scope}
     meaning = index is not None and getattr(index, "available", False)
+    vector = None
+    if meaning and hasattr(index, "embed_query"):
+        try:
+            vector = index.embed_query(text)
+        except Exception:
+            vector = None
+        meaning = vector is not None
     try:
         standing = {row["id"] for row in store.standing_engrams(**scope)}
     except sqlite3.Error:
@@ -352,12 +362,14 @@ def cue_memories(
         emotional_state=store.get_latest_emotional_state(agent_id),
         reconsolidate_results=False,
         keep=keep,
+        query_vector=vector,
         **scope,
     )
     similarity: dict[str, float] = {}
     if meaning and found:
         ids = [result.engram.id for result in found]
-        similarity = dict(index.search_candidates(text, ids, k=len(ids), floor=-1.0))
+        again = {} if vector is None else {"query_vector": vector}
+        similarity = dict(index.search_candidates(text, ids, k=len(ids), floor=-1.0, **again))
     asked = distinctive_terms(text)
     shares = word_shares(store, asked, **scope)
     known = set(exclude_texts)

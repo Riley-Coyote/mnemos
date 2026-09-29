@@ -48,7 +48,7 @@ import struct
 import time
 import urllib.request
 import urllib.error
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -1019,6 +1019,13 @@ class EmbeddingIndex:
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:k]
 
+    def embed_query(self, text: str) -> list[float] | None:
+        """``text``'s vector, as recall compares it with the passages; None
+        when embedding it failed (a network backend that timed out, a model
+        that won't load): then meaning can't run for it, and a caller should
+        act as if it were off. The failure is kept and logged once, as any."""
+        return self._embed(text)
+
     def search_candidates(
         self,
         query: str,
@@ -1028,6 +1035,7 @@ class EmbeddingIndex:
         floor: float = 0.0,
         texts: Mapping[str, str] | None = None,
         length_penalty: float | None = None,
+        query_vector: Sequence[float] | None = None,
     ) -> list[tuple[str, float]]:
         """The ``candidates`` closest in meaning to ``query``: at most ``k``,
         none whose best similarity is below ``floor``, each with that best
@@ -1050,6 +1058,8 @@ class EmbeddingIndex:
         hold now (recall passes the notes'): passages cut from other words are
         stale too and never count, so a note rewritten in place (by code older
         than this, say) is never found by its old meaning. It waits as well.
+        ``query_vector`` is ``query``'s own vector (``embed_query``), when the
+        caller has it: then nothing is embedded here.
         """
         if not self._available or not self._embedder or not candidates:
             return []
@@ -1057,7 +1067,7 @@ class EmbeddingIndex:
         conn = self._existing_conn()
         if conn is None:
             return []
-        query_values = self._embed(query)
+        query_values = list(query_vector) if query_vector is not None else self._embed(query)
         if query_values is None:
             return []
         model = self._embedder.model_name
@@ -1121,6 +1131,20 @@ class EmbeddingIndex:
                 "WHERE model_name = ? AND engram_id IN ({})", (model,), without,
             ))
         return found
+
+    def lessons_searchable(self, lessons: Mapping[str, str]) -> set[str]:
+        """Which of ``lessons`` (memory id to the lesson's words now) meaning
+        can find by the lesson itself: a lesson passage (``LESSON_PART``) from
+        this model, cut by this scheme or a newer one, from these words. A
+        memory's other passages say nothing about its lesson's: written after
+        the capture, the lesson waits for its own. Reads only."""
+        if not self._available or not self._embedder or not lessons:
+            return set()
+        stored = self.lesson_hashes(lessons)
+        return {
+            item_id for item_id, lesson in lessons.items()
+            if stored.get(item_id) is not None and stored[item_id] == _lesson_hash(lesson)
+        }
 
     @staticmethod
     def _rows_for(

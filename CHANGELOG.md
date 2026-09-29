@@ -7,49 +7,60 @@
 Recall fuses its words list and its meaning list by reciprocal rank, which
 keeps each list's order and none of bm25's weight, so a words match on a word
 most memories hold counted as much as one on a rare word. On a copy of the
-live store "Riley" is in 268 of the 464 live memories of its scope (58%), and
-53 words no common-word list names are in more than 8% of them. Each of the
-five memories recall returned for "how does Riley like to be told about
-mistakes" matched by words on "Riley" alone (none holds "mistakes"; one was
-18th by meaning). The cue had the same blind spot: every meaning floor from
-0.30 to 0.50 showed 38 or 39 lines on the lab's development prompts, because
-a shared word such as "page" (in 20% of the memories) let back in what a
-higher floor turned away.
+live store "Riley" is in 268 of the 464 live memories of its scope (58%).
+Each of the five memories recall returned for "how does Riley like to be told
+about mistakes" matched by words on "Riley" alone (none holds "mistakes"; one
+was 18th by meaning). The cue had the same blind spot: every meaning floor
+from 0.30 to 0.50 showed 38 or 39 lines on the lab's development prompts,
+because a shared word such as "page" (in 20% of the memories) let back in
+what a higher floor turned away. And an item counts by its best passage, so
+a long handoff had up to 160 chances to match where a short memory had one.
 
-- With meaning to decide, a word in more than 8% of the live memories in the
-  scope is left out of every words list (memories, lessons, handoffs). When
-  every word of a cue is left out, there is no words list and meaning decides
-  alone. The shares are counted from the full-text index and kept for the
-  process until the scope's count of live memories changes.
-- Nothing is cut below 100 live memories in a scope, where a share is a
-  handful of memories, nor without meaning (a keyword-only install, or an
-  embedding model that failed): there the words are all there is.
+- With meaning to decide, a word in more than 25% of the live memories in
+  the scope is left out of every words list (memories, lessons, handoffs):
+  on the live copy, beside the common-word lists, that is "riley", "2026"
+  and "real". When every word of a cue is left out, meaning decides alone.
+  The shares are counted from the full-text index and kept for the process
+  until the scope's count of live memories changes. A cut at 8% was
+  measured too: it also took words that name the work ("polyphonic",
+  "room", "sanctuary", "page"), cost the cue 5 of its 20 good lines and
+  changed none of the lab's 29 facts.
+- Nothing is cut below 100 live memories in a scope, nor without meaning (a
+  keyword-only install, or an embedding model that failed): there the words
+  are all there is.
 - The cue counts a word it shares with a message as distinctive only at or
-  under that 8%, and its word path (cosine 0.25 with a shared word) needs a
-  word at or under `CUE_WORD_CUT`: 0.08, as close to the old gate as the cut
-  allows. 0.05 and 0.02 were measured beside it; which one holds is Riley's
-  decision.
-- An item's meaning score can pay for its length: its best passage less
-  λ · ln(its passages) (`LENGTH_PENALTY`, and a `length_penalty` parameter
-  on the index, the retriever and the cue). λ is 0: scoring is unchanged
-  until it is chosen from the measured grid (0, 0.01, 0.02, 0.03).
+  under that 25%, and its word path (cosine 0.25 with a shared word) needs a
+  word in at most 2% of the memories (`CUE_WORD_CUT`).
+- Meaning is ordered fairly to length: by the best passage less
+  0.02 · ln(the item's passages) (`LENGTH_PENALTY`, and a `length_penalty`
+  parameter on the index, the retriever and the cue). The penalty only
+  orders: recall's floor and the cue's gate read the best similarity itself,
+  so a long item ranks lower but is never pushed under a floor.
+- R08's "best keyword match" measure for "how does Riley like to be told
+  about mistakes" is retired. On today's store the best words match for it
+  is a note about a page footer's link, found by "Riley" alone; with the cut
+  it leaves the ranking, as it should.
 
-Measured on copies: the lab's 29 development facts reach the top ten 22 times
-before and after; for the "mistakes" question all five results now come by
-meaning, and across R08's twelve cues the results found by meaning alone go
-from 5 to 16 of 58. Recall latency on the live copy, two interleaved runs of
-132 recalls: p50 74.6 and 79.9 ms before, 71.6 and 74.9 after; p95 108.1 and
-118.2 before, 99.3 and 109.6 after.
+Measured on copies against the code before: the lab's 29 development facts
+reach the top ten 22 times, the same 22, strict and crediting newer
+handoffs; the plain-words rule rises from 23rd to 17th for "how should I
+write my replies to Riley" (2nd, and out of reach, for the other two probes,
+as before); across R08's twelve cues the results found by meaning alone go
+from 5 to 13 of 58, and one cue's best whole-text match leaves its top five
+(9 of 12 to 8). Recall latency is unchanged: medians of four interleaved runs
+of 132 recalls on the live copy, p50 78.2 ms before and 77.8 after, p95
+116.5 and 109.2.
 
 Changed behaviour: the cue's lines change. On the lab's 20 development
-prompts it shows 39 lines against 38; 15 of the 20 lines labelled as bearing
-on their message remain (the other five still clear the gate but rank lower
-once topical words like "polyphonic" and "room" stop counting, and other
-lessons take the three places), and 10 of the 39 are new. The cue's protocol
-is 2: a hook on this code does not trust an answerer still running the old
-gate and answers from words until that session's server restarts. No schema
-change, and no change to `MAINTENANCE_CODE_VERSION`: how memory is written
-and maintained is unchanged.
+prompts it shows 36 lines against 38: 20 that bear on their message, as
+before, and 16 that don't against 18. In one task two of the 20 are traded
+for two other lessons that bear on it too: the penalty moved them from 2nd
+and 3rd to 5th and 6th of recall's ranking, still over the gate, and the
+three places went to lessons ranked above them. The cue's protocol is 2: a
+hook on this code does not trust an answerer still running the old gate and
+answers from words until that session's server restarts. No schema change,
+and no change to `MAINTENANCE_CODE_VERSION`: how memory is written and
+maintained is unchanged.
 
 ### Lesson questions that aren't starved
 

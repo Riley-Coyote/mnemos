@@ -17,14 +17,21 @@ what a higher floor turned away. And an item counts by its best passage, so
 a long handoff had up to 160 chances to match where a short memory had one.
 
 - With meaning to decide, a word in more than 25% of the live memories in
-  the scope is left out of every words list (memories, lessons, handoffs):
+  the scope is left out of the words lists (memories, lessons, handoffs):
   on the live copy, beside the common-word lists, that is "riley", "2026"
   and "real". When every word of a cue is left out, meaning decides alone.
-  The shares are counted from the full-text index and kept for the process
-  until the scope's count of live memories changes. A cut at 8% was
-  measured too: it also took words that name the work ("polyphonic",
-  "room", "sanctuary", "page"), cost the cue 5 of its 20 good lines and
-  changed none of the lab's 29 facts.
+  A cut at 8% was measured too: it also took words that name the work
+  ("polyphonic", "room", "sanctuary", "page"), cost the cue 5 of its 20 good
+  lines and changed none of the lab's 29 facts.
+- The cut holds only for what meaning can find. A memory or a handoff with
+  no vector of the index's model (not indexed yet, failed, or indexed by
+  another model) is searched with every word, and so is a shared store,
+  which meaning never searches and whose words this scope's shares say
+  nothing about.
+- The shares are counted from the full-text index and kept for the process
+  until anything is written to the store, by any process (SQLite's
+  `data_version` and the connection's own changes), so a correction that
+  swaps one word for another is counted afresh.
 - Nothing is cut below 100 live memories in a scope, nor without meaning (a
   keyword-only install, or an embedding model that failed): there the words
   are all there is.

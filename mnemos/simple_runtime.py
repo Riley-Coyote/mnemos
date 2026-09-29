@@ -305,8 +305,8 @@ def cue_memories(
     ``words_shared`` distinctive words with the message. A shared word is
     distinctive only while it is in at most ``COMMON_SHARE`` of them
     (``word_shares``; a scope under ``COMMON_MIN_MEMORIES`` counts every one).
-    ``length_penalty`` is λ of the meaning score, for recall's ranking and the
-    gate alike (None: the index's own).
+    ``length_penalty`` is λ of recall's ranking (None: the index's own); the
+    gate reads each memory's best similarity, which λ never lowers.
 
     Standing memories never come (the briefing carries them), nor what
     ``exclude`` names or ``exclude_texts`` keys (``cue.text_key``): what this
@@ -357,8 +357,7 @@ def cue_memories(
     similarity: dict[str, float] = {}
     if meaning and found:
         ids = [result.engram.id for result in found]
-        penalty = {} if length_penalty is None else {"length_penalty": length_penalty}
-        similarity = dict(index.search_candidates(text, ids, k=len(ids), floor=-1.0, **penalty))
+        similarity = dict(index.search_candidates(text, ids, k=len(ids), floor=-1.0))
     asked = distinctive_terms(text)
     shares = word_shares(store, asked, **scope)
     known = set(exclude_texts)

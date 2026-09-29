@@ -113,10 +113,15 @@ PASSAGE_LIMIT = 160
 # λ, the length penalty of an item's meaning score (``search_candidates``):
 # its best passage's similarity less λ · ln(its passages). An item counts by
 # its best passage, so a long text has more chances: a handoff of 16,000
-# characters has up to 160, a short memory one. 0 is the score as it was, the
-# best passage alone. The grid measured was 0, 0.01, 0.02 and 0.03 (WP-R08c);
-# which one holds is Riley's decision, after the lab's held-out replay.
-LENGTH_PENALTY = 0.0
+# characters has up to 160, a short memory one. The penalty orders, and only
+# that: a floor (recall's, the cue's gate) reads the best similarity itself,
+# so a long item is ranked lower but never pushed under a floor. Chosen from
+# 0, 0.01, 0.02 and 0.03 on copies (WP-R08c): at 0.02 the plain-words rule
+# rose from 23rd to 17th for "how should I write my replies to Riley", the
+# lab's 29 facts were unchanged, and the cue kept its 20 lines that bore on
+# the lab's prompts (two of them, in one task, traded for two others that
+# did too).
+LENGTH_PENALTY = 0.02
 # Ids asked about in one statement, well under SQLite's variable limit.
 _ID_CHUNK = 400
 
@@ -1024,12 +1029,12 @@ class EmbeddingIndex:
         texts: Mapping[str, str] | None = None,
         length_penalty: float | None = None,
     ) -> list[tuple[str, float]]:
-        """The ``candidates`` closest in meaning to ``query``, best first, at
-        most ``k``, none below ``floor``, each with its meaning score: the
-        similarity of its best vector less ``length_penalty`` (λ; None:
-        ``LENGTH_PENALTY``) times the log of how many of its vectors were
-        scored. At λ = 0 the score is the best similarity; the floor and the
-        order are on the score.
+        """The ``candidates`` closest in meaning to ``query``: at most ``k``,
+        none whose best similarity is below ``floor``, each with that best
+        similarity, in the order of its meaning score: the best similarity
+        less ``length_penalty`` (λ; None: ``LENGTH_PENALTY``) times the log of
+        how many of its vectors were scored. The penalty orders and chooses
+        the top ``k``; the floor and the numbers are the similarity's.
 
         Only the candidates are scored, and only then is the top taken. Recall
         passes what it may return: the memories live in the caller's scope and
@@ -1079,17 +1084,11 @@ class EmbeddingIndex:
             if similarity > best.get(item_id, -2.0):
                 best[item_id] = similarity
         penalty = LENGTH_PENALTY if length_penalty is None else float(length_penalty)
-        if penalty:
-            best = {
-                item_id: similarity - penalty * math.log(scored[item_id])
-                for item_id, similarity in best.items()
-            }
         ranked = sorted(
-            ((item_id, round(similarity, 4)) for item_id, similarity in best.items()
-             if similarity >= floor),
-            key=lambda item: -item[1],
+            (item_id for item_id, similarity in best.items() if similarity >= floor),
+            key=lambda item_id: -round(best[item_id] - penalty * math.log(scored[item_id]), 4),
         )
-        return ranked[:k]
+        return [(item_id, round(best[item_id], 4)) for item_id in ranked[:k]]
 
     @staticmethod
     def _rows_for(

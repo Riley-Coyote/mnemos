@@ -6,11 +6,11 @@ most memories hold counted as much as a match on a rare one: on a copy of the
 live store "Riley" is in 268 of the 464 live memories of its scope, and each
 of the five memories recall returned for "how does Riley like to be told about
 mistakes" matched by words on that word alone (one was 18th by meaning).
-With meaning to decide, a word in more than 8% of the live memories in scope
-is now left out of the words lists, and the cue counts a shared word as
-distinctive only below that cut (its word path needs a rarer one still). An
-item's meaning score can also pay for its length: its best passage less
-λ · ln(its passages).
+With meaning to decide, a word in more than a quarter of the live memories
+in scope is now left out of the words lists, and the cue counts a shared word
+as distinctive only below that cut; its word path needs one in at most 2%.
+Meaning is ordered fairly to length: by the best passage less
+λ · ln(the passages), while every floor reads the best passage itself.
 
 None of these tests needs sentence-transformers or torch: a fake model gives
 each text a vector by the concepts it names, so every cosine is exact.
@@ -170,10 +170,10 @@ def test_a_word_most_memories_hold_does_not_put_a_worse_match_first(tmp_path, me
 
 
 def test_when_every_word_is_common_meaning_decides_alone(tmp_path, meaning):
-    """"Riley" is in 40 of 130 memories and "lamp" in 30. Asked "Riley's
+    """"Riley" and "lamp" are each in 40 of 140 memories. Asked "Riley's
     lamp", recall has no words list: what comes back came by meaning, and a
     memory that only shares a common word with the cue does not come back."""
-    lamps = [_memory(f"The lamp in cabin {i} was lit at dusk.") for i in range(30)]
+    lamps = [_memory(f"The lamp in cabin {i} was lit at dusk.") for i in range(40)]
     fillers = _riley_fillers(40)
     db = _store(tmp_path / "memory.db", [*lamps, *fillers, *_invoices(60)])
 
@@ -186,8 +186,8 @@ def test_when_every_word_is_common_meaning_decides_alone(tmp_path, meaning):
 
 
 def test_a_small_store_keeps_every_word(tmp_path, meaning):
-    """Below a hundred live memories a share says little: 8% of 30 memories is
-    under three. Nothing is cut, and a word half of them hold is searched."""
+    """Below a hundred live memories a share says little. Nothing is cut, and
+    a word half of them hold is searched."""
     db = _store(tmp_path / "memory.db", [*_riley_fillers(15), *_invoices(15)])
 
     results = _retrieve(db, "Riley boxes", max_results=None)
@@ -288,10 +288,10 @@ def _cue(db: Path, **kwargs) -> list[str]:
 
 
 def test_a_common_shared_word_does_not_open_the_word_path(tmp_path, meaning):
-    """"shutters" is in 25 of 125 memories (20%): not distinctive, so a memory
+    """"shutters" is in 40 of 125 memories (32%): not distinctive, so a memory
     at cosine 0.37 is under the floor with no word path to let it in."""
     near = _memory(_WORD_PATH)
-    db = _store(tmp_path / "memory.db", [near, *_shutters(24), *_invoices(100)])
+    db = _store(tmp_path / "memory.db", [near, *_shutters(39), *_invoices(85)])
     assert 0.35 < cosine(_CUE_MESSAGE, _WORD_PATH) < 0.40
 
     assert near.id not in _cue(db)
@@ -299,19 +299,21 @@ def test_a_common_shared_word_does_not_open_the_word_path(tmp_path, meaning):
 
 
 def test_the_word_path_needs_a_word_under_its_own_cut(tmp_path, meaning):
-    """"shutters" is in 8 of 125 memories (6.4%): distinctive, under the
-    shipped word-path cut (8%, as close to the old gate as the cut allows),
-    but not under 5% or 2%."""
+    """The word path needs a shared word in at most 2% of the live memories.
+    "shutters" in 8 of 125 (6.4%) is distinctive but not that rare: the path
+    opens at a cut of 8%, not at 5% or 2%. In 2 of 125 (1.6%), it opens."""
     from mnemos import cue
 
     near = _memory(_WORD_PATH)
-    db = _store(tmp_path / "memory.db", [near, *_shutters(7), *_invoices(117)])
+    db = _store(tmp_path / "six.db", [near, *_shutters(7), *_invoices(117)])
+    rare = _memory(_WORD_PATH)
+    rare_db = _store(tmp_path / "one.db", [rare, *_shutters(1), *_invoices(123)])
 
-    assert cue.CUE_WORD_CUT == 0.08
-    assert near.id in _cue(db)
+    assert cue.CUE_WORD_CUT == 0.02
+    assert near.id not in _cue(db)
     assert near.id in _cue(db, word_cut=0.08)
     assert near.id not in _cue(db, word_cut=0.05)
-    assert near.id not in _cue(db, word_cut=0.02)
+    assert rare.id in _cue(rare_db)
 
 
 # ── Length fairness on meaning ──
@@ -320,40 +322,86 @@ _LONG = " ".join(f"The lighthouse lamp keeper climbed step {i}." for i in range(
 _SHORT = "Lighthouse lamp keeper by the harbour."
 
 
-def test_a_long_item_pays_for_its_passages_when_lambda_is_set(tmp_path, meaning):
-    """Each of the long item's passages is as close to "beacon" as can be;
-    the short one is a little less close, with one passage. At λ = 0 (the
-    default) the long one leads; at λ = 0.03 it scores its best less
-    0.03 · ln(its passages), and the floor and the order use that score."""
-    long, short = _memory(_LONG), _memory(_SHORT)
-    db = tmp_path / "memory.db"
+def _passage_store(db: Path, *texts: str) -> list[Engram]:
+    """Memories of ``texts``, each cut into passages by the fake model."""
+    memories = [_memory(text) for text in texts]
     store = EngramStore(str(db))
-    for engram in (long, short):
+    for engram in memories:
         store.save_engram(engram)
     store.close()
     index = EmbeddingIndex(db_path=str(db))
-    index.index_passages([(long.id, _LONG), (short.id, _SHORT)])
+    index.index_passages([(engram.id, engram.content) for engram in memories])
+    index.close()
+    return memories
+
+
+def test_a_long_item_is_ranked_by_its_best_passage_less_lambda_ln_passages(tmp_path, meaning):
+    """Each of the long item's passages is as close to "beacon" as can be; the
+    short one is a little less close, with one passage. At λ = 0 the long one
+    leads; at λ = 0.03 its best less 0.03 · ln(its passages) puts it second,
+    and the top one taken is the short one. The numbers stay similarities."""
+    db = tmp_path / "memory.db"
+    long, short = _passage_store(db, _LONG, _SHORT)
     count = len(passages(_LONG))
     assert count > 5 and len(passages(_SHORT)) == 1
+    ids = [long.id, short.id]
+    index = EmbeddingIndex(db_path=str(db), read_only=True)
+    try:
+        plain = index.search_candidates("beacon", ids, k=2, length_penalty=0)
+        fair = index.search_candidates("beacon", ids, k=2, length_penalty=0.03)
+        top = index.search_candidates("beacon", ids, k=1, length_penalty=0.03)
+    finally:
+        index.close()
 
-    plain = dict(index.search_candidates("beacon", [long.id, short.id], k=2))
-    fair = index.search_candidates("beacon", [long.id, short.id], k=2, length_penalty=0.03)
-    floored = index.search_candidates("beacon", [long.id, short.id], k=2, floor=0.94,
-                                      length_penalty=0.03)
-    index.close()
-
-    assert plain[long.id] > plain[short.id]
+    assert [item for item, _ in plain] == [long.id, short.id]
+    assert dict(plain)[long.id] - 0.03 * math.log(count) < dict(plain)[short.id]
     assert [item for item, _ in fair] == [short.id, long.id]
-    assert dict(fair)[long.id] == pytest.approx(plain[long.id] - 0.03 * math.log(count), abs=1e-3)
-    assert dict(fair)[short.id] == pytest.approx(plain[short.id], abs=1e-4)
-    assert [item for item, _ in floored] == [short.id]
+    assert dict(fair) == dict(plain)
+    assert [item for item, _ in top] == [short.id]
 
-    assert [r.engram.id for r in _retrieve(db, "beacon")] == [long.id, short.id]
-    assert [r.engram.id for r in _retrieve(db, "beacon", length_penalty=0.03)] == [short.id, long.id]
+    assert [r.engram.id for r in _retrieve(db, "beacon", length_penalty=0)] == [long.id, short.id]
+    reordered = _retrieve(db, "beacon", length_penalty=0.03)
+    assert [r.engram.id for r in reordered] == [short.id, long.id]
+    assert reordered[1].score_breakdown["similarity"] == dict(plain)[long.id]
 
 
-def test_lambda_is_zero_unless_chosen(tmp_path, meaning):
-    assert ei.LENGTH_PENALTY == 0.0
+# Forty sentences, each naming one lighthouse word and two of the harbour, and
+# sharing no word with the question or the message below.
+_PIERS = " ".join(f"The lighthouse at pier {i} guides the ferry." for i in range(1, 41))
+_QUESTION_NEAR_THE_FLOOR = "talk brief lamp beacon keeper"  # cosine 0.37: recall's floor is 0.35
+_MESSAGE_NEAR_THE_FLOOR = "Tell me about the beacon keeper and the lamp tonight"  # 0.45: the cue's is 0.40
+
+
+def test_lambda_reorders_but_never_pushes_under_a_floor(tmp_path, meaning):
+    """Its best passage clears recall's floor and the cue's; its best less
+    λ · ln(its passages), at λ = 0.03, would clear neither. Recall still
+    finds it by meaning and the cue still offers it: a floor reads the best
+    similarity, and λ only orders."""
+    db = tmp_path / "memory.db"
+    (piers,) = _passage_store(db, _PIERS)
+    count = len(passages(_PIERS))
+    near_recall = cosine(_QUESTION_NEAR_THE_FLOOR, "The lighthouse at pier 1 guides the ferry.")
+    near_cue = cosine(_MESSAGE_NEAR_THE_FLOOR, "The lighthouse at pier 1 guides the ferry.")
+    assert near_recall - 0.03 * math.log(count) < 0.35 <= near_recall
+    assert near_cue - 0.03 * math.log(count) < 0.40 <= near_cue
+
+    found = _retrieve(db, _QUESTION_NEAR_THE_FLOOR, length_penalty=0.03)
+    store = ReadOnlyEngramStore(str(db))
+    index = EmbeddingIndex(db_path=str(db), read_only=True)
+    try:
+        lines = cue_memories(store, index, _MESSAGE_NEAR_THE_FLOOR, length_penalty=0.03, **SCOPE)
+    finally:
+        index.close()
+        store.close()
+
+    assert [(r.engram.id, r.retrieval_path) for r in found] == [(piers.id, "embedding")]
+    assert found[0].score_breakdown["similarity"] >= 0.35
+    assert [line["id"] for line in lines] == [piers.id]
+    assert lines[0]["similarity"] >= 0.40
+
+
+def test_lambda_is_two_hundredths(tmp_path, meaning):
+    assert ei.LENGTH_PENALTY == 0.02
 
 
 # ── An answerer on the old gate is not trusted ──

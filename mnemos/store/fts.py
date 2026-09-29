@@ -18,7 +18,8 @@ its search, and "whatever" was noise to recall but a word to identity.
 A word no list names can still be common in one store: a name, a project, a
 year. ``word_shares`` measures it there, from the index (WP-R08c). On a copy of
 the live store "riley" is in 268 of the 464 live memories of its scope (58%),
-and 53 words outside the lists are in more than 8% of them.
+"2026" in 52% and "real" in 28%: the words outside the lists over
+``COMMON_SHARE``.
 """
 
 from __future__ import annotations
@@ -128,11 +129,14 @@ def search_words(cue: str) -> list[str]:
 # for "how does Riley like to be told about mistakes" matched by words on
 # "Riley" alone (none holds "mistakes"; one was 18th by meaning), and the best
 # words match was a note about a page footer's link. Left out, all five come
-# by meaning.
-COMMON_SHARE = 0.08
+# by meaning. The cut is 25%, not lower: the 50 words between 8% and 25% of
+# that scope ("polyphonic", "room", "sanctuary", "page") name the work itself.
+# Cut at 8%, they cost the cue 5 of the 20 lines that bore on the lab's
+# development prompts and changed none of the lab's 29 facts.
+COMMON_SHARE = 0.25
 # Below this many live memories in a scope no word is cut: a share of a handful
-# of memories is noise (8% of 20 memories is under two, so every word two
-# memories share would go), and a small store has little for meaning to rank.
+# of memories is noise (of 10 memories, a word 3 of them hold is over a
+# quarter), and a small store has little for meaning to rank.
 COMMON_MIN_MEMORIES = 100
 
 # Each word's count of live memories, per store and scope, for this process:

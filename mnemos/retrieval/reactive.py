@@ -225,8 +225,8 @@ class ReactiveRetriever:
         # A word in more than this share of the live memories in scope is left
         # out of the words lists when meaning can decide (None: none is).
         self._common_share = common_share
-        # λ of the meaning score (``EmbeddingIndex.search_candidates``); None
-        # leaves it to the index (``LENGTH_PENALTY``).
+        # λ of the meaning order (``EmbeddingIndex.search_candidates``); None
+        # leaves it to the index (``LENGTH_PENALTY``). It never moves a floor.
         self._length_penalty = length_penalty
 
     def search_terms(
@@ -544,8 +544,9 @@ class ReactiveRetriever:
         """The candidates closest in meaning to ``cue``, at most ``MEANING_SEEDS``,
         none below ``MEANING_FLOOR``, scored before the top is taken. ``texts``
         are the notes' words now: a passage cut from other words never counts.
-        Each is scored by its meaning score: its best passage, less λ times the
-        log of its passages (``length_penalty``; the index's own by default)."""
+        They come in the order of their meaning score, the best passage less λ
+        times the log of their passages (``length_penalty``; the index's own
+        by default); the floor reads the best passage itself."""
         index = self._embedding_index
         if hasattr(index, "search_candidates"):
             penalty = {} if self._length_penalty is None else {"length_penalty": self._length_penalty}

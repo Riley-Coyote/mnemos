@@ -85,12 +85,12 @@ CUE_POOL = 10
 CUE_FLOOR = 0.40
 CUE_WORD_FLOOR = 0.25
 # The word path's word: shared with the message, and in at most this share of
-# the live memories in scope. A shared word counts at all only at or below
-# ``fts.COMMON_SHARE`` (0.08); this is as close to the gate before WP-R08c as
-# that cut allows. 0.05 and 0.02 were measured beside it on the lab's L06
-# prompts; which one holds is Riley's decision. A change here changes what an
-# answer means: raise ``CUE_PROTOCOL`` with it.
-CUE_WORD_CUT = 0.08
+# the live memories in scope (a shared word counts at all only at or below
+# ``fts.COMMON_SHARE``). On the lab's L06 prompts, with recall's ranking as it
+# was, 0.02 showed 36 lines against 38 at 0.08: every one of the 20 that bore
+# on the message, and 14 that didn't against 17. A change here changes what
+# an answer means: raise ``CUE_PROTOCOL`` with it.
+CUE_WORD_CUT = 0.02
 # Without meaning (no answerer, or one whose model is still loading): how many
 # distinctive words a memory must share with the message. On the same prompts,
 # 2 showed the most lines holding a fact for the task: 11 of 40 (1 word: 10 of

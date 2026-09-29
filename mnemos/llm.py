@@ -102,6 +102,31 @@ class AnthropicClient:
         return response.content[0].text
 
 
+# What a one-shot `claude -p` needs from the caller's environment to find itself and
+# sign in with the subscription. Everything else stays behind: a parent Claude Code
+# session's CLAUDE_CODE_* variables and ANTHROPIC_BASE_URL, and ANTHROPIC_API_KEY,
+# which would bill the metered API instead.
+_CLI_ENV = (
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE",
+    "CLAUDE_CONFIG_DIR", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY",
+    "https_proxy", "http_proxy", "no_proxy", "NODE_EXTRA_CA_CERTS",
+)
+
+
+def _cli_env() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k in _CLI_ENV}
+
+
+def _cli_workdir_root() -> str:
+    """A temp root outside the home folder: from a folder under home, Claude Code's
+    project discovery can walk up into the person's own ~/.claude."""
+    import tempfile
+
+    home = os.path.realpath(os.path.expanduser("~"))
+    root = os.path.realpath(tempfile.gettempdir())
+    return "/tmp" if root == home or root.startswith(home + os.sep) else root
+
+
 class ClaudeCLIClient:
     """LLM client that routes through the local ``claude`` CLI.
 
@@ -130,24 +155,35 @@ class ClaudeCLIClient:
 
     def _run(self, prompt: str) -> str:
         import subprocess
+        import tempfile
 
+        # Memory is untrusted input. A captured prompt can contain instructions
+        # aimed at Claude Code, so a maintenance process must never have
+        # filesystem, shell, or network tools available. It also runs with none
+        # of the person's own Claude Code setup: no user or project settings
+        # (their hooks can add private context), no MCP servers, no saved
+        # session, an empty folder outside their home, and only the environment
+        # `claude` needs to sign in.
         try:
-            result = subprocess.run(
-                [
-                    self._bin,
-                    "--model", self._model,
-                    # Memory is untrusted input. A captured prompt can contain
-                    # instructions aimed at Claude Code, so a maintenance
-                    # process must never have filesystem, shell, or network
-                    # tools available.
-                    "--tools", "",
-                    "--disable-slash-commands",
-                    "-p", prompt,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=self._timeout,
-            )
+            with tempfile.TemporaryDirectory(prefix="mnemos-llm-", dir=_cli_workdir_root()) as cwd:
+                result = subprocess.run(
+                    [
+                        self._bin,
+                        "--model", self._model,
+                        "--tools", "",
+                        "--disable-slash-commands",
+                        "--setting-sources", "project",
+                        "--strict-mcp-config",
+                        "--no-session-persistence",
+                        "-p", prompt,
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    timeout=self._timeout,
+                    cwd=cwd,
+                    env=_cli_env(),
+                )
             return (result.stdout or "").strip()
         except Exception:
             return ""

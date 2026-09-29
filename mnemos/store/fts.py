@@ -27,8 +27,10 @@ from __future__ import annotations
 import math
 import re
 import sqlite3
+import weakref
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 # letters and digits; underscore separates, as it does for unicode61
@@ -139,15 +141,40 @@ COMMON_SHARE = 0.25
 # quarter), and a small store has little for meaning to rank.
 COMMON_MIN_MEMORIES = 100
 
-# Each word's count of live memories, per store and scope, for this process:
-# (the scope's live count they were made at, {word: count}). A new count of
-# live memories (a capture, a correction, a memory going quiet) starts afresh.
-_WORD_COUNTS: dict[tuple[str, str, str, str], tuple[int, dict[str, int]]] = {}
+
+@dataclass
+class _Counted:
+    """Word counts for one scope, as one connection saw the store at one
+    write generation."""
+
+    conn: Any
+    generation: tuple[int, int]
+    live: int
+    counts: dict[str, int]
+
+
+# Each word's count of live memories, for this process: per store (held
+# weakly, so it goes with the store) and scope, the connection they were
+# counted on, its write generation then, the scope's live count and
+# {word: count}. The generation is SQLite's own: ``PRAGMA data_version`` moves
+# when another connection (another process included) commits to the file,
+# and the connection's ``total_changes`` when it writes itself. So a
+# correction that swaps one word for another, leaving the count of live
+# memories as it was, is counted afresh.
+_WORD_COUNTS: weakref.WeakKeyDictionary[Any, dict[tuple[str, str, str], _Counted]] = (
+    weakref.WeakKeyDictionary()
+)
 
 _LIVE_IN_SCOPE = (
     "e.state IN ('active', 'dormant') AND e.owner_agent_id = ? "
     "AND e.person_id = ? AND e.project_scope = ?"
 )
+
+
+def _generation(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Changes whenever anything is written to the file: by this connection
+    (``total_changes``) or by any other one (``data_version``)."""
+    return conn.execute("PRAGMA data_version").fetchone()[0], conn.total_changes
 
 
 def word_shares(
@@ -163,36 +190,39 @@ def word_shares(
     matches it, over how many there are.
 
     Counted from the index and cached for this process, per store and scope,
-    until the scope's count of live memories changes. Empty when the scope
-    holds fewer than ``COMMON_MIN_MEMORIES`` live memories, or the index can't
-    be read: then no word is common by its share. Reads only."""
+    until anything is written to the store, by any connection. Empty when the
+    scope holds fewer than ``COMMON_MIN_MEMORIES`` live memories, or the index
+    can't be read: then no word is common by its share. Reads only."""
     wanted = list(dict.fromkeys(word.lower() for word in words if word))
     if not wanted:
         return {}
     scope = (agent_id, person_id, project_scope)
     try:
         conn = store._get_conn()
-        live = conn.execute(
-            f"SELECT COUNT(*) FROM engrams e WHERE {_LIVE_IN_SCOPE}", scope,
-        ).fetchone()[0]
-        if live < COMMON_MIN_MEMORIES:
+        generation = _generation(conn)
+        try:
+            kept = _WORD_COUNTS.setdefault(store, {})
+        except TypeError:
+            kept = {}  # a store that can't be held weakly is counted each time
+        counted = kept.get(scope)
+        if counted is None or counted.conn is not conn or counted.generation != generation:
+            live = conn.execute(
+                f"SELECT COUNT(*) FROM engrams e WHERE {_LIVE_IN_SCOPE}", scope,
+            ).fetchone()[0]
+            counted = kept[scope] = _Counted(conn, generation, live, {})
+        if counted.live < COMMON_MIN_MEMORIES:
             return {}
-        key = (str(getattr(store, "db_path", "") or id(store)), *scope)
-        made_at, counts = _WORD_COUNTS.get(key, (None, {}))
-        if made_at != live:
-            counts = {}
-            _WORD_COUNTS[key] = (live, counts)
         for word in wanted:
-            if word not in counts:
+            if word not in counted.counts:
                 phrase = '"' + word.replace('"', '""') + '"'
-                counts[word] = conn.execute(
+                counted.counts[word] = conn.execute(
                     "SELECT COUNT(DISTINCT e.id) FROM engrams_fts f JOIN engrams e ON e.id = f.id "
                     f"WHERE engrams_fts MATCH ? AND {_LIVE_IN_SCOPE}",
                     (phrase, *scope),
                 ).fetchone()[0]
     except (sqlite3.Error, AttributeError, TypeError):
         return {}
-    return {word: counts[word] / live for word in wanted}
+    return {word: counted.counts[word] / counted.live for word in wanted}
 
 
 def common_words(
@@ -213,6 +243,44 @@ def common_words(
     return {word for word, part in shares.items() if part > share}
 
 
+# Ids asked about in one statement, well under SQLite's variable limit.
+_ID_CHUNK = 400
+
+
+def search_among(
+    store: Any,
+    query: str,
+    ids: Collection[str],
+    *,
+    agent_id: str,
+    person_id: str,
+    project_scope: str,
+    state: str = "active",
+    limit: int = 30,
+) -> list[tuple[str, float]]:
+    """The memories among ``ids`` in one scope and ``state`` that match the
+    full-text ``query``, best first, at most ``limit``: ``(id, rank)``, where
+    rank is FTS5's bm25 rank as ``search_fts_ranked`` gives it (lower is
+    better, on the same scale for the same index). Recall searches, with
+    every word, the memories meaning can't find. Reads only."""
+    found: list[tuple[str, float]] = []
+    ordered = sorted(set(ids))
+    conn = store._get_conn()
+    for start in range(0, len(ordered), _ID_CHUNK):
+        chunk = ordered[start:start + _ID_CHUNK]
+        found.extend(
+            (row[0], row[1]) for row in conn.execute(
+                "SELECT e.id, f.rank FROM engrams e JOIN engrams_fts f ON e.id = f.id "
+                "WHERE engrams_fts MATCH ? AND e.state = ? AND e.owner_agent_id = ? "
+                "AND e.person_id = ? AND e.project_scope = ? "
+                f"AND e.id IN ({', '.join('?' for _ in chunk)}) ORDER BY rank LIMIT ?",
+                (query, state, agent_id, person_id, project_scope, *chunk, limit),
+            ).fetchall()
+        )
+    found.sort(key=lambda item: item[1])
+    return found[:limit]
+
+
 def overlap(a: set[str], b: set[str]) -> float:
     """How much of the smaller set the larger one shares (the overlap coefficient):
     saying the same thing at greater length still reads as the same thing."""
@@ -228,7 +296,7 @@ _BM25_B = 0.75
 
 def rank_by_words(
     cue: str, texts: Mapping[str, str], limit: int | None = None,
-    *, terms: Iterable[str] | None = None,
+    *, terms: Iterable[str] | None = None, every_word_for: Collection[str] = (),
 ) -> list[tuple[str, float]]:
     """Rank ``texts`` (id to words) by the words of ``cue`` worth searching for,
     with bm25 as FTS5 computes it, over these texts alone.
@@ -237,13 +305,19 @@ def rank_by_words(
     its own: handoffs. The cue's words are ``search_words``, as the memories'
     search uses, or ``terms`` when given (what recall searched the memories
     for, common words left out; none, and nothing is ranked); a word counts
-    ignoring case. Best first, each with its score (higher is better). A text
-    holding none of the words is left out.
+    ignoring case. The texts ``every_word_for`` names (the ones meaning can't
+    find) are ranked by every one of ``search_words`` all the same, on the same
+    scale. Best first, each with its score (higher is better). A text holding
+    none of its words is left out.
     """
     searched = list(dict.fromkeys(
         word.lower() for word in (search_words(cue) if terms is None else terms)
     ))
-    if not searched or not texts:
+    every = (
+        list(dict.fromkeys(word.lower() for word in search_words(cue)))
+        if every_word_for else searched
+    )
+    if not (searched or (every and every_word_for)) or not texts:
         return []
     counted = {
         key: Counter(word.lower() for word in _TOKEN.findall(text or ""))
@@ -251,11 +325,14 @@ def rank_by_words(
     }
     lengths = {key: sum(counts.values()) for key, counts in counted.items()}
     average = sum(lengths.values()) / len(lengths) or 1.0
-    holding = {term: sum(1 for counts in counted.values() if term in counts) for term in searched}
+    holding = {
+        term: sum(1 for counts in counted.values() if term in counts)
+        for term in dict.fromkeys([*searched, *every])
+    }
     scored: list[tuple[str, float]] = []
     for key, counts in counted.items():
         score = 0.0
-        for term in searched:
+        for term in (every if key in every_word_for else searched):
             found = counts.get(term, 0)
             if not found:
                 continue

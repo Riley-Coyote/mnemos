@@ -64,7 +64,14 @@ from ..core.engram import Engram
 from ..core.emotional_state import EmotionalState
 from ..core.types import ConnectionRelation
 from .reconsolidation import reconsolidate
-from ..store.fts import COMMON_SHARE, common_words, or_query, rank_by_words, search_words
+from ..store.fts import (
+    COMMON_SHARE,
+    common_words,
+    or_query,
+    rank_by_words,
+    search_among,
+    search_words,
+)
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -239,7 +246,10 @@ class ReactiveRetriever:
         Only when meaning can decide: without an embedding index, or with one
         that is off, the words are all there is, and every word is searched.
         A scope with fewer than ``COMMON_MIN_MEMORIES`` live memories cuts
-        none. Both lists keep the cue's order."""
+        none. Both lists keep the cue's order. What is left out is left out
+        only for what meaning can find: ``retrieve`` searches a memory or a
+        handoff with no vector of the index's model by every word, and a
+        shared store always by every word."""
         words = search_words(cue)
         index = self._embedding_index
         if (
@@ -305,17 +315,44 @@ class ReactiveRetriever:
         # words that mean something (_to_fts_query), active then dormant. Both
         # searches run one query over one index, so their bm25 ranks share a
         # scale and merge into one list. The words too common here to say
-        # anything are left out of every words list (search_terms); with
-        # every word left out there are none, and meaning decides alone. A
-        # cue with no word to search is searched as a phrase, as before.
+        # anything are left out of the words lists (search_terms), but only
+        # for what meaning can find: a memory or a handoff with no vector of
+        # the index's model (not indexed yet, failed, or indexed by another
+        # model) is searched with every word, on the same scale. With every
+        # word left out and meaning able to find everything, there are no
+        # words lists, and meaning decides alone. A cue with no word to search
+        # is searched as a phrase, as before.
         terms, common = self.search_terms(cue, **scope)
-        fts_query = or_query(terms) if terms else (None if common else _to_fts_query(cue))
+        every_word = _to_fts_query(cue)
+        note_by_id = {str(note["id"]): note for note in notes or []}
+        note_texts = {item_id: note.get("content") or "" for item_id, note in note_by_id.items()}
+        live: set[str] | None = None
+        unseen: set[str] = set()
+        unseen_notes: set[str] = set()
+        if common:
+            live = self._store.live_engram_ids(**scope)
+            unseen, unseen_notes = self._unseen_by_meaning(live, note_texts)
+        memory_query = or_query(terms) if terms else (None if common else every_word)
+        none_found = bool(live) and unseen >= live
+        if none_found:
+            memory_query = every_word  # meaning can find none of them: nothing is cut
         ranked: list[tuple[Engram, float]] = []
-        if fts_query is not None:
-            ranked = self._store.search_fts_ranked(fts_query, limit=WORD_SEEDS, **scope)
-            ranked += self._store.search_fts_ranked(
-                fts_query, limit=DORMANT_SEED_LIMIT, state="dormant", **scope,
+        dormant: list[tuple[Engram, float]] = []
+        if memory_query is not None:
+            ranked = self._store.search_fts_ranked(memory_query, limit=WORD_SEEDS, **scope)
+            dormant = self._store.search_fts_ranked(
+                memory_query, limit=DORMANT_SEED_LIMIT, state="dormant", **scope,
             )
+        if unseen and not none_found:
+            ranked = _merged(
+                ranked, self._words_among(every_word, unseen, "active", WORD_SEEDS, scope),
+                WORD_SEEDS,
+            )
+            dormant = _merged(
+                dormant, self._words_among(every_word, unseen, "dormant", DORMANT_SEED_LIMIT, scope),
+                DORMANT_SEED_LIMIT,
+            )
+        ranked += dormant
         ranked.sort(key=lambda found: found[1])
         memory_words: list[str] = []
         for engram, _rank in ranked:
@@ -333,7 +370,9 @@ class ReactiveRetriever:
         lessons_of = getattr(self._store, "live_memory_lessons", None)
         lessons = lessons_of(**scope) if lessons_of is not None else {}
         if lessons:
-            for item_id, _score in rank_by_words(cue, lessons, limit=WORD_SEEDS, terms=terms):
+            for item_id, _score in rank_by_words(
+                cue, lessons, limit=WORD_SEEDS, terms=terms, every_word_for=unseen,
+            ):
                 if item_id not in engrams:
                     engram = self._store.get_engram_in_scope(item_id, **scope)
                     if engram is None or engram.state not in ("active", "dormant"):
@@ -342,14 +381,16 @@ class ReactiveRetriever:
                 lesson_words.append(item_id)
         memory_words = better_rank(memory_words, lesson_words)
 
-        # Shared memories (cross-agent), ranked by words within their own search
+        # Shared memories (cross-agent), ranked by words within their own
+        # search. Always by every word: how common a word is in this scope
+        # says nothing about another store, and meaning never searches it.
         shared_words: list[str] = []
-        if self._shared_store and fts_query is not None:
+        if self._shared_store:
             try:
                 if hasattr(self._shared_store, "search_fts_ranked"):
-                    shared = self._shared_store.search_fts_ranked(fts_query, limit=20)
+                    shared = self._shared_store.search_fts_ranked(every_word, limit=20)
                 else:
-                    shared = [(e, -1.0) for e in self._shared_store.search_fts(fts_query, limit=20)]
+                    shared = [(e, -1.0) for e in self._shared_store.search_fts(every_word, limit=20)]
                 for engram, _rank in shared:
                     if engram.visibility in ("shared", "public") and engram.id not in engrams:
                         engrams[engram.id] = engram
@@ -358,11 +399,9 @@ class ReactiveRetriever:
                 pass  # Shared store is optional
 
         # 1b. WORDS among the notes the caller passes (handoffs), by bm25 over them
-        note_by_id = {str(note["id"]): note for note in notes or []}
         note_words = [
             item_id for item_id, _score in rank_by_words(
-                cue, {item_id: note.get("content") or "" for item_id, note in note_by_id.items()},
-                limit=WORD_SEEDS, terms=terms,
+                cue, note_texts, limit=WORD_SEEDS, terms=terms, every_word_for=unseen_notes,
             )
         ] if note_by_id else []
 
@@ -373,9 +412,8 @@ class ReactiveRetriever:
         meaning: list[str] = []
         if self._embedding_index is not None:
             try:
-                candidates = self._store.live_engram_ids(**scope) | set(note_by_id)
-                words_now = {item_id: note.get("content") or "" for item_id, note in note_by_id.items()}
-                for item_id, sim in self._meaning_hits(cue, candidates, words_now):
+                candidates = (live if live is not None else self._store.live_engram_ids(**scope)) | set(note_by_id)
+                for item_id, sim in self._meaning_hits(cue, candidates, note_texts):
                     if item_id not in note_by_id and item_id not in engrams:
                         engram = self._store.get_engram_in_scope(item_id, **scope)
                         if engram is None or engram.state not in ("active", "dormant"):
@@ -538,6 +576,33 @@ class ReactiveRetriever:
 
         return top
 
+    def _unseen_by_meaning(
+        self, live: Collection[str], note_texts: dict[str, str],
+    ) -> tuple[set[str], set[str]]:
+        """The live memories and the notes meaning can't find now: no vector of
+        the index's model to find them by (``EmbeddingIndex.searchable``). An
+        index that can't say counts for none of them."""
+        searchable = getattr(self._embedding_index, "searchable", None)
+        if searchable is None:
+            return set(live), set(note_texts)
+        try:
+            found = searchable(set(live) | set(note_texts), texts=note_texts)
+        except Exception as exc:
+            _log_seed_failure_once(exc)
+            return set(live), set(note_texts)
+        return set(live) - found, set(note_texts) - found
+
+    def _words_among(
+        self, query: str, ids: Collection[str], state: str, limit: int, scope: dict[str, str],
+    ) -> list[tuple[Engram, float]]:
+        """``search_fts_ranked`` among ``ids`` only: ``(engram, rank)``."""
+        found: list[tuple[Engram, float]] = []
+        for item_id, rank in search_among(self._store, query, ids, state=state, limit=limit, **scope):
+            engram = self._store.get_engram_in_scope(item_id, **scope)
+            if engram is not None:
+                found.append((engram, rank))
+        return found
+
     def _meaning_hits(
         self, cue: str, candidates: Collection[str], texts: dict[str, str] | None = None,
     ) -> list[tuple[str, float]]:
@@ -612,6 +677,18 @@ class ReactiveRetriever:
                 store=target_store,
                 session=session,
             )
+
+
+def _merged(
+    first: list[tuple[Engram, float]], second: list[tuple[Engram, float]], limit: int,
+) -> list[tuple[Engram, float]]:
+    """Two rankings of one full-text index as one: each memory once, at its
+    better rank, best first, at most ``limit``."""
+    best: dict[str, tuple[Engram, float]] = {}
+    for engram, rank in [*first, *second]:
+        if engram.id not in best or rank < best[engram.id][1]:
+            best[engram.id] = (engram, rank)
+    return sorted(best.values(), key=lambda found: found[1])[:limit]
 
 
 def _code_older_than(store: Any) -> bool:

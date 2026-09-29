@@ -1090,6 +1090,38 @@ class EmbeddingIndex:
         )
         return [(item_id, round(best[item_id], 4)) for item_id in ranked[:k]]
 
+    def searchable(
+        self, ids: Collection[str], *, texts: Mapping[str, str] | None = None,
+    ) -> set[str]:
+        """Which of ``ids`` meaning can find now: the ones ``search_candidates``
+        would score, with vectors from this model (passages cut by this scheme
+        or a newer one, from the words ``texts`` gives where it gives them, or
+        else a whole-text vector). None while semantic search is off. A
+        backend being configured says nothing about this: a memory not yet
+        indexed, one that failed, or a store indexed by another model has no
+        vector to find it by. Reads only; embeds nothing."""
+        if not self._available or not self._embedder or not ids:
+            return set()
+        conn = self._existing_conn()
+        if conn is None:
+            return set()
+        wanted = set(ids)
+        model = self._embedder.model_name
+        cut = self._rows_for(
+            conn, "SELECT DISTINCT item_id, text_hash FROM passage_vectors "
+            "WHERE model_name = ? AND scheme >= ? AND item_id IN ({})",
+            (model, PASSAGE_SCHEME), wanted,
+        ) if self._marks_scheme(conn) else []
+        now = {item_id: text_hash(text) for item_id, text in (texts or {}).items()}
+        found = {item_id for item_id, digest in cut if item_id not in now or now[item_id] == digest}
+        without = wanted - {row[0] for row in cut}
+        if without:
+            found.update(row[0] for row in self._rows_for(
+                conn, "SELECT engram_id FROM embeddings "
+                "WHERE model_name = ? AND engram_id IN ({})", (model,), without,
+            ))
+        return found
+
     @staticmethod
     def _rows_for(
         conn: sqlite3.Connection, sql: str, params: tuple[Any, ...], ids: Collection[str],

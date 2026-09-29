@@ -23,6 +23,8 @@ import math
 import os
 import re
 import socket
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -402,6 +404,127 @@ def test_lambda_reorders_but_never_pushes_under_a_floor(tmp_path, meaning):
 
 def test_lambda_is_two_hundredths(tmp_path, meaning):
     assert ei.LENGTH_PENALTY == 0.02
+
+
+# ── What the cut must not reach ──
+
+# Memories that name the harbour and mention Riley: nothing like the question
+# "Riley" in meaning (a name alone means nothing to the fake model), so only
+# words can find what the question is after.
+def _riley_at_the_harbour(count: int) -> list[Engram]:
+    return [_memory(f"Riley moored the ferry at pier {i}.") for i in range(count)]
+
+
+def _timetables(count: int) -> list[Engram]:
+    return [_memory(f"The ferry timetable for day {i}.") for i in range(count)]
+
+
+def test_a_shared_store_is_searched_by_every_word(tmp_path, meaning):
+    """"Riley" is in 40 of 120 memories in this scope, so this scope's search
+    leaves it out. A memory another agent shared matches only "Riley": a
+    share of this scope says nothing about that store, and meaning never
+    searches it, so it is searched by every word and found."""
+    db = _store(tmp_path / "memory.db", [*_riley_at_the_harbour(40), *_timetables(80)])
+    shared_db = tmp_path / "shared.db"
+    shared = Engram(content="Riley's glossary.", kind="semantic", owner_agent_id="orla",
+                    person_id="riley", project_scope="demo", visibility="shared")
+    other = EngramStore(str(shared_db))
+    other.save_engram(shared)
+    other.close()
+
+    store = ReadOnlyEngramStore(str(db))
+    index = EmbeddingIndex(db_path=str(db), read_only=True)
+    others = EngramStore(str(shared_db))
+    try:
+        retriever = ReactiveRetriever(store, embedding_index=index, shared_store=others,
+                                      reconsolidation_enabled=False)
+        assert retriever.search_terms("Riley", **SCOPE) == ([], ["Riley"])
+        found = retriever.retrieve("Riley", reconsolidate_results=False, **SCOPE)
+    finally:
+        others.close()
+        index.close()
+        store.close()
+
+    assert [r.engram.id for r in found] == [shared.id]
+
+
+def test_a_memory_meaning_cannot_find_is_searched_by_every_word(tmp_path, meaning):
+    """Two memories hold only "Riley", which 40 of 122 memories share: one was
+    never indexed, one was indexed by another model. Meaning can't find
+    either, so the cut doesn't hold for them: each is found by its words.
+    The ones meaning can find, sharing only "Riley", still aren't."""
+    fillers = _riley_at_the_harbour(40)
+    db = _store(tmp_path / "memory.db", [*fillers, *_timetables(80)])
+    unindexed = _memory("Riley, again.")
+    elsewhere = _memory("Riley, once more.")
+    store = EngramStore(str(db))
+    store.save_engram(unindexed)
+    store.save_engram(elsewhere)
+    store._get_conn().execute(
+        "INSERT INTO embeddings (engram_id, embedding, model_name, dims) VALUES (?, ?, ?, ?)",
+        (elsewhere.id, b"\x00" * 16, "another-model", 4),
+    )
+    store._get_conn().commit()
+    store.close()
+
+    found = _retrieve(db, "Riley", max_results=None)
+
+    by_words = {r.engram.id for r in found if r.retrieval_path == "fts"}
+    assert {unindexed.id, elsewhere.id} <= by_words, [r.engram.content for r in found]
+    assert not by_words & {f.id for f in fillers}
+
+
+def test_a_correction_that_swaps_words_refreshes_the_shares(tmp_path):
+    """"Riley" is in 30 of 110 memories (27%). Four corrections put "Casey"
+    in its place, leaving 110 live memories: 26 of 110 (24%), under the
+    cut. Counted afresh, though the number of live memories didn't change."""
+    riley = _riley_fillers(30)
+    db = _store(tmp_path / "memory.db", [*riley, *_invoices(80)], meaning_on=False)
+    store = EngramStore(str(db))
+    try:
+        before = word_shares(store, ["riley"], **SCOPE)
+        was_common = fts.common_words(store, ["Riley"], **SCOPE)
+        for engram in riley[:4]:
+            engram.content = engram.content.replace("Riley", "Casey")
+            store.save_engram(engram)
+        after = word_shares(store, ["riley"], **SCOPE)
+        is_common = fts.common_words(store, ["Riley"], **SCOPE)
+    finally:
+        store.close()
+
+    assert before == {"riley": 30 / 110} and was_common == {"riley"}
+    assert after == {"riley": 26 / 110} and is_common == set()
+
+
+_SWAP = """
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+for engram_id in sys.argv[2:]:
+    words = conn.execute("SELECT content FROM engrams WHERE id = ?", (engram_id,)).fetchone()[0]
+    words = words.replace("Riley", "Casey")
+    conn.execute("UPDATE engrams SET content = ? WHERE id = ?", (words, engram_id))
+    conn.execute("DELETE FROM engrams_fts WHERE id = ?", (engram_id,))
+    conn.execute("INSERT INTO engrams_fts (id, content) VALUES (?, ?)", (engram_id, words))
+conn.commit()
+"""
+
+
+def test_another_process_swapping_words_refreshes_the_shares(tmp_path):
+    """Another process corrects four memories on the same file, "Riley" to
+    "Casey": 30 of 110 becomes 26 of 110, and this process counts afresh."""
+    riley = _riley_fillers(30)
+    db = _store(tmp_path / "memory.db", [*riley, *_invoices(80)], meaning_on=False)
+    store = EngramStore(str(db))
+    try:
+        before = word_shares(store, ["riley"], **SCOPE)
+        subprocess.run([sys.executable, "-c", _SWAP, str(db), *(e.id for e in riley[:4])], check=True)
+        after = word_shares(store, ["riley"], **SCOPE)
+        is_common = fts.common_words(store, ["Riley"], **SCOPE)
+    finally:
+        store.close()
+
+    assert before == {"riley": 30 / 110}
+    assert after == {"riley": 26 / 110} and is_common == set()
 
 
 # ── An answerer on the old gate is not trusted ──

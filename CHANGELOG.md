@@ -32,10 +32,18 @@ a long handoff had up to 160 chances to match where a short memory had one.
   (written or rewritten since its memory was indexed), is searched with
   every word, and so is a shared store, which meaning never searches and
   whose words this scope's shares say nothing about.
-- The shares are counted from the full-text index and kept for the process
-  until anything is written to the store, by any process (SQLite's
-  `data_version` and the connection's own changes), so a correction that
-  swaps one word for another is counted afresh.
+- A word's share counts the live memories that hold it in their words (as
+  the full-text index matches it) or in their lesson, each memory once: the
+  index holds no lesson, so a word most lessons hold used to count as rare,
+  kept in the lesson ranking and able to open the cue's rare-word path. The
+  cue reads a memory's words and its lesson too, not an impact the server
+  filled in. Shares are kept for the process until anything is written to
+  the store, by any process (SQLite's `data_version` and the connection's
+  own changes), so a correction that swaps one word for another is counted
+  afresh. Recall passes the lessons it has already read, so a recount on the
+  live copy took 1.6 ms at the median, against about 1.4 counting words
+  alone. Each recall writes its own trace row, so in a running server the
+  shares are recounted on almost every recall.
 - Nothing is cut below 100 live memories in a scope, nor without meaning (a
   keyword-only install, or an embedding model that failed): there the words
   are all there is.

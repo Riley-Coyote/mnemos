@@ -28,6 +28,48 @@ def test_claude_cli_disables_tools_and_never_bypasses_permissions(monkeypatch):
     assert "--disable-slash-commands" in argv
 
 
+def test_claude_cli_runs_without_the_callers_own_setup(monkeypatch):
+    """A maintenance call must not load the person's hooks, MCP servers or session
+    variables: a SessionStart hook once put a person's private notes into every one
+    of an agent's classifier calls."""
+    import os
+    import subprocess
+
+    from mnemos.llm import ClaudeCLIClient
+
+    seen: dict[str, object] = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        seen["kwargs"] = kwargs
+        cwd = kwargs["cwd"]
+        seen["cwd_existed_empty"] = os.path.isdir(cwd) and not os.listdir(cwd)
+        return SimpleNamespace(stdout="ok", returncode=0)
+
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "parent-session")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://parent.example")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-not-for-the-cli")
+    monkeypatch.setattr("subprocess.run", fake_run)
+    assert ClaudeCLIClient(claude_bin="/audit/claude").complete("sort these memories") == "ok"
+
+    argv = seen["argv"]
+    assert argv[argv.index("--setting-sources") + 1] == "project"
+    assert "--strict-mcp-config" in argv
+    assert "--no-session-persistence" in argv
+    kwargs = seen["kwargs"]
+    assert kwargs["stdin"] is subprocess.DEVNULL
+    env = kwargs["env"]
+    assert "PATH" in env
+    for leaked in ("CLAUDE_CODE_SESSION_ID", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"):
+        assert leaked not in env
+    if os.path.isdir("/tmp"):  # Windows has no temp root outside home to move to
+        home = os.path.realpath(os.path.expanduser("~"))
+        cwd = os.path.realpath(kwargs["cwd"])
+        assert not (cwd == home or cwd.startswith(home + os.sep))
+    assert seen["cwd_existed_empty"] is True
+    assert not os.path.exists(kwargs["cwd"])
+
+
 def test_simple_tools_expose_no_sampling_context_or_sampling_calls():
     from mnemos.simple_mcp import simple_mcp
 

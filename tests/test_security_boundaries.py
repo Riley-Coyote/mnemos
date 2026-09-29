@@ -62,9 +62,10 @@ def test_claude_cli_runs_without_the_callers_own_setup(monkeypatch):
     assert "PATH" in env
     for leaked in ("CLAUDE_CODE_SESSION_ID", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"):
         assert leaked not in env
-    home = os.path.realpath(os.path.expanduser("~"))
-    cwd = os.path.realpath(kwargs["cwd"])
-    assert not (cwd == home or cwd.startswith(home + os.sep))
+    if os.path.isdir("/tmp"):  # Windows has no temp root outside home to move to
+        home = os.path.realpath(os.path.expanduser("~"))
+        cwd = os.path.realpath(kwargs["cwd"])
+        assert not (cwd == home or cwd.startswith(home + os.sep))
     assert seen["cwd_existed_empty"] is True
     assert not os.path.exists(kwargs["cwd"])
 

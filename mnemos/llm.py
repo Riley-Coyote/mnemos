@@ -124,7 +124,9 @@ def _cli_workdir_root() -> str:
 
     home = os.path.realpath(os.path.expanduser("~"))
     root = os.path.realpath(tempfile.gettempdir())
-    return "/tmp" if root == home or root.startswith(home + os.sep) else root
+    if (root == home or root.startswith(home + os.sep)) and os.path.isdir("/tmp"):
+        return "/tmp"
+    return root
 
 
 class ClaudeCLIClient:

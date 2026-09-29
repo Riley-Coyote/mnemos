@@ -40,6 +40,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -109,6 +110,13 @@ PASSAGE_CHARS = 700
 # windows and the whole. A capture can run to 65,536; past this, the rest is
 # found by its words.
 PASSAGE_LIMIT = 160
+# λ, the length penalty of an item's meaning score (``search_candidates``):
+# its best passage's similarity less λ · ln(its passages). An item counts by
+# its best passage, so a long text has more chances: a handoff of 16,000
+# characters has up to 160, a short memory one. 0 is the score as it was, the
+# best passage alone. The grid measured was 0, 0.01, 0.02 and 0.03 (WP-R08c);
+# which one holds is Riley's decision, after the lab's held-out replay.
+LENGTH_PENALTY = 0.0
 # Ids asked about in one statement, well under SQLite's variable limit.
 _ID_CHUNK = 400
 
@@ -1014,9 +1022,14 @@ class EmbeddingIndex:
         k: int = 30,
         floor: float = 0.0,
         texts: Mapping[str, str] | None = None,
+        length_penalty: float | None = None,
     ) -> list[tuple[str, float]]:
         """The ``candidates`` closest in meaning to ``query``, best first, at
-        most ``k``, none below ``floor``.
+        most ``k``, none below ``floor``, each with its meaning score: the
+        similarity of its best vector less ``length_penalty`` (λ; None:
+        ``LENGTH_PENALTY``) times the log of how many of its vectors were
+        scored. At λ = 0 the score is the best similarity; the floor and the
+        order are on the score.
 
         Only the candidates are scored, and only then is the top taken. Recall
         passes what it may return: the memories live in the caller's scope and
@@ -1060,9 +1073,17 @@ class EmbeddingIndex:
                 "WHERE model_name = ? AND engram_id IN ({})", (model,), without,
             )
         best: dict[str, float] = {}
+        scored: dict[str, int] = {}
         for item_id, similarity in _similarities(query_values, rows):
+            scored[item_id] = scored.get(item_id, 0) + 1
             if similarity > best.get(item_id, -2.0):
                 best[item_id] = similarity
+        penalty = LENGTH_PENALTY if length_penalty is None else float(length_penalty)
+        if penalty:
+            best = {
+                item_id: similarity - penalty * math.log(scored[item_id])
+                for item_id, similarity in best.items()
+            }
         ranked = sorted(
             ((item_id, round(similarity, 4)) for item_id, similarity in best.items()
              if similarity >= floor),

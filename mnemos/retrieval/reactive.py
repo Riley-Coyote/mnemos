@@ -18,6 +18,11 @@ Pipeline:
    The lists are fused by reciprocal rank (words 0.3, meaning 0.5, k = 60, as
    Polyphonic fuses its seeds), so neither kind of match is locked out. A seed
    starts at its fused score relative to the best one.
+   Fusion keeps only each list's order, so a match on a word most memories
+   hold would count as much as one on a rare word. With meaning to decide, a
+   word held by more than ``COMMON_SHARE`` of the live memories in the scope
+   is left out of every words list (``search_terms``); when every word is,
+   there are no words lists and meaning decides alone (WP-R08c).
 2. RESONANCE through the connection graph, among memories only: each hop,
    only memories reached for the first time pass activation on, a memory's
    contribution is divided by its number of links, and it stops after two
@@ -59,7 +64,7 @@ from ..core.engram import Engram
 from ..core.emotional_state import EmotionalState
 from ..core.types import ConnectionRelation
 from .reconsolidation import reconsolidate
-from ..store.fts import or_query, rank_by_words, search_words
+from ..store.fts import COMMON_SHARE, common_words, or_query, rank_by_words, search_words
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -206,6 +211,8 @@ class ReactiveRetriever:
         activation_threshold: float = 0.1,
         reconsolidation_enabled: bool = True,
         confidence_floor: float = 0.3,
+        common_share: float | None = COMMON_SHARE,
+        length_penalty: float | None = None,
     ) -> None:
         self._store = store
         self._embedding_index = embedding_index
@@ -215,6 +222,41 @@ class ReactiveRetriever:
         self._threshold = activation_threshold
         self._reconsolidation_enabled = reconsolidation_enabled
         self._confidence_floor = confidence_floor
+        # A word in more than this share of the live memories in scope is left
+        # out of the words lists when meaning can decide (None: none is).
+        self._common_share = common_share
+        # λ of the meaning score (``EmbeddingIndex.search_candidates``); None
+        # leaves it to the index (``LENGTH_PENALTY``).
+        self._length_penalty = length_penalty
+
+    def search_terms(
+        self, cue: str, *, agent_id: str, person_id: str, project_scope: str,
+    ) -> tuple[list[str], list[str]]:
+        """The words of ``cue`` recall searches for (``search_words``), and
+        those it leaves out: the ones in more than ``common_share`` of the
+        live memories in the scope, counted from the index (``word_shares``).
+
+        Only when meaning can decide: without an embedding index, or with one
+        that is off, the words are all there is, and every word is searched.
+        A scope with fewer than ``COMMON_MIN_MEMORIES`` live memories cuts
+        none. Both lists keep the cue's order."""
+        words = search_words(cue)
+        index = self._embedding_index
+        if (
+            not words
+            or self._common_share is None
+            or index is None
+            or not getattr(index, "available", True)
+        ):
+            return words, []
+        common = common_words(
+            self._store, words, agent_id=agent_id, person_id=person_id,
+            project_scope=project_scope, share=self._common_share,
+        )
+        return (
+            [word for word in words if word.lower() not in common],
+            [word for word in words if word.lower() in common],
+        )
 
     def retrieve(
         self,
@@ -262,12 +304,18 @@ class ReactiveRetriever:
         # 1a. WORDS among memories: the live ones in scope holding the cue's
         # words that mean something (_to_fts_query), active then dormant. Both
         # searches run one query over one index, so their bm25 ranks share a
-        # scale and merge into one list.
-        fts_query = _to_fts_query(cue)
-        ranked = self._store.search_fts_ranked(fts_query, limit=WORD_SEEDS, **scope)
-        ranked += self._store.search_fts_ranked(
-            fts_query, limit=DORMANT_SEED_LIMIT, state="dormant", **scope,
-        )
+        # scale and merge into one list. The words too common here to say
+        # anything are left out of every words list (search_terms); with
+        # every word left out there are none, and meaning decides alone. A
+        # cue with no word to search is searched as a phrase, as before.
+        terms, common = self.search_terms(cue, **scope)
+        fts_query = or_query(terms) if terms else (None if common else _to_fts_query(cue))
+        ranked: list[tuple[Engram, float]] = []
+        if fts_query is not None:
+            ranked = self._store.search_fts_ranked(fts_query, limit=WORD_SEEDS, **scope)
+            ranked += self._store.search_fts_ranked(
+                fts_query, limit=DORMANT_SEED_LIMIT, state="dormant", **scope,
+            )
         ranked.sort(key=lambda found: found[1])
         memory_words: list[str] = []
         for engram, _rank in ranked:
@@ -285,7 +333,7 @@ class ReactiveRetriever:
         lessons_of = getattr(self._store, "live_memory_lessons", None)
         lessons = lessons_of(**scope) if lessons_of is not None else {}
         if lessons:
-            for item_id, _score in rank_by_words(cue, lessons, limit=WORD_SEEDS):
+            for item_id, _score in rank_by_words(cue, lessons, limit=WORD_SEEDS, terms=terms):
                 if item_id not in engrams:
                     engram = self._store.get_engram_in_scope(item_id, **scope)
                     if engram is None or engram.state not in ("active", "dormant"):
@@ -296,7 +344,7 @@ class ReactiveRetriever:
 
         # Shared memories (cross-agent), ranked by words within their own search
         shared_words: list[str] = []
-        if self._shared_store:
+        if self._shared_store and fts_query is not None:
             try:
                 if hasattr(self._shared_store, "search_fts_ranked"):
                     shared = self._shared_store.search_fts_ranked(fts_query, limit=20)
@@ -314,7 +362,7 @@ class ReactiveRetriever:
         note_words = [
             item_id for item_id, _score in rank_by_words(
                 cue, {item_id: note.get("content") or "" for item_id, note in note_by_id.items()},
-                limit=WORD_SEEDS,
+                limit=WORD_SEEDS, terms=terms,
             )
         ] if note_by_id else []
 
@@ -495,11 +543,14 @@ class ReactiveRetriever:
     ) -> list[tuple[str, float]]:
         """The candidates closest in meaning to ``cue``, at most ``MEANING_SEEDS``,
         none below ``MEANING_FLOOR``, scored before the top is taken. ``texts``
-        are the notes' words now: a passage cut from other words never counts."""
+        are the notes' words now: a passage cut from other words never counts.
+        Each is scored by its meaning score: its best passage, less λ times the
+        log of its passages (``length_penalty``; the index's own by default)."""
         index = self._embedding_index
         if hasattr(index, "search_candidates"):
+            penalty = {} if self._length_penalty is None else {"length_penalty": self._length_penalty}
             return index.search_candidates(
-                cue, candidates, k=MEANING_SEEDS, floor=MEANING_FLOOR, texts=texts,
+                cue, candidates, k=MEANING_SEEDS, floor=MEANING_FLOOR, texts=texts, **penalty,
             )
         if not hasattr(index, "search"):
             return []

@@ -248,9 +248,9 @@ class ReactiveRetriever:
         that is off, the words are all there is, and every word is searched.
         A scope with fewer than ``COMMON_MIN_MEMORIES`` live memories cuts
         none. Both lists keep the cue's order. What is left out is left out
-        only for what meaning can find: ``retrieve`` searches a memory or a
-        handoff with no vector of the index's model by every word, and a
-        shared store always by every word."""
+        only for what meaning can find in full: ``retrieve`` searches by every
+        word a memory or a handoff with no vector of the index's model for its
+        words now, or with a tail no vector reads, and a shared store always."""
         words = search_words(cue)
         index = self._embedding_index
         if (
@@ -335,9 +335,11 @@ class ReactiveRetriever:
         # searches run one query over one index, so their bm25 ranks share a
         # scale and merge into one list. The words too common here to say
         # anything are left out of the words lists (search_terms), but only
-        # for what meaning can find: a memory or a handoff with no vector of
-        # the index's model (not indexed yet, failed, or indexed by another
-        # model) is searched with every word, on the same scale. With every
+        # for what meaning can find in full: a memory or a handoff with no
+        # vector of the index's model for its words now (not indexed yet,
+        # failed, corrected since, or indexed by another model), or with a
+        # tail past PASSAGE_LIMIT that no vector reads, is searched with every
+        # word, on the same scale. With every
         # word left out and meaning able to find everything, there are no
         # words lists, and meaning decides alone. A cue with no word to search
         # is searched as a phrase, as before.
@@ -357,7 +359,7 @@ class ReactiveRetriever:
         unseen_notes: set[str] = set()
         if common:
             live = self._store.live_engram_ids(**scope)
-            unseen, unseen_notes = self._unseen_by_meaning(live, note_texts)
+            unseen, unseen_notes = self._unseen_by_meaning(live, note_texts, scope)
         memory_query = or_query(terms) if terms else (None if common else every_word)
         none_found = bool(live) and unseen >= live
         if none_found:
@@ -627,16 +629,24 @@ class ReactiveRetriever:
             return set()
 
     def _unseen_by_meaning(
-        self, live: Collection[str], note_texts: dict[str, str],
+        self, live: Collection[str], note_texts: dict[str, str], scope: dict[str, str],
     ) -> tuple[set[str], set[str]]:
-        """The live memories and the notes meaning can't find now: no vector of
-        the index's model to find them by (``EmbeddingIndex.searchable``). An
-        index that can't say counts for none of them."""
+        """The live memories and the notes meaning can't find in full now
+        (``EmbeddingIndex.searchable``): no vector of the index's model, one
+        cut from words they no longer hold (a correction since), or a tail
+        past ``PASSAGE_LIMIT`` that no vector reads. Their words now are the
+        ones recall's index is built from (``live_memory_texts``). An index
+        that can't say counts for none of them."""
         searchable = getattr(self._embedding_index, "searchable", None)
         if searchable is None:
             return set(live), set(note_texts)
         try:
-            found = searchable(set(live) | set(note_texts), texts=note_texts)
+            texts_of = getattr(self._store, "live_memory_texts", None)
+            texts = {
+                memory_id: content for memory_id, content, _state in (texts_of(**scope) if texts_of else [])
+            }
+            texts.update(note_texts)
+            found = searchable(set(live) | set(note_texts), texts=texts)
         except Exception as exc:
             _log_seed_failure_once(exc)
             return set(live), set(note_texts)

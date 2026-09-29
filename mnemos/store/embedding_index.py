@@ -197,6 +197,16 @@ def passages(text: str) -> list[str]:
     return [whole, *windows][:PASSAGE_LIMIT]
 
 
+def passages_cut_short(text: str) -> bool:
+    """Whether ``passages`` leaves some of ``text`` without a passage: it would
+    have more than ``PASSAGE_LIMIT``, and the rest is found by its words only."""
+    whole = " ".join((text or "").split())
+    if not whole:
+        return False
+    windows = _windows([piece for sentence in _sentences(text) for piece in _pieces(sentence)])
+    return 1 + len(windows) > PASSAGE_LIMIT
+
+
 def lesson_passage(lesson: str) -> str:
     """A memory's lesson as one passage: on one line, its first
     ``PASSAGE_CHARS`` characters, like a text's whole-text passage."""
@@ -1100,36 +1110,40 @@ class EmbeddingIndex:
         )
         return [(item_id, round(best[item_id], 4)) for item_id in ranked[:k]]
 
-    def searchable(
-        self, ids: Collection[str], *, texts: Mapping[str, str] | None = None,
-    ) -> set[str]:
-        """Which of ``ids`` meaning can find now: the ones ``search_candidates``
-        would score, with vectors from this model (passages cut by this scheme
-        or a newer one, from the words ``texts`` gives where it gives them, or
-        else a whole-text vector). None while semantic search is off. A
-        backend being configured says nothing about this: a memory not yet
-        indexed, one that failed, or a store indexed by another model has no
-        vector to find it by. Reads only; embeds nothing."""
+    def searchable(self, ids: Collection[str], *, texts: Mapping[str, str]) -> set[str]:
+        """Which of ``ids`` meaning can find in full now: items whose passages
+        from this model, cut by this scheme or a newer one, were cut from the
+        words ``texts`` gives for them now (the same hash) and read all of
+        them. An item with more passages than ``PASSAGE_LIMIT`` has a tail no
+        vector reads (``passages_cut_short``). None while semantic search is
+        off.
+
+        A backend being configured says nothing about this: a memory not yet
+        indexed, one that failed, one corrected since (its words and the
+        full-text index changed; its vectors wait for the next pass), or a
+        store indexed by another model has nothing to find it by, or only its
+        old words. A whole-text vector from capture holds no hash, so it
+        can't show it was made from the words there now, and doesn't count;
+        nor does an item ``texts`` gives no words for. Reads only; embeds
+        nothing."""
         if not self._available or not self._embedder or not ids:
             return set()
         conn = self._existing_conn()
-        if conn is None:
+        if conn is None or not self._marks_scheme(conn):
             return set()
-        wanted = set(ids)
-        model = self._embedder.model_name
-        cut = self._rows_for(
-            conn, "SELECT DISTINCT item_id, text_hash FROM passage_vectors "
-            "WHERE model_name = ? AND scheme >= ? AND item_id IN ({})",
-            (model, PASSAGE_SCHEME), wanted,
-        ) if self._marks_scheme(conn) else []
-        now = {item_id: text_hash(text) for item_id, text in (texts or {}).items()}
-        found = {item_id for item_id, digest in cut if item_id not in now or now[item_id] == digest}
-        without = wanted - {row[0] for row in cut}
-        if without:
-            found.update(row[0] for row in self._rows_for(
-                conn, "SELECT engram_id FROM embeddings "
-                "WHERE model_name = ? AND engram_id IN ({})", (model,), without,
-            ))
+        now = {item_id: text_hash(texts[item_id]) for item_id in set(ids) if item_id in texts}
+        found: set[str] = set()
+        for item_id, digest, count in self._rows_for(
+            conn, "SELECT item_id, text_hash, COUNT(*) FROM passage_vectors "
+            "WHERE model_name = ? AND scheme >= ? AND part < ? AND item_id IN ({}) "
+            "GROUP BY item_id, text_hash",
+            (self._embedder.model_name, PASSAGE_SCHEME, LESSON_PART), set(now),
+        ):
+            if digest != now[item_id]:
+                continue  # cut from other words: a correction since, say
+            if count >= PASSAGE_LIMIT and passages_cut_short(texts[item_id]):
+                continue  # its tail has no vector
+            found.add(item_id)
         return found
 
     def lessons_searchable(self, lessons: Mapping[str, str]) -> set[str]:

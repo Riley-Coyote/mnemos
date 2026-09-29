@@ -108,16 +108,18 @@ def _memory(content: str, **fields) -> Engram:
 
 
 def _store(db: Path, memories: list[Engram], *, meaning_on: bool = True) -> Path:
-    """A store holding ``memories``, each with a vector by the fake model."""
+    """A store holding ``memories``, indexed for recall as the scheduled job
+    indexes it: each memory's words and lesson cut into passages by the fake
+    model, from the words it holds now."""
     store = EngramStore(str(db))
-    index = EmbeddingIndex(db_path=str(db)) if meaning_on else None
     for engram in memories:
         store.save_engram(engram)
-        if index is not None:
-            index.index_engram(engram.id, engram.content)
-    if index is not None:
-        index.close()
+    lessons = store.live_memory_lessons(**SCOPE)
     store.close()
+    if meaning_on:
+        index = EmbeddingIndex(db_path=str(db))
+        index.index_passages([(engram.id, engram.content) for engram in memories], lessons=lessons)
+        index.close()
     return db
 
 
@@ -474,6 +476,54 @@ def test_a_memory_meaning_cannot_find_is_searched_by_every_word(tmp_path, meanin
     assert not by_words & {f.id for f in fillers}
 
 
+def test_a_corrected_memory_is_searched_by_every_word(tmp_path, meaning):
+    """A memory corrected since it was indexed: its words and the full-text
+    index hold the new words, its vectors still the old ones. Meaning can't
+    find its new words, so the cut doesn't hold for it: its one word in
+    common with the question, "Riley" (in 40 of 121 memories), finds it."""
+    corrected = _memory("The ferry timetable for the late boat.")
+    fillers = _riley_at_the_harbour(40)
+    db = _store(tmp_path / "memory.db", [corrected, *fillers, *_timetables(80)])
+    store = EngramStore(str(db))
+    corrected.content = "Riley, on the late boat."
+    store.save_engram(corrected)
+    store.close()
+
+    found = _retrieve(db, "Riley", max_results=None)
+
+    by_words = {r.engram.id for r in found if r.retrieval_path == "fts"}
+    assert corrected.id in by_words, [r.engram.content for r in found]
+    assert not by_words & {f.id for f in fillers}
+
+
+# Two hundred sentences of about 110 characters (two to a window, so windows
+# advance one sentence at a time), and one naming Riley at the end: past the
+# passages' limit, so no vector reads it.
+_LONG_LOG = " ".join(
+    f"The ferry left pier {i:03d} at dawn and came back at dusk with the harbour boat "
+    "full of crates for the market."
+    for i in range(200)
+) + " Riley signed the last page."
+
+
+def test_a_capped_item_is_searched_by_every_word(tmp_path, meaning):
+    """A memory with more passages than ``PASSAGE_LIMIT``: its last words have
+    no vector, so the cut doesn't hold for it. Its one word in common with
+    the question, "Riley", in its tail, finds it."""
+    long_log = _memory(_LONG_LOG)
+    fillers = _riley_at_the_harbour(40)
+    db = _store(tmp_path / "memory.db", [long_log, *fillers, *_timetables(80)])
+    assert len(passages(_LONG_LOG)) == ei.PASSAGE_LIMIT
+    assert not any("Riley" in passage for passage in passages(_LONG_LOG))
+
+    found = _retrieve(db, "Riley", max_results=None)
+
+    by_words = {r.engram.id for r in found if r.retrieval_path == "fts"}
+    assert long_log.id in by_words, [r.engram.content[:40] for r in found]
+    assert not by_words & {f.id for f in fillers}
+    assert ei.passages_cut_short(_LONG_LOG)
+
+
 class _NoQueryVector(_ConceptEmbedder):
     """A backend that indexed everything, then can't embed a cue: a network
     that times out, a model that won't load."""
@@ -530,14 +580,16 @@ def test_a_lesson_without_its_own_vector_is_searched_by_every_word(tmp_path, mea
     written after its memory was indexed, one was rewritten since. Those two
     are found by the common word in their lessons; the third, whose lesson
     meaning can find, is left to meaning."""
-    unindexed = _memory("The ferry timetable changed at pier 7.",
-                        impact="Riley wants the times written on the board.", impact_source="agent")
+    unindexed = _memory("The ferry timetable changed at pier 7.")
     rewritten = _memory("The harbour boat log for pier 9.",
                         impact="Keep the boat log dry.", impact_source="agent")
     current = _memory("The ferry ropes at pier 3.",
                       impact="Riley checks the ropes before a storm.", impact_source="agent")
     db = _store(tmp_path / "memory.db", [unindexed, *_riley_at_the_harbour(40), *_timetables(80)])
     store = EngramStore(str(db))
+    unindexed.impact = "Riley wants the times written on the board."  # written after it was indexed
+    unindexed.impact_source = "agent"
+    store.save_engram(unindexed)
     for engram in (rewritten, current):
         store.save_engram(engram)
     store.close()

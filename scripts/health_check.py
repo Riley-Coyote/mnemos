@@ -240,16 +240,18 @@ def phase0(h: Harness) -> None:
         from mnemos import mcp_server, simple_mcp
         advanced = {t.name for t in asyncio.run(mcp_server.mcp.list_tools())}
         simple = {t.name for t in asyncio.run(simple_mcp.simple_mcp.list_tools())}
-        # The codebase's own canonical invariant (tests/test_mcp_surface.py) is
-        # Structural invariant: simple is a fixed 7-tool surface and the advanced
-        # server is a SUPERSET (simple ⊆ advanced). The advanced COUNT is NOT
-        # pinned — it grows as features add tools; specific-tool presence is
-        # covered by tests/test_mcp_surface.py.
+        # Structural invariant: simple serves exactly the tools the code
+        # declares (SIMPLE_TOOL_NAMES, nine today) and the advanced server is a
+        # SUPERSET (simple ⊆ advanced). The advanced COUNT is NOT pinned — it
+        # grows as features add tools; specific-tool presence is covered by
+        # tests/test_mcp_surface.py.
+        declared = set(simple_mcp.SIMPLE_TOOL_NAMES)
         diff = simple - advanced
-        ok = (len(simple) == 7 and diff == set() and len(advanced) > len(simple))
+        ok = (simple == declared and diff == set() and len(advanced) > len(simple))
         return ok, (f"advanced={len(advanced)} simple={len(simple)} "
-                    f"simple⊆advanced={diff == set()} (count not pinned)")
-    h.check("I24", "MCP surface: simple⊆advanced, 7 simple", h0b)
+                    f"declared={len(declared)} simple⊆advanced={diff == set()} "
+                    "(advanced count not pinned)")
+    h.check("I24", "MCP surface: simple⊆advanced, simple = SIMPLE_TOOL_NAMES", h0b)
 
 
 # ─────────────────────────── Phase 1 ───────────────────────────

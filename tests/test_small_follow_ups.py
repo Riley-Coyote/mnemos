@@ -1055,7 +1055,7 @@ def test_doctor_says_whether_the_judge_is_on_where_the_switch_was_read_and_wheth
 
 
 def test_repeated_jev_failures_raise_attention_in_every_session_and_in_doctor(
-    tmp_path, meaning, home, capsys,
+    tmp_path, meaning, home, capsys, monkeypatch,
 ):
     """Two sessions' answerers keep their calls in one row of the store; a
     third process, doctor, and a fourth, a fresh session's health card, see
@@ -1081,19 +1081,53 @@ def test_repeated_jev_failures_raise_attention_in_every_session_and_in_doctor(
 
     done = subprocess.run(
         [sys.executable, "-m", "mnemos.cli", "doctor", "--db-path", str(db), *SCOPE_ARGS],
-        capture_output=True, text=True, timeout=120, env=_env(home),
+        capture_output=True, text=True, timeout=120, env=_env(home, MNEMOS_CUE_JUDGE="jev"),
     )
     said = "The cue's judge failed on 11 of Jev's last 11 calls (6 timed out, 5 failed)"
     assert said in done.stdout and "ATTENTION" in done.stdout, done.stdout
     assert "Jev's last 11 call(s), all sessions: 0 answered, 6 timed out, 5 failed" in done.stdout
     assert KEY not in done.stdout + done.stderr
 
+    monkeypatch.setenv("MNEMOS_CUE_JUDGE", "jev")
     rt = _runtime(db)
     try:
         card = format_health_card(rt.health())
     finally:
         rt.close()
     assert f"ATTENTION — {said}" in card and "Run: mnemos doctor" in card, card
+
+
+def test_switching_the_judge_off_clears_its_flag(tmp_path, meaning, home, monkeypatch):
+    """Repeated failures stop being flagged once the judge is switched off,
+    without waiting a week for the calls to age out; switched back on, the
+    same calls flag again."""
+    db = _lights(tmp_path / "memory.db")
+    key = tmp_path / "api_key"
+    key.write_text(KEY)
+    switched = {"MNEMOS_CUE_JUDGE": "jev", "MNEMOS_JEV_KEY_FILE": str(key), "CLAUDE_PID": str(os.getpid())}
+    answerer = _answerer(db, _Judge(fail=jev.JevFailed("timeout")))
+    try:
+        for n in range(12):
+            _hook(db, session=f"off-later-{n}", **switched)
+        assert len(_kept_calls(db, 12)) == 12
+    finally:
+        answerer.stop()
+
+    def check() -> tuple[dict, str]:
+        rt = _runtime(db)
+        try:
+            data = rt.health()
+        finally:
+            rt.close()
+        return data["watchdog"]["checks"]["cue_judge"], format_health_card(data)
+
+    off, card = check()  # the conftest leaves the switch off in this process
+    assert off["switched_on"] is False and off["stalled"] is False, off
+    assert "switched off now" in off["seen"] and "judge failed" not in card, card
+    monkeypatch.setenv("MNEMOS_CUE_JUDGE", "jev")
+    on, card = check()
+    assert on["switched_on"] is True and on["stalled"] is True, on
+    assert "The cue's judge failed on 12 of Jev's last 12 calls" in card, card
 
 
 def test_half_the_calls_failing_is_not_repeated_failure(tmp_path, meaning, home):

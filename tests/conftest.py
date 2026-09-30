@@ -3,6 +3,18 @@ import os
 import tempfile
 import pytest
 
+# mcp's stdio_client takes the server's stderr as ``errlog=sys.stderr``, a
+# default bound when mcp is first imported. Imported first inside a test that
+# uses capsys, it bound pytest's in-memory capture, which has no file
+# descriptor, and every later test that starts a server over stdio failed on
+# fileno() (test_watchdog.py before test_min_code_version.py). Imported here,
+# while pytest's own capture is in place, it binds the same stream whatever
+# order the tests run in.
+try:
+    import mcp.client.stdio  # noqa: F401
+except ImportError:  # pragma: no cover - mcp is a core dependency
+    pass
+
 
 @pytest.fixture(autouse=True)
 def _isolate_mnemos_env(monkeypatch):

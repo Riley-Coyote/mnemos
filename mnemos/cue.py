@@ -23,11 +23,14 @@ words, with its date and its id. Or nothing, which is the usual answer.
   words like "page" (in 20% of the memories) and "claude" (17%).
   Messages with fewer than ``CUE_MIN_WORDS`` content words get nothing.
 - **Never twice in a session.** The session-start hook records what its
-  briefing showed and the cue records what it offers, in a small file per
-  session under ``~/.mnemos/run`` (``SeenFile``). Anything already shown is
-  skipped.
+  briefing showed (so does ``mnemos_context``, for a session that fetches its
+  briefing) and the cue records what it offers, in a small file per session
+  under ``~/.mnemos/run`` (``SeenFile``). Anything already shown is skipped.
 - **Shown is not used.** An offered line is counted as offered, in that file,
-  and never reinforces anything. Recalling it by id afterwards is a use.
+  and never reinforces anything. Recalling it by id afterwards is a use. The
+  file also counts the messages the cue answered by meaning or by words, those
+  it answered with nothing (silences), and those it could not answer
+  (failures); the watchdog reads them (``offered_summary``).
 - **Fast, with meaning.** The session's own Mnemos server keeps the embedding
   model warm (``CueAnswerer``) and answers on a unix socket named for the
   Claude Code process that spawned it. The hook finds it by ``CLAUDE_PID``,
@@ -216,7 +219,11 @@ def text_key(text: str) -> str:
 
 class SeenFile:
     """What one session has been shown, for one scope: the ids and words the
-    briefing showed and the cue offered, and the cue's offers counted.
+    briefing showed and the cue offered, and the cue's offers counted; and
+    how the cue answered each message it looked at (``answers``, by meaning,
+    by words or by Jev), how many of them it answered with nothing
+    (``silences``) and how many it could not answer (``failures``, the last
+    one's reason kept).
 
     One small JSON file per session under ``~/.mnemos/run`` (0600, the folder
     0700), replaced whole on every write. The session is Claude Code's session
@@ -231,7 +238,8 @@ class SeenFile:
         self.path = run_dir() / f"shown-{self.session}-{key}.json"
 
     def read(self) -> dict[str, Any]:
-        empty = {"shown": [], "texts": [], "offered": 0, "offers": []}
+        empty = {"shown": [], "texts": [], "offered": 0, "offers": [], "answers": {},
+                 "silences": 0, "failures": 0, "last_failure": None}
         if not self.session:
             return empty
         try:
@@ -240,11 +248,17 @@ class SeenFile:
             return empty
         if not isinstance(data, dict):
             return empty
+        answers = data.get("answers") if isinstance(data.get("answers"), dict) else {}
+        last = data.get("last_failure")
         return {
             "shown": [i for i in data.get("shown") or [] if isinstance(i, str)],
             "texts": [t for t in data.get("texts") or [] if isinstance(t, str)],
             "offered": int(data.get("offered") or 0),
             "offers": [o for o in data.get("offers") or [] if isinstance(o, dict)],
+            "answers": {str(via): _count_of(n) for via, n in answers.items()},
+            "silences": _count_of(data.get("silences")),
+            "failures": _count_of(data.get("failures")),
+            "last_failure": last if isinstance(last, str) else None,
         }
 
     def record(
@@ -253,8 +267,15 @@ class SeenFile:
         texts: Iterable[str] = (),
         *,
         offer: Mapping[str, Any] | None = None,
+        answered: str | None = None,
+        failure: str | None = None,
     ) -> None:
-        """Add what was just shown. An offer (the cue's) is also counted."""
+        """Add what was just shown. An offer (the cue's) is also counted.
+
+        ``answered`` is how the cue answered a message it looked at (its
+        ``via``): with an offer, or else with nothing, a silence. ``failure``
+        says why the cue could not answer one (it ran out of time, broke, or
+        its judge failed); a failure is not a silence."""
         if not self.session:
             return
         folder = ensure_run_dir()
@@ -263,9 +284,19 @@ class SeenFile:
         known = list(dict.fromkeys([*data["texts"], *texts]))
         offers = data["offers"]
         offered = data["offered"]
+        answers = dict(data["answers"])
+        silences, failures, last_failure = data["silences"], data["failures"], data["last_failure"]
         if offer is not None:
             offers = [*offers, dict(offer)][-OFFERS_KEPT:]
             offered += len(offer.get("ids") or [])
+            answered = answered or str(offer.get("via") or "") or None
+        if failure:
+            failures += 1
+            last_failure = str(failure)[:200]
+        elif answered:
+            answers[answered] = answers.get(answered, 0) + 1
+            if offer is None:
+                silences += 1
         _write_private(self.path, {
             "v": CUE_PROTOCOL,
             "session": self.session,
@@ -274,9 +305,18 @@ class SeenFile:
             "texts": known,
             "offered": offered,
             "offers": offers,
+            "answers": answers,
+            "silences": silences,
+            "failures": failures,
+            "last_failure": last_failure,
             "updated": datetime.now(timezone.utc).isoformat(),
         })
         sweep(folder)
+
+
+def _count_of(value: Any) -> int:
+    """A count read from a session file: a whole number, else 0."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
 
 
 def _write_private(path: Path, data: Mapping[str, Any]) -> None:
@@ -321,31 +361,63 @@ def sweep(folder: Path | None = None, *, days: float = RUN_DAYS) -> int:
     return removed
 
 
-def offered_summary(*, days: float = RUN_DAYS) -> dict[str, Any]:
-    """The cue's offers across sessions, from the per-session files: for the
-    watchdog and the lab. Reads only."""
-    summary = {"sessions": 0, "offered": 0, "offers": 0, "by_via": {}}
+def offered_summary(*, days: float = RUN_DAYS, key: str | None = None) -> dict[str, Any]:
+    """What the cue did across sessions, from the per-session files changed in
+    the last ``days`` (only one scope's with ``key``, a ``scope_key``): for the
+    watchdog and the lab. Reads only, and makes nothing: no folder, no file.
+
+    ``messages`` the cue looked at in ``sessions`` sessions; ``offers`` (the
+    messages it brought lines to), ``offered`` (those lines) and
+    ``silences`` (the messages it answered with nothing); ``answered_by``,
+    those messages by how the cue answered ("meaning", "words" or "jev"), and
+    ``by_via``, the lines offered the same way; and ``failures``, the messages
+    it could not answer, with ``last_failure``, the newest one's reason. A file
+    written before messages were counted gives its offers only."""
+    summary: dict[str, Any] = {
+        "sessions": 0, "messages": 0, "offers": 0, "offered": 0, "silences": 0,
+        "failures": 0, "last_failure": None, "answered_by": {}, "by_via": {},
+    }
     cutoff = time.time() - days * 86400
+    suffix = f"-{key}.json" if key else ".json"
     try:
-        entries = [e for e in os.scandir(run_dir()) if e.name.startswith("shown-") and e.name.endswith(".json")]
+        entries = [e for e in os.scandir(run_dir()) if e.name.startswith("shown-") and e.name.endswith(suffix)]
     except OSError:
         return summary
+    newest_failure = 0.0
     for entry in entries:
         try:
-            if entry.stat().st_mtime < cutoff:
+            changed = entry.stat().st_mtime
+            if changed < cutoff:
                 continue
             data = json.loads(Path(entry.path).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        offers = [o for o in data.get("offers") or [] if isinstance(o, dict)]
-        if not offers:
+        if not isinstance(data, dict):
             continue
+        offers = [o for o in data.get("offers") or [] if isinstance(o, dict)]
+        answers = data.get("answers") if isinstance(data.get("answers"), dict) else None
+        if answers is None:  # written before messages were counted: its offers
+            answers = {}
+            for offer in offers:
+                via = str(offer.get("via") or "")
+                answers[via] = answers.get(via, 0) + 1
+        answers = {str(via): _count_of(n) for via, n in answers.items()}
+        silences, failures = _count_of(data.get("silences")), _count_of(data.get("failures"))
+        if not offers and not failures and not sum(answers.values()):
+            continue  # only what a briefing showed: the cue never answered here
         summary["sessions"] += 1
-        summary["offered"] += int(data.get("offered") or 0)
+        summary["offered"] += _count_of(data.get("offered"))
         summary["offers"] += len(offers)
+        summary["silences"] += silences
+        summary["failures"] += failures
+        summary["messages"] += sum(answers.values()) + failures
+        for via, count in answers.items():
+            summary["answered_by"][via] = summary["answered_by"].get(via, 0) + count
         for offer in offers:
             via = str(offer.get("via") or "")
             summary["by_via"][via] = summary["by_via"].get(via, 0) + len(offer.get("ids") or [])
+        if failures and isinstance(data.get("last_failure"), str) and changed >= newest_failure:
+            newest_failure, summary["last_failure"] = changed, data["last_failure"]
     return summary
 
 
@@ -928,7 +1000,10 @@ def prompt_hook(
     deadline: float | None = None,
 ) -> str:
     """What ``mnemos hook prompt`` prints for one message: the block, or
-    ``""``. Records what it offers. Writes nothing to the store.
+    ``""``. Records what it offers, and how it answered the message (by
+    meaning, by words or by Jev; with lines or with nothing) or why it could
+    not (it ran out of time, broke, or its judge failed), in the session's
+    file (``SeenFile``). Writes nothing to the store.
 
     ``payload`` is Claude Code's UserPromptSubmit input. ``deadline`` (a
     ``time.monotonic()`` value) bounds the work: past it, nothing is printed.
@@ -960,53 +1035,66 @@ def prompt_hook(
 
     from .store.sqlite_store import ReadOnlyEngramStore
 
-    store = ReadOnlyEngramStore(db)
+    # Why the cue could not answer this message, when it could not.
+    failure: str | None = None
     try:
-        # No read may outlast the hook: a locked store waits only until the
-        # deadline, and a query still running then is stopped.
-        conn = store._get_conn()
-        conn.execute(f"PRAGMA busy_timeout = {max(1, int((deadline - time.monotonic()) * 1000))}")
-        conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
-        minimum = store.min_code_version()
-        if minimum is not None and minimum > MAINTENANCE_CODE_VERSION:
-            return ""  # a newer Mnemos has opened this store
-        _check(deadline)
-        room = deadline - time.monotonic()
-        if judged:
-            # Only lines an answerer judged show. With no answerer that
-            # judged, a slow one, or a judge that failed, nothing does. There
-            # is no answering from words, so the answerer gets that time too.
-            reply = ask_answerer(
-                key, text, exclude=seen["shown"], texts=seen["texts"], environ=env, judge=jev.JEV,
-                connect_seconds=min(CONNECT_SECONDS, max(0.0, room)),
-                answer_seconds=max(0.0, room - CONNECT_SECONDS - JUDGE_MARGIN),
-            )
-            ruled = reply is not None and reply.get("judge") == jev.JEV
-            lines, via = (_valid_lines(reply["lines"]) if ruled else []), jev.JEV
-        else:
-            reply = ask_answerer(
-                key, text, exclude=seen["shown"], texts=seen["texts"], environ=env,
-                connect_seconds=min(CONNECT_SECONDS, max(0.0, room)),
-                answer_seconds=min(ANSWER_SECONDS, max(0.0, room - CONNECT_SECONDS - 0.15)),
-            )
-            if reply is not None:
-                lines, via = _valid_lines(reply["lines"]), "meaning"
-            else:
-                _check(deadline)
-                from .simple_runtime import cue_memories
-
-                lines = cue_memories(
-                    store, None, text, exclude=seen["shown"], exclude_texts=seen["texts"],
-                    agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        store = ReadOnlyEngramStore(db)
+        try:
+            # No read may outlast the hook: a locked store waits only until the
+            # deadline, and a query still running then is stopped.
+            conn = store._get_conn()
+            conn.execute(f"PRAGMA busy_timeout = {max(1, int((deadline - time.monotonic()) * 1000))}")
+            conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+            minimum = store.min_code_version()
+            if minimum is not None and minimum > MAINTENANCE_CODE_VERSION:
+                return ""  # a newer Mnemos has opened this store
+            _check(deadline)
+            room = deadline - time.monotonic()
+            if judged:
+                # Only lines an answerer judged show. With no answerer that
+                # judged, a slow one, or a judge that failed, nothing does. There
+                # is no answering from words, so the answerer gets that time too.
+                reply = ask_answerer(
+                    key, text, exclude=seen["shown"], texts=seen["texts"], environ=env, judge=jev.JEV,
+                    connect_seconds=min(CONNECT_SECONDS, max(0.0, room)),
+                    answer_seconds=max(0.0, room - CONNECT_SECONDS - JUDGE_MARGIN),
                 )
-                via = "words"
-    finally:
-        store.close()
-    shown = set(seen["shown"])
-    known = set(seen["texts"])
-    lines = [line for line in lines if line["id"] not in shown and line["key"] not in known][:CUE_LINES]
-    _check(deadline)
-    block = format_block(lines)
+                ruled = reply is not None and reply.get("judge") == jev.JEV
+                lines, via = (_valid_lines(reply["lines"]) if ruled else []), jev.JEV
+                if not ruled:
+                    failure = "no answerer judged"
+                elif reply.get("judged") in ("timeout", "error"):
+                    failure = f"judge {reply['judged']}"
+            else:
+                reply = ask_answerer(
+                    key, text, exclude=seen["shown"], texts=seen["texts"], environ=env,
+                    connect_seconds=min(CONNECT_SECONDS, max(0.0, room)),
+                    answer_seconds=min(ANSWER_SECONDS, max(0.0, room - CONNECT_SECONDS - 0.15)),
+                )
+                if reply is not None:
+                    lines, via = _valid_lines(reply["lines"]), "meaning"
+                else:
+                    _check(deadline)
+                    from .simple_runtime import cue_memories
+
+                    lines = cue_memories(
+                        store, None, text, exclude=seen["shown"], exclude_texts=seen["texts"],
+                        agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+                    )
+                    via = "words"
+        finally:
+            store.close()
+        shown = set(seen["shown"])
+        known = set(seen["texts"])
+        lines = [line for line in lines if line["id"] not in shown and line["key"] not in known][:CUE_LINES]
+        _check(deadline)
+        block = format_block(lines)
+    except HookTimeout:
+        _failed(seen_file, "timeout")
+        raise
+    except Exception as exc:
+        _failed(seen_file, f"error ({type(exc).__name__})")
+        raise
     if block:
         judged_scores = {"scores": [line.get("score") for line in lines]} if via == jev.JEV else {}
         seen_file.record(
@@ -1020,8 +1108,21 @@ def prompt_hook(
                 **judged_scores,
                 "ms": round((time.perf_counter() - started) * 1000, 1),
             },
+            answered=via,
         )
+    else:
+        # Nothing to show: a silence, or a failure the cue went quiet on.
+        seen_file.record((), (), answered=via, failure=failure)
     return block
+
+
+def _failed(seen_file: SeenFile, reason: str) -> None:
+    """Count a message the cue could not answer. Never raises: the hook's own
+    failure is what the caller sees."""
+    try:
+        seen_file.record((), (), failure=reason)
+    except Exception:
+        pass
 
 
 def _valid_lines(lines: Any) -> list[dict[str, Any]]:

@@ -52,6 +52,7 @@ from mnemos.code_version import MAINTENANCE_CODE_VERSION
 from mnemos.core.engram import Engram
 from mnemos.simple_runtime import MnemosRuntime, format_health_card
 from mnemos.simple_scope import MnemosScope
+from mnemos.store.embedding_index import EmbeddingIndex
 from mnemos.store.sqlite_store import EngramStore
 
 
@@ -70,12 +71,15 @@ class _Lazy:
 
 
 cue = _Lazy("mnemos.cue")
+jev = _Lazy("mnemos.jev")
 dream_journal = _Lazy("mnemos.dream_journal")
 
 SCOPE = {"agent_id": "nova", "person_id": "riley", "project_scope": "demo"}
 SCOPE_ARGS = ["--agent-id", "nova", "--person-id", "riley", "--project-scope", "demo"]
 MODEL = "claude-opus-5-5"
 LONG_AGO = "2020-01-01T00:00:00+00:00"
+# A key no one has.
+KEY = "jev-test-key-" + "a1b2c3d4e5f6" * 3
 
 
 def _runtime(db: Path) -> MnemosRuntime:
@@ -470,6 +474,122 @@ def test_mnemos_context_over_the_protocol_counts_as_shown_for_the_hook(tmp_path,
 
     assert hook("served-session") == b"", "the cue brought what mnemos_context showed"
     assert memory.encode() in hook("another-session")
+
+
+# ── 3. The watchdog reads the cue's offers ──
+
+LIGHTS = (
+    "Trim the lamp and the beacon wick each evening.",
+    "The lamp keeper tends the beacon.",
+    "A spare lamp for the lighthouse beacon.",
+    "Oil the beacon lamp before the keeper's night watch.",
+    "The lighthouse lamp room needs a new beacon lens.",
+    # Shares "keeper", "storm" and "shutters" with the message: words find it.
+    "The keeper checks the storm shutters every night by the lamp.",
+)
+
+
+def _lights(db: Path) -> Path:
+    store = EngramStore(str(db))
+    index = EmbeddingIndex(db_path=str(db))
+    for text in LIGHTS:
+        engram = _engram(text)
+        store.save_engram(engram)
+        index.index_engram(engram.id, engram.content)
+    index.close()
+    store.close()
+    return db
+
+
+def _answerer(db: Path, judge=None, claude_pid: int | None = None):
+    """A warm answerer, as a server starts one where the prompt hook is in use."""
+    cue.mark_hook_in_use()
+    answerer = cue.CueAnswerer(str(db), claude_pid=claude_pid or os.getpid(), judge=judge, **SCOPE)
+    assert answerer.start()
+    assert answerer.ready.wait(10) and answerer.warm.is_set()
+    return answerer
+
+
+class _Judge:
+    """Stands in for ``jev.ask``: every line scores ``score``, or ``fail`` is
+    raised."""
+
+    def __init__(self, *, score: float = 0.9, fail: BaseException | None = None) -> None:
+        self.score = score
+        self.fail = fail
+        self.calls = 0
+
+    def __call__(self, message, lines, *, timeout):
+        self.calls += 1
+        if self.fail is not None:
+            raise self.fail
+        return [self.score for _ in lines]
+
+
+def test_the_watchdog_reports_the_cues_offers_silences_and_failures(tmp_path, meaning, home, monkeypatch):
+    db = _lights(tmp_path / "memory.db")
+    key = tmp_path / "jev" / "api_key"
+    key.parent.mkdir()
+    key.write_text(KEY)
+
+    # By words (no answerer here): an offer, then a silence (nothing left to show).
+    assert _hook(db, session="words-session")
+    assert _hook(db, MESSAGE + " again, the keeper and the storm", session="words-session") == ""
+    # By meaning, from the session's warm answerer.
+    answerer = _answerer(db)
+    try:
+        assert _hook(db, session="meaning-session", CLAUDE_PID=str(os.getpid()))
+    finally:
+        answerer.stop()
+    # Failures: the judge switched on with no answerer to judge, and a hook
+    # that broke.
+    assert _hook(db, session="judged-session", MNEMOS_CUE_JUDGE="jev", MNEMOS_JEV_KEY_FILE=str(key)) == ""
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("the index is unreadable")
+
+    with monkeypatch.context() as patched:
+        patched.setattr("mnemos.simple_runtime.cue_memories", broken)
+        with pytest.raises(RuntimeError):
+            _hook(db, session="broken-session")
+    # Another scope's file is not this scope's.
+    cue.SeenFile("elsewhere", "0123456789ab").record(
+        ["engram_ELSEWHERE"], offer={"ids": ["engram_ELSEWHERE"], "via": "words"},
+    )
+
+    run = Path(os.environ["HOME"]) / ".mnemos" / "run"
+    files_before = sorted((path.name, path.stat().st_mtime_ns) for path in run.iterdir())
+    rt = _runtime(db)
+    try:
+        data = rt.health()
+    finally:
+        rt.close()
+    check = data["watchdog"]["checks"]["cue"]
+
+    assert (check["messages"], check["sessions"]) == (5, 4), check
+    assert (check["offers"], check["silences"], check["failures"]) == (2, 1, 2), check
+    assert check["answered_by"] == {"words": 2, "meaning": 1}, check
+    assert set(check["by_via"]) == {"words", "meaning"} and check["offered"] >= 2, check
+    assert check["last_failure"] == "error (RuntimeError)", check
+    assert "2 offers" in check["seen"] and "1 silence" in check["seen"] and "2 failures" in check["seen"]
+    assert check["stalled"] is False
+    assert sorted((path.name, path.stat().st_mtime_ns) for path in run.iterdir()) == files_before, (
+        "the watchdog wrote to the cue's files"
+    )
+
+
+def test_the_hook_records_a_judge_failure_as_a_failure_not_a_silence(tmp_path, meaning, home):
+    db = _lights(tmp_path / "memory.db")
+    key = tmp_path / "api_key"
+    key.write_text(KEY)
+    answerer = _answerer(db, judge=_Judge(fail=jev.JevFailed("timeout")))
+    try:
+        assert _hook(db, session="judged-session", CLAUDE_PID=str(os.getpid()),
+                     MNEMOS_CUE_JUDGE="jev", MNEMOS_JEV_KEY_FILE=str(key)) == ""
+    finally:
+        answerer.stop()
+    seen = _seen("judged-session", db)
+    assert (seen["silences"], seen["failures"], seen["last_failure"]) == (0, 1, "judge timeout"), seen
 
 
 # ── 4. The scheduled consolidate reports; old reports are retired ──

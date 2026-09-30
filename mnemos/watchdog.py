@@ -15,8 +15,10 @@ nothing of it.
 It reads only. Every statement it runs is a SELECT (``_rows`` refuses any
 other), it works on a store opened read-only, and a check that cannot run says
 so in its own data instead of raising: looking at memory must never change it
-or fail the call that looked. A signal that would have to be recorded first
-(how slow an embedding was, say) is left out rather than written.
+or fail the call that looked. Outside the store it reads the cue's per-session
+files (``cue.offered_summary``) and the runtime's own counts, and writes
+nothing there either. A signal that would have to be recorded first (how slow
+an embedding was, say) is left out rather than written.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from .cue import offered_summary, scope_key
 from .dream_journal import changed_something, compose_dream_narrative, latest_dream_entry
 from .store.embedding_index import NETWORK_TIMEOUT, text_hash
 from .store.sqlite_store import AUTHORS_LABELED_KEY, EngramStore
@@ -65,6 +68,10 @@ EXPECTED = {
         "everything recall can return is indexed by meaning within a day of being written"
     ),
     "notes": "notes reach the briefing unless the memory they belong to went quiet or faded",
+    "cue": (
+        "the prompt hook's cue answers each message, by meaning where the session's "
+        "server answers, with lines that bear on it or with nothing"
+    ),
     "network_waits": (
         "a network embedding backend answers each call within its "
         f"{NETWORK_TIMEOUT:g} seconds; a call that doesn't is skipped, and counted here"
@@ -657,6 +664,30 @@ def _notes(store: EngramStore, scope: dict[str, str], now: datetime, index: Any)
     return {"seen": seen, **counts}
 
 
+def _cue(store: EngramStore, scope: dict[str, str], now: datetime, index: Any) -> dict:
+    """What the prompt hook's cue did with the messages sent in this scope over
+    the last week (R16), from its per-session files, which sit outside the
+    store: offers, silences, how it answered (by meaning or by words, or by
+    Jev), and failures (``cue.offered_summary``). Reads those files only."""
+    summary = offered_summary(days=WINDOW.days, key=scope_key(str(store.db_path), **scope))
+    messages = summary["messages"]
+    if not messages:
+        seen = f"the prompt hook's cue answered no message here in the last {WINDOW.days} days"
+    else:
+        ways = ", ".join(
+            f"{count} by {via}" for via, count in sorted(summary["answered_by"].items(), key=lambda i: -i[1])
+        )
+        seen = (
+            f"{_count(messages, 'message')} in {_count(summary['sessions'], 'session')} over the last "
+            f"{WINDOW.days} days: {_count(summary['offers'], 'offer')} "
+            f"({_count(summary['offered'], 'line')}), {_count(summary['silences'], 'silence')}, "
+            f"{_count(summary['failures'], 'failure')}" + (f"; answered {ways}" if ways else "")
+        )
+        if summary["last_failure"]:
+            seen += f"; the last failure: {summary['last_failure']}"
+    return {"seen": seen, **summary}
+
+
 def _network_waits(store: EngramStore, scope: dict[str, str], now: datetime, index: Any) -> dict:
     """Embedding calls to a network backend that ran out of their time, each
     one a meaning step skipped quietly (R19): in this process (the runtime's
@@ -703,6 +734,7 @@ _CHECKS: Sequence[tuple[str, Callable[..., dict]]] = (
     ("authorship", _authorship),
     ("recall_index", _recall_index),
     ("notes", _notes),
+    ("cue", _cue),
     ("network_waits", _network_waits),
 )
 

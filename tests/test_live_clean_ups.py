@@ -199,6 +199,8 @@ def test_split_notes_write_joins_them_and_keeps_both_words(tmp_path, capsys):
 
     assert code == 0
     assert "Joined 2 pairs: 1 memory took the note's words, 1 note moved" in out
+    # The way to make the new words searchable by meaning at once, for this store.
+    assert f"mnemos --db-path {db} embeddings index" in out
     # The memory takes the note's newer words; a version keeps the old ones,
     # signed by whoever wrote the new.
     corrected = "The ferry to the island now leaves at ten from pier four."

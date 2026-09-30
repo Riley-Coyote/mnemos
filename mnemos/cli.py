@@ -2240,8 +2240,9 @@ def _cmd_repair_split_notes(args: argparse.Namespace) -> int:
             f"Joined {_repair_count(done['ahead'] + done['behind'], 'pair')}: "
             f"{_repair_count(done['ahead'], 'memory', 'memories')} took the note's "
             f"words, {_repair_count(done['behind'], 'note')} moved to the memory that "
-            "replaced theirs. What changed waits for the meaning index ('mnemos "
-            "embeddings index', or the scheduled consolidate)."
+            "replaced theirs. Their new words are found by meaning after the next "
+            "maintenance, or at once with: mnemos --db-path "
+            f"{shlex.quote(str(runtime.db_path))} embeddings index."
         ),
         verb="join them",
     )

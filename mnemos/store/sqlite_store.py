@@ -3431,30 +3431,29 @@ class EngramStore:
         person_id: str = "user",
         project_scope: str = "global",
     ) -> dict[str, Any] | None:
-        """The active continuity note a memory was captured as, if any.
+        """The active continuity note a memory was captured as, if any: the
+        note paired with it (``graduated_to_engram_id``, as ``notes_for_engram``
+        reads it).
 
-        Capture writes both an engram and a scoped hypomnema note, linked by
-        ``related_engram_id``. Anything that has learned something *about* an
-        engram needs this to reach the layer the session packet is built from;
-        writing only to the engram puts it somewhere the automatic path does
-        not read.
+        Capture writes both an engram and a scoped hypomnema note, one object.
+        Anything that has learned something *about* an engram needs this to
+        reach the layer the session packet is built from; writing only to the
+        engram puts it somewhere the automatic path does not read.
+
+        Never a note that only references the memory (``related_engram_id``):
+        a note written to interpret it, or a correction's note that keeps such
+        a reference. Matched by the reference, a reflection landed in the
+        newest note naming the memory, which could be one of those, and a
+        correction's own memory was never reached through its note.
 
         Returns None for engrams encoded outside the simple capture path,
         which legitimately have no note.
         """
-        conn = self._get_conn()
-        row = conn.execute(
-            """
-            SELECT * FROM hypomnema_entries
-            WHERE related_engram_id = ?
-              AND agent_id = ? AND person_id = ? AND project_scope = ?
-              AND active = 1
-            ORDER BY last_revised_at DESC
-            LIMIT 1
-            """,
-            (engram_id, agent_id, person_id, project_scope),
-        ).fetchone()
-        return self._hydrate_hypomnema_row(dict(row)) if row else None
+        notes = self.notes_for_engram(
+            engram_id, agent_id=agent_id, person_id=person_id,
+            project_scope=project_scope, active_only=True,
+        )
+        return notes[0] if notes else None
 
     def archive_hypomnema_for_engram(
         self,

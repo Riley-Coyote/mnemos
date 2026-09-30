@@ -54,6 +54,10 @@ def _memory_id(said: str) -> str:
     return re.search(r"Memory ID: (engram_[A-Za-z0-9]+)", said).group(1)
 
 
+def _note_id(said: str) -> str:
+    return re.search(r"Continuity note ID: (\S+)", said).group(1)
+
+
 def _read(db: Path, sql: str, params: tuple = ()) -> list[tuple]:
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
@@ -285,3 +289,67 @@ def test_the_code_before_this_change_stands_down_once_this_code_opens_the_store(
         rt.close()
     assert "Cycle: skipped" in said, said
     assert _asked(db, memory) == [("impact", True)]
+
+
+# ── 5. A reflection lands in the memory's own note ──
+
+
+def _note(db: Path, note_id: str) -> str:
+    return _read(db, "SELECT content FROM hypomnema_entries WHERE id = ?", (note_id,))[0][0]
+
+
+def test_a_reflection_lands_in_the_memorys_own_note_not_one_that_references_it(tmp_path):
+    db = tmp_path / "memory.db"
+    rt = _runtime(db)
+    try:
+        captured = rt.capture(HARBOUR)
+        memory, own = _memory_id(captured), _note_id(captured)
+        # A note interpreting the memory, written after it (as the advanced
+        # mnemos_hypomnema_write writes one): it names the memory, and is not it.
+        interpreting = rt._store.write_hypomnema_entry(
+            "Reading of the pilot memory: the outer buoy is the fixed point.", **SCOPE,
+            source="synthesized", related_engram_id=memory,
+        )
+        rt.maintain()
+        assert ("impact", False) in _asked(db, memory), "premise: asked what it changed"
+        said = rt.reflect(memory, "A fixed meeting point is what makes the handover safe.")
+    finally:
+        rt.close()
+
+    assert said.startswith("Reflection recorded."), said
+    assert "What this changed: A fixed meeting point" in _note(db, own), _note(db, own)
+    assert "What this changed" not in _note(db, interpreting), (
+        "the reflection landed in a note that only references the memory"
+    )
+
+
+def test_a_correction_that_keeps_a_reference_still_gets_its_own_reflection(tmp_path):
+    """A note that only referenced a memory, corrected, becomes a pair of its
+    own that still names the memory it referenced. A reflection on the new
+    memory lands in its own note."""
+    db = tmp_path / "memory.db"
+    rt = _runtime(db)
+    try:
+        captured = rt.capture(HARBOUR)
+        memory, own = _memory_id(captured), _note_id(captured)
+        interpreting = rt._store.write_hypomnema_entry(
+            "Reading of the pilot memory: the outer buoy is the fixed point.", **SCOPE,
+            source="synthesized", related_engram_id=memory,
+        )
+        corrected = rt.correct(
+            correction="Reading of the pilot memory: the inner buoy is the fixed point.",
+            target_id=interpreting,
+        )
+        replacement, replacement_note = _memory_id(corrected), _note_id(corrected)
+        assert _read(db, "SELECT related_engram_id, graduated_to_engram_id FROM hypomnema_entries "
+                         "WHERE id = ?", (replacement_note,)) == [(memory, replacement)], "premise"
+        rt._store.enqueue_reflection("impact", replacement, "What did this change?", **SCOPE)
+        said = rt.reflect(replacement, "The fixed point moved, and the handover with it.")
+    finally:
+        rt.close()
+
+    assert said.startswith("Reflection recorded."), said
+    assert "What this changed: The fixed point moved" in _note(db, replacement_note), (
+        "the reflection never reached the corrected memory's own note"
+    )
+    assert "What this changed" not in _note(db, own)

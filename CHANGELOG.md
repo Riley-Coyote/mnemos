@@ -2,6 +2,34 @@
 
 ## 0.3.1 (unreleased)
 
+### The live clean-ups
+
+Four `mnemos repair` commands for damage earlier code left in stores, each
+shaped like `repair-versions`: a dry run by default that only reads, and
+`--write` that takes a verified backup first and prints its path. A second
+run finds nothing, and code older than the store refuses to write.
+
+- **`repair split-notes`** (one scope): a note corrected in place by its id
+  while its memory kept the old words gets its memory's words brought to the
+  note's (the old words kept as a version), and a live note left over a
+  memory a correction replaced moves to the replacement that has none. The
+  correction's lineage is recorded, so the old id reaches the pair in use.
+- **`repair archive-rows`** (whole store): drops archive rows that repeat a
+  memory no longer archived; a row whose words differ would stay as history.
+- **`repair dead-embeddings`** (whole store): prunes stored vectors from
+  models this Mnemos doesn't embed with (Gemini's, on a store now indexed by
+  the local model); with no model available it prunes nothing.
+- **`repair placeholder-impacts`** (whole store): empties every meaning the
+  server wrote where the agent's goes (`TEMPLATED_IMPACTS`: the correction
+  templates, the promotion phrase and the older capture path's), leaving the
+  meaning for the agent to give; the memory's words and history stay.
+
+On a fresh copy of the maintainer's live store (2026-09-30): 1 memory takes
+its note's words and 3 notes move; 1,392 archive rows go, 0 kept; 3,494
+Gemini vectors go; 12 placeholder meanings are emptied. Integrity checks
+pass, doctor shows no new flags, and a capture written in one process is
+recalled in another.
+
 ### Small follow-ups
 
 Nine small things the last packages' reports left open.

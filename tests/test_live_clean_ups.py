@@ -572,19 +572,19 @@ def test_placeholder_impacts_empties_only_the_servers_phrases(tmp_path, capsys):
         "Correction to earlier continuity.",
         "Corrected continuity for future interactions.",
         "Stable continuity promoted during simple maintenance.",
+        "Durable continuity captured from the session.",
     ):
         assert f'1  "{text}"' in out
-    assert "1  other phrases, from the older capture path" in out
+    assert "other phrases, from the older capture path" not in out
 
     assert main(["repair", "placeholder-impacts", "--db-path", str(db), *ARGS, "--write"]) == 0
     out = capsys.readouterr().out
-    assert "Emptied 3 meanings" in out
+    assert "Emptied 4 meanings" in out
     impacts = dict(
         (row[0], (row[1], row[2])) for row in _all(db, "SELECT id, impact, impact_source FROM engrams")
     )
-    for name in ("correction", "corrected", "promoted"):
+    for name in ("correction", "corrected", "promoted", "older"):
         assert impacts[ids[name]] == ("", ""), name
-    assert impacts[ids["older"]] == ("Durable continuity captured from the session.", "")
     assert impacts[ids["agent"]] == ("Check the tide before booking the ferry.", "agent")
     assert _all(db, "SELECT id, content FROM engrams ORDER BY id") == contents
     [backup] = _backups(tmp_path, "placeholder-impacts")

@@ -1277,13 +1277,11 @@ class MnemosRuntime:
 
     # What a split-notes repair records as the reason a memory's words changed.
     SPLIT_NOTES_VERSION_REASON = "repair_split_notes"
-    # The placeholder meanings placeholder-impacts empties: the two a
-    # correction wrote until code version 10, and the one promotion writes.
-    PLACEHOLDER_IMPACTS_EMPTIED = (
-        "Correction to earlier continuity.",
-        "Corrected continuity for future interactions.",
-        "Stable continuity promoted during simple maintenance.",
-    )
+    # The placeholder meanings placeholder-impacts empties: every phrase the
+    # server wrote where the agent's meaning goes (``TEMPLATED_IMPACTS``): the
+    # two a correction wrote until code version 10, the one promotion writes,
+    # and the older capture path's.
+    PLACEHOLDER_IMPACTS_EMPTIED = tuple(sorted(TEMPLATED_IMPACTS))
 
     def _run_repair(
         self,
@@ -1775,8 +1773,9 @@ class MnemosRuntime:
         the meaning is left to the agent: a memory without one is asked about
         as one with a placeholder always was (``_enqueue_impact_reflections``
         treats the two alike). The memory's words and history are untouched.
-        The older capture path's phrases are counted and left alone. Across
-        the whole store.
+        The older capture path's phrases ("Durable continuity captured from
+        the session." and the rest of ``TEMPLATED_IMPACTS``) are the server's
+        too, and are emptied the same way. Across the whole store.
         """
         plan: dict[str, Any] = {
             "db_path": str(self.db_path),

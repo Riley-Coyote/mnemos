@@ -618,12 +618,12 @@ image can still read the continuity packet and structured data.
 Mnemos operates in layered form:
 
 ```text
-Simple MCP Surface      context | capture | recall | correct
+Simple MCP Surface      context | handoff | capture | recall | correct
                         reflect | maintain | introduce | health
 Continuity Layer        scoped notes | revisions | supersession | promotion
 Mnemos Core             engrams | connections | beliefs | reconsolidation
 Substrate               decay | softening | reflection | modulators | events
-Cross-Agent Layer       shared pool | bridge | experimental federation/attestation
+Cross-Agent Layer       shared pool | cross-agent bridge
 Hermes Integration      sidecar MCP | provider shim | identity continuity
 ```
 

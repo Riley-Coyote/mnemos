@@ -2,6 +2,54 @@
 
 ## 0.3.1 (unreleased)
 
+### Make it smaller
+
+3,073 lines of modules that nothing reached are gone, and a few things
+that are reached now do what they say.
+
+- **Removed, with nothing left importing them** (checked across the repo,
+  every entry point, and the other projects on the maintainer's machine):
+  the fifteen `mnemos/advanced/` prototypes that only raised
+  `ExperimentalFeatureUnavailable` (working memory, schemas, the attention
+  gate, predictive retrieval, spreading activation, interference,
+  intentions, metamemory, the observer, dreaming and their helpers), and
+  `mnemos/experimental.py` with them; `interface/` session, prompt builder,
+  memory inspector and export; `multiagent/` relationships, federation and
+  attestation; `visualization/`; and the unused migration runner
+  `store/migrations.py`. **Breaking** only for code that imported them
+  directly or through `mnemos.interface` / `mnemos.multiagent` (the names
+  `MnemosSession`, `PromptBuilder`, `MemoryInspector`, `export_memory`,
+  `import_memory`, `RelationshipTracker`, `FederationClient`,
+  `AttestationService`): nothing replaces them, and nothing used them. Their
+  unread config toggles (`advanced.*`, `multiagent.federation_enabled`,
+  `multiagent.attestation_enabled`) went too. `advanced/introspection*`,
+  `shared_pool` and the cross-agent bridge stay.
+- **Removed helpers with no caller:** `EngramStore.archive_hypomnema_for_engram`,
+  `simple_runtime._impact_for` and `authorship.handoff_framing`.
+- **Options given before a command reach it.** `mnemos --db-path X
+  --agent-id Y hook session-start` used the default store and printed
+  nothing: the hook's own copies of the options defaulted to None, which
+  argparse copies over what the main parser read. Fifteen commands did this
+  (serve, doctor and remember among them). The scope options are defined
+  once now; given after a command they still win.
+- **`mnemos substrate-tick` decays as maintenance does:** through the
+  store's decay pass, never a standing memory, only its own agent's, on the
+  clock maintenance keeps, and not at all from code older than the store.
+  Its raw UPDATE took a flat 0.02 off every active memory in the file.
+- **`mnemos repair faded-words`** (one scope, the shape of the live
+  clean-ups): a live memory whose words an old model-less softening cut to
+  "... [details faded]" gets them back from the words it was encoded with,
+  when the cut words are exactly what that softening made of them; the cut
+  words stay as a version. On a fresh copy of the maintainer's live store
+  (2026-09-30) it finds and restores 3 memories.
+- The health harness (`scripts/health_check.py` I12, I13) and
+  `benchmarks/continuity_eval.py` check the packet as it is now; the
+  benchmark scores cues through recall, since the packet takes no cue.
+- Tests: every test has a home of its own, so the suite no longer writes
+  `~/.mnemos/audit.db`, `~/.mnemos/logs` or `~/.mnemos/run` in the real
+  home; and the stdio tests pass in any order (mcp bound its stderr default
+  to pytest's in-memory capture when a capsys test imported it first).
+
 ### No engine voice
 
 Words in memory come only from the agent. Three maintenance paths still

@@ -11,7 +11,7 @@ Configuration is organized by module:
 - retrieval: retrieval scoring weights and limits
 - consolidation: decay rates, thresholds, pass toggles
 - interface: prompt building and session settings
-- multiagent: federation and shared pool settings
+- multiagent: shared pool settings
 """
 
 DEFAULT_CONFIG: dict = {
@@ -129,8 +129,6 @@ DEFAULT_CONFIG: dict = {
     # ── Multi-agent ──
     "multiagent": {
         "shared_pool_enabled": False,
-        "federation_enabled": False,
-        "attestation_enabled": False,
         "default_visibility": "private",
     },
 }

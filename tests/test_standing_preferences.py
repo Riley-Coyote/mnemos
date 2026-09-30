@@ -13,9 +13,10 @@ So the agent marks a standing preference itself, as a typed choice: when it
 captures it (``standing=true``), or later by the memory's id
 (``mnemos_correct`` with ``mark_standing`` / ``unmark_standing``, which change
 no words and write no version). The mark is signed: who, in which session,
-when. "Who you're with" opens with the newest marks, one line each in the
-memory's own words, then says how to list the rest (``mnemos_recall`` with
-``standing=true``). A marked memory is exempt from decay until it is unmarked.
+when. The section on who the agent is with opens with the newest marks, one
+line each in the memory's own words, and says how many more there are; their
+ids, and how to list the rest (``mnemos_recall`` with ``standing=true``), wait
+in the packet's closing section for the tools. A marked memory is exempt from decay until it is unmarked.
 Code older than the store records the words and ignores the flag.
 
 These tests read what was written on fresh connections and compare against
@@ -51,7 +52,7 @@ READER = "22222222-bbbb-4bbb-8bbb-222222222222"
 OLDER = "This session runs older Mnemos code than the store expects. Restart the session."
 
 # What the briefing and the tools say, as literal text.
-LABEL = "Standing, how the human wants you to work in every session:"
+LABEL = "how we work, every session:"
 LIST_CALL = 'mnemos_recall(query="", standing=true)'
 DESCRIPTION = "True when this is how the human wants you to work in every session, not just now"
 
@@ -264,10 +265,17 @@ def _hook(db: Path, folder: Path) -> str:
 
 
 def _who(packet: str) -> list[str]:
-    """The lines of "Who you're with", without its heading."""
-    assert "### Who you're with\n" in packet, packet
-    section = packet.split("### Who you're with\n", 1)[1].split("\n\n### ", 1)[0]
+    """The lines of the section on who the agent is with, without its heading."""
+    assert "### who i'm with\n" in packet, packet
+    section = packet.split("### who i'm with\n", 1)[1].split("\n\n### ", 1)[0]
     return section.split("\n")
+
+
+def _standing_shown(packet: str) -> list[str]:
+    """The ids of the standing lines, in the order shown, from the closing
+    section for the tools."""
+    [line] = [line for line in packet.splitlines() if line.startswith("- what's marked standing")]
+    return re.findall(r"engram_\w+", line.split(";", 1)[0])
 
 
 def _decay_pass(db) -> dict:
@@ -316,10 +324,11 @@ def test_a_capture_marked_standing_is_signed_and_words_never_mark_one(tmp_path):
 
     # ... and read back in another: the next session's briefing opens with it.
     # The capture whose words only sound like a rule is an ordinary note.
-    who = _who(_hook(db, tmp_path))
+    packet = _hook(db, tmp_path)
+    who = _who(packet)
     assert who[0] == LABEL, who
-    assert who[1].startswith("- HARD RULE from Riley") and who[1].endswith(f" ({marked})"), who
-    assert who[2] == "Other notes:" and SOUNDS_STANDING in who[3], who
+    assert who[1].startswith("- HARD RULE from Riley") and _standing_shown(packet) == [marked], who
+    assert who[2] == "also:" and SOUNDS_STANDING in who[3], who
 
 
 def test_the_tool_descriptions_carry_the_mark_and_the_instructions_do_not():
@@ -337,10 +346,11 @@ def test_the_tool_descriptions_carry_the_mark_and_the_instructions_do_not():
     correct_text = " ".join(correct.description.split())
     assert "mark_standing" in correct_text and "unmark_standing" in correct_text
     assert "standing: True to list every memory marked standing" in " ".join(recall.description.split())
-    # The instructions stay as WP-R04b left them: models see only their first
+    # The instructions change only on purpose: models see only their first
     # 2,048 characters, and the parameter descriptions, which they see in
-    # full, carry the mark.
-    assert len(SERVER_INSTRUCTIONS) == 1816
+    # full, carry the mark. (1,816 as WP-R04b left them; 1,860 since
+    # handoffs are written in first person, as the next reader's own memory.)
+    assert len(SERVER_INSTRUCTIONS) == 1860
     assert re.search(r"\bstanding\b", SERVER_INSTRUCTIONS, re.IGNORECASE) is None
 
 
@@ -471,19 +481,20 @@ def test_the_briefing_opens_with_the_newest_standing_marks(tmp_path):
     newest = list(reversed(range(len(RULES))))[:5]
     assert who[0] == LABEL, who
     shown = who[1:6]
-    for line, index in zip(shown, newest):
-        assert line.startswith("- ") and line.endswith(f" ({marked[index]})"), line
+    assert all(line.startswith("- ") for line in shown), shown
+    assert _standing_shown(packet) == [marked[index] for index in newest], packet
     # One line each, in the memory's own words: whole when it is short, cut at
     # a sentence boundary when it is long, never with the capture's context.
     assert shown[0].startswith("- HARD RULE from Riley"), shown[0]
-    words = shown[0][2:].rsplit(" (", 1)[0]
+    words = shown[0][2:]
     assert words.endswith(". […]") and len(words) <= 330 and words[:-4] in PLAIN, words
-    assert shown[3] == f"- {RULES[3]} ({marked[3]})", shown[3]
+    assert shown[3] == f"- {RULES[3]}", shown[3]
     assert RULE_CONTEXT not in packet
-    assert who[6] == f"And 2 more: {LIST_CALL}", who
+    assert who[6] == "and 2 more like these.", who
+    assert f"; all of it: {LIST_CALL}" in packet, packet
     # The rest of the section follows, and a standing memory's own note is not
     # said a second time.
-    assert who[7] == "Other notes:", who
+    assert who[7] == "also:", who
     assert any(FOUNDATION in line for line in who[8:]), who
     for rule in RULES[:6]:
         assert packet.count(rule) <= 1, f"said twice: {rule}"
@@ -516,7 +527,8 @@ def test_standing_lines_are_the_last_to_leave_a_full_packet(tmp_path):
     assert len(packet) < 6000, len(packet)
     who = _who(packet)
     assert who[0] == LABEL
-    assert [line.rsplit(" (", 1)[-1][:-1] for line in who[1:6]] == list(reversed(ids[:5])), who
+    assert all(line.startswith("- ") for line in who[1:6]), who
+    assert _standing_shown(packet) == list(reversed(ids[:5])), packet
     # Premise: the packet was full, and the foundational notes that follow
     # the standing lines gave way first.
     assert sum("Riley always keeps ledger" in line for line in who) < 3, who
@@ -684,8 +696,10 @@ def test_correcting_a_standing_memory_keeps_it_standing(tmp_path, monkeypatch):
     assert _mark(db, new_id) == mark, corrected
     assert "It stays standing" in corrected, corrected
 
-    who = _who(_hook(db, tmp_path))
-    assert who[:2] == [LABEL, f"- {CORRECTED} ({new_id})"], who
+    packet = _hook(db, tmp_path)
+    who = _who(packet)
+    assert who[:2] == [LABEL, f"- {CORRECTED}"], who
+    assert _standing_shown(packet) == [new_id], packet
     assert CANOE_RULE not in "\n".join(who)
 
 

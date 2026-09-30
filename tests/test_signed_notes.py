@@ -229,10 +229,12 @@ class TestThePacket:
 
         packet = _hook(db_path, home, {"hook_event_name": "SessionStart", "model": "claude-opus-5-5"})
         assert "From your previous session, in your own words" not in packet
-        assert "From Fable 5.1, a colleague" in packet
-        assert "Yours" not in packet
-        assert "don't claim its work as yours" in packet
-        assert "by Fable 5.1:" in packet
+        # This memory is Fable's; Opus 5.5 is a guest in it, and says so once.
+        assert "This memory is mostly Fable 5.1's; I'm Opus 5.5, visiting." in packet
+        assert "### where things were left\nFable 5.1, a colleague, " in packet
+        assert "### where i left off" not in packet and "Yours" not in packet
+        assert "don't claim the work" in packet
+        assert ", Fable 5.1: The first steward's visit" in packet
 
     def test_the_same_model_is_told_so(self, tmp_path):
         db_path = tmp_path / "shared.db"
@@ -241,7 +243,9 @@ class TestThePacket:
         (home / ".mnemos").mkdir(parents=True)
 
         packet = _hook(db_path, home, {"hook_event_name": "SessionStart", "model": "claude-fable-5-1"})
-        assert "Yours (Fable 5.1)" in packet
+        # Its own memory: its note and its words carry no signature to it.
+        assert "### where i left off\n" in packet, packet
+        assert "Fable 5.1" not in packet and "colleague" not in packet, packet
 
     def test_without_the_readers_name_the_reader_is_asked_to_compare(self, tmp_path):
         db_path = tmp_path / "shared.db"
@@ -250,9 +254,10 @@ class TestThePacket:
         (home / ".mnemos").mkdir(parents=True)
 
         packet = _hook(db_path, home, {"hook_event_name": "SessionStart"})
-        assert "From Fable 5.1, " in packet
-        assert "(yours if you are Fable 5.1)" in packet
-        assert "Yours" not in packet
+        # Said once, in the opening, not on every note.
+        assert "This memory is mostly Fable 5.1's; if I'm not Fable 5.1, I'm visiting." in packet
+        assert "### where things were left\nFable 5.1, " in packet
+        assert "yours if" not in packet and "Yours" not in packet
 
     def test_the_mcp_packet_names_the_reader_it_detects(self, tmp_path, monkeypatch):
         db_path = tmp_path / "shared.db"
@@ -262,8 +267,9 @@ class TestThePacket:
         try:
             packet = runtime.context()
             assert "From your previous session, in your own words" not in packet
-            assert "From Fable 5.1, a colleague" in packet
-            assert "by Fable 5.1" in packet
+            assert "I'm Opus 5.5, visiting." in packet
+            assert "Fable 5.1, a colleague" in packet
+            assert ", Fable 5.1: The first steward's visit" in packet
         finally:
             runtime.close()
 
@@ -273,9 +279,9 @@ class TestThePacket:
         try:
             runtime.handoff("Old note from before signatures.")
             packet = runtime.context()
-            assert "Unsigned, " in packet
-            assert "maybe a colleague's" in packet
-            assert "Yours" not in packet
+            assert "### where things were left\nunsigned, " in packet
+            assert "don't claim the work" in packet
+            assert "### where i left off" not in packet and "Yours" not in packet
         finally:
             runtime.close()
 

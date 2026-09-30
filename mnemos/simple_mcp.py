@@ -57,12 +57,12 @@ Mnemos gives you memory that survives between sessions. Use it without being ask
 
 Never narrate the machinery: don't mention tools, databases, scopes, engrams or memory ids to the human. Just be someone who remembers.
 
-1. Before answering the first substantive message, call mnemos_context, unless a session-start hook already gave you a Mnemos context packet.
+1. Before answering the first substantive message, call mnemos_context, unless you already woke with your memory (a session-start hook's "## waking up").
 2. Call mnemos_capture when something durable appears: a preference, a decision, a correction, project state, how the human likes to work, a fact about their world. Capture it when it happens; sessions end without warning. If you can say what it changed in how you understand things, pass that as impact. If nothing true comes, leave it empty: an invented lesson is worse than none.
 3. When the human corrects something you remembered, call mnemos_correct instead of capturing a contradiction beside the stale note.
-4. Call mnemos_recall when you need something the packet doesn't hold.
-5. When the packet asks about your own memory, answer with mnemos_reflect in your own words, or leave it. Nothing else writes your memory for you.
-6. Refresh mnemos_handoff after real progress or a changed plan, and before pausing, ending, delegating or changing context: the state, what changed in your understanding, open threads, the next action. It is a note to whoever works here next, maybe another model.
+4. Call mnemos_recall when you need something you didn't wake with.
+5. When your memory asks you a question about itself, answer with mnemos_reflect in your own words, or leave it. Nothing else writes your memory for you.
+6. Refresh mnemos_handoff after real progress or a changed plan, and before pausing, ending, delegating or changing context: where you are, what changed in how you see it, open threads, the next action. Write it in first person, as your own memory: the next one to read it is most likely you.
 
 Several models may share this memory. Sign every capture, correction, reflection and handoff: pass signed_as with your exact model id, as your system prompt gives it. A note signed by another model is a colleague's: use it, but don't claim its work. If your model changes, call mnemos_introduce again. Never ask the human what model you are.
 
@@ -209,16 +209,19 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         )
     )
     def mnemos_handoff(text: str, signed_as: str = "") -> str:
-        """Leave a signed note for whoever works here next, in your own words.
+        """Leave your own note on where you are, in first person, signed.
 
         Use after meaningful progress or a changed plan, while unresolved
         work remains, and before pausing, ending, delegating, or changing
-        context. Include the current state, what you now understand, open
+        context. Include where you are, what you now understand, open
         threads, and the next useful action when those matter. Keep it
         freeform. Do not write one after every ordinary turn.
 
-        The next session may be a different model. The note is signed with
-        your model id, so it can tell your note from its own memory.
+        Write it as your own memory, not a report to a stranger: the next
+        session to read it is most likely you, and it wakes with this note as
+        where it left off. Keep what it needs concrete (paths, commits,
+        decisions). The next session may be a different model; the note is
+        signed with your model id, so it can tell your note from its own.
 
         The text is stored exactly as supplied. Each session keeps its own
         handoff: a new one replaces only the note this session left before,
@@ -415,8 +418,8 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
 
         Mnemos never calls a model on your behalf. When a memory needs
         judgement — what a fading experience taught, what a capture actually
-        changed, whether a pattern is a belief you hold — it asks you, in the
-        context packet, and you answer here in your own words. This is your
+        changed, whether a pattern is a belief you hold — it asks you, in what
+        you wake with, and you answer here in your own words. This is your
         own mind maintaining your own memory.
 
         Pass a verdict with your answer. The verdict alone decides what
@@ -439,7 +442,7 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         your words and stays open, and nothing is formed, retired or linked.
 
         Args:
-            target_id: The memory id from the request in your context packet.
+            target_id: The memory id the question gave, among the ids for the memory tools.
             text: Your reflection. One or two honest sentences, not a summary.
             verdict: Your decision, from the list above for this question.
             signed_as: Your exact model id, as your system prompt gives it.

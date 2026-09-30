@@ -254,10 +254,11 @@ class TestContinuityOnlyPacket:
             "the packet still overflows its budget and is being hard-cut"
         )
         # Every section must survive, not just the ones that sorted first.
-        assert "### Who you're with" in prompt
-        assert "### What you're carrying" in prompt
-        # And no note may end mid-word.
-        for line in prompt.splitlines():
+        assert "### who i'm with" in prompt
+        assert "### what this memory is carrying" in prompt
+        # And no note may end mid-word. (The ids and calls for the tools that
+        # close the packet aren't notes; a call's "…" is a placeholder.)
+        for line in prompt.split("### for the memory tools", 1)[0].splitlines():
             if line.startswith("- ") and "…" in line:
                 assert " […]" in line, f"clipped mid-word: {line[-40:]!r}"
 
@@ -291,8 +292,8 @@ class TestContinuityOnlyPacket:
         for entry in packet["hypomnema"]:
             assert DREAM_JOURNAL_TAG not in (entry.get("tags") or [])
         assert "148 memories" in packet["prompt"]
-        assert "### While you were away" in packet["prompt"]
-        assert "these aren't your words" in packet["prompt"]
+        assert "### lately, in this memory" in packet["prompt"]
+        assert "these aren't my words" in packet["prompt"]
 
 
 class TestHookInstaller:

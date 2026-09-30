@@ -21,6 +21,10 @@ in the middle of a session. They come from, in order:
    model id on every assistant turn of the session transcript;
 5. nothing. An unsigned note is recorded as unsigned, never guessed.
 
+Who is *reading* a session-start packet is found the same way, and then, only
+there, from the harness's launch line (``launch_model``): at session start
+there is no transcript yet.
+
 Detection reads only the tail of the transcript and keeps only the model id.
 
 Notes and memories are also marked with the harness session that wrote them.
@@ -201,6 +205,57 @@ def _last_assistant_model(path: Path) -> str:
             if window >= size or window >= _TAIL_MAX:
                 return ""
             window = min(size, window * 4, _TAIL_MAX)
+
+
+# ``--model claude-opus-5-5`` or ``--model=claude-opus-5-5`` in a launch line.
+_LAUNCH_MODEL = re.compile(r"(?:^|\s)--model(?:=|\s+)(\S+)")
+
+
+def launch_model(
+    environ: Mapping[str, str] | None = None,
+    *,
+    command_line: Callable[[int], str | None] | None = None,
+) -> str:
+    """The model the Claude Code session running this hook was launched with,
+    if its launch line names one.
+
+    A SessionStart hook runs before the session has a transcript, and Claude
+    Code's payload doesn't name the model on a fresh start, so nothing else can
+    say who is about to read the packet. Claude Code gives its hooks
+    ``CLAUDE_PID``, its own process, and the Claude desktop app launches every
+    session with ``--model <id>``; the launch line says which model runs it.
+    Only a model Mnemos can name counts: an alias such as ``opus`` or
+    ``opus[1m]`` names no particular model and returns ``""``, as does no
+    ``CLAUDE_PID`` (not a Claude Code hook) or any failure. A later ``/model``
+    switch isn't in the launch line, so this comes after the transcript, which
+    follows switches.
+    """
+
+    env = os.environ if environ is None else environ
+    pid = (env.get("CLAUDE_PID") or "").strip()
+    if not pid.isdigit() or int(pid) <= 1 or os.name == "nt":
+        return ""
+    args = (command_line or _command_line)(int(pid))
+    match = _LAUNCH_MODEL.search(args or "")
+    if not match:
+        return ""
+    model = clean_model_id(match.group(1).strip("'\""))
+    return model if model and display_name(model) != model else ""
+
+
+def _command_line(pid: int) -> str | None:
+    """A process's command line, from ``ps``; ``None`` on failure."""
+
+    import subprocess
+
+    try:
+        done = subprocess.run(
+            ["ps", "-o", "args=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout.strip() if done.returncode == 0 else None
 
 
 def resolve_author_model(

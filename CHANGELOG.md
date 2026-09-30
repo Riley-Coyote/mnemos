@@ -2,6 +2,33 @@
 
 ## 0.3.1 (unreleased)
 
+### No engine voice
+
+Words in memory come only from the agent. Three maintenance paths still
+wrote Mnemos's own words, or reached the agent's through the wrong note.
+
+- **The reflection pass writes no memories.** A deep cycle's reflection pass
+  wrote "thoughts" as memories: without a model, Mnemos's own template
+  ("Recurring theme: continuity (appeared in 46 recent memories)"), and with
+  a model configured, the model's lines. It now only counts the agent's
+  recent memories, and sends them to no model. On a fresh copy of the live
+  store (2026-09-30), a deep `mnemos consolidate` on the previous code wrote
+  3 such memories; on this code it wrote none.
+- **Promotion leaves the meaning as the note left it.** A promoted memory's
+  meaning was "Stable continuity promoted during simple maintenance.". A note
+  holds no meaning of its own, so the memory's stays empty, and the memory
+  is asked "what did this change?" like any memory without one. A note
+  Mnemos wrote, such as a closed session's summary, is no longer promoted
+  (it became a memory Mnemos wrote) or counted as a candidate.
+- **"What did this change?" reaches a memory through its own note**
+  (`graduated_to_engram_id`), the note the answer is written into, never
+  through a note that only names it (`related_engram_id`). It asked about
+  memories a note only interprets, whose answers had no note to land in,
+  and never about the memory a correction of such a note wrote. On the live
+  store both ways reach the same 251 memories today.
+- `MAINTENANCE_CODE_VERSION` is 11: servers started on older code stop
+  maintaining a store once this code opens it.
+
 ### Small follow-ups
 
 Nine small things the last packages' reports left open.

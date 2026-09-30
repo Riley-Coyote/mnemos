@@ -11,7 +11,6 @@ Configuration is organized by module:
 - retrieval: retrieval scoring weights and limits
 - consolidation: decay rates, thresholds, pass toggles
 - interface: prompt building and session settings
-- advanced: opt-in module toggles
 - multiagent: federation and shared pool settings
 """
 
@@ -126,23 +125,6 @@ DEFAULT_CONFIG: dict = {
     # key (~/.config/jev/api_key, or the file MNEMOS_JEV_KEY_FILE names) it
     # stays off.
     "cue_judge": "off",
-
-    # ── Advanced modules (opt-in) ──
-    "advanced": {
-        "working_memory_enabled": False,
-        "wm_nominal_capacity": 7,
-        "wm_attention_gradient": True,
-
-        "schemas_enabled": False,
-        "attention_gate_enabled": False,
-        "predictive_retrieval_enabled": False,
-        "spreading_activation_enabled": False,
-        "interference_enabled": False,
-        "intention_enabled": False,
-        "metamemory_enabled": False,
-        "observer_enabled": False,
-        "dreaming_enabled": False,
-    },
 
     # ── Multi-agent ──
     "multiagent": {

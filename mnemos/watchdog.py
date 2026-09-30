@@ -15,8 +15,10 @@ nothing of it.
 It reads only. Every statement it runs is a SELECT (``_rows`` refuses any
 other), it works on a store opened read-only, and a check that cannot run says
 so in its own data instead of raising: looking at memory must never change it
-or fail the call that looked. A signal that would have to be recorded first
-(how slow an embedding was, say) is left out rather than written.
+or fail the call that looked. Outside the store it reads the cue's per-session
+files (``cue.offered_summary``) and the runtime's own counts, and writes
+nothing there either. A signal that would have to be recorded first (how slow
+an embedding was, say) is left out rather than written.
 """
 
 from __future__ import annotations
@@ -27,8 +29,10 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from .cue import JUDGE_CALLS_KEPT, JUDGE_CALLS_KEY, judged_calls, offered_summary, scope_key
 from .dream_journal import changed_something, compose_dream_narrative, latest_dream_entry
-from .store.embedding_index import text_hash
+from .jev import switched_on as judge_switched_on
+from .store.embedding_index import NETWORK_TIMEOUT, text_hash
 from .store.sqlite_store import AUTHORS_LABELED_KEY, EngramStore
 
 # How long something may sit still before it is flagged.
@@ -65,6 +69,18 @@ EXPECTED = {
         "everything recall can return is indexed by meaning within a day of being written"
     ),
     "notes": "notes reach the briefing unless the memory they belong to went quiet or faded",
+    "cue": (
+        "the prompt hook's cue answers each message, by meaning where the session's "
+        "server answers, with lines that bear on it or with nothing"
+    ),
+    "network_waits": (
+        "a network embedding backend answers each call within its "
+        f"{NETWORK_TIMEOUT:g} seconds; a call that doesn't is skipped, and counted here"
+    ),
+    "cue_judge": (
+        "while the cue's judge is switched on, Jev answers at least half of the "
+        f"last {JUDGE_CALLS_KEPT} calls"
+    ),
 }
 
 # The counters in a cycle's log that mean it changed memory: a link made,
@@ -392,7 +408,8 @@ def _idle_evidence(
       none at all;
     - ``lessons_never_asked``: fading memories the softening pass named as
       waiting for their lesson question (``awaiting_impact``) that are still
-      active and were never asked one.
+      active and were never asked one, nor had "what did this change?"
+      answered or skipped (which ends the lesson question too).
 
     None of it is a cycle finding nothing to do: floors hold memories still,
     and a question once asked, answered or not, is never asked again."""
@@ -429,7 +446,8 @@ def _idle_evidence(
                   AND e.owner_agent_id = ? AND e.person_id = ? AND e.project_scope = ?
                   AND NOT EXISTS (
                     SELECT 1 FROM reflection_queue q
-                    WHERE q.target_id = e.id AND q.kind = 'lesson'
+                    WHERE q.target_id = e.id
+                      AND (q.kind = 'lesson' OR (q.kind = 'impact' AND q.answered_at IS NOT NULL))
                       AND q.agent_id = ? AND q.person_id = ? AND q.project_scope = ?
                   )
             """, (*chunk, *_scope_tuple(scope), *_scope_tuple(scope)))}
@@ -651,6 +669,113 @@ def _notes(store: EngramStore, scope: dict[str, str], now: datetime, index: Any)
     return {"seen": seen, **counts}
 
 
+def _cue(store: EngramStore, scope: dict[str, str], now: datetime, index: Any) -> dict:
+    """What the prompt hook's cue did with the messages sent in this scope over
+    the last week (R16), from its per-session files, which sit outside the
+    store: offers, silences, how it answered (by meaning or by words, or by
+    Jev), and failures (``cue.offered_summary``). Reads those files only."""
+    summary = offered_summary(days=WINDOW.days, key=scope_key(str(store.db_path), **scope))
+    messages = summary["messages"]
+    if not messages:
+        seen = f"the prompt hook's cue answered no message here in the last {WINDOW.days} days"
+    else:
+        ways = ", ".join(
+            f"{count} by {via}" for via, count in sorted(summary["answered_by"].items(), key=lambda i: -i[1])
+        )
+        seen = (
+            f"{_count(messages, 'message')} in {_count(summary['sessions'], 'session')} over the last "
+            f"{WINDOW.days} days: {_count(summary['offers'], 'offer')} "
+            f"({_count(summary['offered'], 'line')}), {_count(summary['silences'], 'silence')}, "
+            f"{_count(summary['failures'], 'failure')}" + (f"; answered {ways}" if ways else "")
+        )
+        if summary["last_failure"]:
+            seen += f"; the last failure: {summary['last_failure']}"
+    return {"seen": seen, **summary}
+
+
+def _network_waits(store: EngramStore, scope: dict[str, str], now: datetime, index: Any) -> dict:
+    """Embedding calls to a network backend that ran out of their time, each
+    one a meaning step skipped quietly (R19): in this process (the runtime's
+    index: recall, the cue, doctor's probe), and in the maintenance cycles'
+    link lookups over the last week, from the cycles' own log."""
+    network = bool(getattr(index, "network", False))
+    here = int(getattr(index, "timeouts", 0) or 0) if index is not None else 0
+    lookups = deferred = cycles = 0
+    for _at_, stats in _cycles(store, scope, now - WINDOW):
+        section = stats.get("connection_discovery")
+        if not isinstance(section, Mapping):
+            continue
+        timed_out = int(section.get("embedding_timeouts") or 0)
+        lookups += timed_out
+        deferred += int(section.get("embedding_deferred") or 0)
+        cycles += 1 if timed_out else 0
+    if not network and not lookups:
+        seen = "no network embedding backend here: meaning waits on no network"
+    else:
+        seen = (
+            f"{_count(here, 'call')} timed out in this process; {_count(lookups, 'link lookup')} "
+            f"timed out in {_count(cycles, 'maintenance cycle')} in the last {WINDOW.days} days"
+        )
+        if deferred:
+            seen += f", which linked {_count(deferred, 'memory', 'memories')} by words alone"
+    return {
+        "seen": seen,
+        "network": network,
+        "timeout_seconds": NETWORK_TIMEOUT,
+        "timeouts_here": here,
+        "link_lookup_timeouts": lookups,
+        "link_lookups_deferred": deferred,
+        "cycles_with_timeouts": cycles,
+    }
+
+
+def _cue_judge(store: EngramStore, scope: dict[str, str], now: datetime, index: Any) -> dict:
+    """How Jev's recent calls for the cue ended (R16b), from the one row the
+    answerers keep in the store while the judge is switched on
+    (``cue.JUDGE_CALLS_KEY``): every session's calls, so a failing judge is
+    seen from any of them. Flagged when more than half of the last
+    ``JUDGE_CALLS_KEPT`` calls timed out or failed, the newest of them came
+    within the week, and the judge is still switched on, read the way the
+    hook reads it (``MNEMOS_CUE_JUDGE``, else the config file): switching it
+    off clears the flag at once."""
+    rows = _rows(store._get_conn(), "SELECT value FROM meta WHERE key = ?", (JUDGE_CALLS_KEY,))
+    calls = judged_calls(rows[0][0]) if rows else []
+    last = calls[-JUDGE_CALLS_KEPT:]
+    timeouts = sum(1 for call in last if call["outcome"] == "timeout")
+    errors = sum(1 for call in last if call["outcome"] == "error")
+    failed = timeouts + errors
+    newest = max((at for at in (_at(call["at"]) for call in last) if at), default=None)
+    result: dict[str, Any] = {
+        "calls": len(last),
+        "answered": len(last) - failed,
+        "timeouts": timeouts,
+        "errors": errors,
+        "last_call_at": newest.isoformat() if newest else None,
+        "switched_on": judge_switched_on(),
+    }
+    if not last:
+        result["seen"] = "the cue's judge has made no calls here"
+        return result
+    result["seen"] = (
+        f"of Jev's last {_count(len(last), 'call')}, {len(last) - failed} answered, "
+        f"{timeouts} timed out and {errors} failed; the newest {_ago(newest, now)}"
+    )
+    if not result["switched_on"]:
+        result["seen"] += "; the judge is switched off now"
+    stalled = (
+        result["switched_on"] and failed * 2 > JUDGE_CALLS_KEPT
+        and newest is not None and not _older_than(newest, now, WINDOW)
+    )
+    result["stalled"] = stalled
+    if stalled:
+        result["flag"] = (
+            f"The cue's judge failed on {failed} of Jev's last {len(last)} calls ({timeouts} timed "
+            f"out, {errors} failed), the newest {_ago(newest, now)}; the cue showed nothing for those."
+        )
+        result["command"] = "mnemos doctor"
+    return result
+
+
 _CHECKS: Sequence[tuple[str, Callable[..., dict]]] = (
     ("questions", _questions),
     ("report", _report),
@@ -661,6 +786,9 @@ _CHECKS: Sequence[tuple[str, Callable[..., dict]]] = (
     ("authorship", _authorship),
     ("recall_index", _recall_index),
     ("notes", _notes),
+    ("cue", _cue),
+    ("network_waits", _network_waits),
+    ("cue_judge", _cue_judge),
 )
 
 

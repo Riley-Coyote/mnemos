@@ -517,6 +517,17 @@ def test_dead_embeddings_prunes_only_other_models(tmp_path, capsys, local_model)
     assert _settled_sha256(db) == after_first, "a second run changed the store"
 
 
+def test_dead_embeddings_changes_nothing_from_older_code(tmp_path, capsys, local_model):
+    db = _vector_store(tmp_path)
+    _set_store_minimum(db, 999)
+    before = _settled_sha256(db)
+
+    assert main(["repair", "dead-embeddings", "--db-path", str(db), *ARGS, "--write"]) == 1
+    assert "older than the store expects" in capsys.readouterr().out
+    assert _settled_sha256(db) == before
+    assert _backups(tmp_path, "dead-embeddings") == []
+
+
 def test_dead_embeddings_prunes_nothing_without_a_model(tmp_path, capsys, no_model):
     db = _vector_store(tmp_path)
     before = _settled_sha256(db)

@@ -282,3 +282,61 @@ def test_a_question_is_read_without_its_answering_instructions():
     # A quotation is the memory's own words, even when it says "verdict".
     quoted = 'Does it contradict an earlier one: "The verdict came in. We won."? Say which.'
     assert question_words(quoted) == quoted
+
+
+# ── Review follow-ups (PR #100) ──
+
+
+def _lesson(store: EngramStore, content: str, *, kind: str, model: str = "") -> None:
+    from mnemos.core.engram import Engram
+
+    engram = Engram(
+        content=content, content_at_encoding=content, impact=content, kind="procedural",
+        tags=["lesson", "distilled"], owner_agent_id=SCOPE["agent_id"],
+        person_id=SCOPE["person_id"], project_scope=SCOPE["project_scope"],
+    )
+    engram.author_kind = kind
+    engram.author_model = model
+    store.save_engram(engram)
+
+
+@needs_ps
+def test_a_lesson_is_the_readers_own_only_when_the_reader_wrote_it(tmp_path, harness):
+    db = tmp_path / "memory.db"
+    store = EngramStore(db)
+    try:
+        # Opus 5.5's memory: its note, and three lessons, which fill what it carries.
+        store.write_handoff(NOTE, **SCOPE, author_model=OPUS, author_session=EARLIER)
+        _lesson(store, "Fable's lesson: ask before moving a file.", kind="agent", model=FABLE)
+        _lesson(store, "Opus's lesson: check the live page first.", kind="agent", model=OPUS)
+        _lesson(store, "A lesson no one signed or claimed.", kind="unknown")
+    finally:
+        store.close()
+    packet = _hook(db, tmp_path, env={"CLAUDE_PID": harness(["--model", OPUS])})
+    carrying = packet.split("### what i'm carrying\n", 1)[1].split("\n\n### ", 1)[0]
+
+    assert ", Fable 5.1's lesson: Fable's lesson: ask before moving" in carrying, carrying
+    assert ", learned: Opus's lesson: check the live page first." in carrying, carrying
+    assert ", lesson: A lesson no one signed or claimed." in carrying, carrying
+
+
+def test_the_advanced_context_packet_knows_its_reader(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home" / ".mnemos").mkdir(parents=True)
+    (tmp_path / "home" / ".mnemos" / "config.json").write_text('{"setup_complete": true}')
+    db = _store(tmp_path)
+    monkeypatch.setenv("MNEMOS_DB_PATH", str(db))
+    monkeypatch.setenv("MNEMOS_AGENT_MODEL", OPUS)
+    monkeypatch.setenv("MNEMOS_PERSON_NAME", "Riley")
+
+    import mnemos.mcp_server as server
+
+    monkeypatch.setattr(server, "_store", None)
+    monkeypatch.setattr(server, "_config", None)
+    server._init_store(str(db))
+    packet = server.mnemos_context_packet(query="", **SCOPE)
+
+    # Its own memory, in its own voice, as the hook and mnemos_context give it.
+    assert "### where i left off\n" in packet, packet
+    assert "if I'm not" not in packet and "visiting" not in packet, packet
+    assert "with Riley." in packet.split("\n", 2)[1], packet

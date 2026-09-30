@@ -31,6 +31,11 @@ yours".
   signed most of the live notes; a guest's own notes are still its own, the
   rest is labelled, and the opening says whose memory it is visiting. A
   reader the harness didn't name is told once, in the opening.
+- A lesson is the reader's own ("learned") only when the reader wrote it: one
+  another model signed says whose it is ("Fable 5.1's lesson"), and one no one
+  is known to have written is just a lesson. The advanced
+  `mnemos_context_packet` finds its reader as the hook and `mnemos_context` do,
+  so it speaks in the same voice.
 - `--person-name` on the hook (or `MNEMOS_PERSON_NAME`) names the person, so
   the packet can say "with Riley" and head the section with their name.
 - Handoffs are written in first person, as the next reader's own memory: the

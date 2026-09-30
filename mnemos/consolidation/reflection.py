@@ -64,10 +64,11 @@ def run_reflection_pass(
     }
 
     # The agent's own memories only: what a tool or a model wrote is not
-    # something the agent keeps returning to.
+    # something the agent keeps returning to. Counted, so their links are
+    # not loaded.
     all_engrams = store.get_active_engrams(
         agent_id=agent_id, person_id=person_id, project_scope=project_scope,
-        limit=200, author_kind="agent",
+        limit=200, author_kind="agent", load_connections=False,
     )
     stats["engrams_reviewed"] = sum(
         1 for e in all_engrams if _hours_since(e.created_at) < lookback_hours

@@ -20,7 +20,7 @@ DREAM_DOMAIN = "situational"
 MAX_NARRATIVE_CHARS = 700
 
 # What a deep cycle that changed nothing reports. The packet leaves it out:
-# "While you were away" is for when something changed.
+# "While I was away" is for when something changed.
 NO_CHANGE_NARRATIVE = (
     "Mnemos checked the stored continuity; no mechanical changes were needed."
 )

@@ -524,13 +524,13 @@ def phase3_wakeup_packet(h: Harness) -> None:
         pktA = build_context_packet(
             store, query=probe, agent_id="alpha", person_id="p1", project_scope="projA")
         prompt = pktA["prompt"]
-        ok12 = ("## Mnemos Context Packet" in prompt
+        ok12 = ("## waking up" in prompt
                 and "alpha functional note" in prompt
                 and "alpha hypomnema continuity" in prompt
                 and len(prompt) > 0)
         h.record("I12", "packet has header + seeded functional & hypomnema text",
                  "PASS" if ok12 else "FAIL",
-                 f"prompt_len={len(prompt)} header={'## Mnemos Context Packet' in prompt} "
+                 f"prompt_len={len(prompt)} header={'## waking up' in prompt} "
                  f"functional={'alpha functional note' in prompt} "
                  f"hypomnema={'alpha hypomnema continuity' in prompt}")
 
@@ -539,7 +539,7 @@ def phase3_wakeup_packet(h: Harness) -> None:
         pktBlank = build_context_packet(
             store, query="", agent_id="alpha", person_id="p1", project_scope="projA")
         ok13 = (pktBlank["mnemos_engrams"] == []
-                and "## Mnemos Context Packet" in pktBlank["prompt"]
+                and "## waking up" in pktBlank["prompt"]
                 and "alpha functional note" in pktBlank["prompt"]
                 and "alpha hypomnema continuity" in pktBlank["prompt"])
         h.record("I13", "blank query → 0 engrams; functional/hypomnema still render; no crash",

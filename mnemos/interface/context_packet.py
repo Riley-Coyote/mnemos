@@ -87,8 +87,8 @@ _BELIEFS_SHOWN = 6
 # What the agent marked standing: how the human wants it to work in every
 # session, not just now. A standing rule is obeyed, not recalled, so no usage
 # signal (reinforcement, recency, recall) can be trusted to bring it here; the
-# agent's own mark does. The newest marks open "Who you're with", this many,
-# one line each, and the line says how to list the rest.
+# agent's own mark does. The newest marks open the section on who the agent is
+# with, this many, one line each; the closing section says how to list the rest.
 STANDING_SHOWN = 5
 # How long a standing line may run, cut at a sentence boundary. Each is a rule
 # to follow in this session, so it is not shortened to make room: when the

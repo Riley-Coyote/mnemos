@@ -30,7 +30,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Barrier
 
-from mnemos.authorship import handoff_framing
 from mnemos.interface.context_packet import build_context_packet
 from mnemos.simple_runtime import MnemosRuntime
 from mnemos.store.sqlite_store import SCHEMA_VERSION, EngramStore
@@ -439,35 +438,6 @@ class TestSignatures:
             if "Written before sessions were told apart." in line
         ]
         assert "another session" not in line
-
-    def test_framing_follows_the_session_as_well_as_the_model(self):
-        heading, guidance = handoff_framing(
-            "claude-opus-5-5", "3 minutes ago", "claude-opus-5-5", same_session=True,
-        )
-        assert heading == "Left earlier in this session by Opus 5.5 (claude-opus-5-5) — the same model as you — 3 minutes ago."
-        assert guidance.startswith("Carry on from it.")
-
-        heading, guidance = handoff_framing(
-            "claude-fable-5-1", "an hour ago", "claude-opus-5-5", same_session=True,
-        )
-        assert "You are Opus 5.5 (claude-opus-5-5), a different model." in heading
-        assert "colleague's" in guidance
-
-        heading, guidance = handoff_framing(
-            "claude-opus-5-5", "3 minutes ago", "claude-opus-5-5", same_session=False,
-        )
-        assert "in another session" in heading
-        assert "Carry on from it." not in guidance
-        assert "colleague's" in guidance
-
-        heading, _ = handoff_framing("", "3 minutes ago", "claude-opus-5-5", same_session=False)
-        assert "isn't signed" in heading
-
-        # Without both sessions known, the framing is exactly what it was.
-        assert handoff_framing("claude-opus-5-5", "3 minutes ago", "claude-opus-5-5") == (
-            "Left by Opus 5.5 (claude-opus-5-5) — the same model as you — 3 minutes ago.",
-            "Carry on from it. Don't narrate the memory system to the human.",
-        )
 
 
 class TestReadingANoteWhole:

@@ -5682,20 +5682,6 @@ def _replacement_impact(impact: str, *replaced: Engram | None) -> tuple[str, str
     return "", "", ""
 
 
-def _impact_for(content: str, domain: str) -> str:
-    if domain in {"foundational", "identity"}:
-        return "Foundational continuity for future interactions."
-    if domain == "recurring":
-        return "Recurring pattern worth carrying across sessions."
-    if domain == "long-arc":
-        return "Long-arc context that should shape future work."
-    if domain == "situational":
-        return "Current working context for continuity."
-    if "prefer" in content.lower() or "wants" in content.lower():
-        return "Preference to respect in future decisions."
-    return "Durable continuity captured from the session."
-
-
 def _own_words(text: str, limit: int = ROW_CHARS) -> str:
     """Up to ``limit`` characters of an item's own words, on one line: a
     memory's words without the context its capture keeps after them, cut at a

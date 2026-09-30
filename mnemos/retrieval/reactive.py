@@ -354,22 +354,49 @@ class ReactiveRetriever:
         every_word = _to_fts_query(cue)
         note_by_id = {str(note["id"]): note for note in notes or []}
         note_texts = {item_id: note.get("content") or "" for item_id, note in note_by_id.items()}
-        live: set[str] | None = None
-        unseen: set[str] = set()
-        unseen_notes: set[str] = set()
-        if common:
-            live = self._store.live_engram_ids(**scope)
-            unseen, unseen_notes = self._unseen_by_meaning(live, note_texts, scope)
+        # The words are searched before meaning's scan, which reads every
+        # candidate's vectors: after it, the same queries took about 5 ms
+        # more a recall on the live copy.
         memory_query = or_query(terms) if terms else (None if common else every_word)
-        none_found = bool(live) and unseen >= live
-        if none_found:
-            memory_query = every_word  # meaning can find none of them: nothing is cut
         ranked: list[tuple[Engram, float]] = []
         dormant: list[tuple[Engram, float]] = []
         if memory_query is not None:
             ranked = self._store.search_fts_ranked(memory_query, limit=WORD_SEEDS, **scope)
             dormant = self._store.search_fts_ranked(
                 memory_query, limit=DORMANT_SEED_LIMIT, state="dormant", **scope,
+            )
+
+        # 1c, first: MEANING's scores, over only what may be returned: the
+        # memories live in the scope and the notes, each by its closest
+        # passage, and only then the top taken. The search reads every
+        # candidate's vectors, and when a word is cut it says which it
+        # couldn't use: what decides where the cut holds is the scorer's own
+        # verdict. Its hits join the ranking below (1c), as they always have.
+        # A search that fails leaves meaning off for this cue: nothing is cut.
+        live: set[str] | None = None
+        hits: list[tuple[str, float]] = []
+        unusable: dict[str, set[str]] | None = {} if common else None
+        if meaning_runs:
+            try:
+                live = self._store.live_engram_ids(**scope)
+                hits = self._meaning_hits(cue, live | set(note_by_id), note_texts, vector, unusable)
+            except Exception as exc:
+                # Meaning is optional — words still work — but a failure here
+                # is a bug, not a missing backend (the index reports those
+                # itself), so say it once instead of hiding it.
+                _log_seed_failure_once(exc)
+                hits, (terms, common) = [], (search_words(cue), [])
+        unseen: set[str] = set()
+        unseen_notes: set[str] = set()
+        if common and live is not None:
+            unseen, unseen_notes = self._unseen_by_meaning(live, note_texts, scope, unusable or {})
+        none_found = bool(live) and unseen >= live
+        if (none_found or not common) and memory_query != every_word:
+            # Meaning can find none of them, or its search failed: nothing is
+            # cut, and every word is searched.
+            ranked = self._store.search_fts_ranked(every_word, limit=WORD_SEEDS, **scope)
+            dormant = self._store.search_fts_ranked(
+                every_word, limit=DORMANT_SEED_LIMIT, state="dormant", **scope,
             )
         if unseen and not none_found:
             ranked = _merged(
@@ -400,7 +427,7 @@ class ReactiveRetriever:
             # its words now: one written after the capture waits for it.
             every_lesson_word = set(unseen)
             if common:
-                every_lesson_word |= set(lessons) - self._lessons_found_by_meaning(lessons)
+                every_lesson_word |= set(lessons) - self._lessons_found_by_meaning(lessons, unusable or {})
             for item_id, _score in rank_by_words(
                 cue, lessons, limit=WORD_SEEDS, terms=terms, every_word_for=every_lesson_word,
             ):
@@ -436,27 +463,21 @@ class ReactiveRetriever:
             )
         ] if note_by_id else []
 
-        # 1c. MEANING, over only what may be returned: the memories live in the
-        # scope and the notes, each by its closest passage, and only then the
-        # top taken. Kept apart so results say which came by meaning.
+        # 1c. MEANING's hits (scored above), kept apart so results say which
+        # came by meaning.
         similarity: dict[str, float] = {}
         meaning: list[str] = []
-        if meaning_runs:
-            try:
-                candidates = (live if live is not None else self._store.live_engram_ids(**scope)) | set(note_by_id)
-                for item_id, sim in self._meaning_hits(cue, candidates, note_texts, vector):
-                    if item_id not in note_by_id and item_id not in engrams:
-                        engram = self._store.get_engram_in_scope(item_id, **scope)
-                        if engram is None or engram.state not in ("active", "dormant"):
-                            continue
-                        engrams[item_id] = engram
-                    similarity[item_id] = sim
-                    meaning.append(item_id)
-            except Exception as exc:
-                # Meaning is optional — words still work — but a failure here
-                # is a bug, not a missing backend (the index reports those
-                # itself), so say it once instead of hiding it.
-                _log_seed_failure_once(exc)
+        try:
+            for item_id, sim in hits:
+                if item_id not in note_by_id and item_id not in engrams:
+                    engram = self._store.get_engram_in_scope(item_id, **scope)
+                    if engram is None or engram.state not in ("active", "dormant"):
+                        continue
+                    engrams[item_id] = engram
+                similarity[item_id] = sim
+                meaning.append(item_id)
+        except Exception as exc:
+            _log_seed_failure_once(exc)
 
         # 1d. FUSE: reciprocal rank over the lists. Each seed starts at
         # its fused score relative to the best match, and a dormant memory at
@@ -615,28 +636,32 @@ class ReactiveRetriever:
             _log_seed_failure_once(exc)
             return None
 
-    def _lessons_found_by_meaning(self, lessons: dict[str, str]) -> set[str]:
+    def _lessons_found_by_meaning(
+        self, lessons: dict[str, str], unusable: dict[str, set[str]],
+    ) -> set[str]:
         """The memories whose lesson meaning can find by the lesson's own
-        passage (``EmbeddingIndex.lessons_searchable``). An index that can't
-        say finds none."""
+        passage (``EmbeddingIndex.lessons_searchable``), one the scorer could
+        use. An index that can't say finds none."""
         found = getattr(self._embedding_index, "lessons_searchable", None)
         if found is None:
             return set()
         try:
-            return found(lessons)
+            return found(lessons, unusable=unusable)
         except Exception as exc:
             _log_seed_failure_once(exc)
             return set()
 
     def _unseen_by_meaning(
         self, live: Collection[str], note_texts: dict[str, str], scope: dict[str, str],
+        unusable: dict[str, set[str]],
     ) -> tuple[set[str], set[str]]:
         """The live memories and the notes meaning can't find in full now
         (``EmbeddingIndex.searchable``): no vector of the index's model, one
-        cut from words they no longer hold (a correction since), or a tail
-        past ``PASSAGE_LIMIT`` that no vector reads. Their words now are the
-        ones recall's index is built from (``live_memory_texts``). An index
-        that can't say counts for none of them."""
+        cut from words they no longer hold (a correction since), a tail past
+        ``PASSAGE_LIMIT`` that no vector reads, or a vector the scorer
+        couldn't use (``unusable``, its verdicts on this cue). Their words now
+        are the ones recall's index is built from (``live_memory_texts``). An
+        index that can't say counts for none of them."""
         searchable = getattr(self._embedding_index, "searchable", None)
         if searchable is None:
             return set(live), set(note_texts)
@@ -646,7 +671,7 @@ class ReactiveRetriever:
                 memory_id: content for memory_id, content, _state in (texts_of(**scope) if texts_of else [])
             }
             texts.update(note_texts)
-            found = searchable(set(live) | set(note_texts), texts=texts)
+            found = searchable(set(live) | set(note_texts), texts=texts, unusable=unusable)
         except Exception as exc:
             _log_seed_failure_once(exc)
             return set(live), set(note_texts)
@@ -665,7 +690,7 @@ class ReactiveRetriever:
 
     def _meaning_hits(
         self, cue: str, candidates: Collection[str], texts: dict[str, str] | None = None,
-        vector: Sequence[float] | None = None,
+        vector: Sequence[float] | None = None, unusable: dict[str, set[str]] | None = None,
     ) -> list[tuple[str, float]]:
         """The candidates closest in meaning to ``cue``, at most ``MEANING_SEEDS``,
         none below ``MEANING_FLOOR``, scored before the top is taken. ``texts``
@@ -680,6 +705,8 @@ class ReactiveRetriever:
                 extra["length_penalty"] = self._length_penalty
             if vector is not None:
                 extra["query_vector"] = vector
+            if unusable is not None:
+                extra["unusable"] = unusable
             return index.search_candidates(
                 cue, candidates, k=MEANING_SEEDS, floor=MEANING_FLOOR, texts=texts, **extra,
             )

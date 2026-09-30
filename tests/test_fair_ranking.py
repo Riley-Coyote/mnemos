@@ -23,6 +23,8 @@ import math
 import os
 import re
 import socket
+import sqlite3
+import struct
 import subprocess
 import sys
 import threading
@@ -480,7 +482,7 @@ def test_a_corrected_memory_is_searched_by_every_word(tmp_path, meaning):
     """A memory corrected since it was indexed: its words and the full-text
     index hold the new words, its vectors still the old ones. Meaning can't
     find its new words, so the cut doesn't hold for it: its one word in
-    common with the question, "Riley" (in 40 of 121 memories), finds it."""
+    common with the question, "Riley" (in 41 of 121 memories), finds it."""
     corrected = _memory("The ferry timetable for the late boat.")
     fillers = _riley_at_the_harbour(40)
     db = _store(tmp_path / "memory.db", [corrected, *fillers, *_timetables(80)])
@@ -524,6 +526,99 @@ def test_a_capped_item_is_searched_by_every_word(tmp_path, meaning):
     assert ei.passages_cut_short(_LONG_LOG)
 
 
+def _break_vectors(db: Path, item_id: str, how: str, *, lesson: bool = False) -> None:
+    """Rewrite an item's current passages (its words', or its lesson's) as a
+    vector the scorer can't use, keeping their hash: another size under the
+    same model, or all zeros."""
+    part = "part = 1000" if lesson else "part < 1000"
+    conn = sqlite3.connect(str(db))
+    if how == "wrong dims":
+        conn.execute(f"UPDATE passage_vectors SET dims = 3, embedding = ? WHERE item_id = ? AND {part}",
+                     (struct.pack("3f", 0.5, 0.5, 0.5), item_id))
+    else:
+        conn.execute(f"UPDATE passage_vectors SET embedding = zeroblob(4 * dims) WHERE item_id = ? AND {part}",
+                     (item_id,))
+    assert conn.total_changes > 0
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.parametrize("how", ["wrong dims", "all zeros"])
+def test_a_vector_the_scorer_cannot_use_leaves_its_item_on_every_word(tmp_path, meaning, how):
+    """A memory whose one passage has the current hash but can't be scored:
+    another size under the same model, or all zeros. Meaning can't find it,
+    so the cut doesn't hold for it: "Riley", its one word in common with the
+    question (in 41 of 121 memories), finds it. Healthy ones sharing only
+    "Riley" are still left to meaning."""
+    broken = _memory("Riley, in passing.")
+    fillers = _riley_at_the_harbour(40)
+    db = _store(tmp_path / "memory.db", [broken, *fillers, *_timetables(80)])
+    _break_vectors(db, broken.id, how)
+
+    found = _retrieve(db, "Riley", max_results=None)
+
+    by_words = {r.engram.id for r in found if r.retrieval_path == "fts"}
+    assert broken.id in by_words, [r.engram.content for r in found]
+    assert not by_words & {f.id for f in fillers}
+
+
+def test_a_lesson_vector_the_scorer_cannot_use_leaves_the_lesson_on_every_word(tmp_path, meaning):
+    """The same for a lesson: its own passage has the current hash but is all
+    zeros, so the common word in the lesson finds its memory."""
+    taught = _memory("The ferry ropes at pier 3.", impact="Riley checks the ropes first.",
+                     impact_source="agent")
+    db = _store(tmp_path / "memory.db", [taught, *_riley_at_the_harbour(40), *_timetables(80)])
+    _break_vectors(db, taught.id, "all zeros", lesson=True)
+
+    found = _retrieve(db, "Riley", max_results=None)
+
+    assert taught.id in {r.engram.id for r in found if r.retrieval_path == "fts"}
+
+
+class _BlankModel(_ConceptModel):
+    """Embeds a text holding the word "blank" as all zeros."""
+
+    def encode(self, texts, normalize_embeddings=True, batch_size=32):
+        if isinstance(texts, str):
+            return _Vector([0.0] * 4) if "blank" in texts else super().encode(texts)
+        return [_Vector([0.0] * 4) if "blank" in text else _Vector(concept_vector(text))
+                for text in texts]
+
+
+class _BlankEmbedder(ei._LocalEmbedder):
+    def _get_model(self):
+        if self._model is None:
+            self._model = _BlankModel()
+        return self._model
+
+
+def test_the_index_never_writes_a_vector_no_search_could_use(tmp_path, meaning, monkeypatch):
+    """An embedding that comes back all zeros is never stored: the item waits
+    for a later pass instead of counting as indexed."""
+    monkeypatch.setattr(ei, "_LocalEmbedder", _BlankEmbedder)
+    blank, lamp = _memory("A blank page."), _memory("The lighthouse lamp.")
+    db = tmp_path / "memory.db"
+    store = EngramStore(str(db))
+    for engram in (blank, lamp):
+        store.save_engram(engram)
+    store.close()
+    index = EmbeddingIndex(db_path=str(db))
+    try:
+        done = index.index_passages([(blank.id, blank.content), (lamp.id, lamp.content)])
+        whole = index.index_engram(blank.id, blank.content)
+        waiting = index.waiting([(blank.id, blank.content), (lamp.id, lamp.content)])
+    finally:
+        index.close()
+    conn = sqlite3.connect(str(db))
+    stored = {row[0] for row in conn.execute("SELECT item_id FROM passage_vectors")}
+    stored |= {row[0] for row in conn.execute("SELECT engram_id FROM embeddings")}
+    conn.close()
+
+    assert blank.id not in stored and lamp.id in stored
+    assert done["items"] == 1 and done["waiting"] == 1 and whole is False
+    assert waiting == [blank.id]
+
+
 class _NoQueryVector(_ConceptEmbedder):
     """A backend that indexed everything, then can't embed a cue: a network
     that times out, a model that won't load."""
@@ -537,7 +632,15 @@ class _EmptyQueryVector(_ConceptEmbedder):
         return None
 
 
-@pytest.mark.parametrize("failing", [_NoQueryVector, _EmptyQueryVector])
+class _ZeroQueryVector(_ConceptEmbedder):
+    """Embeds the cue as all zeros: a vector with no direction, which no
+    search could compare with anything."""
+
+    def embed(self, text):
+        return [0.0] * 4
+
+
+@pytest.mark.parametrize("failing", [_NoQueryVector, _EmptyQueryVector, _ZeroQueryVector])
 def test_when_the_cue_cannot_be_embedded_nothing_is_cut(tmp_path, meaning, monkeypatch, failing):
     """Every memory has a vector, but the cue's own embedding fails, so
     meaning doesn't run for it. "Riley", in 41 of 121 memories, is searched
@@ -551,7 +654,7 @@ def test_when_the_cue_cannot_be_embedded_nothing_is_cut(tmp_path, meaning, monke
     assert only_riley.id in {r.engram.id for r in found if r.retrieval_path == "fts"}
 
 
-@pytest.mark.parametrize("failing", [_NoQueryVector, _EmptyQueryVector])
+@pytest.mark.parametrize("failing", [_NoQueryVector, _EmptyQueryVector, _ZeroQueryVector])
 def test_when_the_message_cannot_be_embedded_the_cue_answers_from_words(
     tmp_path, meaning, monkeypatch, failing,
 ):
@@ -575,11 +678,11 @@ def test_when_the_message_cannot_be_embedded_the_cue_answers_from_words(
 
 def test_a_lesson_without_its_own_vector_is_searched_by_every_word(tmp_path, meaning):
     """Three memories whose words are about the harbour and whose lessons
-    name Riley, who is in 40 of 123 memories. Each memory's words have a
-    vector. Meaning can find only one lesson by the lesson itself: one was
-    written after its memory was indexed, one was rewritten since. Those two
-    are found by the common word in their lessons; the third, whose lesson
-    meaning can find, is left to meaning."""
+    name Riley, who is in 43 of 123 memories (40 by their words). Each
+    memory's words have a vector. Meaning can find only one lesson by the
+    lesson itself: one was written after its memory was indexed, one was
+    rewritten since. Those two are found by the common word in their
+    lessons; the third, whose lesson meaning can find, is left to meaning."""
     unindexed = _memory("The ferry timetable changed at pier 7.")
     rewritten = _memory("The harbour boat log for pier 9.",
                         impact="Keep the boat log dry.", impact_source="agent")

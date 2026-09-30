@@ -38,6 +38,13 @@ words, with its date and its id. Or nothing, which is the usual answer.
   start where the hook is in use, and otherwise only when a cue first asks.
 - **Read-only.** The cue writes nothing to the store. The per-session files and
   the socket are outside it.
+- **Jev decides, when switched on** (WP-R16b, off by default; ``mnemos.jev``).
+  The hook asks the answerer to judge: its candidates before the cap, at most
+  ``jev.CANDIDATES`` lines that cleared the floors, go to Jev with the message
+  in one call, and the cue shows at most ``CUE_LINES`` of those Jev scores at
+  least ``CUE_JUDGE_THRESHOLD``, the likeliest first. On a timeout or an error
+  it shows nothing, and so it does without an answerer that judged: quiet beats
+  noisy. The answerer counts every outcome for the health card.
 
 The hook imports nothing heavy: no torch, no MCP.
 """
@@ -48,6 +55,7 @@ import errno
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import socket
@@ -56,10 +64,12 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from . import jev
 
 log = logging.getLogger("mnemos.cue")
 
@@ -67,7 +77,11 @@ log = logging.getLogger("mnemos.cue")
 # means (the gate, the lines) raises it, so a hook never trusts a server still
 # running older code: it answers from words alone instead. 2: a shared word
 # counts only below the frequency cut, and the word path needs a rarer one
-# (WP-R08c).
+# (WP-R08c). A hook with the judge switched on also asks the answerer to judge
+# and says how long it waits (``judge``, ``wait``: WP-R16b), and trusts only a
+# reply that says it judged (``judge``). An older answerer ignores both fields
+# and never says so, so its lines don't show; without the switch nothing
+# changes, and the protocol stays 2.
 CUE_PROTOCOL = 2
 
 # What the cue offers: at most this many memories, one line each.
@@ -109,6 +123,24 @@ HOOK_BUDGET = 0.7
 HOOK_MARGIN = 0.05
 CONNECT_SECONDS = 0.05
 ANSWER_SECONDS = 0.35
+
+# Jev's score a line needs to show, with the switch on (WP-R16b). On the lab's
+# 20 development prompts the cue's candidates before its cap are 62 lines, 26
+# of them bearing on their message (one reader's labels); without Jev it shows
+# 36, 20 of them good. Through the real gate, seven passes: at 0.8 it showed
+# 14 or 15 lines, 12 or 13 good (80-93%, about half the good ones), a bad line
+# alone on at most one prompt; at 0.75, 16 or 17 (76-88%), a bad line alone on
+# one or two; at 0.7, 17 to 20 (70-78%). Jev's score for the same line moved
+# by up to 0.11 between passes.
+CUE_JUDGE_THRESHOLD = 0.8
+# With the switch on the hook waits for the answerer as long as its budget
+# allows (there is no answering from words then), less this slack for what it
+# does after; the answerer gives Jev at most ``jev.TIMEOUT`` of what the hook
+# said it would wait, less this same slack for its reply. With less than
+# ``JUDGE_MIN_SECONDS`` left, Jev isn't asked at all, and that counts as a
+# timeout: the fastest of 148 calls in the live check took 126 ms.
+JUDGE_MARGIN = 0.03
+JUDGE_MIN_SECONDS = 0.1
 # The payload Claude Code sends on stdin, at most.
 PAYLOAD_BYTES = 1_048_576
 
@@ -425,9 +457,14 @@ def ask_answerer(
     environ: Mapping[str, str] | None = None,
     connect_seconds: float = CONNECT_SECONDS,
     answer_seconds: float = ANSWER_SECONDS,
+    judge: str = "",
 ) -> dict[str, Any] | None:
     """Ask this session's answerer for the cue: its reply, or None when there
-    is none, it is slow, it fails, or it speaks another protocol."""
+    is none, it is slow, it fails, or it speaks another protocol.
+
+    ``judge`` ("jev") asks it to have its candidates judged (WP-R16b), and
+    tells it how long this waits, so the judge's time fits inside it. An
+    answerer that did judge says so in its reply (``judge``)."""
     if not hasattr(socket, "AF_UNIX"):
         return None
     started = time.monotonic()
@@ -454,6 +491,8 @@ def ask_answerer(
     try:
         request = {"v": CUE_PROTOCOL, "op": "cue", "text": text,
                    "exclude": list(exclude), "texts": list(texts)}
+        if judge:
+            request.update({"judge": judge, "wait": round(answer_seconds, 3)})
         answer_by = time.monotonic() + answer_seconds
         sock.settimeout(answer_seconds)
         sock.sendall((json.dumps(request) + "\n").encode("utf-8"))
@@ -551,6 +590,13 @@ class CueAnswerer:
     only while it is still its own. Without meaning to offer (no embedding
     backend, a model that can't load) it stops, and the server goes on as it
     was.
+
+    Asked to judge (the hook's switch is on, WP-R16b), it takes up to
+    ``jev.CANDIDATES`` of its lines before the cap, makes one call to ``judge``
+    (``jev.ask`` unless a test gives another) within the time the hook said it
+    would wait, and answers with at most ``CUE_LINES`` of the lines scoring at
+    least ``CUE_JUDGE_THRESHOLD``, or with none when the judge timed out or
+    failed. It counts each outcome (``judge_counts``) for the health card.
     """
 
     def __init__(
@@ -562,6 +608,7 @@ class CueAnswerer:
         project_scope: str,
         claude_pid: int | None = None,
         index_factory: Any = None,
+        judge: Callable[..., Sequence[float]] | None = None,
     ) -> None:
         self.db_path = str(Path(db_path).expanduser())
         self.scope = {"agent_id": agent_id, "person_id": person_id, "project_scope": project_scope}
@@ -581,6 +628,17 @@ class CueAnswerer:
         self.warm = threading.Event()
         self.thread: threading.Thread | None = None
         self.answered = 0
+        self._judge = judge
+        self._judged_lock = threading.Lock()
+        self._judged: dict[str, Any] = {
+            # Messages the hook asked to have judged; those with nothing to
+            # judge (no call); calls made; calls that answered; lines shown;
+            # answered calls that showed nothing; timeouts; errors (a missing
+            # key or an unusable answer among them), the last one's kind.
+            "messages": 0, "no_candidates": 0, "calls": 0, "answered": 0,
+            "shown": 0, "none_shown": 0, "timeouts": 0, "errors": 0,
+            "last_failure": None,
+        }
 
     def start(self) -> bool:
         """Start in the background. False when this process has no Claude
@@ -714,6 +772,7 @@ class CueAnswerer:
         line = _read_line(conn, time.monotonic() + 0.5)
         if line is None:
             return
+        received = time.monotonic()
         try:
             request = json.loads(line)
         except ValueError:
@@ -724,22 +783,32 @@ class CueAnswerer:
             self._warm_later()
             reply = {"v": CUE_PROTOCOL, "ok": False, "why": "warming"}
         else:
+            text = str(request.get("text") or "")
+            judged = request.get("judge") == jev.JEV
             try:
                 lines = self._lines(
-                    str(request.get("text") or ""),
+                    text,
                     exclude=[i for i in request.get("exclude") or [] if isinstance(i, str)],
                     texts=[t for t in request.get("texts") or [] if isinstance(t, str)],
+                    # Judged, the candidates before the cap; else the cap.
+                    limit=jev.CANDIDATES if judged else None,
                 )
                 why = None if lines is not None else "no store"
             except Exception as exc:  # the hook answers from words instead
                 lines, why = None, f"{type(exc).__name__}: {exc}"[:200]
             reply = {"v": CUE_PROTOCOL, "ok": lines is not None, "meaning": True,
                      "lines": lines or [], "why": why}
+            if judged and lines is not None:
+                by = received + _wait(request.get("wait")) - JUDGE_MARGIN
+                reply["lines"], reply["judged"] = self._judged_lines(text, lines, by=by)
+                reply["judge"] = jev.JEV
         reply["ms"] = round((time.perf_counter() - started) * 1000, 1)
         conn.sendall((json.dumps(reply) + "\n").encode("utf-8"))
         self.answered += 1
 
-    def _lines(self, text: str, *, exclude: list[str], texts: list[str]) -> list[dict[str, Any]] | None:
+    def _lines(
+        self, text: str, *, exclude: list[str], texts: list[str], limit: int | None = None,
+    ) -> list[dict[str, Any]] | None:
         if self._store is None:
             if not Path(self.db_path).is_file():
                 return None
@@ -749,8 +818,99 @@ class CueAnswerer:
         from .simple_runtime import cue_memories
 
         return cue_memories(
-            self._store, self._index, text, exclude=exclude, exclude_texts=texts, **self.scope,
+            self._store, self._index, text, exclude=exclude, exclude_texts=texts, limit=limit,
+            **self.scope,
         )
+
+    # The judge (WP-R16b)
+
+    def _judged_lines(
+        self, text: str, lines: list[dict[str, Any]], *, by: float,
+    ) -> tuple[list[dict[str, Any]], str]:
+        """What the cue shows of ``lines`` once judged: at most ``CUE_LINES``
+        scoring at least ``CUE_JUDGE_THRESHOLD``, the likeliest first, each
+        with its score; and how the judging went ("shown", "none",
+        "no-candidates", "timeout" or "error"). One call, which must end by
+        ``by`` (a ``time.monotonic()`` value) and never outlasts
+        ``jev.TIMEOUT``. On a timeout or an error, nothing."""
+        self._count(messages=1)
+        if not lines:
+            self._count(no_candidates=1)
+            return [], "no-candidates"
+        room = min(jev.TIMEOUT, by - time.monotonic())
+        if room < JUDGE_MIN_SECONDS:
+            self._count(timeouts=1, last_failure="timeout")
+            return [], "timeout"
+        judge = self._judge or jev.ask
+        self._count(calls=1)
+        try:
+            scores = [float(score) for score in judge(text, [line["text"] for line in lines], timeout=room)]
+            if len(scores) != len(lines) or not all(0.0 <= score <= 1.0 for score in scores):
+                raise jev.JevFailed("answer", "scores")
+        except jev.JevFailed as failed:
+            said = failed.kind + (f" ({failed.detail})" if failed.detail else "")
+            if failed.kind == "timeout":
+                self._count(timeouts=1, last_failure=said)
+                return [], "timeout"
+            self._count(errors=1, last_failure=said)
+            return [], "error"
+        except Exception as exc:  # a judge that broke: nothing shows
+            self._count(errors=1, last_failure=f"error ({type(exc).__name__})")
+            return [], "error"
+        chosen = sorted(
+            (index for index, score in enumerate(scores) if score >= CUE_JUDGE_THRESHOLD),
+            key=lambda index: (-scores[index], index),
+        )[:CUE_LINES]
+        shown = [{**lines[index], "score": round(scores[index], 4)} for index in chosen]
+        self._count(answered=1, shown=len(shown), none_shown=0 if shown else 1)
+        return shown, "shown" if shown else "none"
+
+    def _count(self, *, last_failure: str | None = None, **increments: int) -> None:
+        with self._judged_lock:
+            for name, n in increments.items():
+                self._judged[name] += n
+            if last_failure is not None:
+                self._judged["last_failure"] = last_failure
+
+    def judge_counts(self) -> dict[str, Any]:
+        """What judging has done in this process: a copy of the counts."""
+        with self._judged_lock:
+            return dict(self._judged)
+
+
+def _wait(value: Any) -> float:
+    """How long the hook said it waits for this answer, when that makes sense;
+    else what a hook waits without the judge."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        if 0 < value <= HOOK_SECONDS:
+            return float(value)
+    return ANSWER_SECONDS
+
+
+def judge_health(answerer: Any = None, environ: Mapping[str, str] | None = None) -> dict[str, Any] | None:
+    """The health card's word on the judge (WP-R16b), or None while it is
+    off and nothing was judged here: the switch as this process sees it (never
+    the key), this process's answerer's counts, and ``line``, the one line the
+    card prints, which says what leaves the machine. Never raises."""
+    try:
+        status = jev.status(environ)
+        counts = answerer.judge_counts() if answerer is not None and hasattr(answerer, "judge_counts") else {}
+    except Exception:
+        return None
+    if not status["switched_on"] and not counts.get("messages"):
+        return None
+    label = f"{'Cue judge:':<15}"
+    if status["switched_on"] and not status["key"] and not counts.get("calls"):
+        line = (f"{label}switched to Jev, but there is no key at {status['key_file']}, "
+                "so nothing is sent and the cue shows what it did before.")
+    else:
+        line = (f"{label}Jev decides which memories come to each message. Each message and "
+                f"at most {status['candidates']} memory lines of up to {status['line_chars']} "
+                f"characters go to {status['host']}.")
+        if counts.get("messages"):
+            line += (f" This session: {counts['calls']} asked, {counts['timeouts']} timed out, "
+                     f"{counts['errors']} failed, and the cue showed nothing for those.")
+    return {**status, "counts": counts, "line": line}
 
 
 # ── The hook ──
@@ -794,6 +954,8 @@ def prompt_hook(
     session = clean_session_id(payload.get("session_id")) or clean_session_id(env.get("CLAUDE_CODE_SESSION_ID"))
     seen_file = SeenFile(session, key)
     seen = seen_file.read()
+    # Jev decides (WP-R16b), when the switch is on and there is a key.
+    judged = jev.in_use(env)
 
     from .store.sqlite_store import ReadOnlyEngramStore
 
@@ -809,22 +971,34 @@ def prompt_hook(
             return ""  # a newer Mnemos has opened this store
         _check(deadline)
         room = deadline - time.monotonic()
-        reply = ask_answerer(
-            key, text, exclude=seen["shown"], texts=seen["texts"], environ=env,
-            connect_seconds=min(CONNECT_SECONDS, max(0.0, room)),
-            answer_seconds=min(ANSWER_SECONDS, max(0.0, room - CONNECT_SECONDS - 0.15)),
-        )
-        if reply is not None:
-            lines, via = _valid_lines(reply["lines"]), "meaning"
-        else:
-            _check(deadline)
-            from .simple_runtime import cue_memories
-
-            lines = cue_memories(
-                store, None, text, exclude=seen["shown"], exclude_texts=seen["texts"],
-                agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        if judged:
+            # Only lines an answerer judged show. With no answerer that
+            # judged, a slow one, or a judge that failed, nothing does. There
+            # is no answering from words, so the answerer gets that time too.
+            reply = ask_answerer(
+                key, text, exclude=seen["shown"], texts=seen["texts"], environ=env, judge=jev.JEV,
+                connect_seconds=min(CONNECT_SECONDS, max(0.0, room)),
+                answer_seconds=max(0.0, room - CONNECT_SECONDS - JUDGE_MARGIN),
             )
-            via = "words"
+            ruled = reply is not None and reply.get("judge") == jev.JEV
+            lines, via = (_valid_lines(reply["lines"]) if ruled else []), jev.JEV
+        else:
+            reply = ask_answerer(
+                key, text, exclude=seen["shown"], texts=seen["texts"], environ=env,
+                connect_seconds=min(CONNECT_SECONDS, max(0.0, room)),
+                answer_seconds=min(ANSWER_SECONDS, max(0.0, room - CONNECT_SECONDS - 0.15)),
+            )
+            if reply is not None:
+                lines, via = _valid_lines(reply["lines"]), "meaning"
+            else:
+                _check(deadline)
+                from .simple_runtime import cue_memories
+
+                lines = cue_memories(
+                    store, None, text, exclude=seen["shown"], exclude_texts=seen["texts"],
+                    agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+                )
+                via = "words"
     finally:
         store.close()
     shown = set(seen["shown"])
@@ -833,6 +1007,7 @@ def prompt_hook(
     _check(deadline)
     block = format_block(lines)
     if block:
+        judged_scores = {"scores": [line.get("score") for line in lines]} if via == jev.JEV else {}
         seen_file.record(
             [line["id"] for line in lines],
             [line["key"] for line in lines],
@@ -841,6 +1016,7 @@ def prompt_hook(
                 "ids": [line["id"] for line in lines],
                 "similarity": [line.get("similarity") for line in lines],
                 "via": via,
+                **judged_scores,
                 "ms": round((time.perf_counter() - started) * 1000, 1),
             },
         )
@@ -856,10 +1032,12 @@ def _valid_lines(lines: Any) -> list[dict[str, Any]]:
         if not all(isinstance(line.get(field), str) and line.get(field) for field in ("id", "text", "date", "key")):
             continue
         similarity = line.get("similarity")
+        score = line.get("score")
         valid.append({
             "id": line["id"], "text": line["text"][:CUE_LINE_CHARS], "date": line["date"][:10],
             "key": line["key"], "lesson": bool(line.get("lesson")),
             "similarity": similarity if isinstance(similarity, (int, float)) else None,
+            "score": score if isinstance(score, (int, float)) and not isinstance(score, bool) else None,
         })
     return valid
 

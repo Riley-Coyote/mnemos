@@ -22,9 +22,10 @@ switch that is off by default, Jev can decide.
   whether each bears on the message. At most three that Jev scores 0.8 or
   more show, the likeliest first.
 - What leaves the machine, and nothing else: the message, up to 1,000
-  characters (a longer one goes as its first 700 and its last 300, since
-  people put the ask at either end of a pasted log), and up to six lines of
-  at most 200 characters, to Jev at api.typesafe.ai. No ids, dates or scope.
+  characters with the mark included (a longer one goes as its first 700,
+  " … " and its last 297, since people put the ask at either end of a pasted
+  log), and up to six lines of at most 200 characters, to Jev at
+  api.typesafe.ai. No ids, dates or scope.
   The key goes only into the request's Authorization header: never a log
   line, an error or a reply. While the switch is on, the health card says
   so in one line, with this session's calls, timeouts and failures.

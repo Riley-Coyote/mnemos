@@ -630,10 +630,10 @@ def test_only_the_message_and_six_lines_of_200_leave_in_the_labs_words(tmp_path,
     assert jev.ask(MESSAGE, [], url=fake.url, environ=environ) == [] and len(fake.requests) == 1
 
 
-def test_a_long_message_goes_as_its_first_700_and_last_300_characters(fake_jev, key):
-    """At most 1,000 characters of a message leave: a longer one goes as its
-    first 700, " … " and its last 300, since people put the ask at either end
-    of a pasted log. One at the cap or under it goes unchanged."""
+def test_a_long_message_goes_as_its_first_700_and_last_297_characters(fake_jev, key):
+    """At most 1,000 characters of a message leave, the mark included: a longer
+    one goes as its first 700, " … " and its last 297, since people put the ask
+    at either end of a pasted log. One at the cap or under it goes unchanged."""
     fake = fake_jev()
     environ = {"MNEMOS_JEV_KEY_FILE": str(key)}
     head = "Why does the lighthouse build fail? The log follows. "
@@ -646,8 +646,8 @@ def test_a_long_message_goes_as_its_first_700_and_last_300_characters(fake_jev, 
     jev.ask(long, ["a line"], url=fake.url, environ=environ)
 
     sent = fake.requests[-1]["body"]["state"]["message"]
-    assert sent == long[:700] + " … " + long[-300:]
-    assert len(sent) == 1_000 + len(" … ")
+    assert sent == long[:700] + " … " + long[-297:]
+    assert len(sent) == 1_000
     assert sent.startswith(head) and sent.endswith(tail)
 
     for size in (999, 1_000):
@@ -656,7 +656,8 @@ def test_a_long_message_goes_as_its_first_700_and_last_300_characters(fake_jev, 
         assert fake.requests[-1]["body"]["state"]["message"] == whole
     over = ("keeper lamp " * 100)[:1_001]
     jev.ask(over, ["a line"], url=fake.url, environ=environ)
-    assert fake.requests[-1]["body"]["state"]["message"] == over[:700] + " … " + over[-300:]
+    assert fake.requests[-1]["body"]["state"]["message"] == over[:700] + " … " + over[-297:]
+    assert len(fake.requests[-1]["body"]["state"]["message"]) == 1_000
 
 
 @pytest.mark.parametrize("server, kind, detail", [

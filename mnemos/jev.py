@@ -54,11 +54,12 @@ CANDIDATES = 6
 LINE_CHARS = 200
 # And the message, up to this many characters. A longer one goes as its first
 # MESSAGE_HEAD and last MESSAGE_TAIL characters with MESSAGE_MARK between:
-# people put what they ask at either end of a pasted log.
+# people put what they ask at either end of a pasted log. The mark counts
+# toward the cap, so what leaves is never more than MESSAGE_CHARS.
 MESSAGE_CHARS = 1000
 MESSAGE_HEAD = 700
-MESSAGE_TAIL = 300
 MESSAGE_MARK = " … "
+MESSAGE_TAIL = MESSAGE_CHARS - MESSAGE_HEAD - len(MESSAGE_MARK)  # 297
 # Jev's time, end to end, in seconds.
 TIMEOUT = 0.4
 

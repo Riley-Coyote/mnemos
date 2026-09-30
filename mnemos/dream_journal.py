@@ -19,6 +19,18 @@ DREAM_JOURNAL_TAG = "dream-journal"
 DREAM_DOMAIN = "situational"
 MAX_NARRATIVE_CHARS = 700
 
+# Reports kept in use in a scope: the newest this many. Writing a report
+# retires the ones older than them (``retire_old_reports``): archived, with
+# their words and revision trail, never deleted. Before reports were found by
+# their tag, each cycle wrote a new one instead of replacing the last, and
+# they piled up: 117 in use at once on a copy of the live store (2026-09-29).
+REPORTS_KEPT = 5
+RETIRED_REASON = f"retired: older than the newest {REPORTS_KEPT} maintenance reports"
+
+# Where the health card reads when a scope's report was last written: the
+# runtime's own meta key for it (``MnemosRuntime._meta_key``).
+WRITTEN_META = "dream_last_written_at"
+
 # What a deep cycle that changed nothing reports. The packet leaves it out:
 # "While I was away" is for when something changed.
 NO_CHANGE_NARRATIVE = (
@@ -119,6 +131,36 @@ def compose_dream_narrative(
     return narrative
 
 
+def report_cycle(
+    store: EngramStore,
+    scope: MnemosScope,
+    cycle_stats: dict,
+    promoted: int = 0,
+) -> tuple[str | None, str | None]:
+    """Report one maintenance cycle, under the journal's rule: only when it
+    did something worth telling (``compose_dream_narrative``). The report
+    supersedes the last one and retires those older than the newest
+    ``REPORTS_KEPT`` (``write_dream_entry``), and when it was written is kept
+    where the health card reads it. Returns its id and words, or
+    ``(None, None)`` when there was nothing worth telling.
+
+    A session's maintenance (``MnemosRuntime.maintain``) and the scheduled
+    ``mnemos consolidate`` both report through this. The scheduled job used to
+    write none, so its cycles went untold, and the briefing's newest report
+    fell behind what had changed."""
+
+    deltas = collect_belief_deltas(store, scope.agent_id, cycle_stats.get("started_at", ""))
+    narrative = compose_dream_narrative(cycle_stats, deltas, promoted)
+    if not narrative:
+        return None, None
+    entry_id = write_dream_entry(store, scope, narrative)
+    store.set_meta(
+        f"simple:{scope.agent_id}:{scope.person_id}:{scope.project_scope}:{WRITTEN_META}",
+        datetime.now(timezone.utc).isoformat(),
+    )
+    return entry_id, narrative
+
+
 def collect_belief_deltas(
     store: EngramStore,
     agent_id: str,
@@ -211,33 +253,73 @@ def changed_something(entry: dict[str, Any]) -> bool:
 
 
 def write_dream_entry(store: EngramStore, scope: MnemosScope, narrative: str) -> str:
-    """Store a dream narrative, superseding any prior entry for this scope."""
+    """Store a dream narrative, superseding any prior entry for this scope,
+    and retire the reports older than the newest ``REPORTS_KEPT``, all in one
+    transaction. Returns the new entry's id."""
 
-    prior = fetch_active_dream_entry(store, scope)
-    if prior:
-        return store.supersede_hypomnema_entry(
-            prior["id"],
-            narrative,
-            reason="dream journal: newer consolidation entry",
-            agent_id=scope.agent_id,
-            person_id=scope.person_id,
-            project_scope=scope.project_scope,
-        )
-    return store.write_hypomnema_entry(
-        narrative,
-        agent_id=scope.agent_id,
-        person_id=scope.person_id,
-        project_scope=scope.project_scope,
-        source="synthesized",
-        entry_kind="maintenance_report",
-        authored_by="system",
-        author_id="mnemos",
-        domain=DREAM_DOMAIN,
-        tags=[DREAM_JOURNAL_TAG],
-        confidence=0.55,
-        salience=0.4,
-        foundational=False,
-    )
+    with store.transaction():
+        prior = fetch_active_dream_entry(store, scope)
+        if prior:
+            entry_id = store.supersede_hypomnema_entry(
+                prior["id"],
+                narrative,
+                reason="dream journal: newer consolidation entry",
+                agent_id=scope.agent_id,
+                person_id=scope.person_id,
+                project_scope=scope.project_scope,
+            )
+        else:
+            entry_id = store.write_hypomnema_entry(
+                narrative,
+                agent_id=scope.agent_id,
+                person_id=scope.person_id,
+                project_scope=scope.project_scope,
+                source="synthesized",
+                entry_kind="maintenance_report",
+                authored_by="system",
+                author_id="mnemos",
+                domain=DREAM_DOMAIN,
+                tags=[DREAM_JOURNAL_TAG],
+                confidence=0.55,
+                salience=0.4,
+                foundational=False,
+            )
+        retire_old_reports(store, scope)
+    return entry_id
+
+
+def retire_old_reports(store: EngramStore, scope: MnemosScope, keep: int = REPORTS_KEPT) -> list[str]:
+    """Retire this scope's maintenance reports older than the newest ``keep``
+    (newest by the order the briefing's finder reads them in), and return
+    their ids.
+
+    Retired is archived (``archive_hypomnema_entry``): taken out of use, with
+    its words and revision trail kept and ``RETIRED_REASON`` recorded, never
+    deleted, so it can be restored. Only the dream journal's reports: an
+    identity report or a note carries another tag or kind."""
+
+    scope_args = {
+        "agent_id": scope.agent_id,
+        "person_id": scope.person_id,
+        "project_scope": scope.project_scope,
+    }
+    rows = store._get_conn().execute(
+        """
+        SELECT id FROM hypomnema_entries
+        WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+          AND entry_kind = 'maintenance_report' AND active = 1
+          AND tags_json LIKE ?
+        ORDER BY last_revised_at DESC, created_at DESC, rowid DESC
+        LIMIT -1 OFFSET ?
+        """,
+        (*scope_args.values(), f'%"{DREAM_JOURNAL_TAG}"%', max(0, int(keep))),
+    ).fetchall()
+    retired = [row[0] for row in rows]
+    if retired:
+        with store.transaction():
+            for entry_id in retired:
+                store.archive_hypomnema_entry(entry_id, reason=RETIRED_REASON, **scope_args)
+    return retired
 
 
 def polish_dream_entry(

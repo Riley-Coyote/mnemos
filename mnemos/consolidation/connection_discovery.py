@@ -12,10 +12,12 @@ Phase 2 upgrade:
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from ..core.engram import Connection
 from ..core.types import ConnectionRelation, DEFAULT_AGENT_ID
+from ..store import embedding_index as _embedding
 from ..store.fts import distinctive_terms, fts_words, or_query, overlap
 from ..encoding.llm_classifier import classify_connections
 
@@ -25,6 +27,53 @@ if TYPE_CHECKING:
     from ..llm import LLMClient
 
 log = logging.getLogger("mnemos.consolidation.connections")
+
+
+class _LinkLookup:
+    """The pass's lookups by meaning, bounded as write-path indexing is.
+
+    Maintenance runs inside a capture, and the pass looks up to 50 memories'
+    neighbours by meaning, embedding each one. With a network backend each
+    lookup waited up to 30 s, so a network that hung held the capture for
+    minutes. Now, with a network backend, the pass's lookups share one budget
+    (``WRITE_EMBED_SECONDS``), each waits at most ``NETWORK_TIMEOUT`` and never
+    past it, and the first that times out ends them: the memories left are
+    linked by their words this cycle, and by meaning in a later one. The local
+    model waits on no network and is not bounded. ``timeouts`` and
+    ``deferred`` go into the cycle's log, where the watchdog counts them."""
+
+    def __init__(self, index: Any | None) -> None:
+        self.index = index
+        self.meaning = bool(index is not None and getattr(index, "available", False))
+        self.network = self.meaning and bool(getattr(index, "network", False))
+        self.deadline = (
+            time.monotonic() + _embedding.WRITE_EMBED_SECONDS if self.network else None
+        )
+        self.spent = False
+        self.timeouts = 0
+        self.deferred = 0
+
+    def neighbours(self, engram: Any) -> list[tuple[str, float]]:
+        """``engram``'s nearest by meaning; none when meaning is off, or spent
+        for this pass (the memory is then counted as deferred)."""
+        if not self.meaning:
+            return []
+        if self.deadline is None:
+            return self.index.search(engram.content, k=10, exclude_ids={engram.id})
+        wait = min(_embedding.NETWORK_TIMEOUT, self.deadline - time.monotonic())
+        if self.spent or wait <= 0:
+            self.spent = True
+            self.deferred += 1
+            return []
+        before = getattr(self.index, "timeouts", 0)
+        found = self.index.search(engram.content, k=10, exclude_ids={engram.id}, timeout=wait)
+        if getattr(self.index, "timeouts", 0) > before:
+            # The backend isn't answering: nothing more is asked of it here.
+            self.timeouts += 1
+            self.deferred += 1
+            self.spent = True
+            return []
+        return found
 
 
 def run_connection_discovery(
@@ -93,16 +142,15 @@ def run_connection_discovery(
         if len(existing) < max_per_engram:
             underconnected.append((engram, existing))
 
+    lookup = _LinkLookup(embedding_index)
     for engram, existing_connections in underconnected[:max_per_pass]:
         stats["engrams_processed"] += 1
         existing_target_ids = {c.target_id for c in existing_connections}
         candidates = []
 
-        # 1. Embedding-based candidates (if available)
-        if embedding_index and embedding_index.available:
-            emb_results = embedding_index.search(
-                engram.content, k=10, exclude_ids={engram.id},
-            )
+        # 1. Embedding-based candidates (if available, within the pass's time)
+        if lookup.meaning:
+            emb_results = lookup.neighbours(engram)
             for eid, score in emb_results:
                 if eid not in existing_target_ids and score >= similarity_threshold:
                     candidate = (
@@ -182,6 +230,12 @@ def run_connection_discovery(
                 stats["connections_created"] += 1
 
         store.save_engram(engram)
+
+    if lookup.network:
+        # Lookups by meaning that timed out, and memories linked by their
+        # words alone this cycle for want of the backend's time.
+        stats["embedding_timeouts"] = lookup.timeouts
+        stats["embedding_deferred"] = lookup.deferred
 
     # ── Phase B: Reclassify unclassified connections ──
     if llm_client:

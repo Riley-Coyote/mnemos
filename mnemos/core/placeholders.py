@@ -1,12 +1,13 @@
 """Impacts the server writes itself.
 
 An impact is what a memory changed, in the agent's own words. A few code paths
-fill the field with a fixed phrase instead: a correction, a promotion, and the
-older capture path that chose a phrase by domain. These phrases fill the column
-but are not traces of how understanding changed. They must not become lessons,
-or count as a memory having taught one. Newer rows also say so in
-``impact_source="template"``. Older rows carry the phrase with no source
-recorded, so the phrase itself is the test.
+filled the field with a fixed phrase instead: a correction (until code version
+10, which leaves it empty), a promotion, and the older capture path that chose
+a phrase by domain. These phrases fill the column but are not traces of how
+understanding changed. They must not become lessons, or count as a memory
+having taught one. Newer rows also say so in ``impact_source="template"``.
+Older rows carry the phrase with no source recorded, so the phrase itself is
+the test.
 """
 
 from __future__ import annotations

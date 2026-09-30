@@ -49,6 +49,7 @@ from .interface.context_packet import (
     format_questions,
     room_after,
     shown_ids,
+    shown_memories,
     standing_words,
     whose_handoff,
 )
@@ -1625,6 +1626,13 @@ class MnemosRuntime:
         of an event. The server must never write one itself — a phrase it
         picked from a list is exactly the boilerplate that made 76% of a
         live store records rather than traces. It can only notice, and ask.
+
+        A memory whose lesson question ended with an answer is not asked this:
+        answered in words, it carries them already; skipped ("nothing true
+        comes"), asking what it changed asks the same thing again. The skip
+        holds until the memory's words change, and a correction writes them
+        as a new memory, which may be asked once more. The lesson pass keeps
+        the same rule the other way round (``_enqueue_lesson_reflections``).
         """
         self._ensure_init()
         assert self._store is not None
@@ -1645,12 +1653,14 @@ class MnemosRuntime:
         # A memory already being asked about as a fading lesson must not also
         # be asked about as a missing impact. Two questions about one memory
         # in one packet reads as nagging, however reasonable each is alone.
+        # Nor is one asked again once either question about it has ended with
+        # an answer or a skip.
         already_asked = {
             r[0] for r in self._store._get_conn().execute(
                 """
                 SELECT target_id FROM reflection_queue
                 WHERE agent_id = ? AND person_id = ? AND project_scope = ?
-                  AND answered_at IS NULL
+                  AND (answered_at IS NULL OR kind IN ('impact', 'lesson'))
                 """,
                 (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
             ).fetchall()
@@ -1694,6 +1704,13 @@ class MnemosRuntime:
         Of the rest, the faintest are asked first. The question exists to
         catch what a memory taught before it fades, and the faintest is the
         nearest to gone; the softening pass names them the other way round.
+
+        A memory whose "what did this change?" was skipped is set aside too:
+        nothing true came for it, and asking what it taught asks the same
+        thing again. (Answered in words, it carries them, and the softening
+        pass never names it.) The skip holds until a correction writes the
+        memory's words anew, as a new memory. The impact pass keeps the same
+        rule the other way round.
         """
         self._ensure_init()
         assert self._store is not None
@@ -1702,7 +1719,7 @@ class MnemosRuntime:
             row[0] for row in self._store._get_conn().execute(
                 """
                 SELECT target_id FROM reflection_queue
-                WHERE kind = 'lesson'
+                WHERE (kind = 'lesson' OR (kind = 'impact' AND answered_at IS NOT NULL))
                   AND agent_id = ? AND person_id = ? AND project_scope = ?
                 """,
                 (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
@@ -2855,6 +2872,10 @@ class MnemosRuntime:
         memory matches it (at most ``max_results`` of each kind), in the room
         left under the packet's budget. Building the packet runs no
         maintenance; that rides on captures, corrections and mnemos_maintain.
+
+        What the packet showed counts as shown in this session, exactly as the
+        session-start hook's briefing does (``_record_briefing_shown``), so
+        the prompt hook's cue doesn't bring those lines again.
         """
 
         self._ensure_init()
@@ -2865,6 +2886,7 @@ class MnemosRuntime:
         self._current_session()
         packet = self._briefing_packet()
         self._note_context_outcome(carried_count(packet))
+        self._record_briefing_shown(packet)
         shown = packet.get("shown") or {}
         asked = set(shown.get("questions") or [])
         self._traced_read(
@@ -2890,6 +2912,25 @@ class MnemosRuntime:
                 "memory. Capture durable context as the conversation gives it."
             )
         return "\n\n".join(parts)
+
+    def _record_briefing_shown(self, packet: Mapping[str, Any]) -> None:
+        """Record what a briefing showed for the Claude Code session this
+        process serves, as the session-start hook records its own (``mnemos
+        hook session-start``): the ids it named, the memory each shown note is
+        one object with, and the words shown. Only a briefing that says
+        something, and only in a harness session. The record is a small file
+        outside the store (``cue.record_briefing``, which never raises).
+
+        Without it, a session that fetched its briefing through mnemos_context
+        (no session-start hook) had those same lines offered again by the
+        prompt hook's cue."""
+        session = harness_session()
+        if not session or not (packet.get("prompt") or "").strip():
+            return
+        from .cue import record_briefing
+
+        ids, texts = shown_memories(dict(packet))
+        record_briefing(session, db_path=str(self.db_path), **self._scope_args(), ids=ids, texts=texts)
 
     def _briefing_packet(
         self,
@@ -3871,7 +3912,6 @@ class MnemosRuntime:
         impact: str,
         *,
         action: str,
-        placeholder: str,
         corrector: str,
         session: str,
         older: bool,
@@ -3888,6 +3928,10 @@ class MnemosRuntime:
         replaces is carried to the replacement, signed as it was. Code older
         than the store does none of that: it records the agent's words,
         retires what they name, and changes nothing else.
+
+        With no meaning given and none to carry, the replacement's impact is
+        left empty: the server never writes its own words where the agent's
+        meaning goes (it wrote "Correction to earlier continuity." there).
         """
         assert self._store is not None
         assert self._encoder is not None
@@ -3897,7 +3941,7 @@ class MnemosRuntime:
         # What it meant, carried unless the agent says otherwise: this pair's
         # memory first, then any other it still held.
         meanings = sorted(held, key=lambda memory: engram is None or memory.id != engram.id)
-        meaning, meaning_source, kept = _replacement_impact(impact, placeholder, *meanings)
+        meaning, meaning_source, kept = _replacement_impact(impact, *meanings)
         # A standing memory stays standing when its words are corrected: the
         # replacement carries the mark in force, signed as it was. Without it,
         # correcting a rule would quietly take it out of every briefing. Code
@@ -4281,8 +4325,8 @@ class MnemosRuntime:
         target = target_id.strip()
         # Code older than the store records the agent's words and applies no
         # rules: a correction still retires what it names and writes its
-        # replacement, without links to other memories, lineage, versions,
-        # lessons, or a placeholder where its meaning would go.
+        # replacement, without links to other memories, lineage, versions or
+        # lessons.
         older = self._older_than_store() is not None
 
         if marking:
@@ -4327,13 +4371,10 @@ class MnemosRuntime:
                     return "\n".join(lines + ([followed] if followed else []))
 
                 by_note = kind == "note"
+                # What it means: the agent's words, carried, or nothing.
                 result = self._replace_pair(
                     note, engram, correction, impact,
                     action=action,
-                    # A correction by note id wrote no memory before, so it
-                    # never gets the server's placeholder where its meaning
-                    # would go: the agent's words, carried, or nothing.
-                    placeholder="" if older or by_note else "Correction to earlier continuity.",
                     older=older,
                     **signing,
                 )
@@ -4395,7 +4436,6 @@ class MnemosRuntime:
                 result = self._replace_pair(
                     note, engram, correction, impact,
                     action=action,
-                    placeholder="" if older else "Corrected continuity for future interactions.",
                     older=older,
                     query=query_text,
                     **signing,
@@ -4537,27 +4577,20 @@ class MnemosRuntime:
             if self._host_mutation_active:
                 raise
 
-        # Dream journal: narrate the cycle when it did meaningful work. The
-        # import stays local so a journal failure can never break maintenance.
+        # Dream journal: narrate the cycle when it did meaningful work, as the
+        # scheduled `mnemos consolidate` does (``report_cycle``). The import
+        # stays local so a journal failure can never break maintenance.
         self.last_dream_note_id = None
         self.last_dream_narrative = None
         dream_status = "skipped (nothing noteworthy)"
         try:
-            from .dream_journal import (
-                collect_belief_deltas,
-                compose_dream_narrative,
-                write_dream_entry,
-            )
+            from .dream_journal import report_cycle
 
-            deltas = collect_belief_deltas(
-                self._store, self.scope.agent_id, stats.get("started_at", "")
-            )
-            narrative = compose_dream_narrative(stats, deltas, promoted)
+            note_id, narrative = report_cycle(self._store, self.scope, stats, promoted)
             if narrative:
-                self.last_dream_note_id = write_dream_entry(self._store, self.scope, narrative)
+                self.last_dream_note_id = note_id
                 self.last_dream_narrative = narrative
-                self._traced_write(self.last_dream_note_id)
-                self._set_meta("dream_last_written_at", datetime.now(timezone.utc).isoformat())
+                self._traced_write(note_id)
                 dream_status = "updated"
         except Exception:
             if self._host_mutation_active:
@@ -5009,20 +5042,19 @@ def _importance_scores(importance: str | float, domain: str) -> tuple[float, flo
 _TEMPLATED_IMPACTS = TEMPLATED_IMPACTS
 
 
-def _replacement_impact(
-    impact: str, placeholder: str, *replaced: Engram | None
-) -> tuple[str, str, str]:
+def _replacement_impact(impact: str, *replaced: Engram | None) -> tuple[str, str, str]:
     """What a correction's replacement means: (impact, impact_source, note).
 
     An impact given with the correction is the agent's own words, labelled as
     capture labels them. Without one, the replacement keeps what the memory
     it replaces meant (``replaced`` is newest first), with that meaning's own
-    source: a correction usually fixes a detail, not the meaning, and a
-    placeholder in its place means no lesson can ever come from it. A
-    placeholder is never carried as meaning, so only when there is nothing
-    true to carry does the replacement get one. ``note`` is the result line
-    saying what was kept, so the agent can notice a meaning that no longer
-    holds.
+    source: a correction usually fixes a detail, not the meaning. A
+    placeholder is never carried as meaning. When there is nothing true to
+    carry, the impact stays empty, as a capture's does without one: the
+    server's own words there ("Correction to earlier continuity.") were no
+    one's meaning, and no lesson could ever come from them. ``note`` is the
+    result line saying what was kept, so the agent can notice a meaning that
+    no longer holds.
     """
     given = (impact or "").strip()
     if given:
@@ -5038,7 +5070,7 @@ def _replacement_impact(
                 f'Kept what it meant: "{shown}"{end} '
                 "If that has changed, correct it with a new impact."
             )
-    return placeholder, "template", ""
+    return "", "", ""
 
 
 def _impact_for(content: str, domain: str) -> str:

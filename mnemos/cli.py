@@ -1703,9 +1703,27 @@ def _cmd_consolidate(args: argparse.Namespace) -> int:
     for e in errors:
         print(f"  ERROR ({e}): {stats[e]}", file=sys.stderr)
 
+    _report_consolidation(store, scope, stats)
     _index_after_consolidating(store, args, scope)
     store.close()
     return 0
+
+
+def _report_consolidation(store, scope, stats: dict) -> None:
+    """The cycle's maintenance report, under the dream journal's rule: written
+    only when the cycle did something worth telling, superseding the last one,
+    as a session's maintenance writes it (``dream_journal.report_cycle``).
+    Without it the scheduled job's cycles went untold: the briefing's newest
+    report fell behind what had changed, and the watchdog said so. The cycle
+    has already run and nothing here can undo it."""
+    try:
+        from .dream_journal import report_cycle
+
+        _entry, narrative = report_cycle(store, scope, stats)
+    except Exception as exc:
+        print(f"Maintenance report: not written ({type(exc).__name__}: {exc})")
+        return
+    print("Maintenance report: written" if narrative else "Maintenance report: none, nothing worth reporting")
 
 
 def _index_after_consolidating(store, args: argparse.Namespace, scope) -> None:
@@ -2470,6 +2488,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print(f"Model:        {'dedicated provider configured' if runtime.has_dedicated_model else 'local baseline only'}")
         _print_background_status(runtime.scope)
         _print_semantic_status(runtime, watched)
+        _print_judge_status(watched)
         print(f"Simple tools: {', '.join(SIMPLE_TOOL_NAMES)}")
         _print_memory_status(runtime)
         _print_continuity_status(runtime)
@@ -2478,6 +2497,38 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         return 0
     finally:
         runtime.close()
+
+
+def _print_judge_status(watched=None) -> None:
+    """Say whether the cue's judge is on, where the switch was read from, and
+    whether a key file is there (by its size: the key is never read), as this
+    shell sees them; the prompt hook reads the same switch, from the config
+    file or the environment Claude Code started in. Then, when any session's
+    answerer has kept calls, how the last of them ended (the watchdog flags
+    repeated failures with the others)."""
+    from . import jev
+
+    try:
+        status = jev.status()
+    except Exception as exc:
+        print(f"Cue judge:    unknown ({type(exc).__name__}: {exc})")
+        return
+    key = f"key file {status['key_file']}: {status['key_state']}"
+    if status["in_use"]:
+        print(f"Cue judge:    on: Jev decides which memories the cue shows (switch: {status['source']}; {key})")
+    elif status["switched_on"]:
+        print(
+            f"Cue judge:    switched on ({status['source']}), but with no key the cue runs "
+            f"without Jev ({key})"
+        )
+    else:
+        print(f"Cue judge:    off (switch: {status['source']}; {key})")
+    calls = ((watched or {}).get("checks") or {}).get("cue_judge") or {}
+    if calls.get("calls"):
+        print(
+            f"              Jev's last {calls['calls']} call(s), all sessions: {calls['answered']} "
+            f"answered, {calls['timeouts']} timed out, {calls['errors']} failed"
+        )
 
 
 def _print_watchdog(watched) -> None:

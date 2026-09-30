@@ -14,7 +14,9 @@ future interactions."
 
 A correction usually fixes a detail, not the meaning. So the replacement keeps
 the meaning unless the agent gives a new one, and the result says what was
-kept, so the agent can notice a meaning that no longer holds.
+kept, so the agent can notice a meaning that no longer holds. With nothing true
+to carry, it means nothing yet: its impact stays empty, as a capture's does,
+and the server's own words never go there (WP-R19).
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ MEANING = "Spring changes shape: the draft has to be whole before she leaves."
 NEW_MEANING = "Spring is still hers: the draft only has to be whole by April."
 QUERY = "Lisbon residency"
 
+# What the two correction paths wrote where a meaning goes, until WP-R19.
 PLACEHOLDER = {
     "by-memory-id": "Correction to earlier continuity.",
     "by-query": "Corrected continuity for future interactions.",
@@ -163,10 +166,11 @@ def test_a_placeholder_is_never_carried_as_meaning(db, path, impact, impact_sour
         rt.close()
 
     kept, source = _live(db, "five weeks")
-    # Nothing true to carry, so the replacement gets its placeholder, as
-    # before, labelled as one.
-    assert kept == PLACEHOLDER[path], kept
-    assert source == "template", source
+    # Nothing true to carry, so the replacement means nothing yet: its impact
+    # stays empty, as a capture's does without one. The server's own words
+    # ("Correction to earlier continuity.") are no one's meaning.
+    assert (kept, source) == ("", ""), (kept, source)
+    assert PLACEHOLDER[path] not in result, result
     assert "Kept what it meant" not in result, result
 
 

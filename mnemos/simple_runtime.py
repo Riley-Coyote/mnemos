@@ -3870,7 +3870,6 @@ class MnemosRuntime:
         impact: str,
         *,
         action: str,
-        placeholder: str,
         corrector: str,
         session: str,
         older: bool,
@@ -3887,6 +3886,10 @@ class MnemosRuntime:
         replaces is carried to the replacement, signed as it was. Code older
         than the store does none of that: it records the agent's words,
         retires what they name, and changes nothing else.
+
+        With no meaning given and none to carry, the replacement's impact is
+        left empty: the server never writes its own words where the agent's
+        meaning goes (it wrote "Correction to earlier continuity." there).
         """
         assert self._store is not None
         assert self._encoder is not None
@@ -3896,7 +3899,7 @@ class MnemosRuntime:
         # What it meant, carried unless the agent says otherwise: this pair's
         # memory first, then any other it still held.
         meanings = sorted(held, key=lambda memory: engram is None or memory.id != engram.id)
-        meaning, meaning_source, kept = _replacement_impact(impact, placeholder, *meanings)
+        meaning, meaning_source, kept = _replacement_impact(impact, *meanings)
         # A standing memory stays standing when its words are corrected: the
         # replacement carries the mark in force, signed as it was. Without it,
         # correcting a rule would quietly take it out of every briefing. Code
@@ -4279,8 +4282,8 @@ class MnemosRuntime:
         target = target_id.strip()
         # Code older than the store records the agent's words and applies no
         # rules: a correction still retires what it names and writes its
-        # replacement, without links to other memories, lineage, versions,
-        # lessons, or a placeholder where its meaning would go.
+        # replacement, without links to other memories, lineage, versions or
+        # lessons.
         older = self._older_than_store() is not None
 
         if marking:
@@ -4325,13 +4328,10 @@ class MnemosRuntime:
                     return "\n".join(lines + ([followed] if followed else []))
 
                 by_note = kind == "note"
+                # What it means: the agent's words, carried, or nothing.
                 result = self._replace_pair(
                     note, engram, correction, impact,
                     action=action,
-                    # A correction by note id wrote no memory before, so it
-                    # never gets the server's placeholder where its meaning
-                    # would go: the agent's words, carried, or nothing.
-                    placeholder="" if older or by_note else "Correction to earlier continuity.",
                     older=older,
                     **signing,
                 )
@@ -4393,7 +4393,6 @@ class MnemosRuntime:
                 result = self._replace_pair(
                     note, engram, correction, impact,
                     action=action,
-                    placeholder="" if older else "Corrected continuity for future interactions.",
                     older=older,
                     query=query_text,
                     **signing,
@@ -5007,20 +5006,19 @@ def _importance_scores(importance: str | float, domain: str) -> tuple[float, flo
 _TEMPLATED_IMPACTS = TEMPLATED_IMPACTS
 
 
-def _replacement_impact(
-    impact: str, placeholder: str, *replaced: Engram | None
-) -> tuple[str, str, str]:
+def _replacement_impact(impact: str, *replaced: Engram | None) -> tuple[str, str, str]:
     """What a correction's replacement means: (impact, impact_source, note).
 
     An impact given with the correction is the agent's own words, labelled as
     capture labels them. Without one, the replacement keeps what the memory
     it replaces meant (``replaced`` is newest first), with that meaning's own
-    source: a correction usually fixes a detail, not the meaning, and a
-    placeholder in its place means no lesson can ever come from it. A
-    placeholder is never carried as meaning, so only when there is nothing
-    true to carry does the replacement get one. ``note`` is the result line
-    saying what was kept, so the agent can notice a meaning that no longer
-    holds.
+    source: a correction usually fixes a detail, not the meaning. A
+    placeholder is never carried as meaning. When there is nothing true to
+    carry, the impact stays empty, as a capture's does without one: the
+    server's own words there ("Correction to earlier continuity.") were no
+    one's meaning, and no lesson could ever come from them. ``note`` is the
+    result line saying what was kept, so the agent can notice a meaning that
+    no longer holds.
     """
     given = (impact or "").strip()
     if given:
@@ -5036,7 +5034,7 @@ def _replacement_impact(
                 f'Kept what it meant: "{shown}"{end} '
                 "If that has changed, correct it with a new impact."
             )
-    return placeholder, "template", ""
+    return "", "", ""
 
 
 def _impact_for(content: str, domain: str) -> str:

@@ -59,14 +59,15 @@ class TestImpactSourceIsRecordedAtWriteTime:
         _impact, source = _source_of(db, "MCP sampling")
         assert source == "agent", source
 
-    def test_server_correction_impact_is_labelled_template(self, db):
+    def test_a_correction_with_no_meaning_writes_no_impact(self, db):
+        """A correction that carries no meaning gets none: the server no
+        longer writes its own sentence there and labels it template (WP-R19).
+        No impact, no author."""
         rt = _runtime(db)
         rt.capture(content="Riley's editor is vim")
         rt.correct(correction="Riley's editor is Zed, not vim", query="editor")
-        # The replacement's impact sentence is server boilerplate, whoever
-        # supplied the content.
-        _impact, source = _source_of(db, "Zed, not vim")
-        assert source == "template", source
+        impact, source = _source_of(db, "Zed, not vim")
+        assert (impact, source) == ("", ""), (impact, source)
 
     def test_empty_impact_has_no_source(self, db):
         """No impact, no author. A source on an empty trace would be a lie."""

@@ -17,14 +17,22 @@ except ImportError:  # pragma: no cover - mcp is a core dependency
 
 
 @pytest.fixture(autouse=True)
-def _isolate_mnemos_env(monkeypatch):
+def _isolate_mnemos_env(monkeypatch, tmp_path_factory):
     """No developer's real environment bleeds into tests.
 
     MNEMOS_DISABLE_DOTENV stops llm._load_env_key (and the OpenClaw key
     lookup) from reading workspace .env files; the MNEMOS_*/provider
     variables are cleared so every test starts from a clean slate and
     sets exactly what it needs via monkeypatch.setenv.
+
+    And every test has a home of its own. With the developer's, whatever
+    resolved a default path wrote into the real ~/.mnemos: a store named
+    audit.db (bootstrap with no store path), the scheduler's log folder, and
+    the cue's shown files. A test that needs a particular home sets its own.
     """
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # where Windows looks
     for var in (
         "MNEMOS_LLM_PROVIDER", "MNEMOS_MODEL", "MNEMOS_AGENT_MODEL",
         "MNEMOS_SUBSTRATE_AFFINITY", "MNEMOS_AGENT_ID", "MNEMOS_PERSON_ID",

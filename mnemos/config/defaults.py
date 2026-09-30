@@ -120,10 +120,11 @@ DEFAULT_CONFIG: dict = {
 
     # ── The cue's judge (mnemos.jev) ──
     # "jev" has Jev decide which of the prompt hook's candidate memories show
-    # with each message. Then the message and at most 6 memory lines of 200
-    # characters go to Jev (api.typesafe.ai). Off by default; the environment
-    # variable MNEMOS_CUE_JUDGE overrides this, and without a key
-    # (~/.config/jev/api_key, or the file MNEMOS_JEV_KEY_FILE names) it stays off.
+    # with each message. Then the message (up to 1,000 characters) and up to
+    # 6 lines of 200 from memory go to Jev (api.typesafe.ai). Off by default;
+    # the environment variable MNEMOS_CUE_JUDGE overrides this, and without a
+    # key (~/.config/jev/api_key, or the file MNEMOS_JEV_KEY_FILE names) it
+    # stays off.
     "cue_judge": "off",
 
     # ── Advanced modules (opt-in) ──

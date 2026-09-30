@@ -630,6 +630,35 @@ def test_only_the_message_and_six_lines_of_200_leave_in_the_labs_words(tmp_path,
     assert jev.ask(MESSAGE, [], url=fake.url, environ=environ) == [] and len(fake.requests) == 1
 
 
+def test_a_long_message_goes_as_its_first_700_and_last_300_characters(fake_jev, key):
+    """At most 1,000 characters of a message leave: a longer one goes as its
+    first 700, " … " and its last 300, since people put the ask at either end
+    of a pasted log. One at the cap or under it goes unchanged."""
+    fake = fake_jev()
+    environ = {"MNEMOS_JEV_KEY_FILE": str(key)}
+    head = "Why does the lighthouse build fail? The log follows. "
+    tail = " That was the whole log: what should the keeper change first?"
+    logged = "the lamp beacon warmed, then the build stopped.\n"
+    filler = (logged * (20_000 // len(logged) + 1))[: 20_000 - len(head) - len(tail)]
+    long = head + filler + tail
+    assert len(long) == 20_000
+
+    jev.ask(long, ["a line"], url=fake.url, environ=environ)
+
+    sent = fake.requests[-1]["body"]["state"]["message"]
+    assert sent == long[:700] + " … " + long[-300:]
+    assert len(sent) == 1_000 + len(" … ")
+    assert sent.startswith(head) and sent.endswith(tail)
+
+    for size in (999, 1_000):
+        whole = ("keeper lamp " * 100)[:size]
+        jev.ask(whole, ["a line"], url=fake.url, environ=environ)
+        assert fake.requests[-1]["body"]["state"]["message"] == whole
+    over = ("keeper lamp " * 100)[:1_001]
+    jev.ask(over, ["a line"], url=fake.url, environ=environ)
+    assert fake.requests[-1]["body"]["state"]["message"] == over[:700] + " … " + over[-300:]
+
+
 @pytest.mark.parametrize("server, kind, detail", [
     (dict(delay=2.0), "timeout", ""),
     (dict(status=500), "error", "HTTP 500"),
@@ -751,7 +780,9 @@ def test_health_says_so_in_one_line_when_the_switch_is_on(tmp_path, meaning, hom
     lines = [line for line in card.splitlines() if line.startswith("Cue judge:")]
     assert len(lines) == 1 and "Cue judge" not in card.replace(lines[0], "")
     [line] = lines
-    assert "Each message and at most 6 memory lines of up to 200 characters go to api.typesafe.ai" in line
+    assert "the message (up to 1,000 characters) and up to 6 lines of 200" in line
+    assert line.endswith("go to api.typesafe.ai. This session: 4 asked, 1 timed out, 1 failed, "
+                         "and the cue showed nothing for those.")
     assert "4 asked, 1 timed out, 1 failed" in line
     assert card.index("Last dream:") < card.index("Cue judge:") < card.index("Everything on this card")
     assert data["cue_judge"]["counts"]["timeouts"] == 1 and data["cue_judge"]["in_use"]

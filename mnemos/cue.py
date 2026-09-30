@@ -41,7 +41,8 @@ words, with its date and its id. Or nothing, which is the usual answer.
 - **Jev decides, when switched on** (WP-R16b, off by default; ``mnemos.jev``).
   The hook asks the answerer to judge: its candidates before the cap, at most
   ``jev.CANDIDATES`` lines that cleared the floors, go to Jev with the message
-  in one call, and the cue shows at most ``CUE_LINES`` of those Jev scores at
+  (at most ``jev.MESSAGE_CHARS`` characters of it) in one call, and the cue
+  shows at most ``CUE_LINES`` of those Jev scores at
   least ``CUE_JUDGE_THRESHOLD``, the likeliest first. On a timeout or an error
   it shows nothing, and so it does without an answerer that judged: quiet beats
   noisy. The answerer counts every outcome for the health card.
@@ -904,9 +905,9 @@ def judge_health(answerer: Any = None, environ: Mapping[str, str] | None = None)
         line = (f"{label}switched to Jev, but there is no key at {status['key_file']}, "
                 "so nothing is sent and the cue shows what it did before.")
     else:
-        line = (f"{label}Jev decides which memories come to each message. Each message and "
-                f"at most {status['candidates']} memory lines of up to {status['line_chars']} "
-                f"characters go to {status['host']}.")
+        line = (f"{label}Jev decides which memories come to each message: the message "
+                f"(up to {status['message_chars']:,} characters) and up to {status['candidates']} "
+                f"lines of {status['line_chars']} characters from memory go to {status['host']}.")
         if counts.get("messages"):
             line += (f" This session: {counts['calls']} asked, {counts['timeouts']} timed out, "
                      f"{counts['errors']} failed, and the cue showed nothing for those.")

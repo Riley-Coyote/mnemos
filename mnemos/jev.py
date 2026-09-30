@@ -14,8 +14,10 @@ a probability; the cue shows at most three of the lines it scores at least
 - **The key** is read from its file at each call and goes only into that
   call's Authorization header. It is never an argument, a log line, an error's
   words or part of a reply.
-- **What leaves the machine:** the message and at most ``CANDIDATES`` memory
-  lines of at most ``LINE_CHARS`` characters each. No id, date or scope.
+- **What leaves the machine:** the message, up to ``MESSAGE_CHARS`` characters
+  (a longer one goes as its start and its end: ``message_sent``), and at most
+  ``CANDIDATES`` memory lines of at most ``LINE_CHARS`` characters each. No
+  id, date or scope.
 - **Typed decisions only.** Jev's scores decide what the cue shows. They never
   change a memory, a link or a belief, and no words of Jev's are kept.
 - **Fail quiet.** One call per message, at most ``TIMEOUT`` seconds end to end
@@ -50,6 +52,13 @@ KEY_FILE_ENV = "MNEMOS_JEV_KEY_FILE"
 # to at most this many characters (the cue's own line length).
 CANDIDATES = 6
 LINE_CHARS = 200
+# And the message, up to this many characters. A longer one goes as its first
+# MESSAGE_HEAD and last MESSAGE_TAIL characters with MESSAGE_MARK between:
+# people put what they ask at either end of a pasted log.
+MESSAGE_CHARS = 1000
+MESSAGE_HEAD = 700
+MESSAGE_TAIL = 300
+MESSAGE_MARK = " … "
 # Jev's time, end to end, in seconds.
 TIMEOUT = 0.4
 
@@ -135,10 +144,21 @@ def status(environ: Mapping[str, str] | None = None, *, config_path: str | Path 
     except ValueError:
         shown = str(path)
     return {"switched_on": on, "key": key, "key_file": shown, "in_use": on and key,
-            "host": JEV_HOST, "candidates": CANDIDATES, "line_chars": LINE_CHARS}
+            "host": JEV_HOST, "message_chars": MESSAGE_CHARS, "candidates": CANDIDATES,
+            "line_chars": LINE_CHARS}
 
 
 # ── One call ──
+
+
+def message_sent(message: str) -> str:
+    """What Jev is sent of a message: all of it up to ``MESSAGE_CHARS``
+    characters; a longer one as its first ``MESSAGE_HEAD``, then
+    ``MESSAGE_MARK``, then its last ``MESSAGE_TAIL``."""
+    text = str(message)
+    if len(text) <= MESSAGE_CHARS:
+        return text
+    return text[:MESSAGE_HEAD] + MESSAGE_MARK + text[-MESSAGE_TAIL:]
 
 
 def request_body(message: str, lines: Sequence[str]) -> dict[str, Any]:
@@ -166,8 +186,9 @@ def ask(
 ) -> list[float]:
     """Jev's probability that each line bears on the message, in order: one
     call for all of them. At most ``CANDIDATES`` lines are sent, each cut to
-    ``LINE_CHARS``; only as many scores come back. No lines, no call.
-    ``url`` is ``JEV_URL`` unless a test names its own stand-in.
+    ``LINE_CHARS``, and the message as ``message_sent`` cuts it; only as many
+    scores come back. No lines, no call. ``url`` is ``JEV_URL`` unless a test
+    names its own stand-in.
 
     Raises ``JevFailed`` on a timeout (``timeout`` seconds, end to end), an
     error, a missing key, or an answer without a probability for every line.
@@ -176,7 +197,7 @@ def ask(
     if not sent:
         return []
     key = _read_key(environ)
-    body = json.dumps(request_body(str(message), sent)).encode("utf-8")
+    body = json.dumps(request_body(message_sent(message), sent)).encode("utf-8")
     target = url or JEV_URL
     finished = threading.Event()
     outcome: dict[str, Any] = {}

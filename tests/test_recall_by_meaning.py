@@ -922,7 +922,8 @@ def test_a_slow_provider_never_holds_a_write(tmp_path, gemini, capsys):
     """With a provider that hung, a handoff waited 120 s for the batch, then
     30 s a passage: about 14 minutes for 24 passages. A write now waits about
     its budget; what it could not index waits for `mnemos embeddings index` or
-    the scheduled job, which keep their full waits."""
+    the scheduled job, whose requests each wait at most NETWORK_TIMEOUT
+    (WP-R19; they waited 120 s)."""
     db = tmp_path / "memory.db"
     said: dict = {}
     stop = threading.Event()
@@ -931,8 +932,7 @@ def test_a_slow_provider_never_holds_a_write(tmp_path, gemini, capsys):
         # While the provider answers, a capture runs the maintenance cycle, so
         # the next capture, minutes sooner than the activity gate allows,
         # skips it and waits on its own indexing alone. (The cycle's
-        # connection discovery waits on the provider by its own rules, as it
-        # did before this change; it is not indexing.)
+        # connection discovery has a budget of its own: WP-R19.)
         rt.capture("The lighthouse keeper logs every storm.")
         gemini.mode = "hang"
         started = time.monotonic()
@@ -965,7 +965,7 @@ def test_a_slow_provider_never_holds_a_write(tmp_path, gemini, capsys):
     gemini.calls.clear()
     assert main(_cli(db, "embeddings", "index")) == 0
     assert _passages(db, handoff_id), capsys.readouterr().out
-    assert gemini.calls and set(gemini.calls) == {120}, "the command's waits changed"
+    assert gemini.calls and set(gemini.calls) == {2.0}, gemini.calls  # NETWORK_TIMEOUT
 
 
 def test_a_failing_provider_fails_no_write_and_is_asked_once(tmp_path, gemini):

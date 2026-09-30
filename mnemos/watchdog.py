@@ -28,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .dream_journal import changed_something, compose_dream_narrative, latest_dream_entry
-from .store.embedding_index import text_hash
+from .store.embedding_index import NETWORK_TIMEOUT, text_hash
 from .store.sqlite_store import AUTHORS_LABELED_KEY, EngramStore
 
 # How long something may sit still before it is flagged.
@@ -65,6 +65,10 @@ EXPECTED = {
         "everything recall can return is indexed by meaning within a day of being written"
     ),
     "notes": "notes reach the briefing unless the memory they belong to went quiet or faded",
+    "network_waits": (
+        "a network embedding backend answers each call within its "
+        f"{NETWORK_TIMEOUT:g} seconds; a call that doesn't is skipped, and counted here"
+    ),
 }
 
 # The counters in a cycle's log that mean it changed memory: a link made,
@@ -653,6 +657,42 @@ def _notes(store: EngramStore, scope: dict[str, str], now: datetime, index: Any)
     return {"seen": seen, **counts}
 
 
+def _network_waits(store: EngramStore, scope: dict[str, str], now: datetime, index: Any) -> dict:
+    """Embedding calls to a network backend that ran out of their time, each
+    one a meaning step skipped quietly (R19): in this process (the runtime's
+    index: recall, the cue, doctor's probe), and in the maintenance cycles'
+    link lookups over the last week, from the cycles' own log."""
+    network = bool(getattr(index, "network", False))
+    here = int(getattr(index, "timeouts", 0) or 0) if index is not None else 0
+    lookups = deferred = cycles = 0
+    for _at_, stats in _cycles(store, scope, now - WINDOW):
+        section = stats.get("connection_discovery")
+        if not isinstance(section, Mapping):
+            continue
+        timed_out = int(section.get("embedding_timeouts") or 0)
+        lookups += timed_out
+        deferred += int(section.get("embedding_deferred") or 0)
+        cycles += 1 if timed_out else 0
+    if not network and not lookups:
+        seen = "no network embedding backend here: meaning waits on no network"
+    else:
+        seen = (
+            f"{_count(here, 'call')} timed out in this process; {_count(lookups, 'link lookup')} "
+            f"timed out in {_count(cycles, 'maintenance cycle')} in the last {WINDOW.days} days"
+        )
+        if deferred:
+            seen += f", which linked {_count(deferred, 'memory', 'memories')} by words alone"
+    return {
+        "seen": seen,
+        "network": network,
+        "timeout_seconds": NETWORK_TIMEOUT,
+        "timeouts_here": here,
+        "link_lookup_timeouts": lookups,
+        "link_lookups_deferred": deferred,
+        "cycles_with_timeouts": cycles,
+    }
+
+
 _CHECKS: Sequence[tuple[str, Callable[..., dict]]] = (
     ("questions", _questions),
     ("report", _report),
@@ -663,6 +703,7 @@ _CHECKS: Sequence[tuple[str, Callable[..., dict]]] = (
     ("authorship", _authorship),
     ("recall_index", _recall_index),
     ("notes", _notes),
+    ("network_waits", _network_waits),
 )
 
 

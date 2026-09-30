@@ -134,13 +134,26 @@ _ID_CHUNK = 400
 # local model's one-time load (from this machine only, once per process) is
 # not an embedding call and is not counted.
 WRITE_EMBED_SECONDS = 2.0
-# A network backend's wait per call on the write path, and never past the
-# pass's deadline. No retry, and no second try one passage at a time: a
-# failure leaves the items waiting.
-WRITE_NETWORK_TIMEOUT = 2.0
+# A network backend's wait for one call, anywhere: recall's and the cue's
+# query, doctor's probe, the maintenance cycle's link lookups, and every
+# indexing request. Outside the write path the Gemini backend waited 30 s for
+# one text and 120 s for a batch, so a network that hung held recall, doctor,
+# and every capture whose maintenance looked up links (up to 50 lookups of
+# 30 s each). A call that times out gives nothing and is not retried: the step
+# that wanted meaning goes on by words, and the backend counts it
+# (``EmbeddingIndex.timeouts``) for the watchdog.
+NETWORK_TIMEOUT = 2.0
+# The same wait on the write path, and never past the pass's deadline. No
+# retry, and no second try one passage at a time: a failure leaves the items
+# waiting.
+WRITE_NETWORK_TIMEOUT = NETWORK_TIMEOUT
 # Passages embedded per call on the write path, so the time budget can stop
 # between calls (a local call of this size takes well under a tenth of a second).
 _WRITE_CHUNK = 16
+# Texts in one request to a network backend, so a request fits in its
+# NETWORK_TIMEOUT: the write path's chunk. Outside it, one request carried up
+# to 100 and had 120 s.
+NETWORK_CHUNK = _WRITE_CHUNK
 
 # Where a sentence ends: a run of . ! ? or …, and any closing quotes or
 # brackets after it, before a space. A line break ends one too.
@@ -320,9 +333,27 @@ def _load_env_key(key_name: str) -> str | None:
 
 # --- Gemini API embedding ---
 
+def _timed_out(exc: BaseException) -> bool:
+    """Whether a network call failed by running out of its time."""
+    import socket
+
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    return isinstance(reason, (TimeoutError, socket.timeout))
+
+
+# The Gemini API's models, which each request names.
+GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models"
+
+
 class _GeminiEmbedder:
-    """Generates embeddings via Google Gemini API."""
-    
+    """Generates embeddings via Google Gemini API.
+
+    Every request waits at most ``NETWORK_TIMEOUT`` seconds unless its caller
+    gives less, and a request that times out is never retried (``timeouts``
+    counts them): a network that hangs costs one wait, not one per text."""
+
+    network = True
+
     def __init__(self, api_key: str, model: str = "gemini-embedding-2-preview"):
         self._api_key = api_key
         self._model = model
@@ -330,6 +361,8 @@ class _GeminiEmbedder:
         # Why the latest call returned nothing. The API is called with the key
         # in the URL, so the key is scrubbed from anything kept here.
         self.last_error: str | None = None
+        # Requests that ran out of their time, in this process.
+        self.timeouts = 0
 
     @property
     def dims(self) -> int:
@@ -340,21 +373,21 @@ class _GeminiEmbedder:
         return self._model
 
     def _failed(self, error: BaseException | str) -> None:
+        if isinstance(error, BaseException) and _timed_out(error):
+            self.timeouts += 1
         text = error if isinstance(error, str) else _describe_failure(error)
         self.last_error = text.replace(self._api_key, "<key>") if self._api_key else text
 
-    def embed(self, text: str, *, timeout: float = 30) -> list[float] | None:
+    def embed(self, text: str, *, timeout: float | None = None) -> list[float] | None:
         """Generate embedding for a single text, waiting at most ``timeout``
-        seconds on the network."""
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self._model}:embedContent?key={self._api_key}"
-        )
+        seconds on the network (``NETWORK_TIMEOUT`` when not given)."""
+        timeout = NETWORK_TIMEOUT if timeout is None else timeout
+        url = f"{GEMINI_API}/{self._model}:embedContent?key={self._api_key}"
         payload = json.dumps({
             "model": f"models/{self._model}",
             "content": {"parts": [{"text": text}]}
         }).encode()
-        
+
         req = urllib.request.Request(
             url, data=payload,
             headers={"Content-Type": "application/json"}
@@ -372,33 +405,35 @@ class _GeminiEmbedder:
         except Exception as exc:
             self._failed(exc)
             return None
-    
+
     def batch_embed(
-        self, texts: list[str], *, timeout: float = 120, fallback: bool = True,
+        self, texts: list[str], *, timeout: float | None = None, fallback: bool = True,
         deadline: float | None = None,
     ) -> list[list[float] | None]:
-        """Embed multiple texts via batchEmbedContents API, waiting at most
-        ``timeout`` seconds on each request. A failed request is retried one
-        text at a time, unless ``fallback`` is False (the write path): then its
-        texts come back as None, and wait for a later pass. With ``deadline``
-        (a ``time.monotonic()`` moment), no request waits past it and none
-        starts after it: the texts left come back as None."""
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self._model}:batchEmbedContents?key={self._api_key}"
-        )
-        
+        """Embed multiple texts via batchEmbedContents API, ``NETWORK_CHUNK``
+        texts to a request, waiting at most ``timeout`` seconds on each
+        (``NETWORK_TIMEOUT`` when not given). A request that failed otherwise
+        is retried one text at a time, unless ``fallback`` is False (the write
+        path): then its texts come back as None, and wait for a later pass. A
+        request that timed out is not retried, and no request follows it: the
+        texts left come back as None, and wait. With ``deadline`` (a
+        ``time.monotonic()`` moment), no request waits past it and none starts
+        after it: the texts left come back as None."""
+        timeout = NETWORK_TIMEOUT if timeout is None else timeout
+        url = f"{GEMINI_API}/{self._model}:batchEmbedContents?key={self._api_key}"
+
         requests_list = []
         for text in texts:
             requests_list.append({
                 "model": f"models/{self._model}",
                 "content": {"parts": [{"text": text}]}
             })
-        
-        # Gemini batch API has a limit of 100 per request
+
+        # Gemini's batch API takes up to 100 a request; fewer go, so that a
+        # request fits in its time.
         all_results: list[list[float] | None] = []
-        batch_size = 100
-        
+        batch_size = NETWORK_CHUNK
+
         for i in range(0, len(requests_list), batch_size):
             batch = requests_list[i:i + batch_size]
             wait = timeout
@@ -424,17 +459,30 @@ class _GeminiEmbedder:
                     else:
                         all_results.append(None)
             except Exception as exc:
+                if _timed_out(exc):
+                    # The network isn't answering: nothing more is asked of it.
+                    self._failed(exc)
+                    all_results.extend([None] * (len(requests_list) - i))
+                    break
                 if not fallback:
                     self._failed(exc)
                     all_results.extend([None] * len(batch))
                     continue
-                # Fall back to individual calls for this batch
-                for r in batch:
+                # Fall back to individual calls for this batch, until one
+                # times out.
+                for number, r in enumerate(batch):
+                    before = self.timeouts
                     text = r["content"]["parts"][0]["text"]
-                    all_results.append(self.embed(text))
-        
-        return all_results
+                    all_results.append(self.embed(text, timeout=timeout))
+                    if self.timeouts > before:
+                        all_results.extend([None] * (len(batch) - number - 1))
+                        break
+                else:
+                    continue
+                all_results.extend([None] * (len(requests_list) - i - len(batch)))
+                break
 
+        return all_results
 
 # --- Local sentence-transformers fallback ---
 
@@ -811,13 +859,17 @@ class EmbeddingIndex:
         return self._conn
 
     def _embed(self, text: str, *, timeout: float | None = None) -> list[float] | None:
-        """One text's vector, or None. ``timeout`` bounds a network backend's
-        wait (the write path); the local model has no network to wait on."""
+        """One text's vector, or None. A network backend waits at most
+        ``timeout`` seconds, ``NETWORK_TIMEOUT`` when not given, and a call
+        that runs out of it gives None, as any failure does; the local model
+        has no network to wait on."""
         if not self._available or not self._embedder:
             return None
         try:
-            if timeout is not None and isinstance(self._embedder, _GeminiEmbedder):
-                values = self._embedder.embed(text, timeout=timeout)
+            if isinstance(self._embedder, _GeminiEmbedder):
+                values = self._embedder.embed(
+                    text, timeout=NETWORK_TIMEOUT if timeout is None else timeout,
+                )
             else:
                 values = self._embedder.embed(text)
         except Exception as exc:
@@ -871,7 +923,18 @@ class EmbeddingIndex:
     @property
     def available(self) -> bool:
         return self._available
-    
+
+    @property
+    def network(self) -> bool:
+        """Whether embedding here waits on a network (the Gemini backend)."""
+        return bool(getattr(self._embedder, "network", False))
+
+    @property
+    def timeouts(self) -> int:
+        """Network calls that ran out of their time in this process (each
+        skipped its meaning step): the watchdog counts them."""
+        return int(getattr(self._embedder, "timeouts", 0) or 0)
+
     @property
     def backend(self) -> str:
         if isinstance(self._embedder, _GeminiEmbedder):
@@ -1016,11 +1079,16 @@ class EmbeddingIndex:
         query: str,
         k: int = 10,
         exclude_ids: set[str] | None = None,
+        *,
+        timeout: float | None = None,
     ) -> list[tuple[str, float]]:
+        """The ``k`` stored whole-text vectors closest to ``query``. A network
+        backend waits at most ``timeout`` seconds to embed it
+        (``NETWORK_TIMEOUT`` when not given); on a timeout, nothing."""
         if not self._available or not self._embedder:
             return []
 
-        query_values = self._embed(query)
+        query_values = self._embed(query, timeout=timeout)
         if query_values is None:
             return []
 
@@ -1462,7 +1530,9 @@ class EmbeddingIndex:
         ``time.monotonic()`` moment), a network backend starts no request
         after it, waits on each until it at most (and at most
         ``WRITE_NETWORK_TIMEOUT``), and does not retry one text at a time: a
-        text it could not embed gives None."""
+        text it could not embed gives None. Without one, each request still
+        waits at most ``NETWORK_TIMEOUT``, and one that times out ends the
+        call (``_GeminiEmbedder.batch_embed``)."""
         if deadline is not None and isinstance(self._embedder, _GeminiEmbedder):
             return self._embedder.batch_embed(
                 texts, timeout=WRITE_NETWORK_TIMEOUT, fallback=False, deadline=deadline,

@@ -28,11 +28,17 @@ No test reaches a real network, a real Jev or a real ~/.mnemos.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
+import socket
 import sqlite3
 import subprocess
 import sys
+import threading
+import time
+import urllib.error
+import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -134,6 +140,49 @@ def home(tmp_path, monkeypatch):
     yield path
     if link is not None:
         os.unlink(link)
+
+
+# A model whose meaning is controlled: each text's vector counts the words it
+# holds of each concept, so every cosine is fixed by the words.
+_CONCEPTS = (
+    {"lighthouse", "beacon", "lamp", "keeper"},
+    {"harbour", "ferry", "pier", "boat", "timetable"},
+    {"garden", "marigolds", "greenhouse", "bloom"},
+)
+
+
+def concept_vector(text: str) -> list[float]:
+    words = re.findall(r"[a-z]+", text.lower())
+    raw = [float(sum(1 for w in words if w in group)) for group in _CONCEPTS] + [0.05]
+    norm = math.sqrt(sum(v * v for v in raw))
+    return [v / norm for v in raw]
+
+
+class _Vector(list):
+    def tolist(self):
+        return list(self)
+
+
+class _ConceptModel:
+    def encode(self, texts, normalize_embeddings=True, batch_size=32):
+        if isinstance(texts, str):
+            return _Vector(concept_vector(texts))
+        return [_Vector(concept_vector(text)) for text in texts]
+
+
+class _ConceptEmbedder(ei._LocalEmbedder):
+    def _get_model(self):
+        if self._model is None:
+            self._model = _ConceptModel()
+        return self._model
+
+
+@pytest.fixture
+def meaning(monkeypatch):
+    """A working local backend whose cosines the test fixes."""
+    monkeypatch.setattr(ei, "_check_local_deps", lambda: True)
+    monkeypatch.setattr(ei, "_LocalEmbedder", _ConceptEmbedder)
+    monkeypatch.setattr(ei, "_LOGGED", set(), raising=False)
 
 
 # ── 1. A skip holds across both passes ──
@@ -632,3 +681,197 @@ def test_a_correction_that_keeps_a_reference_still_gets_its_own_reflection(tmp_p
         "the reflection never reached the corrected memory's own note"
     )
     assert "What this changed" not in _note(db, own)
+
+
+# ── 7. Network waits are bounded ──
+
+
+class _HangingServer:
+    """A TCP server on 127.0.0.1 that takes connections and never answers,
+    as a network that hangs does."""
+
+    def __init__(self) -> None:
+        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(64)
+        self.port = self.listener.getsockname()[1]
+        self.held: list[socket.socket] = []
+        self.done = threading.Event()
+        threading.Thread(target=self._take, daemon=True).start()
+
+    def _take(self) -> None:
+        self.listener.settimeout(0.2)
+        while not self.done.is_set():
+            try:
+                conn, _ = self.listener.accept()
+            except OSError:
+                continue
+            self.held.append(conn)
+
+    def close(self) -> None:
+        self.done.set()
+        for conn in self.held:
+            conn.close()
+        self.listener.close()
+
+
+@pytest.fixture
+def hanging(monkeypatch):
+    """Recall's backend is Gemini, and every request to it goes to a server
+    that never answers. The waits are the code's own (the request's timeout
+    reaches a real socket); ``waits`` keeps each."""
+    server = _HangingServer()
+    real = urllib.request.urlopen
+    waits: list[float | None] = []
+
+    def rerouted(request, timeout=None, **kwargs):
+        url = request.full_url if isinstance(request, urllib.request.Request) else str(request)
+        if "generativelanguage.googleapis.com" in url or "/v1beta/models/" in url:
+            waits.append(timeout)
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.port}/v1beta/models/hanging",
+                data=request.data, headers=dict(request.header_items()), method="POST",
+            )
+        return real(request, timeout=timeout, **kwargs)
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")
+    monkeypatch.setattr(urllib.request, "urlopen", rerouted)
+    monkeypatch.setattr(ei, "_LOGGED", set(), raising=False)
+    for var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    server.waits = waits
+    yield server
+    server.close()
+
+
+def _finishes(call, seconds: float = 10.0) -> bool:
+    done = threading.Event()
+
+    def run():
+        try:
+            call()
+        finally:
+            done.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    return done.wait(seconds)
+
+
+def test_a_hanging_network_blocks_neither_health_doctor_nor_recall(tmp_path, hanging):
+    db = tmp_path / "memory.db"
+    _saved(db, "The lighthouse lamp was rewired on Tuesday.")
+    said: dict = {}
+
+    def recall_then_health():
+        rt = _runtime(db)
+        try:
+            started = time.monotonic()
+            said["recall"] = rt.recall("lighthouse lamp")
+            said["recall seconds"] = time.monotonic() - started
+            said["health"] = rt.health()
+        finally:
+            rt.close()
+
+    assert _finishes(recall_then_health), "recall or health waited on the network"
+    assert _finishes(lambda: main(["doctor", "--db-path", str(db), *SCOPE_ARGS])), (
+        "doctor waited on the network"
+    )
+    assert "rewired on Tuesday" in said["recall"], "recall stopped finding by words"
+    assert said["recall seconds"] < ei.NETWORK_TIMEOUT + 1.5, said["recall seconds"]
+    assert hanging.waits and all(0 < wait <= ei.NETWORK_TIMEOUT for wait in hanging.waits), hanging.waits
+    waits = said["health"]["watchdog"]["checks"]["network_waits"]
+    assert waits["network"] is True and waits["timeouts_here"] >= 1, waits
+
+
+def test_the_maintenance_link_lookup_is_bounded_and_counted(tmp_path, hanging):
+    """Maintenance runs inside a capture. It looked up each of up to 50
+    memories by meaning, 30 s each against a network that hung. Now its
+    lookups share the write path's budget, the first timeout ends them, and
+    the rest are linked by their words."""
+    db = tmp_path / "memory.db"
+    memories = _saved(db, *BEACONS, "The harbour ferry leaves at noon.", "Garden marigolds bloom in June.")
+    said: dict = {}
+
+    def maintain():
+        rt = _runtime(db)
+        try:
+            started = time.monotonic()
+            said["maintain"] = rt.maintain()
+            said["seconds"] = time.monotonic() - started
+            said["health"] = rt.health()
+        finally:
+            rt.close()
+
+    assert _finishes(maintain, 20), "maintenance waited on the network for every memory"
+    assert ei.NETWORK_TIMEOUT == 2.0
+    assert said["seconds"] < 3 * ei.NETWORK_TIMEOUT + 2, said["seconds"]
+    stats = json.loads(_read(db, "SELECT stats FROM consolidation_log WHERE pass_name = 'cycle'")[0][0])
+    discovery = stats["connection_discovery"]
+    assert discovery["embedding_timeouts"] == 1, discovery
+    assert discovery["embedding_deferred"] == len(memories), discovery
+    assert discovery["connections_created"] > 0, "the words did not link what belongs together"
+    waits = said["health"]["watchdog"]["checks"]["network_waits"]
+    assert waits["link_lookup_timeouts"] == 1 and waits["cycles_with_timeouts"] == 1, waits
+    assert "1 link lookup timed out" in waits["seen"], waits["seen"]
+
+
+class _Answering:
+    """urlopen for Gemini's endpoints: answers, fails, or times out, and keeps
+    each request's size and wait."""
+
+    def __init__(self, fail: str = "", fail_after: int = 0) -> None:
+        self.fail = fail
+        self.fail_after = fail_after
+        self.requests: list[tuple[int, float | None]] = []
+
+    def __call__(self, request, timeout=None, **kwargs):
+        payload = json.loads(request.data)
+        texts = [item["content"]["parts"][0]["text"] for item in payload.get("requests") or []] or [
+            payload["content"]["parts"][0]["text"]
+        ]
+        self.requests.append((len(texts), timeout))
+        if self.fail and len(self.requests) > self.fail_after:
+            if self.fail == "timeout":
+                raise TimeoutError("timed out")
+            raise urllib.error.HTTPError(request.full_url, 400, "bad", {}, None)
+        import io
+
+        if "requests" in payload:
+            body = {"embeddings": [{"values": concept_vector(text)} for text in texts]}
+        else:
+            body = {"embedding": {"values": concept_vector(texts[0])}}
+        return io.BytesIO(json.dumps(body).encode())
+
+
+def test_every_network_embedding_call_waits_at_most_two_seconds(monkeypatch):
+    """One text waited 30 s and a batch 120 s outside the write path."""
+    gemini = ei._GeminiEmbedder("test-key-not-real")
+    fake = _Answering()
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+
+    assert gemini.embed("the beacon lamp") is not None
+    assert len(gemini.batch_embed([f"lamp {n}" for n in range(40)])) == 40
+    assert fake.requests[0] == (1, 2.0), fake.requests
+    assert [size for size, _ in fake.requests[1:]] == [16, 16, 8], "a request larger than fits in 2 s"
+    assert {wait for _, wait in fake.requests} == {2.0}, fake.requests
+
+
+def test_a_timeout_ends_the_call_and_is_counted(monkeypatch):
+    """A network that hangs costs one wait, not one per text: no request after
+    a timeout, and no retrying its texts one at a time."""
+    gemini = ei._GeminiEmbedder("test-key-not-real")
+    fake = _Answering(fail="timeout", fail_after=1)
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+
+    got = gemini.batch_embed([f"lamp {n}" for n in range(40)])
+
+    assert [value is not None for value in got] == [True] * 16 + [False] * 24
+    assert len(fake.requests) == 2, fake.requests
+    assert gemini.timeouts == 1
+
+    # Another failure is retried one text at a time, each waiting at most
+    # 2 s, until one of those times out.
+    refused = _Answering(fail="error")
+    monkeypatch.setattr(urllib.request, "urlopen", refused)
+    assert gemini.batch_embed(["a", "b", "c"]) == [None, None, None]
+    assert [wait for _, wait in refused.requests] == [2.0, 2.0, 2.0, 2.0]

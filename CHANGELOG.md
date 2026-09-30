@@ -2,6 +2,54 @@
 
 ## 0.3.1 (unreleased)
 
+### Jev decides what fires
+
+The cue brings up to three memories to each message, and about half of them
+bear on it: on the lab's 20 development prompts it shows 36 lines, 20 of them
+on target by one reader's labels. The idea is that spreading activation
+proposes the memories and a judge decides which of them fire. Now, behind a
+switch that is off by default, Jev can decide.
+
+- The switch: `"cue_judge": "jev"` in `~/.mnemos/config.json`, or
+  `MNEMOS_CUE_JUDGE=jev` in the shell's environment, which wins over the
+  file. The prompt hook reads it with each message, so it belongs in the
+  config file or the shell, not in the MCP server's own environment, which
+  the hook never sees. It also needs a key, read from `~/.config/jev/api_key`
+  or the file `MNEMOS_JEV_KEY_FILE` names; without one the cue works as
+  before.
+- Switched on, the session's answerer takes the cue's candidates before its
+  cap, up to six lines that cleared its floors, and asks Jev in one call
+  whether each bears on the message. At most three that Jev scores 0.8 or
+  more show, the likeliest first.
+- What leaves the machine, and nothing else: the message, up to 1,000
+  characters with the mark included (a longer one goes as its first 700,
+  " … " and its last 297, since people put the ask at either end of a pasted
+  log), and up to six lines of at most 200 characters, to Jev at
+  api.typesafe.ai. No ids, dates or scope.
+  The key goes only into the request's Authorization header: never a log
+  line, an error or a reply. While the switch is on, the health card says
+  so in one line, with this session's calls, timeouts and failures.
+- It fails quiet. Jev gets 0.4 s, end to end, with no retry. On a timeout or
+  an error the cue shows nothing. Switched on, it never falls back on words
+  alone, and it shows no lines from an answerer that didn't judge (a server
+  still running older code): quiet beats noisy.
+- Jev's scores only decide what shows. Nothing is written to the store.
+
+Measured with the real Jev on a copy of the lab's store, over the 20
+development prompts, seven passes. The judge sees 62 candidate lines, 26 of
+them on target. Without it the cue shows 36: 56% on target, 77% of the good
+lines. At 0.8 it shows 14 or 15: 80 to 93% on target, 46 to 50% of the good
+lines, and a bad line stands alone on at most one prompt. At 0.75, 76 to 88%
+and 50 to 54%; at 0.7, 70 to 78% and 50 to 58%. So it shows fewer lines, and
+truer ones. Jev's score for the same line moved by up to 0.11 between
+identical calls. The hook, as Claude Code runs it, took 408 ms at the median
+and 513 ms at p95 with Jev, against 239 and 342 ms without; Jev's call alone,
+160 and 209 ms. One call of 98 timed out, and the cue showed nothing for it.
+
+Changed behaviour: none until the switch is on. Then the cue shows only what
+Jev keeps, often nothing, and each message with candidates makes one call to
+Jev. No schema or code-version change.
+
 ### Fair ranking
 
 Recall fuses its words list and its meaning list by reciprocal rank, which

@@ -30,9 +30,15 @@ def _isolate_mnemos_env(monkeypatch):
         # session's answerer: a test run inside a session would otherwise
         # look for that session's server.
         "CLAUDE_PID",
+        # The cue's judge: a developer who switched it on would otherwise
+        # send test messages to Jev.
+        "MNEMOS_CUE_JUDGE",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("MNEMOS_DISABLE_DOTENV", "1")
+    # And no test reaches a real Jev key (~/.config/jev/api_key): an empty
+    # file is no key. A test that needs one names its own.
+    monkeypatch.setenv("MNEMOS_JEV_KEY_FILE", os.devnull)
 
 
 @pytest.fixture

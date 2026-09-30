@@ -118,6 +118,15 @@ DEFAULT_CONFIG: dict = {
         "max_curiosity_questions_shown": 3,
     },
 
+    # ── The cue's judge (mnemos.jev) ──
+    # "jev" has Jev decide which of the prompt hook's candidate memories show
+    # with each message. Then the message (up to 1,000 characters) and up to
+    # 6 lines of 200 from memory go to Jev (api.typesafe.ai). Off by default;
+    # the environment variable MNEMOS_CUE_JUDGE overrides this, and without a
+    # key (~/.config/jev/api_key, or the file MNEMOS_JEV_KEY_FILE names) it
+    # stays off.
+    "cue_judge": "off",
+
     # ── Advanced modules (opt-in) ──
     "advanced": {
         "working_memory_enabled": False,

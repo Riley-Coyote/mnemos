@@ -72,6 +72,9 @@ simple_mcp = FastMCP("mnemos", instructions=SERVER_INSTRUCTIONS)
 
 _runtime: MnemosRuntime | None = None
 _runtime_kwargs: dict[str, Any] = {}
+# This server's cue answerer, once started: the health card reads its judge's
+# counts (WP-R16b).
+_cue_answerer: Any = None
 
 
 def _annotations(
@@ -498,17 +501,39 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
         sentence and the command that fixes or inspects it. When all is well
         it adds nothing. The structured result keeps, for every check, what
         was expected and what was seen.
+
+        When the cue's judge is switched on, one line says so: what leaves
+        the machine, and how often the judge timed out or failed here.
         """
 
         runtime = _get_runtime()
         data = runtime.health()
+        text = format_health_card(data)
+        from .cue import judge_health
+
+        judge = judge_health(_cue_answerer)
+        if judge is not None:
+            data["cue_judge"] = judge
+            text = _with_card_line(text, judge["line"])
         return types.CallToolResult(
-            content=[types.TextContent(type="text", text=format_health_card(data))],
+            content=[types.TextContent(type="text", text=text)],
             structuredContent=data,
         )
 
 
 register_simple_tools(simple_mcp)
+
+
+def _with_card_line(card: str, line: str) -> str:
+    """``card`` with ``line`` among its labelled lines: after the last one
+    (``Last dream``), or, on a card without it, just before its closing
+    words."""
+    rows = card.split("\n")
+    at = next((i + 1 for i in range(len(rows) - 1, -1, -1) if rows[i].startswith("Last dream:")), None)
+    if at is None:
+        at = max(0, len(rows) - 2)
+    rows.insert(at, line)
+    return "\n".join(rows)
 
 
 def start_cue_answerer() -> Any:
@@ -519,8 +544,10 @@ def start_cue_answerer() -> Any:
     The answerer reads its own read-only copy of the configured store and
     changes nothing. It is stopped at exit. Returns it, or None when it did not
     start; the server runs the same either way, and a prompt hook without an
-    answerer finds memories by their words alone.
+    answerer finds memories by their words alone (or, with the judge switched
+    on, shows nothing). The health card reads its judge's counts.
     """
+    global _cue_answerer
     try:
         import atexit
 
@@ -537,6 +564,7 @@ def start_cue_answerer() -> Any:
         if not answerer.start():
             return None
         atexit.register(answerer.stop)
+        _cue_answerer = answerer
         return answerer
     except Exception as exc:
         logger.warning("The cue's answerer did not start: %s: %s", type(exc).__name__, exc)

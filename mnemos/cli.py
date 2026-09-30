@@ -333,6 +333,13 @@ def main(argv: list[str] | None = None) -> int:
             "promotion, leaving the meaning to the agent (dry run unless --write)",
             "Empty them",
         ),
+        (
+            "faded-words",
+            "Bring back, from the words they were encoded with, the words of live "
+            "memories an earlier softening cut to '... [details faded]' "
+            "(dry run unless --write)",
+            "Restore them",
+        ),
     ):
         p_clean = repair_sub.add_parser(name, help=text)
         _scope_options(p_clean)
@@ -2088,6 +2095,7 @@ def _cmd_repair(args: argparse.Namespace) -> int:
         "archive-rows": _cmd_repair_archive_rows,
         "dead-embeddings": _cmd_repair_dead_embeddings,
         "placeholder-impacts": _cmd_repair_placeholder_impacts,
+        "faded-words": _cmd_repair_faded_words,
     }
     if getattr(args, "repair_command", None) in clean_ups:
         return clean_ups[args.repair_command](args)
@@ -2098,7 +2106,8 @@ def _cmd_repair(args: argparse.Namespace) -> int:
         "       mnemos repair split-notes [--write]\n"
         "       mnemos repair archive-rows [--write]\n"
         "       mnemos repair dead-embeddings [--write]\n"
-        "       mnemos repair placeholder-impacts [--write]",
+        "       mnemos repair placeholder-impacts [--write]\n"
+        "       mnemos repair faded-words [--write]",
         file=sys.stderr,
     )
     return 1
@@ -2351,6 +2360,59 @@ def _cmd_repair_placeholder_impacts(args: argparse.Namespace) -> int:
             "left to the agent."
         ),
         verb="empty them",
+    )
+
+
+def _cmd_repair_faded_words(args: argparse.Namespace) -> int:
+    """Bring back the words an earlier softening cut, from the words the
+    memories were encoded with (one scope).
+
+    A human runs this: a dry run unless --write, and a verified backup first.
+    """
+    runtime = _repair_runtime(args)
+    try:
+        plan = runtime.repair_faded_words(write=args.write)
+    finally:
+        runtime.close()
+
+    if not plan["exists"]:
+        print(f"No store at {runtime.db_path}; nothing to repair.")
+        return 0
+
+    agent, person, project = plan["target"]
+    found = plan["found"]
+    print(f"Faded words for {agent} / {person} / {project} in {runtime.db_path}")
+    print()
+    _repair_row(found["faded"], "live memories whose words were cut when they faded")
+    _repair_row(
+        len(found["restorable"]), "that come back whole from their words at encoding",
+        "restored",
+    )
+    if found["left"]:
+        _repair_row(
+            len(found["left"]), "whose words don't come from their words at encoding", "stay",
+        )
+    for item in found["restorable"]:
+        quiet = " (quiet)" if item["state"] == "dormant" else ""
+        print(f"           - memory {item['id']}{quiet}")
+        for label, words in (("now", item["words"]), ("was", item["encoded"])):
+            print(
+                f"             {label}: \"{_repair_words(words)}\" "
+                f"({len(words.strip()):,} characters)"
+            )
+    for item in found["left"]:
+        print(f"           - left alone: memory {item['id']}")
+
+    done = plan["done"] or {"restored": 0}
+    return _repair_ending(
+        plan, args, todo=bool(found["restorable"]),
+        done=(
+            f"Restored {_repair_count(done['restored'], 'memory', 'memories')}; each "
+            "keeps its cut words as a version. Their words are found by meaning after "
+            "the next maintenance, or at once with: mnemos --db-path "
+            f"{shlex.quote(str(runtime.db_path))} embeddings index."
+        ),
+        verb="restore them",
     )
 
 

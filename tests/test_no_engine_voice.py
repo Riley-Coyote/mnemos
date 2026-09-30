@@ -20,6 +20,10 @@ note:
    deep cycle leave no memory Mnemos wrote and no meaning from
    ``TEMPLATED_IMPACTS``.
 5. Code from before this change stands down once this code opens the store.
+6. A capture that code from before pairs writes after this code opened the
+   store names its memory only as a reference, and the store's one-time
+   pairing has already run. Each maintenance cycle pairs it by the same rule,
+   so the pair-matched impact pass still asks for its meaning.
 
 No test reaches a real network, a real model or a real ~/.mnemos.
 """
@@ -28,6 +32,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import mnemos.store.embedding_index as ei
@@ -37,6 +42,7 @@ from mnemos.core.emotional_state import EmotionalState
 from mnemos.core.identity import AgentIdentity
 from mnemos.core.placeholders import TEMPLATED_IMPACTS
 from mnemos.simple_runtime import MnemosRuntime
+from mnemos.store.sqlite_store import EngramStore
 
 SCOPE = {"agent_id": "nova", "person_id": "riley", "project_scope": "demo"}
 SCOPE_ARGS = ["--agent-id", "nova", "--person-id", "riley", "--project-scope", "demo"]
@@ -475,3 +481,110 @@ def test_the_code_before_this_change_stands_down_once_this_code_opens_the_store(
 
     assert _ids(db) == before, _written(db, _ids(db) - before)
     assert _pair_of(db, note) is None
+
+
+# ── 6. A capture older code writes after the one-time pairing ──
+
+LATE = "The night ferry skips the outer buoy when the swell is over two metres."
+VERSIONED = ("mnemos.code_version", "mnemos.simple_runtime", "mnemos.store.sqlite_store",
+             "mnemos.retrieval.reactive")
+
+
+def _opened_by_this_code(db: Path) -> None:
+    """This code opens the store: its one-time pairing runs and is marked."""
+    rt = _runtime(db)
+    try:
+        rt._ensure_init()
+    finally:
+        rt.close()
+    assert _read(db, "SELECT count(*) FROM meta WHERE key = 'capture_pairs_linked'") == [(1,)]
+
+
+def _older_capture(db: Path, words: str, context: str) -> tuple[str, str]:
+    """A capture as code from before pairs writes one: its memory (the words,
+    then the capture's context), then its note, which names the memory only
+    as a reference (``related_engram_id``)."""
+    from mnemos.encoding.encoder import Encoder
+
+    store = EngramStore(str(db))
+    try:
+        memory = Encoder(store).encode(
+            content=f"{words}\n\nContext: {context}", kind="semantic",
+            tags=["continuity"], author_kind="agent", **SCOPE,
+        ).id
+        note = store.write_hypomnema_entry(
+            words, **SCOPE, source="observed", authored_by="agent", author_id="nova",
+            related_engram_id=memory,
+        )
+    finally:
+        store.close()
+    return memory, note
+
+
+def _written_later(db: Path, memory: str, words: str, seconds: int = 60) -> str:
+    """A note with the memory's very words, written through the advanced tools
+    ``seconds`` after it: a reference, never its pair."""
+    store = EngramStore(str(db))
+    try:
+        note = store.write_hypomnema_entry(
+            words, **SCOPE, source="synthesized", related_engram_id=memory,
+        )
+        [(created,)] = _read(db, "SELECT created_at FROM engrams WHERE id = ?", (memory,))
+        later = (datetime.fromisoformat(created) + timedelta(seconds=seconds)).isoformat()
+        store._get_conn().execute(
+            "UPDATE hypomnema_entries SET created_at = ? WHERE id = ?", (later, note),
+        )
+        store._get_conn().commit()
+    finally:
+        store.close()
+    return note
+
+
+def test_a_capture_older_code_writes_after_the_one_time_pairing_is_paired_and_asked(tmp_path):
+    db = tmp_path / "memory.db"
+    _opened_by_this_code(db)
+    memory, note = _older_capture(db, LATE, "On the quay, after the storm.")
+    reference = _written_later(db, memory, LATE)
+    EngramStore(str(db)).close()  # opening the store again pairs nothing: the pass has run
+    assert _pair_of(db, note) is None and _pair_of(db, reference) is None, "premise"
+
+    rt = _runtime(db)
+    try:
+        rt.maintain()
+    finally:
+        rt.close()
+
+    assert _pair_of(db, note) == memory, "the capture older code wrote was never paired"
+    assert _asked(db, memory) == [("impact", False)], "its missing meaning was never asked for"
+    # By the same rule as the one-time pass: equal words written a minute
+    # later are a reference.
+    assert _pair_of(db, reference) is None, "a note written a minute after the memory was paired"
+
+
+def test_code_older_than_the_store_leaves_the_pairing_to_current_code(tmp_path, monkeypatch):
+    """Pairing a note by rule is maintenance: code older than the store runs
+    none of it, and current code pairs the note at its next cycle."""
+    db = tmp_path / "memory.db"
+    _opened_by_this_code(db)
+    memory, note = _older_capture(db, LATE, "On the quay, after the storm.")
+
+    for module in VERSIONED:
+        monkeypatch.setattr(f"{module}.MAINTENANCE_CODE_VERSION", MAINTENANCE_CODE_VERSION - 1,
+                            raising=False)
+    rt = _runtime(db)
+    try:
+        said = rt.maintain()
+    finally:
+        rt.close()
+    assert "Cycle: skipped" in said, said
+    assert _pair_of(db, note) is None, "code older than the store paired a note"
+
+    for module in VERSIONED:
+        monkeypatch.setattr(f"{module}.MAINTENANCE_CODE_VERSION", MAINTENANCE_CODE_VERSION,
+                            raising=False)
+    rt = _runtime(db)
+    try:
+        rt.maintain()
+    finally:
+        rt.close()
+    assert _pair_of(db, note) == memory, "current code left the late capture unpaired"

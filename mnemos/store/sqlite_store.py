@@ -1122,8 +1122,11 @@ class EngramStore:
         note written later with the memory's very words only references it.
 
         Runs once per store, in one transaction with the record of what it
-        linked (``CAPTURE_PAIRS_LINKED_KEY``), which keeps it from running
-        again: from then on a note is paired when it is written, or never.
+        linked (``CAPTURE_PAIRS_LINKED_KEY``), which keeps this whole-store
+        pass from running again. It does not end the pairing: code from
+        before pairs can still take a capture after this code has opened the
+        store, and writes only the reference. Each maintenance cycle pairs
+        those in its scope by the same rule (``link_capture_pairs``).
         """
         done = "SELECT 1 FROM meta WHERE key = ?"
         if conn.execute(done, (CAPTURE_PAIRS_LINKED_KEY,)).fetchone():
@@ -1134,31 +1137,9 @@ class EngramStore:
         try:
             # Another process may have linked them while this one waited.
             if not conn.execute(done, (CAPTURE_PAIRS_LINKED_KEY,)).fetchone():
-                rows = conn.execute(
-                    f"""
-                    SELECT h.id, h.related_engram_id,
-                           h.agent_id || '/' || h.person_id || '/' || h.project_scope AS scope,
-                           h.created_at, e.created_at
-                    FROM hypomnema_entries h
-                    JOIN engrams e ON e.id = h.related_engram_id
-                    WHERE h.entry_kind = 'continuity'
-                      AND h.graduated_to_engram_id IS NULL
-                      AND e.owner_agent_id = h.agent_id
-                      AND e.person_id = h.person_id
-                      AND e.project_scope = h.project_scope
-                      AND ({_CAPTURED_AS.format(text='e.content')}
-                           OR {_CAPTURED_AS.format(text='e.content_at_encoding')})
-                    """
-                ).fetchall()
-                rows = [row for row in rows if _written_together(row[3], row[4])]
-                conn.executemany(
-                    "UPDATE hypomnema_entries SET graduated_to_engram_id = ? "
-                    "WHERE id = ? AND graduated_to_engram_id IS NULL",
-                    [(row[1], row[0]) for row in rows],
-                )
                 linked: dict[str, int] = {}
-                for row in rows:
-                    linked[row[2]] = linked.get(row[2], 0) + 1
+                for _note, _memory, scope in EngramStore._pair_capture_notes(conn):
+                    linked[scope] = linked.get(scope, 0) + 1
                 conn.execute(
                     "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
                     (CAPTURE_PAIRS_LINKED_KEY, _encode_json({"at": _utc_now(), "linked": linked})),
@@ -1167,6 +1148,76 @@ class EngramStore:
         except BaseException:
             conn.rollback()
             raise
+
+    @staticmethod
+    def _pair_capture_notes(
+        conn: sqlite3.Connection,
+        scope: tuple[str, str, str] | None = None,
+        *,
+        live_only: bool = False,
+    ) -> list[tuple[str, str, str]]:
+        """Pair each continuity note that names its memory only as a reference
+        with that memory, when one capture wrote the two together: the note's
+        words are the memory's words as a capture writes them
+        (``_CAPTURED_AS``), both are in one scope, and they were written
+        within one capture call (``CAPTURE_WINDOW_SECONDS``). In ``scope``
+        (agent, person, project) when given, else the whole store; with
+        ``live_only``, only notes whose memory is live (neither quiet nor
+        faded). Runs in the caller's transaction and returns what it linked:
+        (note id, memory id, "agent/person/project")."""
+        where = [
+            "h.entry_kind = 'continuity'",
+            "h.graduated_to_engram_id IS NULL",
+            "e.owner_agent_id = h.agent_id",
+            "e.person_id = h.person_id",
+            "e.project_scope = h.project_scope",
+        ]
+        params: list[str] = []
+        if scope is not None:
+            where.insert(0, "h.agent_id = ? AND h.person_id = ? AND h.project_scope = ?")
+            params.extend(scope)
+        if live_only:
+            where.append("e.state NOT IN ('dormant', 'archived')")
+        rows = conn.execute(
+            f"""
+            SELECT h.id, h.related_engram_id,
+                   h.agent_id || '/' || h.person_id || '/' || h.project_scope AS scope,
+                   h.created_at, e.created_at
+            FROM hypomnema_entries h
+            JOIN engrams e ON e.id = h.related_engram_id
+            WHERE {' AND '.join(where)}
+              AND ({_CAPTURED_AS.format(text='e.content')}
+                   OR {_CAPTURED_AS.format(text='e.content_at_encoding')})
+            """,
+            params,
+        ).fetchall()
+        rows = [row for row in rows if _written_together(row[3], row[4])]
+        conn.executemany(
+            "UPDATE hypomnema_entries SET graduated_to_engram_id = ? "
+            "WHERE id = ? AND graduated_to_engram_id IS NULL",
+            [(row[1], row[0]) for row in rows],
+        )
+        return [(row[0], row[1], row[2]) for row in rows]
+
+    def link_capture_pairs(
+        self, *, agent_id: str, person_id: str, project_scope: str,
+    ) -> list[str]:
+        """Pair the capture notes in one scope that still name their memory
+        only as a reference, by the rule the one-time pass uses
+        (``_pair_capture_notes``), and return the notes paired.
+
+        Code from before pairs can still take a capture after this code has
+        opened a store (it may save, only not maintain), and it records only
+        the reference; the one-time pass has run by then and does not run
+        again. Maintenance calls this each cycle. Only notes whose memory is
+        live: a quiet or faded memory's note waits until it wakes, which
+        keeps the cycle's cost to the few notes that need it.
+        """
+        with self.transaction() as conn:
+            linked = self._pair_capture_notes(
+                conn, (agent_id, person_id, project_scope), live_only=True,
+            )
+        return [note for note, _memory, _scope in linked]
 
     @staticmethod
     def _backfill_engram_scopes(conn: sqlite3.Connection) -> None:
@@ -3833,7 +3884,8 @@ class EngramStore:
     # advanced tools can name a memory it only interprets or summarises, and
     # that memory is never its pair. Captures from before the pair was
     # recorded are linked once, when the store is opened by this code
-    # (``_link_older_capture_pairs``).
+    # (``_link_older_capture_pairs``), and any that older code writes later
+    # are linked by the next maintenance cycle (``link_capture_pairs``).
 
     def save_capture_pair(
         self,

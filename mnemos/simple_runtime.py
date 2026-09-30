@@ -2218,7 +2218,9 @@ class MnemosRuntime:
         whose answer had no note to land in, such as one a note interprets,
         and missed the memory a correction wrote, whose note still names the
         memory the corrected note named. A promoted memory is reached this
-        way too, so a promotion's empty meaning is asked for like any other.
+        way too, so a promotion's empty meaning is asked for like any other,
+        and so is a capture older code wrote with only the reference, which
+        the cycle pairs first (``EngramStore.link_capture_pairs``).
         """
         self._ensure_init()
         assert self._store is not None
@@ -5145,6 +5147,15 @@ class MnemosRuntime:
                 "Passes: none",
                 *_index_lines(self._index_for_recall(index_budget)),
             ])
+        # A capture that code from before pairs took after this code opened
+        # the store names its memory only as a reference; the store's one-time
+        # pairing has run by then. Paired here, by the same rule, before the
+        # questions that reach a memory through its pair.
+        try:
+            self._traced_write(*self._store.link_capture_pairs(**self._scope_args()))
+        except Exception:
+            if self._host_mutation_active:
+                raise
         promoted = self._promote_candidates(limit=3)
         # Maintenance proposes reflections; it never answers them.
         try:

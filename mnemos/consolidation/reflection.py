@@ -1,13 +1,15 @@
 """
-Reflection pass: autonomous thought generation and narrative identity update.
+Reflection pass: the deep cycle's look over what the agent wrote lately.
 
-The most creative consolidation step:
-1. Reviews recent memories and finds patterns/themes
-2. Generates "thoughts" — new semantic engrams synthesizing insights
-3. Updates the narrative self-summary (the agent's story of who it is)
+It writes no memories. It once wrote "thoughts" as new memories: a configured
+model's lines, or without one Mnemos's own template ("Recurring theme:
+continuity (appeared in 46 recent memories)", author_kind system). Neither was
+the agent's words, and words in memory come only from the agent. A theme the
+pass notices may one day be put to the agent as a question in the packet, at
+most one; until then it becomes nothing.
 
-Requires an LLM client for full functionality. Without one, uses
-template-based fallbacks that still produce useful (if less creative) output.
+The identity pass lives here too (``run_identity_pass``): identity measured
+from the graph of what the agent wrote, not narrated.
 """
 
 from __future__ import annotations
@@ -18,40 +20,10 @@ from typing import TYPE_CHECKING, Any
 
 from ..core.emotional_state import EmotionalState
 from ..core.identity import AgentIdentity, IdentityProfile
-from ..core.types import EngramKind, SourceType, is_structural_tag
+from ..core.types import is_structural_tag
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
-
-
-THOUGHT_PROMPT = """Review these recent memories and generate 1-3 synthetic thoughts that connect themes, identify patterns, or surface insights that aren't obvious from any single memory alone.
-
-Recent memories:
-{memory_summary}
-
-Current emotional state:
-  curiosity: {curiosity:.2f}
-  restlessness: {restlessness:.2f}
-  clarity: {clarity:.2f}
-
-For each thought, write one line. Focus on connections and patterns.
-Write ONLY the thoughts, one per line. Nothing else."""
-
-NARRATIVE_PROMPT = """You are updating an AI agent's internal self-narrative. This is NOT a list of facts — it's a coherent paragraph about who you are, what you've been learning, what you're uncertain about, and how you've grown.
-
-Previous self-summary:
-{current_summary}
-
-Recent experiences:
-{memory_summary}
-
-Current beliefs:
-{belief_text}
-
-Current emotional state:
-  curiosity: {curiosity:.2f}, clarity: {clarity:.2f}, warmth: {warmth:.2f}
-
-Write an updated self-narrative (3-5 sentences). First person. Be honest about uncertainty. Write ONLY the narrative. Nothing else."""
 
 
 def run_reflection_pass(
@@ -63,21 +35,25 @@ def run_reflection_pass(
     person_id: str | None = None,
     project_scope: str | None = None,
 ) -> dict[str, Any]:
-    """Generate thoughts, curiosity questions, and update narrative self-summary.
+    """Count the agent's recent memories. Writes nothing, and asks no model.
 
     Args:
         store: The engram store.
-        identity: Agent identity (epoch_state.self_summary will be updated).
-        emotional_state: Current emotional state.
-        llm_client: LLM client with complete(prompt) -> str. None = template fallback.
-        config: Optional config dict.
+        identity: Agent identity; its memory profile names the agent.
+        emotional_state: Kept for the daemon's call; unused.
+        llm_client: Kept for the daemon's call; never called. A model's
+            thoughts would be its words in the agent's memory, and sending
+            the agent's memories out for words that are then kept nowhere
+            would spend them for nothing.
+        config: Optional config dict (``reflection_lookback_hours``).
 
     Returns:
-        Statistics dict.
+        Statistics dict. ``thoughts_generated`` stays 0 and
+        ``narrative_updated`` False: the dream journal, the watchdog and the
+        CLI read those keys, from this cycle and from older cycles' logs.
     """
     config = config or {}
     lookback_hours = config.get("reflection_lookback_hours", 24)
-    max_thoughts = config.get("max_thoughts_per_pass", 5)
     agent_id = identity.memory_profile.agent_id
 
     stats = {
@@ -87,57 +63,18 @@ def run_reflection_pass(
         "narrative_length": 0,
     }
 
-    # 1. LOAD RECENT ENGRAMS: the agent's own. Themes are mined only from
-    # what the agent wrote, never from a tool's or a model's words.
+    # The agent's own memories only: what a tool or a model wrote is not
+    # something the agent keeps returning to. Counted, so their links are
+    # not loaded.
     all_engrams = store.get_active_engrams(
         agent_id=agent_id, person_id=person_id, project_scope=project_scope,
-        limit=200, author_kind="agent",
+        limit=200, author_kind="agent", load_connections=False,
     )
-    recent = [
-        e for e in all_engrams
-        if _hours_since(e.created_at) < lookback_hours
-    ]
-
-    stats["engrams_reviewed"] = len(recent)
-
-    if len(recent) < 3:
-        return stats
-
-    # Format for prompts
-    memory_summary = "\n".join(f"- {e.content}" for e in recent[:20])
-
-    # 2. GENERATE THOUGHTS
-    if llm_client:
-        thought_lines = _llm_generate_thoughts(
-            memory_summary, emotional_state, llm_client
-        )
-    else:
-        thought_lines = _generate_template_thoughts(recent)
-
-    # Encode thoughts as new engrams. A model wrote them, or Mnemos's own
-    # template did; either way they are not the agent's words.
-    from ..encoding.encoder import Encoder
-    encoder = Encoder(store)
-    writer = "tool" if llm_client else "system"
-    writer_model = str(getattr(llm_client, "_model", "") or "") if llm_client else ""
-
-    for thought in thought_lines[:max_thoughts]:
-        if thought and len(thought.strip()) > 10:
-            encoder.encode(
-                content=thought.strip(),
-                kind=EngramKind.SEMANTIC,
-                tags=["reflection", "synthesized"],
-                source=SourceType.REFLECTION,
-                agent_id=agent_id,
-                person_id=person_id or "user",
-                project_scope=project_scope or "global",
-                author_kind=writer,
-                author_model=writer_model,
-            )
-            stats["thoughts_generated"] += 1
-
+    stats["engrams_reviewed"] = sum(
+        1 for e in all_engrams if _hours_since(e.created_at) < lookback_hours
+    )
     # Identity is computed by run_identity_pass, which runs on every cycle
-    # rather than only when a model is configured. See below.
+    # rather than only when a model is configured.
     return stats
 
 
@@ -193,25 +130,6 @@ def run_identity_pass(
         lessons_accumulated=profile.lessons_accumulated,
     )
     return stats
-
-
-def _llm_generate_thoughts(
-    memory_summary: str,
-    emotional_state: EmotionalState,
-    llm_client: Any,
-) -> list[str]:
-    """Generate thoughts using LLM."""
-    prompt = THOUGHT_PROMPT.format(
-        memory_summary=memory_summary,
-        curiosity=emotional_state.curiosity,
-        restlessness=emotional_state.restlessness,
-        clarity=emotional_state.clarity,
-    )
-    try:
-        raw = llm_client.complete(prompt)
-        return [line.strip().lstrip("- ") for line in raw.strip().split("\n") if line.strip()]
-    except Exception:
-        return []
 
 
 def compute_identity_profile(
@@ -305,35 +223,6 @@ def compute_identity_profile(
         hub_concepts=hub_concepts,
         lessons_accumulated=lessons_count,
         growth_signal=growth_signal,
-    )
-
-
-def _generate_template_thoughts(recent: list) -> list[str]:
-    """Generate simple theme-based thoughts without LLM."""
-    all_tags = [t for e in recent for t in e.tags]
-    common = Counter(all_tags).most_common(3)
-    if not common:
-        return []
-    return [
-        f"Recurring theme: {tag} (appeared in {count} recent memories)"
-        for tag, count in common
-    ]
-
-
-def _generate_template_summary(recent: list, identity: AgentIdentity) -> str:
-    """Generate basic self-summary without LLM."""
-    n = len(recent)
-    if recent:
-        all_tags = [t for e in recent for t in e.tags]
-        common = Counter(all_tags).most_common(3)
-        themes = ", ".join(t for t, _ in common) if common else "various topics"
-    else:
-        themes = "ongoing work"
-
-    epoch = identity.epoch_state.epoch_number
-    return (
-        f"An agent with {n} recent memories, focused on {themes}. "
-        f"Currently in epoch {epoch}."
     )
 
 

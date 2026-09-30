@@ -474,6 +474,30 @@ def test_judging_never_changes_memory(tmp_path, meaning, home, key):
     assert row["calls"][0]["outcome"] == "answered" and set(row) == {"calls"}
 
 
+
+def test_stopping_waits_for_the_judges_row(tmp_path, meaning, home, key, monkeypatch):
+    """The row is written after the reply has gone; stopping the answerer
+    waits for it, so a slow write right after a reply isn't lost."""
+    import mnemos.cue as cue_module
+
+    real = cue_module.keep_judged_calls
+
+    def slow(*args, **kwargs):
+        time.sleep(0.5)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(cue_module, "keep_judged_calls", slow)
+    db = _store(tmp_path / "memory.db")
+    answerer = _answerer(db, _Judge(default=0.99))
+    try:
+        assert _hook(db, **_switched_on(key))
+    finally:
+        answerer.stop()
+    row = _judge_row(db)
+    assert row is not None, "stopping the answerer lost the judge's row"
+    assert [call["outcome"] for call in row["calls"]] == ["answered"]
+
+
 # ── Fail quiet ──
 
 

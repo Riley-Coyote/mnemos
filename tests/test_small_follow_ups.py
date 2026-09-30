@@ -38,6 +38,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -846,7 +847,8 @@ def hanging(monkeypatch):
 
     def rerouted(request, timeout=None, **kwargs):
         url = request.full_url if isinstance(request, urllib.request.Request) else str(request)
-        if "generativelanguage.googleapis.com" in url or "/v1beta/models/" in url:
+        parts = urllib.parse.urlsplit(url)
+        if parts.hostname == "generativelanguage.googleapis.com" or parts.path.startswith("/v1beta/models/"):
             waits.append(timeout)
             request = urllib.request.Request(
                 f"http://127.0.0.1:{server.port}/v1beta/models/hanging",

@@ -721,6 +721,8 @@ class CueAnswerer:
         self.answered = 0
         self._judge = judge
         self._judged_lock = threading.Lock()
+        # One write of the judge's row at a time; stop() waits on it.
+        self._keeping = threading.Lock()
         self._judged: dict[str, Any] = {
             # Messages the hook asked to have judged; those with nothing to
             # judge (no call); calls made; calls that answered; lines shown;
@@ -760,6 +762,10 @@ class CueAnswerer:
             except OSError:
                 pass
             self._inode = None
+        # The row is written after each reply has gone, so a stop right after
+        # a reply would lose it: keep what was judged before stopping, waiting
+        # for a write already under way.
+        self._keep_judged()
 
     # The threads
 
@@ -988,19 +994,20 @@ class CueAnswerer:
         code at least as new as the store: what the row holds is newer code's
         to decide. Never raises: the row is a count, and the reply already
         went."""
-        with self._judged_lock:
-            unkept, self._unkept = self._unkept, []
-        if not unkept:
-            return
-        try:
-            from .code_version import MAINTENANCE_CODE_VERSION
-
-            minimum = self._store.min_code_version() if self._store is not None else None
-            if minimum is not None and minimum > MAINTENANCE_CODE_VERSION:
+        with self._keeping:
+            with self._judged_lock:
+                unkept, self._unkept = self._unkept, []
+            if not unkept:
                 return
-            keep_judged_calls(self.db_path, unkept)
-        except Exception as exc:
-            log.debug("The judge's outcomes were not kept: %s: %s", type(exc).__name__, exc)
+            try:
+                from .code_version import MAINTENANCE_CODE_VERSION
+
+                minimum = self._store.min_code_version() if self._store is not None else None
+                if minimum is not None and minimum > MAINTENANCE_CODE_VERSION:
+                    return
+                keep_judged_calls(self.db_path, unkept)
+            except Exception as exc:
+                log.debug("The judge's outcomes were not kept: %s: %s", type(exc).__name__, exc)
 
 
 def judged_calls(value: Any) -> list[dict[str, str]]:

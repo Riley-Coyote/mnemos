@@ -186,6 +186,9 @@ def _candidates(db: Path, text: str = MESSAGE, limit: int = 6) -> list[dict]:
 
 
 def _state(db: Path) -> dict:
+    """Everything judging must leave as it was. The meta rows leave out the
+    one row the answerers keep while the switch is on (``cue_judge_calls``,
+    WP-R19): how Jev's calls ended, checked by ``_judge_row``."""
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
         return {
@@ -196,10 +199,21 @@ def _state(db: Path) -> dict:
             "reinforced": conn.execute("SELECT COUNT(*) FROM session_reinforcements").fetchone(),
             "versions": conn.execute("SELECT COUNT(*) FROM versions").fetchone(),
             "beliefs": conn.execute("SELECT COUNT(*) FROM beliefs").fetchone(),
-            "meta": conn.execute("SELECT key, value FROM meta ORDER BY key").fetchall(),
+            "meta": conn.execute(
+                "SELECT key, value FROM meta WHERE key != 'cue_judge_calls' ORDER BY key").fetchall(),
         }
     finally:
         conn.close()
+
+
+def _judge_row(db: Path) -> dict | None:
+    """The row the answerers keep of Jev's calls, decoded, or None."""
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key = 'cue_judge_calls'").fetchone()
+    finally:
+        conn.close()
+    return json.loads(row[0]) if row else None
 
 
 # ── The judge, and the answerer that asks it ──
@@ -446,6 +460,7 @@ def test_one_call_per_message_and_none_without_candidates(tmp_path, meaning, hom
 
 
 def test_judging_never_changes_memory(tmp_path, meaning, home, key):
+    """Nothing but the judge's own row: when the call was and how it ended."""
     db = _store(tmp_path / "memory.db")
     before = _state(db)
     answerer = _answerer(db, _Judge(default=0.99))
@@ -454,6 +469,9 @@ def test_judging_never_changes_memory(tmp_path, meaning, home, key):
     finally:
         answerer.stop()
     assert _state(db) == before
+    row = _judge_row(db)
+    assert [set(call) for call in row["calls"]] == [{"at", "outcome"}]
+    assert row["calls"][0]["outcome"] == "answered" and set(row) == {"calls"}
 
 
 # ── Fail quiet ──
@@ -874,6 +892,10 @@ def test_a_real_server_judges_for_the_hook_across_processes(tmp_path, meaning, h
                 input=payload.encode(), capture_output=True, timeout=60,
                 env=_env(Path(os.environ["HOME"]), CLAUDE_PID=str(os.getpid()), **_switched_on(key)),
             ))
+        # The answerer keeps each call's outcome just after its reply went.
+        kept_by = time.monotonic() + 10
+        while len((_judge_row(db) or {}).get("calls") or []) < 2 and time.monotonic() < kept_by:
+            time.sleep(0.05)
     finally:
         server.stdin.close()
         server.wait(timeout=30)
@@ -889,3 +911,5 @@ def test_a_real_server_judges_for_the_hook_across_processes(tmp_path, meaning, h
     assert KEY not in server_err
     assert _seen("judged-one", db)["offers"][0]["via"] == "jev"
     assert _state(db) == before, "the judge's scores changed nothing"
+    # Only the judge's row, kept by the server's answerer: two calls, answered.
+    assert [call["outcome"] for call in _judge_row(db)["calls"]] == ["answered", "answered"]

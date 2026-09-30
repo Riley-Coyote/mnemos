@@ -39,8 +39,9 @@ words, with its date and its id. Or nothing, which is the usual answer.
   with the old one). With no answerer, a slow one, or one speaking an older
   protocol, the hook answers from words alone. The model loads at the server's
   start where the hook is in use, and otherwise only when a cue first asks.
-- **Read-only.** The cue writes nothing to the store. The per-session files and
-  the socket are outside it.
+- **Read-only.** The cue writes no memory. The per-session files and the
+  socket are outside the store; the one row it keeps there, only while the
+  judge is switched on, counts Jev's recent calls (below).
 - **Jev decides, when switched on** (WP-R16b, off by default; ``mnemos.jev``).
   The hook asks the answerer to judge: its candidates before the cap, at most
   ``jev.CANDIDATES`` lines that cleared the floors, go to Jev with the message
@@ -48,7 +49,11 @@ words, with its date and its id. Or nothing, which is the usual answer.
   shows at most ``CUE_LINES`` of those Jev scores at
   least ``CUE_JUDGE_THRESHOLD``, the likeliest first. On a timeout or an error
   it shows nothing, and so it does without an answerer that judged: quiet beats
-  noisy. The answerer counts every outcome for the health card.
+  noisy. The answerer counts every outcome for the health card, and keeps the
+  outcomes of the last ``JUDGE_CALLS_KEPT`` calls (when, and answered, timed
+  out or failed; nothing else) in one row of the store (``JUDGE_CALLS_KEY``),
+  so that repeated failures are seen from every session and by
+  ``mnemos doctor``.
 
 The hook imports nothing heavy: no torch, no MCP.
 """
@@ -152,6 +157,17 @@ PAYLOAD_BYTES = 1_048_576
 RUN_DAYS = 7
 # The offers one session file keeps, newest last.
 OFFERS_KEPT = 200
+
+# The one row the answerers keep in the store while the judge is switched on
+# (``meta``): the outcomes of Jev's last this-many calls, from every session,
+# each as when it was and whether Jev answered ("answered"), timed out
+# ("timeout") or failed ("error"). Nothing of the message, the lines or the
+# key. The watchdog flags it when more than half of them failed.
+JUDGE_CALLS_KEY = "cue_judge_calls"
+JUDGE_CALLS_KEPT = 20
+# How long an answerer waits for the store's lock to save an outcome. Past it
+# the outcome is left out: the row is a count, and the reply already went.
+JUDGE_SAVE_WAIT = 0.25
 
 HEADING = "## Mnemos: from memory, maybe bearing on this message"
 
@@ -669,7 +685,9 @@ class CueAnswerer:
     (``jev.ask`` unless a test gives another) within the time the hook said it
     would wait, and answers with at most ``CUE_LINES`` of the lines scoring at
     least ``CUE_JUDGE_THRESHOLD``, or with none when the judge timed out or
-    failed. It counts each outcome (``judge_counts``) for the health card.
+    failed. It counts each outcome (``judge_counts``) for the health card, and
+    once the reply has gone keeps how each call ended in the store's one row
+    for the judge (``_keep_judged``): the only thing it ever writes there.
     """
 
     def __init__(
@@ -712,6 +730,9 @@ class CueAnswerer:
             "shown": 0, "none_shown": 0, "timeouts": 0, "errors": 0,
             "last_failure": None,
         }
+        # The outcomes of calls made since the last reply went, waiting to be
+        # kept in the store's row (``_keep_judged``).
+        self._unkept: list[tuple[str, str]] = []
 
     def start(self) -> bool:
         """Start in the background. False when this process has no Claude
@@ -878,6 +899,8 @@ class CueAnswerer:
         reply["ms"] = round((time.perf_counter() - started) * 1000, 1)
         conn.sendall((json.dumps(reply) + "\n").encode("utf-8"))
         self.answered += 1
+        # After the reply has gone, so the hook never waits on it.
+        self._keep_judged()
 
     def _lines(
         self, text: str, *, exclude: list[str], texts: list[str], limit: int | None = None,
@@ -923,32 +946,110 @@ class CueAnswerer:
         except jev.JevFailed as failed:
             said = failed.kind + (f" ({failed.detail})" if failed.detail else "")
             if failed.kind == "timeout":
-                self._count(timeouts=1, last_failure=said)
+                self._count(timeouts=1, last_failure=said, outcome="timeout")
                 return [], "timeout"
-            self._count(errors=1, last_failure=said)
+            self._count(errors=1, last_failure=said, outcome="error")
             return [], "error"
         except Exception as exc:  # a judge that broke: nothing shows
-            self._count(errors=1, last_failure=f"error ({type(exc).__name__})")
+            self._count(errors=1, last_failure=f"error ({type(exc).__name__})", outcome="error")
             return [], "error"
         chosen = sorted(
             (index for index, score in enumerate(scores) if score >= CUE_JUDGE_THRESHOLD),
             key=lambda index: (-scores[index], index),
         )[:CUE_LINES]
         shown = [{**lines[index], "score": round(scores[index], 4)} for index in chosen]
-        self._count(answered=1, shown=len(shown), none_shown=0 if shown else 1)
+        self._count(answered=1, shown=len(shown), none_shown=0 if shown else 1, outcome="answered")
         return shown, "shown" if shown else "none"
 
-    def _count(self, *, last_failure: str | None = None, **increments: int) -> None:
+    def _count(
+        self, *, last_failure: str | None = None, outcome: str | None = None, **increments: int,
+    ) -> None:
+        """Add to the judge's counts. ``outcome`` is how a call to Jev ended
+        ("answered", "timeout" or "error"), kept for the store's row once the
+        reply has gone (``_keep_judged``)."""
         with self._judged_lock:
             for name, n in increments.items():
                 self._judged[name] += n
             if last_failure is not None:
                 self._judged["last_failure"] = last_failure
+            if outcome is not None:
+                self._unkept.append((datetime.now(timezone.utc).isoformat(), outcome))
 
     def judge_counts(self) -> dict[str, Any]:
         """What judging has done in this process: a copy of the counts."""
         with self._judged_lock:
             return dict(self._judged)
+
+    def _keep_judged(self) -> None:
+        """Keep how this process's calls to Jev ended in the store's one row
+        for them (``keep_judged_calls``), beside the other sessions' calls, so
+        repeated failures are seen from every session and by ``mnemos
+        doctor``. Only calls a hook asked for (its switch is on), and only by
+        code at least as new as the store: what the row holds is newer code's
+        to decide. Never raises: the row is a count, and the reply already
+        went."""
+        with self._judged_lock:
+            unkept, self._unkept = self._unkept, []
+        if not unkept:
+            return
+        try:
+            from .code_version import MAINTENANCE_CODE_VERSION
+
+            minimum = self._store.min_code_version() if self._store is not None else None
+            if minimum is not None and minimum > MAINTENANCE_CODE_VERSION:
+                return
+            keep_judged_calls(self.db_path, unkept)
+        except Exception as exc:
+            log.debug("The judge's outcomes were not kept: %s: %s", type(exc).__name__, exc)
+
+
+def judged_calls(value: Any) -> list[dict[str, str]]:
+    """The calls a judge row (``JUDGE_CALLS_KEY``) holds, oldest first, each
+    ``{"at": ..., "outcome": ...}``; nothing for a row it can't read."""
+    try:
+        data = json.loads(value) if isinstance(value, str) else value
+    except ValueError:
+        return []
+    calls = data.get("calls") if isinstance(data, dict) else None
+    kept = []
+    for call in calls if isinstance(calls, list) else []:
+        if isinstance(call, dict) and isinstance(call.get("at"), str) and call.get("outcome") in (
+            "answered", "timeout", "error",
+        ):
+            kept.append({"at": call["at"], "outcome": call["outcome"]})
+    return kept
+
+
+def keep_judged_calls(
+    db_path: str | Path, outcomes: Sequence[tuple[str, str]], *, wait: float = JUDGE_SAVE_WAIT,
+) -> bool:
+    """Add ``outcomes`` (``(at, outcome)`` pairs) to the store's judge row,
+    keeping the last ``JUDGE_CALLS_KEPT``, in one short transaction on a
+    connection of its own. Only in a store that is already there. False when
+    it could not (no store, a lock held past ``wait``)."""
+    import sqlite3
+
+    path = Path(db_path).expanduser()
+    if not path.is_file():
+        return False
+    conn = sqlite3.connect(str(path), timeout=wait)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (JUDGE_CALLS_KEY,)).fetchone()
+        calls = judged_calls(row[0] if row else None)
+        calls += [{"at": at, "outcome": outcome} for at, outcome in outcomes]
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+            (JUDGE_CALLS_KEY, json.dumps({"calls": calls[-JUDGE_CALLS_KEPT:]})),
+        )
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        if conn.in_transaction:
+            conn.rollback()
+        return False
+    finally:
+        conn.close()
 
 
 def _wait(value: Any) -> float:

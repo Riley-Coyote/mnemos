@@ -135,16 +135,54 @@ def in_use(environ: Mapping[str, str] | None = None, *, config_path: str | Path 
     return switched_on(environ, config_path=config_path) and has_key(environ)
 
 
+def switch_source(environ: Mapping[str, str] | None = None, *, config_path: str | Path | None = None) -> str:
+    """Where ``switched_on`` read the switch, in words: the environment's
+    ``MNEMOS_CUE_JUDGE`` when set, else the config file when it names
+    ``cue_judge`` (or can't be read, which is off), else nowhere: off by
+    default."""
+    env = os.environ if environ is None else environ
+    said = (env.get(SWITCH_ENV) or "").strip()
+    if said:
+        return f"{SWITCH_ENV}={said} in the environment"
+    path = Path(config_path).expanduser() if config_path is not None else Path.home() / ".mnemos" / "config.json"
+    shown = _home_path(path)
+    try:
+        if not path.exists():
+            return "not set (off by default)"
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RuntimeError):
+        return f"{shown}, which could not be read (off)"
+    if isinstance(data, dict) and SWITCH_KEY in data:
+        return f'"{SWITCH_KEY}": {json.dumps(data[SWITCH_KEY])} in {shown}'
+    return "not set (off by default)"
+
+
+def key_state(environ: Mapping[str, str] | None = None) -> str:
+    """Whether the key file is there: "present", "empty" or "missing". Reads
+    its size, never the key."""
+    try:
+        return "present" if key_file(environ).stat().st_size > 0 else "empty"
+    except (OSError, RuntimeError):
+        return "missing"
+
+
+def _home_path(path: Path) -> str:
+    """``path``, under ``~/`` when it is in the home folder."""
+    try:
+        return "~/" + str(path.relative_to(Path.home()))
+    except (ValueError, RuntimeError):
+        return str(path)
+
+
 def status(environ: Mapping[str, str] | None = None, *, config_path: str | Path | None = None) -> dict[str, Any]:
-    """The switch as this process sees it, for health: never the key."""
+    """The switch as this process sees it, for health and doctor: whether it
+    is on, where it was read from (``source``), and whether a key file is
+    there (``key``, ``key_state``); never the key."""
     on = switched_on(environ, config_path=config_path)
     key = has_key(environ)
-    path = key_file(environ)
-    try:
-        shown = "~/" + str(path.relative_to(Path.home()))
-    except ValueError:
-        shown = str(path)
-    return {"switched_on": on, "key": key, "key_file": shown, "in_use": on and key,
+    shown = _home_path(key_file(environ))
+    return {"switched_on": on, "source": switch_source(environ, config_path=config_path),
+            "key": key, "key_state": key_state(environ), "key_file": shown, "in_use": on and key,
             "host": JEV_HOST, "message_chars": MESSAGE_CHARS, "candidates": CANDIDATES,
             "line_chars": LINE_CHARS}
 

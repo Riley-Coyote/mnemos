@@ -995,3 +995,150 @@ def test_a_timeout_ends_the_call_and_is_counted(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", refused)
     assert gemini.batch_embed(["a", "b", "c"]) == [None, None, None]
     assert [wait for _, wait in refused.requests] == [2.0, 2.0, 2.0, 2.0]
+
+
+# ── 9. The Jev gate in doctor and across sessions ──
+
+
+def _doctor(db: Path, capsys) -> str:
+    assert main(["doctor", "--db-path", str(db), *SCOPE_ARGS]) == 0
+    return capsys.readouterr().out
+
+
+def _kept_calls(db: Path, count: int, seconds: float = 10.0) -> list[dict]:
+    """The judge row's calls once it holds ``count``: an answerer keeps each
+    call's outcome just after its reply has gone."""
+    by = time.monotonic() + seconds
+    while True:
+        rows = _read(db, "SELECT value FROM meta WHERE key = 'cue_judge_calls'")
+        calls = cue.judged_calls(rows[0][0]) if rows else []
+        if len(calls) >= count or time.monotonic() >= by:
+            return calls
+        time.sleep(0.05)
+
+
+def _judge_line(out: str) -> str:
+    [line] = [line for line in out.splitlines() if line.startswith("Cue judge:")]
+    return line
+
+
+def test_doctor_says_whether_the_judge_is_on_where_the_switch_was_read_and_whether_a_key_is_there(
+    tmp_path, home, monkeypatch, capsys,
+):
+    db = tmp_path / "memory.db"
+    _saved(db, "The harbour ferry leaves at noon.")
+    key = tmp_path / "jev" / "api_key"
+    key.parent.mkdir()
+    key.write_text(KEY)
+
+    off = _judge_line(_doctor(db, capsys))
+    assert off.startswith("Cue judge:    off") and "not set (off by default)" in off, off
+
+    monkeypatch.setenv("MNEMOS_CUE_JUDGE", "jev")
+    monkeypatch.setenv("MNEMOS_JEV_KEY_FILE", str(key))
+    out = _doctor(db, capsys)
+    on = _judge_line(out)
+    assert on.startswith("Cue judge:    on") and "MNEMOS_CUE_JUDGE=jev in the environment" in on, on
+    assert f"key file {key}: present" in on, on
+    assert KEY not in out, "doctor printed the key"
+
+    monkeypatch.delenv("MNEMOS_CUE_JUDGE")
+    config = Path(os.environ["HOME"]) / ".mnemos" / "config.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps({"cue_judge": "jev"}))
+    monkeypatch.setenv("MNEMOS_JEV_KEY_FILE", str(tmp_path / "no-key-here"))
+    keyless = _judge_line(_doctor(db, capsys))
+    assert '"cue_judge": "jev" in ~/.mnemos/config.json' in keyless, keyless
+    assert "no key" in keyless and "no-key-here: missing" in keyless, keyless
+
+
+def test_repeated_jev_failures_raise_attention_in_every_session_and_in_doctor(
+    tmp_path, meaning, home, capsys,
+):
+    """Two sessions' answerers keep their calls in one row of the store; a
+    third process, doctor, and a fourth, a fresh session's health card, see
+    that most of them failed."""
+    db = _lights(tmp_path / "memory.db")
+    key = tmp_path / "api_key"
+    key.write_text(KEY)
+    switched = {"MNEMOS_CUE_JUDGE": "jev", "MNEMOS_JEV_KEY_FILE": str(key)}
+    first = _answerer(db, _Judge(fail=jev.JevFailed("timeout")), claude_pid=424242)
+    second = _answerer(db, _Judge(fail=jev.JevFailed("error", "HTTP 500")), claude_pid=434343)
+    try:
+        for n in range(6):
+            assert _hook(db, session=f"first-session-{n}", CLAUDE_PID="424242", **switched) == ""
+        assert len(_kept_calls(db, 6)) == 6
+        for n in range(5):
+            assert _hook(db, session=f"second-session-{n}", CLAUDE_PID="434343", **switched) == ""
+        calls = _kept_calls(db, 11)
+    finally:
+        first.stop()
+        second.stop()
+
+    assert [call["outcome"] for call in calls] == ["timeout"] * 6 + ["error"] * 5
+
+    done = subprocess.run(
+        [sys.executable, "-m", "mnemos.cli", "doctor", "--db-path", str(db), *SCOPE_ARGS],
+        capture_output=True, text=True, timeout=120, env=_env(home),
+    )
+    said = "The cue's judge failed on 11 of Jev's last 11 calls (6 timed out, 5 failed)"
+    assert said in done.stdout and "ATTENTION" in done.stdout, done.stdout
+    assert "Jev's last 11 call(s), all sessions: 0 answered, 6 timed out, 5 failed" in done.stdout
+    assert KEY not in done.stdout + done.stderr
+
+    rt = _runtime(db)
+    try:
+        card = format_health_card(rt.health())
+    finally:
+        rt.close()
+    assert f"ATTENTION — {said}" in card and "Run: mnemos doctor" in card, card
+
+
+def test_half_the_calls_failing_is_not_repeated_failure(tmp_path, meaning, home):
+    db = _lights(tmp_path / "memory.db")
+    key = tmp_path / "api_key"
+    key.write_text(KEY)
+    switched = {"MNEMOS_CUE_JUDGE": "jev", "MNEMOS_JEV_KEY_FILE": str(key), "CLAUDE_PID": str(os.getpid())}
+    judge = _Judge(score=0.1)
+    answerer = _answerer(db, judge)
+    try:
+        for n in range(20):
+            if n == 10:
+                judge.fail = jev.JevFailed("timeout")
+            _hook(db, session=f"half-session-{n}", **switched)
+        assert len(_kept_calls(db, 20)) == 20
+    finally:
+        answerer.stop()
+
+    rt = _runtime(db)
+    try:
+        data = rt.health()
+    finally:
+        rt.close()
+    check = data["watchdog"]["checks"]["cue_judge"]
+    assert (check["calls"], check["answered"], check["timeouts"]) == (20, 10, 10), check
+    assert check["stalled"] is False and "judge" not in format_health_card(data)
+
+
+def test_the_judges_row_is_written_only_when_the_switch_is_on_and_by_current_code(tmp_path, meaning, home):
+    db = _lights(tmp_path / "memory.db")
+    judge = _Judge(fail=jev.JevFailed("timeout"))
+    answerer = _answerer(db, judge)
+    try:
+        for n in range(3):
+            _hook(db, session=f"off-session-{n}", CLAUDE_PID=str(os.getpid()))  # switched off
+    finally:
+        answerer.stop()
+    assert judge.calls == 0
+    assert _read(db, "SELECT COUNT(*) FROM meta WHERE key = 'cue_judge_calls'") == [(0,)]
+
+    # Code older than the store keeps no row: what it holds is newer code's.
+    store = EngramStore(str(db))
+    store.raise_min_code_version(MAINTENANCE_CODE_VERSION + 1)
+    store.close()
+    answerer = cue.CueAnswerer(str(db), claude_pid=os.getpid(), judge=judge, **SCOPE)
+    answerer._lines("lighthouse keeper storm shutters", exclude=[], texts=[])
+    lines = [{"id": "engram_x", "text": "a line", "date": "2026-09-29", "key": "k"}]
+    answerer._judged_lines(MESSAGE, lines, by=time.monotonic() + 1)
+    answerer._keep_judged()
+    assert _read(db, "SELECT COUNT(*) FROM meta WHERE key = 'cue_judge_calls'") == [(0,)]

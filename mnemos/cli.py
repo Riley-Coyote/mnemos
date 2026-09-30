@@ -2471,6 +2471,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print(f"Model:        {'dedicated provider configured' if runtime.has_dedicated_model else 'local baseline only'}")
         _print_background_status(runtime.scope)
         _print_semantic_status(runtime, watched)
+        _print_judge_status(watched)
         print(f"Simple tools: {', '.join(SIMPLE_TOOL_NAMES)}")
         _print_memory_status(runtime)
         _print_continuity_status(runtime)
@@ -2479,6 +2480,38 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         return 0
     finally:
         runtime.close()
+
+
+def _print_judge_status(watched=None) -> None:
+    """Say whether the cue's judge is on, where the switch was read from, and
+    whether a key file is there (by its size: the key is never read), as this
+    shell sees them; the prompt hook reads the same switch, from the config
+    file or the environment Claude Code started in. Then, when any session's
+    answerer has kept calls, how the last of them ended (the watchdog flags
+    repeated failures with the others)."""
+    from . import jev
+
+    try:
+        status = jev.status()
+    except Exception as exc:
+        print(f"Cue judge:    unknown ({type(exc).__name__}: {exc})")
+        return
+    key = f"key file {status['key_file']}: {status['key_state']}"
+    if status["in_use"]:
+        print(f"Cue judge:    on: Jev decides which memories the cue shows (switch: {status['source']}; {key})")
+    elif status["switched_on"]:
+        print(
+            f"Cue judge:    switched on ({status['source']}), but with no key the cue runs "
+            f"without Jev ({key})"
+        )
+    else:
+        print(f"Cue judge:    off (switch: {status['source']}; {key})")
+    calls = ((watched or {}).get("checks") or {}).get("cue_judge") or {}
+    if calls.get("calls"):
+        print(
+            f"              Jev's last {calls['calls']} call(s), all sessions: {calls['answered']} "
+            f"answered, {calls['timeouts']} timed out, {calls['errors']} failed"
+        )
 
 
 def _print_watchdog(watched) -> None:

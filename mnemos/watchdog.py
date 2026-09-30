@@ -29,7 +29,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from .cue import offered_summary, scope_key
+from .cue import JUDGE_CALLS_KEPT, JUDGE_CALLS_KEY, judged_calls, offered_summary, scope_key
 from .dream_journal import changed_something, compose_dream_narrative, latest_dream_entry
 from .store.embedding_index import NETWORK_TIMEOUT, text_hash
 from .store.sqlite_store import AUTHORS_LABELED_KEY, EngramStore
@@ -75,6 +75,10 @@ EXPECTED = {
     "network_waits": (
         "a network embedding backend answers each call within its "
         f"{NETWORK_TIMEOUT:g} seconds; a call that doesn't is skipped, and counted here"
+    ),
+    "cue_judge": (
+        "while the cue's judge is switched on, Jev answers at least half of the "
+        f"last {JUDGE_CALLS_KEPT} calls"
     ),
 }
 
@@ -724,6 +728,45 @@ def _network_waits(store: EngramStore, scope: dict[str, str], now: datetime, ind
     }
 
 
+def _cue_judge(store: EngramStore, scope: dict[str, str], now: datetime, index: Any) -> dict:
+    """How Jev's recent calls for the cue ended (R16b), from the one row the
+    answerers keep in the store while the judge is switched on
+    (``cue.JUDGE_CALLS_KEY``): every session's calls, so a failing judge is
+    seen from any of them. Flagged when more than half of the last
+    ``JUDGE_CALLS_KEPT`` calls timed out or failed, and the newest of them
+    came within the week: a judge switched off since stops being flagged."""
+    rows = _rows(store._get_conn(), "SELECT value FROM meta WHERE key = ?", (JUDGE_CALLS_KEY,))
+    calls = judged_calls(rows[0][0]) if rows else []
+    last = calls[-JUDGE_CALLS_KEPT:]
+    timeouts = sum(1 for call in last if call["outcome"] == "timeout")
+    errors = sum(1 for call in last if call["outcome"] == "error")
+    failed = timeouts + errors
+    newest = max((at for at in (_at(call["at"]) for call in last) if at), default=None)
+    result: dict[str, Any] = {
+        "calls": len(last),
+        "answered": len(last) - failed,
+        "timeouts": timeouts,
+        "errors": errors,
+        "last_call_at": newest.isoformat() if newest else None,
+    }
+    if not last:
+        result["seen"] = "the cue's judge has made no calls here"
+        return result
+    result["seen"] = (
+        f"of Jev's last {_count(len(last), 'call')}, {len(last) - failed} answered, "
+        f"{timeouts} timed out and {errors} failed; the newest {_ago(newest, now)}"
+    )
+    stalled = failed * 2 > JUDGE_CALLS_KEPT and newest is not None and not _older_than(newest, now, WINDOW)
+    result["stalled"] = stalled
+    if stalled:
+        result["flag"] = (
+            f"The cue's judge failed on {failed} of Jev's last {len(last)} calls ({timeouts} timed "
+            f"out, {errors} failed), the newest {_ago(newest, now)}; the cue showed nothing for those."
+        )
+        result["command"] = "mnemos doctor"
+    return result
+
+
 _CHECKS: Sequence[tuple[str, Callable[..., dict]]] = (
     ("questions", _questions),
     ("report", _report),
@@ -736,6 +779,7 @@ _CHECKS: Sequence[tuple[str, Callable[..., dict]]] = (
     ("notes", _notes),
     ("cue", _cue),
     ("network_waits", _network_waits),
+    ("cue_judge", _cue_judge),
 )
 
 

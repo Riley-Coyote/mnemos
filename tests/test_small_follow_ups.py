@@ -41,8 +41,11 @@ import anyio
 import pytest
 
 import mnemos.store.embedding_index as ei
+from mnemos.cli import main
 from mnemos.code_version import MAINTENANCE_CODE_VERSION
+from mnemos.core.engram import Engram
 from mnemos.simple_runtime import MnemosRuntime, format_health_card
+from mnemos.simple_scope import MnemosScope
 from mnemos.store.sqlite_store import EngramStore
 
 
@@ -61,6 +64,7 @@ class _Lazy:
 
 
 cue = _Lazy("mnemos.cue")
+dream_journal = _Lazy("mnemos.dream_journal")
 
 SCOPE = {"agent_id": "nova", "person_id": "riley", "project_scope": "demo"}
 SCOPE_ARGS = ["--agent-id", "nova", "--person-id", "riley", "--project-scope", "demo"]
@@ -100,6 +104,11 @@ def _write(db: Path, sql: str, params: tuple = ()) -> None:
 
 def _ago(**delta) -> str:
     return (datetime.now(timezone.utc) - timedelta(**delta)).isoformat()
+
+
+def _engram(content: str, **fields) -> Engram:
+    return Engram(content=content, kind=fields.pop("kind", "semantic"), owner_agent_id="nova",
+                  person_id="riley", project_scope="demo", **fields)
 
 
 def _env(home: Path, **extra) -> dict[str, str]:
@@ -412,6 +421,153 @@ def test_mnemos_context_over_the_protocol_counts_as_shown_for_the_hook(tmp_path,
 
     assert hook("served-session") == b"", "the cue brought what mnemos_context showed"
     assert memory.encode() in hook("another-session")
+
+
+# ── 4. The scheduled consolidate reports; old reports are retired ──
+
+BEACONS = (
+    "The beacon lamp on the north point needs a new mantle before the storm season.",
+    "Replace the north point beacon lamp mantle before the storm season starts.",
+    "The north point beacon lamp mantle cracked during the last storm season.",
+)
+
+
+def _saved(db: Path, *texts: str) -> list[str]:
+    store = EngramStore(str(db))
+    try:
+        memories = [_engram(text, author_kind="agent") for text in texts]
+        for memory in memories:
+            store.save_engram(memory)
+        return [memory.id for memory in memories]
+    finally:
+        store.close()
+
+
+def _reports(db: Path) -> list[tuple[str, int, str]]:
+    """The dream journal's reports in the scope: id, active, content."""
+    return _read(db, """
+        SELECT id, active, content FROM hypomnema_entries
+        WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+          AND tags_json LIKE '%"dream-journal"%'
+        ORDER BY created_at
+    """, tuple(SCOPE.values()))
+
+
+def test_the_scheduled_consolidate_writes_a_report_the_next_briefing_reads(tmp_path, monkeypatch):
+    monkeypatch.setattr(ei, "_check_local_deps", lambda: False)
+    db = tmp_path / "memory.db"
+    _saved(db, *BEACONS)
+    home = tmp_path / "home"
+    home.mkdir()
+
+    done = subprocess.run(
+        [sys.executable, "-m", "mnemos.cli", "--db-path", str(db), *SCOPE_ARGS, "consolidate"],
+        capture_output=True, text=True, timeout=180, env=_env(home),
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert "Maintenance report: written" in done.stdout, done.stdout
+    [(report_id, active, content)] = _reports(db)
+    assert active == 1 and content.startswith("Mnemos connected"), content
+    rt = _runtime(db)
+    try:
+        packet = rt.context()
+        data = rt.health()
+    finally:
+        rt.close()
+    assert "### While you were away" in packet and content in packet, packet
+    report = data["watchdog"]["checks"]["report"]
+    assert report["report_id"] == report_id and report["cycles_untold"] == 0, report
+    assert data["dream"]["last_written_at"] is not None
+
+
+def test_a_cycle_with_nothing_worth_reporting_writes_no_report(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ei, "_check_local_deps", lambda: False)
+    db = tmp_path / "memory.db"
+    _saved(db, "The harbour ferry leaves at noon.")
+
+    assert main(["--db-path", str(db), *SCOPE_ARGS, "consolidate"]) == 0
+
+    assert "Maintenance report: none, nothing worth reporting" in capsys.readouterr().out
+    assert _reports(db) == []
+
+
+def _pile(db: Path, count: int) -> list[str]:
+    """Reports left in use by the code that wrote a new one each cycle."""
+    store = EngramStore(str(db))
+    try:
+        made = []
+        for n in range(count):
+            made.append(store.write_hypomnema_entry(
+                f"Mnemos connected {n + 2} memories that belong together.",
+                **SCOPE, source="synthesized", entry_kind="maintenance_report", authored_by="system",
+                author_id="mnemos", domain="situational", tags=["dream-journal"],
+                confidence=0.55, salience=0.4,
+            ))
+        # Oldest first, an hour apart.
+        for n, entry in enumerate(made):
+            at = _ago(hours=count - n)
+            store._get_conn().execute(
+                "UPDATE hypomnema_entries SET created_at = ?, last_revised_at = ? WHERE id = ?",
+                (at, at, entry),
+            )
+        # An identity report is a maintenance report of another kind: kept.
+        identity = store.write_hypomnema_entry(
+            "Identity divergence: the declared and the computed identity differ.", **SCOPE,
+            source="synthesized", entry_kind="maintenance_report", authored_by="system",
+            author_id="mnemos", domain="identity", tags=["identity-divergence"],
+        )
+        store._get_conn().commit()
+        return [*made, identity]
+    finally:
+        store.close()
+
+
+def test_reports_older_than_the_newest_five_are_retired_never_deleted(tmp_path):
+    db = tmp_path / "memory.db"
+    *pile, identity = _pile(db, 8)
+    rows_before = _read(db, "SELECT COUNT(*) FROM hypomnema_entries")[0][0]
+
+    store = EngramStore(str(db))
+    try:
+        new = dream_journal.write_dream_entry(store, MnemosScope(db_path=str(db), **SCOPE),
+                                              "Mnemos moved 1 faded memory into the archive.")
+    finally:
+        store.close()
+
+    active = {report for report, is_active, _ in _reports(db) if is_active}
+    # The newest supersedes the last; with it, the four newest of the pile stay.
+    assert active == {new, *pile[3:7]}, (active, pile)
+    assert _read(db, "SELECT active FROM hypomnema_entries WHERE id = ?", (identity,)) == [(1,)]
+    assert _read(db, "SELECT COUNT(*) FROM hypomnema_entries")[0][0] == rows_before + 1, (
+        "a report was deleted"
+    )
+    for retired in pile[:3]:
+        content, revisions = _read(db, "SELECT content, revisions_json FROM hypomnema_entries WHERE id = ?",
+                                   (retired,))[0]
+        assert content.startswith("Mnemos connected"), "a retired report lost its words"
+        trail = json.loads(revisions)[-1]
+        assert trail["prior_content"] == content
+        assert trail["reason"] == "archived: retired: older than the newest 5 maintenance reports"
+    # Restorable: nothing about a retired report is lost but its place in use.
+    _write(db, "UPDATE hypomnema_entries SET active = 1 WHERE id = ?", (pile[0],))
+    assert pile[0] in {report for report, is_active, _ in _reports(db) if is_active}
+
+
+def test_a_session_maintenance_retires_the_pile_too(tmp_path, monkeypatch):
+    """Both writers report through one rule: a session's maintenance retires
+    the old reports as the scheduled job does."""
+    monkeypatch.setattr(ei, "_check_local_deps", lambda: False)
+    db = tmp_path / "memory.db"
+    _pile(db, 7)
+    _saved(db, *BEACONS)
+    rt = _runtime(db)
+    try:
+        said = rt.maintain()
+    finally:
+        rt.close()
+    assert "Dream journal: updated" in said, said
+    assert sum(is_active for _, is_active, _ in _reports(db)) == 5
 
 
 # ── 5. A reflection lands in the memory's own note ──

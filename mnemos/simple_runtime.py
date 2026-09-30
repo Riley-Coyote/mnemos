@@ -4575,27 +4575,20 @@ class MnemosRuntime:
             if self._host_mutation_active:
                 raise
 
-        # Dream journal: narrate the cycle when it did meaningful work. The
-        # import stays local so a journal failure can never break maintenance.
+        # Dream journal: narrate the cycle when it did meaningful work, as the
+        # scheduled `mnemos consolidate` does (``report_cycle``). The import
+        # stays local so a journal failure can never break maintenance.
         self.last_dream_note_id = None
         self.last_dream_narrative = None
         dream_status = "skipped (nothing noteworthy)"
         try:
-            from .dream_journal import (
-                collect_belief_deltas,
-                compose_dream_narrative,
-                write_dream_entry,
-            )
+            from .dream_journal import report_cycle
 
-            deltas = collect_belief_deltas(
-                self._store, self.scope.agent_id, stats.get("started_at", "")
-            )
-            narrative = compose_dream_narrative(stats, deltas, promoted)
+            note_id, narrative = report_cycle(self._store, self.scope, stats, promoted)
             if narrative:
-                self.last_dream_note_id = write_dream_entry(self._store, self.scope, narrative)
+                self.last_dream_note_id = note_id
                 self.last_dream_narrative = narrative
-                self._traced_write(self.last_dream_note_id)
-                self._set_meta("dream_last_written_at", datetime.now(timezone.utc).isoformat())
+                self._traced_write(note_id)
                 dream_status = "updated"
         except Exception:
             if self._host_mutation_active:

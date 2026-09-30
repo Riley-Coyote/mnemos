@@ -1686,9 +1686,27 @@ def _cmd_consolidate(args: argparse.Namespace) -> int:
     for e in errors:
         print(f"  ERROR ({e}): {stats[e]}", file=sys.stderr)
 
+    _report_consolidation(store, scope, stats)
     _index_after_consolidating(store, args, scope)
     store.close()
     return 0
+
+
+def _report_consolidation(store, scope, stats: dict) -> None:
+    """The cycle's maintenance report, under the dream journal's rule: written
+    only when the cycle did something worth telling, superseding the last one,
+    as a session's maintenance writes it (``dream_journal.report_cycle``).
+    Without it the scheduled job's cycles went untold: the briefing's newest
+    report fell behind what had changed, and the watchdog said so. The cycle
+    has already run and nothing here can undo it."""
+    try:
+        from .dream_journal import report_cycle
+
+        _entry, narrative = report_cycle(store, scope, stats)
+    except Exception as exc:
+        print(f"Maintenance report: not written ({type(exc).__name__}: {exc})")
+        return
+    print("Maintenance report: written" if narrative else "Maintenance report: none, nothing worth reporting")
 
 
 def _index_after_consolidating(store, args: argparse.Namespace, scope) -> None:

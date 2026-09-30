@@ -836,9 +836,12 @@ def test_consolidate_indexes_within_its_budget(tmp_path, meaning, monkeypatch, c
     out = capsys.readouterr().out
 
     assert "Passes:" in out, "the cycle did not run"
+    # The cycle linked the lessons, so it wrote its report first (WP-R19): a
+    # note recall returns, indexed within the same budget, ahead of memories.
+    assert "Maintenance report: written" in out, out
     assert ("Recall index: 3 memories and handoffs indexed (3 passages, at most 3 a run); "
-            "2 still waiting") in out, out
-    assert sum(bool(_passages(db, lesson.id)) for lesson in lessons) == 3
+            "3 still waiting") in out, out
+    assert sum(bool(_passages(db, lesson.id)) for lesson in lessons) == 2
 
 
 def test_a_missing_model_does_not_stop_consolidation(tmp_path, monkeypatch, capsys):

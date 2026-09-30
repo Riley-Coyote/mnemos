@@ -1264,6 +1264,566 @@ class MnemosRuntime:
             )
         return plan
 
+    # ── The live clean-ups ──
+    #
+    # Four repairs of what older code left in a store: split notes, stale
+    # archive rows, vectors from models this Mnemos does not use, and the
+    # server's placeholder meanings. Each has the shape of repair-versions: a
+    # dry run reads the store read-only and changes nothing; with ``write``, a
+    # verified backup of the store as found comes first, then everything is
+    # found again under the writer and changed in one transaction, so a
+    # second run finds nothing. Only a human runs them, and code older than
+    # the store refuses to write.
+
+    # What a split-notes repair records as the reason a memory's words changed.
+    SPLIT_NOTES_VERSION_REASON = "repair_split_notes"
+    # The placeholder meanings placeholder-impacts empties: the two a
+    # correction wrote until code version 10, and the one promotion writes.
+    PLACEHOLDER_IMPACTS_EMPTIED = (
+        "Correction to earlier continuity.",
+        "Corrected continuity for future interactions.",
+        "Stable continuity promoted during simple maintenance.",
+    )
+
+    def _run_repair(
+        self,
+        name: str,
+        plan: dict[str, Any],
+        *,
+        write: bool,
+        find: Any,
+        todo: Any,
+        apply: Any,
+    ) -> dict[str, Any]:
+        """Run one clean-up in the shape they share (see above).
+
+        ``find(store)`` reads what there is to repair, from the read-only
+        store or the writer, and ``todo(found)`` says whether that is
+        anything. ``apply(store, found)`` changes it inside the transaction
+        and returns what it did, kept as ``plan["done"]``. The backup is
+        named for ``name``.
+        """
+        if not plan["exists"]:
+            return plan
+        peek = ReadOnlyEngramStore(self.db_path)
+        try:
+            minimum = peek.min_code_version()
+            plan["found"] = find(peek)
+        finally:
+            peek.close()
+        plan["older_than_store"] = minimum is not None and minimum > MAINTENANCE_CODE_VERSION
+        if not write or plan["older_than_store"] or not todo(plan["found"]):
+            return plan
+
+        from .backup import create_backup
+
+        # The backup is the store exactly as the human found it: read through
+        # a read-only connection, before opening for writing migrates the
+        # schema or records this code's version.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        destination = (
+            self.db_path.parent / "backups"
+            / f"{self.db_path.stem}.pre-repair-{name}-{stamp}.db"
+        )
+        source = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            backup = create_backup(self.db_path, destination, source_connection=source)
+        finally:
+            source.close()
+        plan["backup"] = backup["path"]
+
+        self._ensure_init()
+        assert self._store is not None
+        if self._older_than_store() is not None:
+            plan["older_than_store"] = True
+            return plan
+        # Found again under the writer: the store may have moved on since.
+        with self._store.transaction():
+            plan["found"] = find(self._store)
+            if todo(plan["found"]):
+                plan["done"] = apply(self._store, plan["found"])
+        return plan
+
+    @staticmethod
+    def _tables(store: EngramStore) -> set[str]:
+        return {
+            row[0] for row in store._get_conn().execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+
+    @staticmethod
+    def _plain(text: str | None) -> str:
+        """Words compared as words: case kept, spacing ignored."""
+        return " ".join((text or "").split())
+
+    @staticmethod
+    def _json(value: str | None, default: Any) -> Any:
+        """A JSON column's value, or ``default`` when it is empty, unreadable
+        or not of the same type."""
+        try:
+            decoded = json.loads(value) if value else default
+        except (TypeError, ValueError):
+            return default
+        return decoded if isinstance(decoded, type(default)) else default
+
+    @staticmethod
+    def _memory_words(content: str | None) -> str:
+        """A memory's own words: without the context a capture adds after them."""
+        return (content or "").split(_CAPTURE_CONTEXT, 1)[0].strip()
+
+    def repair_split_notes(self, *, write: bool = False) -> dict[str, Any]:
+        """Show, and with ``write`` join again, the notes in this scope that
+        code before one-capture-one-object left apart from their memories
+        (see ``_split_notes_in``).
+
+        The agent's newest words win, and changes go through history, so
+        both sets of words are kept. A memory corrected through its note
+        takes the note's words, with a version keeping the words it had,
+        signed by whoever wrote the note's. A note left over a memory a
+        correction replaced moves to the replacement and takes its words; its
+        revision trail keeps the words it had, and the correction's lineage
+        (a supersedes link, both memories naming each other) is recorded as a
+        correction records it now, so the old memory's id reaches the pair in
+        use. Words that changed leave their vectors behind: the memory or note
+        waits for the meaning index and is never found by its old meaning.
+        """
+        plan: dict[str, Any] = {
+            "target": (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
+            "db_path": str(self.db_path),
+            "exists": self.db_path.exists(),
+            "older_than_store": False,
+            "found": None,
+            "done": None,
+            "backup": None,
+        }
+        scope = self._scope_args()
+        now = datetime.now(timezone.utc).isoformat()
+
+        def apply(store: EngramStore, found: dict[str, Any]) -> dict[str, int]:
+            conn = store._get_conn()
+            tables = self._tables(store)
+            for item in found["ahead"]:
+                memory_id, words = item["memory_id"], item["words"]
+                before = conn.execute(
+                    "SELECT content, resolution FROM engrams WHERE id = ?", (memory_id,)
+                ).fetchone()
+                conn.execute(
+                    "INSERT INTO versions (engram_id, version_num, content_snapshot, "
+                    "resolution_at_version, changed_at, change_reason, author_model, "
+                    "author_session) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        memory_id, store._next_version_num(conn, memory_id),
+                        before["content"], before["resolution"], now,
+                        self.SPLIT_NOTES_VERSION_REASON, item["by"], item["session"],
+                    ),
+                )
+                # Its words at encoding too: resharpen brings a faded memory
+                # back as it was encoded, and would bring back the words the
+                # correction replaced. The version keeps them.
+                conn.execute(
+                    "UPDATE engrams SET content = ?, content_at_encoding = ?, "
+                    "author_kind = 'agent', author_model = ?, author_session = ? "
+                    "WHERE id = ?",
+                    (words, words, item["by"], item["session"], memory_id),
+                )
+                conn.execute("DELETE FROM engrams_fts WHERE id = ?", (memory_id,))
+                conn.execute(
+                    "INSERT INTO engrams_fts (id, content) VALUES (?, ?)", (memory_id, words)
+                )
+                if "embeddings" in tables:
+                    conn.execute("DELETE FROM embeddings WHERE engram_id = ?", (memory_id,))
+                if "passage_vectors" in tables:
+                    conn.execute("DELETE FROM passage_vectors WHERE item_id = ?", (memory_id,))
+            for item in found["behind"]:
+                note_id, replacement_id = item["note_id"], item["replacement_id"]
+                if item["words_change"]:
+                    store.revise_hypomnema_entry(
+                        note_id,
+                        item["words"],
+                        reason=(
+                            "repair split-notes: a correction replaced its memory "
+                            f"{item['memory_id']} with {replacement_id} and left this "
+                            "note behind; it takes the correction's words"
+                        ),
+                        author_model=item["by"],
+                        author_session=item["session"],
+                        **scope,
+                    )
+                conn.execute(
+                    "UPDATE hypomnema_entries SET graduated_to_engram_id = ?, "
+                    "related_engram_id = ? WHERE id = ?",
+                    (replacement_id, replacement_id, note_id),
+                )
+                store.record_correction(
+                    note_id=note_id,
+                    engram_id=replacement_id,
+                    replaced_notes=[],
+                    replaced_engrams=[item["memory_id"]],
+                    words_before=None,
+                    author_model=item["by"],
+                    author_session=item["session"],
+                )
+            return {"ahead": len(found["ahead"]), "behind": len(found["behind"])}
+
+        return self._run_repair(
+            "split-notes", plan, write=write,
+            find=self._split_notes_in,
+            todo=lambda found: bool(found["ahead"] or found["behind"]),
+            apply=apply,
+        )
+
+    def _split_notes_in(self, store: EngramStore) -> dict[str, Any]:
+        """The live notes in this scope that say something their memory does
+        not, read from ``store`` (read-only or the writer). Reads only.
+
+        A note and its memory carry the same words: the note's own words
+        (without a reflection added later) are the memory's (without the
+        context a capture adds), as it holds them now or as it was encoded; a
+        memory that faded keeps its encoded words. Code before one capture
+        was one object left two kinds of pair apart:
+
+        - ``ahead``: a correction naming the note rewrote it in place and left
+          its memory as it was. The memory holds, word for word, what the
+          note said before a correction, so the note's words are the newer.
+        - ``behind``: a correction naming the memory archived it and saved the
+          correction as a new memory without a note, leaving the note over
+          the archived one. The new memory is the one the old one's lineage
+          names or, where no lineage was recorded, the only memory in this
+          scope saved from a session as a correction within one correction
+          call after the old one was archived for one, with no note of its
+          own. Its words are the newer, unless the note was rewritten too.
+
+        Left alone and listed: ``differ``, a pair apart for no correction
+        this can see, and ``unclear``, a pair this can't join without a
+        guess: the replacement can't be told, is gone or already has a note;
+        the note's words match neither memory; or two notes would land on one
+        memory.
+        """
+        from .store.sqlite_store import CAPTURE_WINDOW_SECONDS
+
+        agent, person, project = (
+            self.scope.agent_id, self.scope.person_id, self.scope.project_scope,
+        )
+        conn = store._get_conn()
+        rows = conn.execute(
+            """
+            SELECT h.id AS note_id, h.content AS note_content, h.revisions_json,
+                   h.author_model AS note_by, h.author_session AS note_session,
+                   m.id AS memory_id, m.state, m.content, m.content_at_encoding,
+                   m.lineage, a.archive_reason, a.archived_at
+            FROM hypomnema_entries h
+            JOIN engrams m ON m.id = h.graduated_to_engram_id
+            LEFT JOIN archive a ON a.id = m.id
+            WHERE h.agent_id = ? AND h.person_id = ? AND h.project_scope = ?
+              AND h.entry_kind = 'continuity' AND h.active = 1
+              AND m.owner_agent_id = h.agent_id AND m.person_id = h.person_id
+              AND m.project_scope = h.project_scope
+            ORDER BY h.created_at, h.id
+            """,
+            (agent, person, project),
+        ).fetchall()
+
+        def moment(at: str | None) -> datetime | None:
+            try:
+                return datetime.fromisoformat(str(at))
+            except (TypeError, ValueError):
+                return None
+
+        def memory(memory_id: str) -> sqlite3.Row | None:
+            return conn.execute(
+                "SELECT id, state, content, author_model, author_session, "
+                "(SELECT COUNT(*) FROM hypomnema_entries h WHERE h.entry_kind = 'continuity' "
+                " AND h.active = 1 AND h.graduated_to_engram_id = e.id) AS notes "
+                "FROM engrams e WHERE id = ? AND owner_agent_id = ? AND person_id = ? "
+                "AND project_scope = ?",
+                (memory_id, agent, person, project),
+            ).fetchone()
+
+        def replacement(row: sqlite3.Row) -> sqlite3.Row | None:
+            later = self._json(row["lineage"], {}).get("superseded_by")
+            if later:
+                return memory(str(later))
+            archived = moment(row["archived_at"])
+            if archived is None:
+                return None
+            found = []
+            for candidate in conn.execute(
+                "SELECT id, created_at FROM engrams e "
+                "WHERE owner_agent_id = ? AND person_id = ? AND project_scope = ? "
+                "AND id != ? AND tags LIKE '%\"correction\"%' "
+                "AND CASE WHEN json_valid(source) THEN json_extract(source, '$.type') END "
+                "= 'session' "
+                "AND NOT EXISTS (SELECT 1 FROM hypomnema_entries h "
+                "  WHERE h.graduated_to_engram_id = e.id OR h.related_engram_id = e.id)",
+                (agent, person, project, row["memory_id"]),
+            ).fetchall():
+                made = moment(candidate["created_at"])
+                if made is not None and archived <= made <= archived + timedelta(
+                    seconds=CAPTURE_WINDOW_SECONDS
+                ):
+                    found.append(candidate["id"])
+            return memory(found[0]) if len(found) == 1 else None
+
+        found: dict[str, Any] = {
+            "notes": len(rows), "same": 0, "ahead": [], "behind": [], "differ": [], "unclear": [],
+        }
+        for row in rows:
+            said = self._note_head({"content": row["note_content"]})
+            item = {
+                "note_id": row["note_id"],
+                "memory_id": row["memory_id"],
+                "note_words": said,
+                "memory_words": self._memory_words(row["content"]),
+            }
+            held = {
+                self._plain(self._memory_words(row["content"])),
+                self._plain(self._memory_words(row["content_at_encoding"])),
+            }
+            reason = str(row["archive_reason"] or "") if row["state"] == "archived" else ""
+            action = (
+                reason.removeprefix("simple_correction_")
+                if reason.startswith("simple_correction_") else ""
+            )
+            if action and action not in _FORGET_ACTIONS:
+                # A correction replaced its memory.
+                later = replacement(row)
+                if later is None or later["state"] not in ("active", "dormant") or later["notes"]:
+                    found["unclear"].append(item)
+                    continue
+                words = self._memory_words(later["content"])
+                if self._plain(said) in held:
+                    words_change = self._plain(said) != self._plain(words)
+                elif self._plain(said) == self._plain(words):
+                    words_change = False
+                else:
+                    # Rewritten in place as well: whose words are newer is
+                    # not for this repair to guess.
+                    found["unclear"].append(item)
+                    continue
+                found["behind"].append({
+                    **item,
+                    "replacement_id": later["id"],
+                    "words": words,
+                    "words_change": words_change,
+                    "by": later["author_model"] or "",
+                    "session": later["author_session"] or "",
+                })
+                continue
+            if self._plain(said) in held:
+                found["same"] += 1
+                continue
+            if row["state"] != "archived":
+                corrected_from = {
+                    self._plain(self._note_head({"content": revision.get("prior_content")}))
+                    for revision in self._json(row["revisions_json"], [])
+                    if isinstance(revision, dict)
+                    and str(revision.get("reason") or "").startswith("simple correction")
+                }
+                if self._plain(self._memory_words(row["content"])) in corrected_from:
+                    found["ahead"].append({
+                        **item,
+                        "words": said,
+                        "by": row["note_by"] or "",
+                        "session": row["note_session"] or "",
+                    })
+                    continue
+            # Apart for no correction this can see, or over a memory that
+            # faded or was forgotten (the note shares its fate): left alone.
+            found["differ"].append(item)
+        # Two notes that would land on one memory: which one it keeps is not
+        # for this repair to choose, so both are left alone.
+        landing: dict[str, int] = {}
+        for item in found["ahead"]:
+            landing[item["memory_id"]] = landing.get(item["memory_id"], 0) + 1
+        for item in found["behind"]:
+            landing[item["replacement_id"]] = landing.get(item["replacement_id"], 0) + 1
+        for kind, key in (("ahead", "memory_id"), ("behind", "replacement_id")):
+            clash = [item for item in found[kind] if landing[item[key]] > 1]
+            found[kind] = [item for item in found[kind] if landing[item[key]] == 1]
+            found["unclear"].extend(clash)
+        return found
+
+    def repair_archive_rows(self, *, write: bool = False) -> dict[str, Any]:
+        """Show, and with ``write`` drop, archive rows that only repeat a
+        memory that is no longer archived.
+
+        The archive keeps a memory's words when it is archived. A memory that
+        came back (woken by recall, or set back by an older repair) left its
+        row behind: on a copy of the live store, 1,392 rows for memories that
+        are quiet again. A row goes only when its words are the memory's words
+        now, word for word; a row whose words differ is history and stays, as
+        does every row for a memory still archived or no longer in the store.
+        Across the whole store: the archive has no scope.
+        """
+        plan: dict[str, Any] = {
+            "db_path": str(self.db_path),
+            "exists": self.db_path.exists(),
+            "older_than_store": False,
+            "found": None,
+            "done": None,
+            "backup": None,
+        }
+
+        def find(store: EngramStore) -> dict[str, Any]:
+            rows = store._get_conn().execute(
+                "SELECT a.id, e.id IS NOT NULL AS held, e.state, "
+                "a.content = e.content AND a.content_at_encoding = e.content_at_encoding "
+                "AS same FROM archive a LEFT JOIN engrams e ON e.id = a.id ORDER BY a.id"
+            ).fetchall()
+            found: dict[str, Any] = {
+                "rows": len(rows), "archived": 0, "gone": 0,
+                "repeats": [], "history": [], "repeats_by_state": {},
+            }
+            for row in rows:
+                if not row["held"]:
+                    found["gone"] += 1
+                elif row["state"] == "archived":
+                    found["archived"] += 1
+                elif row["same"]:
+                    found["repeats"].append(row["id"])
+                    state = row["state"]
+                    found["repeats_by_state"][state] = found["repeats_by_state"].get(state, 0) + 1
+                else:
+                    found["history"].append(row["id"])
+            return found
+
+        def apply(store: EngramStore, found: dict[str, Any]) -> dict[str, int]:
+            # The condition again in the statement: a row goes only while it
+            # repeats a memory that is not archived.
+            cursor = store._get_conn().executemany(
+                "DELETE FROM archive WHERE id = ? AND EXISTS (SELECT 1 FROM engrams e "
+                "WHERE e.id = archive.id AND e.state != 'archived' "
+                "AND e.content = archive.content "
+                "AND e.content_at_encoding = archive.content_at_encoding)",
+                [(row_id,) for row_id in found["repeats"]],
+            )
+            return {"dropped": max(0, cursor.rowcount)}
+
+        return self._run_repair(
+            "archive-rows", plan, write=write, find=find,
+            todo=lambda found: bool(found["repeats"]), apply=apply,
+        )
+
+    def repair_dead_embeddings(self, *, write: bool = False) -> dict[str, Any]:
+        """Show, and with ``write`` prune, stored vectors from embedding
+        models this process does not use.
+
+        A vector is compared only with vectors from the same model, so one
+        from any other model is never read: on a copy of the live store,
+        3,494 whole-text vectors from gemini-embedding-2 and its preview,
+        beside the local model's. Which model is in use is decided here as
+        recall decides it (``EmbeddingIndex``). With no model set up in this
+        process nothing can be told dead from alive, and nothing is pruned.
+        Vectors are rebuilt from the words at any time; they are never memory
+        themselves. Across the whole store: vectors have no scope.
+        """
+        index = EmbeddingIndex(read_only=True)
+        here = index.status()
+        model = here["model"] if here["active"] else None
+        plan: dict[str, Any] = {
+            "db_path": str(self.db_path),
+            "exists": self.db_path.exists(),
+            "older_than_store": False,
+            "model": model,
+            "backend": here["backend"],
+            "reason": here["reason"],
+            "found": None,
+            "done": None,
+            "backup": None,
+        }
+
+        def find(store: EngramStore) -> dict[str, Any]:
+            conn = store._get_conn()
+            tables = self._tables(store)
+            counts = {}
+            for table in ("embeddings", "passage_vectors"):
+                counts[table] = {
+                    row[0]: int(row[1]) for row in conn.execute(
+                        f"SELECT model_name, COUNT(*) FROM {table} GROUP BY model_name "
+                        "ORDER BY COUNT(*) DESC, model_name"
+                    ).fetchall()
+                } if table in tables else {}
+            dead = sorted(
+                {name for table in counts.values() for name in table if name != model}
+            ) if model else []
+            return {**counts, "dead": dead}
+
+        def apply(store: EngramStore, found: dict[str, Any]) -> dict[str, int]:
+            conn = store._get_conn()
+            marks = ", ".join("?" for _ in found["dead"])
+            done = {}
+            for table in ("embeddings", "passage_vectors"):
+                done[table] = max(0, conn.execute(
+                    f"DELETE FROM {table} WHERE model_name IN ({marks})", found["dead"],
+                ).rowcount) if found[table] else 0
+            return done
+
+        return self._run_repair(
+            "dead-embeddings", plan, write=write, find=find,
+            todo=lambda found: bool(found["dead"]), apply=apply,
+        )
+
+    def repair_placeholder_impacts(self, *, write: bool = False) -> dict[str, Any]:
+        """Show, and with ``write`` empty, the meanings the server wrote
+        where the agent's go (``PLACEHOLDER_IMPACTS_EMPTIED``).
+
+        A correction wrote "Correction to earlier continuity." or "Corrected
+        continuity for future interactions." where the meaning goes, until
+        code version 10 left it empty; promotion writes "Stable continuity
+        promoted during simple maintenance." None is anyone's meaning. Emptied,
+        the meaning is left to the agent: a memory without one is asked about
+        as one with a placeholder always was (``_enqueue_impact_reflections``
+        treats the two alike). The memory's words and history are untouched.
+        The older capture path's phrases are counted and left alone. Across
+        the whole store.
+        """
+        plan: dict[str, Any] = {
+            "db_path": str(self.db_path),
+            "exists": self.db_path.exists(),
+            "older_than_store": False,
+            "found": None,
+            "done": None,
+            "backup": None,
+        }
+        emptied = self.PLACEHOLDER_IMPACTS_EMPTIED
+        others = sorted(TEMPLATED_IMPACTS - set(emptied))
+        trimmed = "trim(impact, ' ' || char(9) || char(10) || char(13))"
+
+        def find(store: EngramStore) -> dict[str, Any]:
+            texts = [*emptied, *others]
+            rows = store._get_conn().execute(
+                f"SELECT id, {trimmed} AS said FROM engrams "
+                f"WHERE {trimmed} IN ({', '.join('?' for _ in texts)}) ORDER BY id",
+                texts,
+            ).fetchall()
+            found: dict[str, Any] = {
+                "by_text": {text: [] for text in emptied},
+                "left": {},
+            }
+            for row in rows:
+                if row["said"] in found["by_text"]:
+                    found["by_text"][row["said"]].append(row["id"])
+                else:
+                    found["left"][row["said"]] = found["left"].get(row["said"], 0) + 1
+            return found
+
+        def apply(store: EngramStore, found: dict[str, Any]) -> dict[str, int]:
+            cursor = store._get_conn().executemany(
+                f"UPDATE engrams SET impact = '', impact_source = '' "
+                f"WHERE id = ? AND {trimmed} = ?",
+                [
+                    (engram_id, text)
+                    for text, ids in found["by_text"].items() for engram_id in ids
+                ],
+            )
+            return {"emptied": max(0, cursor.rowcount)}
+
+        return self._run_repair(
+            "placeholder-impacts", plan, write=write, find=find,
+            todo=lambda found: any(found["by_text"].values()), apply=apply,
+        )
+
     def close(self) -> None:
         if self._store is not None:
             self._store.close()

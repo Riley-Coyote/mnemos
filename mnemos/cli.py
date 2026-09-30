@@ -318,6 +318,46 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Undo them instead of printing what would change",
     )
+    for name, text, verb in (
+        (
+            "split-notes",
+            "Join again the notes older code left apart from their memories: a "
+            "memory corrected through its note takes the note's words, and a note "
+            "left over a replaced memory moves to its replacement (dry run unless "
+            "--write)",
+            "Join them",
+        ),
+        (
+            "archive-rows",
+            "Drop the archive rows that only repeat a memory that is no longer "
+            "archived; rows whose words differ stay as history (dry run unless --write)",
+            "Drop them",
+        ),
+        (
+            "dead-embeddings",
+            "Prune stored vectors from embedding models this Mnemos does not use "
+            "(dry run unless --write)",
+            "Prune them",
+        ),
+        (
+            "placeholder-impacts",
+            "Empty the meanings the server wrote itself after a correction or a "
+            "promotion, leaving the meaning to the agent (dry run unless --write)",
+            "Empty them",
+        ),
+    ):
+        p_clean = repair_sub.add_parser(name, help=text)
+        p_clean.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
+        p_clean.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
+        p_clean.add_argument("--person-id", default=argparse.SUPPRESS, help="Person scope")
+        p_clean.add_argument(
+            "--project-scope", default=argparse.SUPPRESS, help="Project scope"
+        )
+        p_clean.add_argument(
+            "--write",
+            action="store_true",
+            help=f"{verb} instead of printing what would change",
+        )
 
     # ── hermes ──
     p_hermes = sub.add_parser("hermes", help="Hermes Agent identity-continuity integration")
@@ -2076,13 +2116,274 @@ def _cmd_repair(args: argparse.Namespace) -> int:
         return _cmd_repair_keyword_contradictions(args)
     if getattr(args, "repair_command", None) == "quarantine-tool-written":
         return _cmd_repair_quarantine_tool_written(args)
+    clean_ups = {
+        "split-notes": _cmd_repair_split_notes,
+        "archive-rows": _cmd_repair_archive_rows,
+        "dead-embeddings": _cmd_repair_dead_embeddings,
+        "placeholder-impacts": _cmd_repair_placeholder_impacts,
+    }
+    if getattr(args, "repair_command", None) in clean_ups:
+        return clean_ups[args.repair_command](args)
     print(
         "Usage: mnemos repair min-code-version [--set N] [--write]\n"
         "       mnemos repair keyword-contradictions [--write]\n"
-        "       mnemos repair quarantine-tool-written [--write]",
+        "       mnemos repair quarantine-tool-written [--write]\n"
+        "       mnemos repair split-notes [--write]\n"
+        "       mnemos repair archive-rows [--write]\n"
+        "       mnemos repair dead-embeddings [--write]\n"
+        "       mnemos repair placeholder-impacts [--write]",
         file=sys.stderr,
     )
     return 1
+
+
+def _repair_runtime(args: argparse.Namespace) -> Any:
+    from .simple_runtime import MnemosRuntime
+
+    return MnemosRuntime(
+        db_path=getattr(args, "db_path", None),
+        agent_id=getattr(args, "agent_id", None),
+        person_id=getattr(args, "person_id", None),
+        project_scope=getattr(args, "project_scope", None),
+    )
+
+
+def _repair_ending(plan: dict[str, Any], args: argparse.Namespace, *, todo: bool,
+                   done: str, verb: str) -> int:
+    """How every clean-up ends: refused by older code, nothing to do, done
+    (with the backup's path), or a dry run."""
+    print()
+    if plan["older_than_store"]:
+        print(
+            "This code is older than the store expects, so it changes nothing. "
+            "Run the repair with current Mnemos."
+        )
+        return 1 if args.write else 0
+    if not todo:
+        print("Nothing to repair.")
+        return 0
+    if args.write:
+        print(f"{done} Backup: {plan['backup']}")
+    else:
+        print(f"Dry run: nothing changed. Run again with --write to {verb}")
+        print("(a verified backup is made first).")
+    return 0
+
+
+def _repair_row(count: int, what: str, action: str = "") -> None:
+    print(f"  {count:>7,}  {what:<58} {action}".rstrip())
+
+
+def _repair_count(count: int, one: str, many: str = "") -> str:
+    return f"{count:,} {one if count == 1 else (many or one + 's')}"
+
+
+def _repair_words(text: str, limit: int = 80) -> str:
+    words = " ".join((text or "").split())
+    return words if len(words) <= limit else words[: limit - 1].rstrip() + "…"
+
+
+def _cmd_repair_split_notes(args: argparse.Namespace) -> int:
+    """Join again the notes older code left apart from their memories.
+
+    Before one capture was one object, correcting a note rewrote it and left
+    its memory saying the old words, and correcting a memory saved the
+    correction as a new memory without a note, leaving the old note over the
+    archived memory. The agent's newest words win; history keeps both. A
+    human runs this: a dry run unless --write, and a verified backup first.
+    """
+    runtime = _repair_runtime(args)
+    try:
+        plan = runtime.repair_split_notes(write=args.write)
+    finally:
+        runtime.close()
+
+    if not plan["exists"]:
+        print(f"No store at {runtime.db_path}; nothing to repair.")
+        return 0
+
+    agent, person, project = plan["target"]
+    found = plan["found"]
+    print(f"Notes and their memories for {agent} / {person} / {project} in {runtime.db_path}")
+    print()
+    _repair_row(found["notes"], "notes in use, each with a memory of its own")
+    _repair_row(found["same"], "that say what their memory says", "stay")
+    _repair_row(
+        len(found["ahead"]), "corrected, while the memory kept the old words",
+        "the memory takes the note's words",
+    )
+    _repair_row(
+        len(found["behind"]), "over a replaced memory, while the new one has no note",
+        "the note moves to the new memory",
+    )
+    if found["differ"]:
+        _repair_row(len(found["differ"]), "that differ from their memory for another reason", "stay")
+    if found["unclear"]:
+        _repair_row(len(found["unclear"]), "that can't be joined without a guess", "stay")
+    for item in found["ahead"]:
+        print(f"           - memory {item['memory_id']} (note {item['note_id']})")
+        print(f"             was: \"{_repair_words(item['memory_words'])}\"")
+        print(f"             now: \"{_repair_words(item['words'])}\"")
+    for item in found["behind"]:
+        print(f"           - note {item['note_id']}: memory {item['memory_id']} -> "
+              f"{item['replacement_id']}")
+        if item["words_change"]:
+            print(f"             now: \"{_repair_words(item['words'])}\"")
+    for item in [*found["differ"], *found["unclear"]]:
+        print(f"           - left alone: note {item['note_id']}, memory {item['memory_id']}")
+
+    todo = bool(found["ahead"] or found["behind"])
+    done = plan["done"] or {"ahead": 0, "behind": 0}
+    return _repair_ending(
+        plan, args, todo=todo,
+        done=(
+            f"Joined {_repair_count(done['ahead'] + done['behind'], 'pair')}: "
+            f"{_repair_count(done['ahead'], 'memory', 'memories')} took the note's "
+            f"words, {_repair_count(done['behind'], 'note')} moved to the memory that "
+            "replaced theirs. What changed waits for the meaning index ('mnemos "
+            "embeddings index', or the scheduled consolidate)."
+        ),
+        verb="join them",
+    )
+
+
+def _cmd_repair_archive_rows(args: argparse.Namespace) -> int:
+    """Drop the archive rows that only repeat a memory no longer archived.
+
+    A human runs this: a dry run unless --write, and a verified backup first.
+    """
+    runtime = _repair_runtime(args)
+    try:
+        plan = runtime.repair_archive_rows(write=args.write)
+    finally:
+        runtime.close()
+
+    if not plan["exists"]:
+        print(f"No store at {runtime.db_path}; nothing to repair.")
+        return 0
+
+    found = plan["found"]
+    states = ", ".join(
+        f"{count:,} {'quiet' if state == 'dormant' else state}"
+        for state, count in sorted(found["repeats_by_state"].items())
+    )
+    print(f"Archive rows in {runtime.db_path}")
+    print()
+    _repair_row(found["rows"], "rows in the archive")
+    _repair_row(found["archived"], "for memories in the archive", "stay")
+    _repair_row(len(found["repeats"]), "repeating a memory no longer archived, word for word", "go")
+    if states:
+        print(f"           ({states})")
+    _repair_row(
+        len(found["history"]), "for a memory no longer archived, in other words", "stay, as history"
+    )
+    _repair_row(found["gone"], "for memories no longer in the store", "stay")
+
+    done = plan["done"] or {"dropped": 0}
+    return _repair_ending(
+        plan, args, todo=bool(found["repeats"]),
+        done=(
+            f"Dropped {_repair_count(done['dropped'], 'row')}; "
+            f"{found['rows'] - done['dropped']:,} remain. "
+            "The file keeps its size; SQLite reuses the space."
+        ),
+        verb="drop them",
+    )
+
+
+def _cmd_repair_dead_embeddings(args: argparse.Namespace) -> int:
+    """Prune stored vectors from embedding models this Mnemos does not use.
+
+    A human runs this: a dry run unless --write, and a verified backup first.
+    With no embedding model set up where it runs, it prunes nothing.
+    """
+    runtime = _repair_runtime(args)
+    try:
+        plan = runtime.repair_dead_embeddings(write=args.write)
+    finally:
+        runtime.close()
+
+    if not plan["exists"]:
+        print(f"No store at {runtime.db_path}; nothing to repair.")
+        return 0
+
+    found = plan["found"]
+    model = plan["model"]
+    print(f"Stored embeddings in {runtime.db_path}")
+    if model:
+        print(f"This Mnemos embeds with: {plan['backend']} model {model}")
+    else:
+        print(f"This Mnemos embeds with no model here (why: {plan['reason']}).")
+    for table, title in (("embeddings", "Whole-text vectors"), ("passage_vectors", "Passages")):
+        print()
+        print(title)
+        if not found[table]:
+            _repair_row(0, "stored")
+        for name, count in found[table].items():
+            action = "" if not model else ("stay" if name == model else "go")
+            _repair_row(count, name, action)
+
+    if not model:
+        print()
+        print(
+            "With no model in use here, a dead vector can't be told from a live one, "
+            "so nothing is pruned. Run it where Mnemos embeds (the same Python and "
+            "settings as the server)."
+        )
+        return 1 if args.write else 0
+    dead = sum(
+        count for table in ("embeddings", "passage_vectors")
+        for name, count in found[table].items() if name in found["dead"]
+    )
+    done = plan["done"] or {"embeddings": 0, "passage_vectors": 0}
+    return _repair_ending(
+        plan, args, todo=bool(dead),
+        done=(
+            f"Pruned {_repair_count(done['embeddings'], 'whole-text vector')} and "
+            f"{_repair_count(done['passage_vectors'], 'passage')}. The file keeps its "
+            "size; SQLite reuses the space."
+        ),
+        verb="prune them",
+    )
+
+
+def _cmd_repair_placeholder_impacts(args: argparse.Namespace) -> int:
+    """Empty the meanings the server wrote itself, leaving them to the agent.
+
+    A human runs this: a dry run unless --write, and a verified backup first.
+    """
+    runtime = _repair_runtime(args)
+    try:
+        plan = runtime.repair_placeholder_impacts(write=args.write)
+    finally:
+        runtime.close()
+
+    if not plan["exists"]:
+        print(f"No store at {runtime.db_path}; nothing to repair.")
+        return 0
+
+    found = plan["found"]
+    print(f"Meanings the server wrote itself, in {runtime.db_path}")
+    print()
+    for text, ids in found["by_text"].items():
+        _repair_row(len(ids), f'"{text}"', "emptied")
+    if found["left"]:
+        _repair_row(
+            sum(found["left"].values()), "other phrases, from the older capture path",
+            "stay (not this repair)",
+        )
+        for text, count in sorted(found["left"].items(), key=lambda item: (-item[1], item[0])):
+            print(f"           {count:>3,}  \"{text}\"")
+
+    done = plan["done"] or {"emptied": 0}
+    return _repair_ending(
+        plan, args, todo=any(found["by_text"].values()),
+        done=(
+            f"Emptied {_repair_count(done['emptied'], 'meaning')}; what each meant is "
+            "left to the agent."
+        ),
+        verb="empty them",
+    )
 
 
 def _cmd_repair_quarantine_tool_written(args: argparse.Namespace) -> int:

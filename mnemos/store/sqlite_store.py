@@ -4162,7 +4162,11 @@ class EngramStore:
 
         A note that references a memory it interprets or summarises
         (``related_engram_id``) is never one: promoting it would pair it with
-        a memory no capture wrote together with it.
+        a memory no capture wrote together with it. Nor is a note Mnemos
+        wrote (``authored_by`` 'system'), such as a closed session's summary:
+        promoted, its words would become a memory Mnemos wrote, and words in
+        memory come only from the agent. Left out here, not skipped later, so
+        such a note never holds a place another note could have.
         """
         conn = self._get_conn()
         rows = conn.execute(
@@ -4171,6 +4175,7 @@ class EngramStore:
             WHERE agent_id = ? AND person_id = ? AND project_scope = ?
               AND active = 1
               AND entry_kind = 'continuity'
+              AND authored_by != 'system'
               AND graduated_to_engram_id IS NULL
               AND related_engram_id IS NULL
               AND confidence >= 0.82
@@ -4224,6 +4229,7 @@ class EngramStore:
             f"WHERE {where_sql} "
             "AND active = 1 "
             "AND entry_kind = 'continuity' "
+            "AND authored_by != 'system' "
             "AND graduated_to_engram_id IS NULL "
             "AND related_engram_id IS NULL "
             "AND confidence >= 0.82 "

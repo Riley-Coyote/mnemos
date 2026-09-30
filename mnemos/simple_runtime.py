@@ -1633,6 +1633,15 @@ class MnemosRuntime:
         holds until the memory's words change, and a correction writes them
         as a new memory, which may be asked once more. The lesson pass keeps
         the same rule the other way round (``_enqueue_lesson_reflections``).
+
+        A memory is reached through the note it is paired with
+        (``graduated_to_engram_id``), the note its answer is written into
+        (``get_hypomnema_entry_for_engram``). Reached through a note that only
+        names it (``related_engram_id``), the pass asked about a memory
+        whose answer had no note to land in, such as one a note interprets,
+        and missed the memory a correction wrote, whose note still names the
+        memory the corrected note named. A promoted memory is reached this
+        way too, so a promotion's empty meaning is asked for like any other.
         """
         self._ensure_init()
         assert self._store is not None
@@ -1641,7 +1650,7 @@ class MnemosRuntime:
             """
             SELECT e.id, e.content, e.impact
             FROM engrams e
-            JOIN hypomnema_entries h ON h.related_engram_id = e.id
+            JOIN hypomnema_entries h ON h.graduated_to_engram_id = e.id
             WHERE h.agent_id = ? AND h.person_id = ? AND h.project_scope = ?
               AND h.active = 1 AND e.state = 'active'
             ORDER BY e.created_at DESC
@@ -4977,6 +4986,22 @@ class MnemosRuntime:
         )
 
     def _promote_candidates(self, limit: int = 3) -> int:
+        """Promote stable continuity notes to memories, as their writers left them.
+
+        The memory holds the note's words and the note's meaning, which is
+        none: a note has no place for what it changed. So the memory's
+        meaning stays empty, and the impact pass asks the agent for it later,
+        as it asks any memory without one; it reaches the memory through the
+        note it is now paired with. Promotion used to write "Stable
+        continuity promoted during simple maintenance." there: Mnemos's words
+        where only the agent's belong.
+
+        A note Mnemos wrote is never a candidate
+        (``get_hypomnema_promotion_candidates``): promoted, its words became
+        a memory Mnemos wrote. Nor is a note that references a memory:
+        marking it promoted into that memory paired it with a memory no
+        capture wrote together with it.
+        """
         assert self._store is not None
         assert self._encoder is not None
         candidates = self._store.get_hypomnema_promotion_candidates(
@@ -4986,17 +5011,13 @@ class MnemosRuntime:
             limit=limit,
         )
         promoted = 0
-        # A note that references a memory is never a candidate: marking it
-        # promoted into that memory paired it with a memory no capture wrote
-        # together with it.
         for entry in candidates:
             # The memory holds the note's words, so it keeps the note's
-            # author: the agent's note stays the agent's, Mnemos's stays
-            # Mnemos's, and any other kind is not claimed for either.
+            # author: the agent's note stays the agent's, and any other kind
+            # is not claimed for it. (Mnemos's own notes never get here; one
+            # that did would stay Mnemos's, not be passed off as another's.)
             engram = self._encoder.encode(
                 content=entry["content"],
-                impact="Stable continuity promoted during simple maintenance.",
-                impact_source="template",
                 kind="semantic",
                 tags=["continuity", "promoted", *entry.get("tags", [])],
                 source=SourceType.BACKGROUND,

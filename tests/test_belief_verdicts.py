@@ -350,6 +350,16 @@ def test_the_packet_shows_the_verdict_a_question_takes(tmp_path, builder, kind, 
 
     lines = [line.strip() for line in shown.splitlines()]
     call = f'mnemos_reflect(target_id="{target}", text="…", verdict="…")'
+    if builder == "hook":
+        # The session-start packet keeps the call out of the reader's voice:
+        # it waits, with its verdicts, among the ids for the memory tools.
+        [tools] = [line for line in lines if line.startswith("- to answer the question: ")]
+        if verdicts is None:
+            assert tools == f'- to answer the question: mnemos_reflect(target_id="{target}", text="…")'
+            assert "verdict" not in shown
+        else:
+            assert tools == f"- to answer the question: {call}; verdict: {verdicts}", shown
+        return
     if verdicts is None:
         assert call not in lines
         assert [line for line in lines if line.startswith("mnemos_reflect(")] == [

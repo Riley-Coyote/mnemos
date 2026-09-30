@@ -182,7 +182,10 @@ def test_maintain_writes_dream_and_context_renders_section(tmp_path):
         assert runtime._get_meta("dream_last_written_at") is not None
 
         packet = runtime.context()
-        assert "### While you were away" in packet
+        # In the reader's voice when it is this memory's own, else plainly.
+        assert (
+            "### while i was away\n" in packet or "### lately, in this memory\n" in packet
+        ), packet
         # The narrative renders in its own section only — never duplicated
         # among the notes.
         assert packet.count(narrative) == 1

@@ -17,7 +17,7 @@ def _isolate_mnemos_env(monkeypatch):
         "MNEMOS_LLM_PROVIDER", "MNEMOS_MODEL", "MNEMOS_AGENT_MODEL",
         "MNEMOS_SUBSTRATE_AFFINITY", "MNEMOS_AGENT_ID", "MNEMOS_PERSON_ID",
         "MNEMOS_PROJECT_SCOPE", "MNEMOS_DB_PATH", "MNEMOS_ENV_PATHS",
-        "MNEMOS_WORKSPACE", "MNEMOS_MODE",
+        "MNEMOS_WORKSPACE", "MNEMOS_MODE", "MNEMOS_PERSON_NAME",
         "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY",
         # A real key would send every captured test memory to the Gemini API.
         "GEMINI_API_KEY", "MNEMOS_EMBEDDING_MODEL",

@@ -21,6 +21,7 @@ hand.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import subprocess
 import sys
@@ -171,11 +172,15 @@ class TestTheIncident:
             store.close()
 
         packet = _hook(db_path, tmp_path, _start(FRESH))
-        # Both threads reach the next session, newest first, each signed.
+        # Both threads reach the next session, newest first, each placed: the
+        # same model's notes are the reader's own, from other sessions.
         assert "Sanctuary steward: the season check-in ran" in packet
         assert "What Lights Up: the conversation page is done" in packet
         assert packet.index("Sanctuary steward") < packet.index("What Lights Up")
-        assert packet.count("(Opus 5.5)") >= 2
+        assert re.search(
+            r"### where i left off\n[^\n]*, in another session:\nSanctuary steward", packet,
+        ), packet
+        assert re.search(r"^- me, [^:]*, in another session: What Lights Up", packet, re.M), packet
 
     def test_after_compaction_a_session_is_handed_its_own_note_first(self, tmp_path):
         db_path = tmp_path / "shared.db"
@@ -185,7 +190,9 @@ class TestTheIncident:
         packet = _hook(db_path, tmp_path, _start(LIGHTS, source="compact"))
         assert LIGHTS_NOTE in packet
         assert packet.index("What Lights Up") < packet.index("Sanctuary steward")
-        assert "Yours (Opus 5.5), from this session" in packet
+        assert re.search(r"### where i left off\n[^\n]*, this session:\nWhat Lights Up", packet), (
+            packet
+        )
 
     def test_the_mcp_packet_hands_a_session_its_own_note_first(self, tmp_path, monkeypatch):
         db_path = tmp_path / "shared.db"
@@ -319,8 +326,10 @@ class TestThePacketStaysSmall:
             assert older[:30] not in packet
         # The other sessions' lines are short: they name the thread and how to
         # read it whole, and leave the rest of the packet to continuity.
-        head = packet.split("### What you're carrying", 1)[0]
-        assert len(head) < len(newest) + 1600
+        assert "### what i'm carrying\n" in packet, packet
+        left_off = packet.split("### where i left off\n", 1)[1].split("\n\n### ", 1)[0]
+        assert newest in left_off
+        assert len(left_off) < len(newest) + 1000
         assert "Riley wants short, plain messages." in packet
         assert "The staging deploy runs before production." in packet
 
@@ -337,7 +346,7 @@ class TestThePacketStaysSmall:
             monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
 
             packet = runtime.context(max_results=5)
-            section = packet.split("### What you're carrying", 1)[1].split("\n### ", 1)[0]
+            section = packet.split("### what this memory is carrying\n", 1)[1].split("\n### ", 1)[0]
             assert sum(fact in section for fact in facts) == 3
 
             recalled = runtime.recall("release durable facts")
@@ -397,7 +406,7 @@ class TestSignatures:
         _handoff_from(LIGHTS, LIGHTS_NOTE, db_path, tmp_path)
 
         packet = _hook(db_path, tmp_path, _start(FRESH))
-        assert "Yours (Opus 5.5), from another session," in packet
+        assert re.search(r"### where i left off\n[^\n]*, in another session:\n", packet), packet
         assert "colleague" not in packet
         assert "don't claim" not in packet
 
@@ -407,8 +416,8 @@ class TestSignatures:
         _handoff_from(STEWARD, STEWARD_NOTE, db_path, tmp_path)
 
         packet = _hook(db_path, tmp_path, _start(FRESH))
-        sibling = packet.split("Other notes from the last three days:", 1)[1]
-        assert "From Fable 5.1, a colleague" in sibling
+        sibling = packet.split("also from the last three days:", 1)[1]
+        assert "- Fable 5.1, a colleague, " in sibling
         # Short enough to show whole, so it needs no id to be read whole.
         assert " ".join(LIGHTS_NOTE.split()) in sibling
 

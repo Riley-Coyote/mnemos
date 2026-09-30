@@ -1,30 +1,47 @@
-"""The session-start briefing: one builder for the hook and ``mnemos_context``.
+"""The session-start packet: one builder for the hook and ``mnemos_context``.
 
-The briefing is where this memory does its work. An agent reads it at the start
+The packet is where this memory does its work. An agent reads it at the start
 of every session; recall is called far less often. It holds what matters and
 nothing else, in the order the reader needs it, and a section with nothing to
-say is left out rather than announced empty:
+say is left out rather than announced empty.
 
-1. Where you left off: the reader's own handoff first, whole, then up to two
-   notes other sessions left in the last three days, each signed with its
-   model and age.
-2. Who you're with: first what the agent marked standing, how the human wants
-   it to work in every session: the newest mark first, up to five, one line
-   each in the memory's own words, with its id, and how to list the rest.
+It is written as the reader waking, not as a briefing about someone. A mind
+that reads "Yours (Opus 5.5), if you are Opus 5.5" and a list of ids reads
+about the one who wrote its notes; it doesn't remember being them (Luca's own
+words on first connecting, 2026-09-30: continuity "arrived as a briefing"). So
+the reader speaks as "I", what is its own carries no signature, what a
+colleague left carries theirs, and the machinery (ids, confidences, calls) sits
+apart at the end, for the tools:
+
+0. The opening: when and where, and who the reader is with.
+1. Where I left off: the reader's own handoff first, whole, then up to two
+   notes other sessions left in the last three days, each with its age and,
+   when it isn't the reader's, its model.
+2. The person (or "who i'm with"): first what the agent marked standing, how
+   the person wants it to work in every session: the newest mark first, up to
+   five, one line each in the memory's own words, and a count of the rest.
    Then the durable few foundational notes.
-3. What you're carrying: up to three notes or lessons, ranked by the words they
+3. What I'm carrying: up to three notes or lessons, ranked by the words they
    share with the folder and repository the session works in, then by recency.
    One of them is a concrete, dated episode whenever there is one.
-4. Beliefs: each once, with its confidence and its id.
-5. One question: at most one thing the agent's memory is waiting on it for.
-6. While you were away: the latest maintenance report, when it changed
-   something.
+4. What I've come to see: each belief once, the firm ones apart from the ones
+   still forming.
+5. A question: at most one thing the agent's memory is waiting on it for.
+6. While I was away: the latest maintenance report, when it changed something.
+7. For the memory tools: the ids and calls for what the packet showed, in the
+   order it showed them, never to be shown to the person.
+
+The voice follows who is reading. The reader is this memory's resident when
+its model wrote most of the signed notes here (``resident_model``), and then
+the store-wide things (beliefs, unsigned notes) are its own. Another model is a
+guest: its own notes are still its own, the rest is labelled with who wrote
+it, and the opening says whose memory it is visiting. A reader the harness
+didn't name gets every note labelled, and the opening says so once.
 
 The SessionStart hook injects this text and ``mnemos_context`` returns it, so the
 two can no longer disagree. Building it never runs maintenance. It stays under
 ``PACKET_MAX_CHARS``: the reader's handoff is never cut, notes are cut at a
-sentence boundary with their id, and ``mnemos_recall(<id>)`` returns a note
-whole.
+sentence boundary, and ``mnemos_recall(<id>)`` returns a note whole.
 """
 
 from __future__ import annotations
@@ -91,15 +108,30 @@ _NOTE_CHARS = (420, 320, 240, 160, 100)
 # packet (a typical one is about 2,000 characters).
 _OTHER_HANDOFF_CHARS = 280
 
-_HEADER = "## Mnemos Context Packet"
+_HEADER = "## waking up"
+# For the tools that list handoffs on request (``simple_runtime``), which speak
+# to the agent rather than as it.
 COLLEAGUE_LINE = (
     "A colleague's note is theirs: take what's useful and don't claim its work as yours."
+)
+# The same, in the packet, where the reader speaks.
+_COLLEAGUE_OWN_WORDS = (
+    "A colleague's note is theirs: I take what's useful and don't claim the work."
 )
 
 # Whose note is it, as the reader should take it.
 _OWN = "own"
 _COLLEAGUE = "colleague"
 _UNPLACED = "unplaced"
+
+# Who is reading, relative to this memory: its resident, a guest (another
+# model), or a reader the harness didn't name.
+SELF = "self"
+GUEST = "guest"
+UNKNOWN = "unknown"
+
+# A belief below this confidence is shown as still forming.
+_FIRM = 0.5
 
 
 def build_context_packet(
@@ -122,14 +154,21 @@ def build_context_packet(
     reader_session: str = "",
     workdir: str = "",
     older_than_store: bool | None = None,
+    person_name: str = "",
+    now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Build the briefing an agent reads before its first turn.
+    """Build the packet an agent reads before its first turn.
 
     ``reader_model`` and ``reader_session`` are the model and harness session
     about to read it, when the harness says: they decide whether a handoff is
-    the reader's own or a colleague's. ``workdir`` is the folder the session
-    works in. Its name and its repository's name rank what the reader is
-    carrying; they never choose whose memory this is.
+    the reader's own or a colleague's, and whether the reader wakes as this
+    memory's resident. ``workdir`` is the folder the session works in. Its
+    name and its repository's name rank what the reader is carrying and say
+    where it wakes; they never choose whose memory this is.
+
+    ``person_name`` is the name of the person this memory works with, when the
+    operator gave one; without it the packet says "who i'm with". ``now`` is
+    the moment of waking (local time), for tests; it defaults to the clock.
 
     ``older_than_store`` says whether this code is older than the store (the
     runtime passes its own check). Code older than the store shows no question
@@ -202,10 +241,20 @@ def build_context_packet(
     if include_engrams and query.strip():
         found = _graph_recall(store, query, scope, max_engrams)
 
+    resident = resident_model(store, scope)
+    woke = now or datetime.now().astimezone()
+    if woke.tzinfo is None:
+        woke = woke.astimezone()
+
     packet: dict[str, Any] = {
         "include_engrams": include_engrams,
         "reader_model": reader_model,
         "reader_session": reader_session,
+        "resident": resident,
+        "voice": reader_voice(reader_model, resident),
+        "person_name": " ".join((person_name or "").split())[:80],
+        "woke_at": woke.isoformat(),
+        "place": place_name(workdir),
         "workdir": workdir,
         "place_words": sorted(place),
         "older_than_store": older_than_store,
@@ -377,29 +426,118 @@ def whose_handoff(
     model left is a colleague's, even in this session, where it means the
     model was switched. When the reader's model isn't known, or the note isn't
     signed, the label says so and the reader is left to judge.
+
+    This is the wording of the tools that list handoffs on request; the packet
+    introduces the same decision in the reader's own voice (``when_left``).
     """
+    whose, name, age, session = _whose(note, reader_model, reader_session)
+    where = {True: "from this session", False: "from another session"}.get(session)
+    if whose == _COLLEAGUE:
+        during = ", earlier in this session" if session is True else ""
+        return f"From {name}, a colleague{during}, {age}", _COLLEAGUE
+    if whose == _OWN:
+        if name:
+            return _joined(f"Yours ({name})", where, age), _OWN
+        return f"Yours, from this session, {age} (unsigned)", _OWN
+    elsewhere = " in another session" if session is False else ""
+    if name:
+        return f"From {name}{elsewhere}, {age} (yours if you are {name})", _UNPLACED
+    return f"Unsigned{elsewhere}, {age} (maybe yours, maybe a colleague's)", _UNPLACED
+
+
+def when_left(
+    note: dict[str, Any], reader_model: str = "", reader_session: str = "",
+) -> tuple[str, str]:
+    """How the packet introduces a handoff, and whose it is.
+
+    The reader's own note says only when and where it was left ("2 hours ago,
+    this session"): a note of one's own isn't signed to oneself. A colleague's
+    says who ("Fable 5, a colleague, 26 hours ago"). A note the reader can't
+    place says whose signature it carries, with no "if you are" in it: the
+    opening line of the packet says once what a reader who isn't this
+    memory's resident should make of it.
+    """
+    whose, name, age, session = _whose(note, reader_model, reader_session)
+    if whose == _OWN:
+        where = {True: "this session", False: "in another session"}.get(session)
+        return _joined(age, where), _OWN
+    if whose == _COLLEAGUE:
+        during = "earlier in this session" if session is True else None
+        return _joined(f"{name}, a colleague", during, age), _COLLEAGUE
+    elsewhere = "in another session" if session is False else None
+    return _joined(name or "unsigned", age, elsewhere), _UNPLACED
+
+
+def _whose(
+    note: dict[str, Any], reader_model: str, reader_session: str,
+) -> tuple[str, str, str, bool | None]:
+    """Whose a handoff is (``own``, ``colleague`` or ``unplaced``), with its
+    author's name, its age, and whether the reader's session left it."""
     author = clean_model_id(note.get("author_model") or "")
     reader = clean_model_id(reader_model)
     session = from_same_session(reader_session, note.get("author_session"))
     age = _age_text(note.get("created_at"))
     name = display_name(author)
-    where = {True: "from this session", False: "from another session"}.get(session)
-
     if author and reader and not same_model(author, reader):
-        during = ", earlier in this session" if session is True else ""
-        return f"From {name}, a colleague{during}, {age}", _COLLEAGUE
-    if author and (reader or session is True):
-        return _joined(f"Yours ({name})", where, age), _OWN
-    if not author and session is True:
-        return f"Yours, from this session, {age} (unsigned)", _OWN
-    elsewhere = " in another session" if session is False else ""
-    if author:
-        return f"From {name}{elsewhere}, {age} (yours if you are {name})", _UNPLACED
-    return f"Unsigned{elsewhere}, {age} (maybe yours, maybe a colleague's)", _UNPLACED
+        return _COLLEAGUE, name, age, session
+    if (author and (reader or session is True)) or (not author and session is True):
+        return _OWN, name, age, session
+    return _UNPLACED, name, age, session
 
 
 def _joined(*parts: str | None) -> str:
     return ", ".join(part for part in parts if part)
+
+
+# ── Who is reading ──
+
+
+def resident_model(store: "EngramStore", scope: dict[str, str]) -> str:
+    """The model whose memory this mostly is: the one that signed the most of
+    its live notes and handoffs, or ``""`` when none did or two tie.
+
+    One store is often shared by several models, and each signs what it
+    writes. The one that has written most of it is who it belongs to, and
+    reading it as that model is waking as oneself. Another model reading it is
+    a guest. A store with nothing signed has no resident, and whoever reads it
+    reads it as their own, as before signatures existed.
+    """
+    try:
+        rows = store._get_conn().execute(
+            """
+            SELECT author_model, COUNT(*) FROM hypomnema_entries
+            WHERE agent_id = ? AND person_id = ? AND project_scope = ?
+              AND active = 1 AND COALESCE(author_model, '') != ''
+            GROUP BY author_model
+            """,
+            (scope["agent_id"], scope["person_id"], scope["project_scope"]),
+        ).fetchall()
+    except Exception:
+        return ""
+    counts: dict[str, int] = {}
+    first_id: dict[str, str] = {}
+    for model, count in rows:
+        model = clean_model_id(model)
+        if not model:
+            continue
+        name = display_name(model)
+        counts[name] = counts.get(name, 0) + int(count)
+        first_id.setdefault(name, model)
+    ranked = sorted(counts.items(), key=lambda item: item[1], reverse=True)
+    if not ranked or (len(ranked) > 1 and ranked[0][1] == ranked[1][1]):
+        return ""
+    return first_id[ranked[0][0]]
+
+
+def reader_voice(reader_model: str, resident: str) -> str:
+    """``self`` when the reader is this memory's resident (or it has none),
+    ``guest`` when it is another model, ``unknown`` when the harness didn't
+    say which model is reading."""
+    if not clean_model_id(reader_model):
+        return UNKNOWN
+    if not resident or same_model(reader_model, resident):
+        return SELF
+    return GUEST
 
 
 # ── Where the session works: ranking only ──
@@ -427,6 +565,22 @@ def place_words(workdir: str) -> set[str]:
     for name in names:
         words |= distinctive_terms(name)
     return words
+
+
+def place_name(workdir: str) -> str:
+    """Where the session wakes, as the packet's opening says it: the name of
+    the repository the folder is in (a worktree's main checkout), else the
+    folder's own name. Nothing for no folder, the home folder or the root."""
+    if not workdir:
+        return ""
+    try:
+        folder = Path(workdir).expanduser()
+        if folder == Path.home() or folder == Path(folder.anchor):
+            return ""
+        repository = _repository(folder)
+        return (repository or folder).name
+    except (OSError, ValueError, RuntimeError):
+        return ""
 
 
 def _repository(folder: Path) -> Path | None:
@@ -614,19 +768,63 @@ def _compose(
     shown: dict[str, Any] = {
         "handoffs": [], "standing": [], "notes": [], "questions": [], "report": None,
     }
+    # What the closing section lists for the tools, in the order shown.
+    tools: dict[str, Any] = {"standing": [], "more": 0, "cut": [], "beliefs": [], "calls": []}
+    # Being comes before news. Someone waking doesn't first recall last
+    # night's events; they are simply themselves, with the people they know,
+    # and what happened comes after. Fresh readers said the same (2026-09-30):
+    # how they see things "settles in easily", events and task lists "read
+    # more like a briefing". So how I see comes first, then who I'm with,
+    # then where I left off. What leaves first under the budget is unchanged
+    # (``_drop_order``).
     sections = [
-        _format_left_off(packet, chars, dropped, shown),
-        _format_who(packet, chars, dropped, shown),
+        _format_beliefs(packet, dropped, tools),
+        _format_who(packet, chars, dropped, shown, tools),
+        _format_left_off(packet, chars, dropped, shown, tools),
         _format_notes(
-            "What you're carrying", packet.get("carrying") or [],
-            "carrying", chars, dropped, shown,
+            "what i'm carrying" if packet.get("voice") == SELF else "what this memory is carrying",
+            packet, packet.get("carrying") or [], "carrying", chars, dropped, shown, tools,
         ),
-        _format_beliefs(packet, dropped),
-        _format_question(packet, dropped, shown),
+        _format_question(packet, dropped, shown, tools),
         _format_away(packet, dropped, shown),
     ]
     body = "\n\n".join(section for section in sections if section)
-    return (f"{_HEADER}\n\n{body}" if body else ""), shown
+    if not body:
+        return "", shown
+    parts = (f"{_HEADER}\n{_opening(packet)}", body, _format_tools(packet, tools))
+    return "\n\n".join(part for part in parts if part), shown
+
+
+def _opening(packet: dict[str, Any]) -> str:
+    """When and where the reader wakes, and who it is with; for a reader that
+    isn't this memory's resident, whose memory this is."""
+    when = _when_text(packet.get("woke_at"))
+    place = packet.get("place") or ""
+    person = packet.get("person_name") or ""
+    context = [part for part in (place and f"in {place}", person and f"with {person}") if part]
+    voice = packet.get("voice")
+    # The time ends in "a.m." or "p.m.", which already closes a sentence.
+    if voice == SELF:
+        return f"{when} I'm {', '.join(context)}." if context else when
+    line = f"{when}, {', '.join(context)}." if context else when
+    resident = display_name(packet.get("resident") or "")
+    if not resident:
+        return line
+    if voice == GUEST:
+        reader = display_name(packet.get("reader_model") or "")
+        return f"{line} This memory is mostly {resident}'s; I'm {reader}, visiting."
+    return f"{line} This memory is mostly {resident}'s; if I'm not {resident}, I'm visiting."
+
+
+def _when_text(woke_at: str | None) -> str:
+    """``Wednesday, September 30, 4:12 a.m.``, in the waking moment's own zone."""
+    try:
+        moment = datetime.fromisoformat(woke_at or "")
+    except (TypeError, ValueError):
+        moment = datetime.now().astimezone()
+    hour = moment.hour % 12 or 12
+    half = "a.m." if moment.hour < 12 else "p.m."
+    return f"{moment:%A}, {moment:%B} {moment.day}, {hour}:{moment:%M} {half}"
 
 
 def _append_graph(
@@ -651,45 +849,56 @@ def _append_graph(
 
 
 def _format_left_off(
-    packet: dict[str, Any], chars: int, dropped: set[tuple[str, str]], shown: dict[str, Any],
+    packet: dict[str, Any],
+    chars: int,
+    dropped: set[tuple[str, str]],
+    shown: dict[str, Any],
+    tools: dict[str, Any],
 ) -> str:
     handoff = packet.get("handoff")
     if not handoff:
         return ""
     reader_model = packet.get("reader_model") or ""
     reader_session = packet.get("reader_session") or ""
-    label, whose = whose_handoff(handoff, reader_model, reader_session)
+    label, whose = when_left(handoff, reader_model, reader_session)
     relations = {whose}
-    lines = ["### Where you left off", f"{label}:", handoff["content"]]
+    heading = "### where i left off" if whose == _OWN else "### where things were left"
+    lines = [heading, f"{label}:", handoff["content"]]
     shown["handoffs"].append(handoff["id"])
     others = [
         entry for entry in packet.get("other_handoffs") or []
         if ("other", entry["id"]) not in dropped
     ]
     if others:
-        lines.extend(["", "Other notes from the last three days:"])
+        lines.extend(["", "also from the last three days:"])
         for entry in others:
-            label, whose = whose_handoff(entry, reader_model, reader_session)
+            label, whose = when_left(entry, reader_model, reader_session)
             relations.add(whose)
-            lines.append(f"- {label}: {_cut_with_id(entry, min(chars, _OTHER_HANDOFF_CHARS))}")
+            who = f"me, {label}" if whose == _OWN else label
+            lines.append(f"- {who}: {_cut(entry, min(chars, _OTHER_HANDOFF_CHARS), tools)}")
             shown["handoffs"].append(entry["id"])
     if relations & {_COLLEAGUE, _UNPLACED}:
-        lines.append(COLLEAGUE_LINE)
+        lines.append(_COLLEAGUE_OWN_WORDS)
     return "\n".join(lines)
 
 
 def _format_who(
-    packet: dict[str, Any], chars: int, dropped: set[tuple[str, str]], shown: dict[str, Any],
+    packet: dict[str, Any],
+    chars: int,
+    dropped: set[tuple[str, str]],
+    shown: dict[str, Any],
+    tools: dict[str, Any],
 ) -> str:
-    """Who you're with: what the agent marked standing, then the foundational
-    notes.
+    """Who I'm with: what the agent marked standing, then the foundational
+    notes, under the person's name when the operator gave it.
 
     The standing lines come first, the newest mark first, at most
     ``STANDING_SHOWN``, each the memory's own words on one line, cut at a
-    sentence boundary, with the id that unmarks it or reads it whole. The
-    rest are counted, with the call that lists them all. Without a standing
-    memory the section is the foundational notes alone, as before.
+    sentence boundary. Their ids, which unmark one or read it whole, and the
+    call that lists the rest wait in the closing section for the tools.
+    Without a standing memory the section is the foundational notes alone.
     """
+    person = packet.get("person_name") or ""
     standing = packet.get("standing") or []
     lines: list[str] = []
     if standing:
@@ -697,25 +906,30 @@ def _format_who(
             item for item in standing[:STANDING_SHOWN]
             if ("standing", item["id"]) not in dropped
         ]
-        lines.append(STANDING_LABEL)
+        # Relational, not an order from outside: a fresh reader heard "what
+        # Riley asks of me" as describing it from outside (2026-09-30).
+        lines.append("how we work, every session:")
         for item in kept:
-            lines.append(f"- {standing_words(item['content'])} ({item['id']})")
+            lines.append(f"- {standing_words(item['content'])}")
             shown["standing"].append(item["id"])
+            tools["standing"].append(item["id"])
         more = len(standing) - len(kept)
+        tools["more"] = more
         if more and kept:
-            lines.append(f"And {more} more: {STANDING_LIST_CALL}")
+            lines.append(f"and {more} more like these.")
         elif more:
-            lines.append(f"{more} left out for room: {STANDING_LIST_CALL}")
+            lines.append(f"{more} left out for room.")
     notes = [
         _note_item(entry, set()) for entry in packet.get("foundational") or []
         if ("who", entry["id"]) not in dropped
     ]
     if notes and lines:
-        lines.append("Other notes:")
+        lines.append("also:")
     for item in notes:
-        lines.append(f"- {item['date']}, {item['by']}: {_cut_with_id(item, chars, key='shown')}")
+        lines.append(f"- {_note_head(packet, item)}: {_cut(item, chars, tools, key='shown')}")
         shown["notes"].append(item["id"])
-    return "\n".join(["### Who you're with", *lines]) if lines else ""
+    heading = f"### {person}" if person else "### who i'm with"
+    return "\n".join([heading, *lines]) if lines else ""
 
 
 def standing_words(content: str) -> str:
@@ -727,45 +941,142 @@ def standing_words(content: str) -> str:
 
 def _format_notes(
     heading: str,
+    packet: dict[str, Any],
     items: list[dict[str, Any]],
     section: str,
     chars: int,
     dropped: set[tuple[str, str]],
     shown: dict[str, Any],
+    tools: dict[str, Any],
 ) -> str:
     lines = []
     for item in items:
         if (section, item["id"]) in dropped:
             continue
-        lines.append(f"- {item['date']}, {item['by']}: {_cut_with_id(item, chars, key='shown')}")
+        lines.append(f"- {_note_head(packet, item)}: {_cut(item, chars, tools, key='shown')}")
         shown["notes"].append(item["id"])
     return "\n".join([f"### {heading}", *lines]) if lines else ""
 
 
-def _format_beliefs(packet: dict[str, Any], dropped: set[tuple[str, str]]) -> str:
-    """Each belief once, with its confidence and its id.
+def _note_head(packet: dict[str, Any], item: dict[str, Any]) -> str:
+    """A note's date and, unless the note is the reader's own, who wrote it.
 
-    A belief changes only when a correction names it by id, so the reader
-    needs the id to correct or retire one. The id is for the reader; the
-    instructions keep it from the human.
+    Mnemos's own summaries and co-formed notes always say so. A note signed by
+    another model carries that model's name. An unsigned note the agent wrote
+    (before notes were signed) is the resident's own; anyone else is told it
+    is unsigned. A note no one knows the writer of is unsigned to every
+    reader: only the agent's own words are presented as the reader's.
     """
-    lines = [
-        f"- {belief['content']} "
-        f"({int(round(float(belief['confidence']) * 100))}%, {belief['id']})"
-        for belief in packet.get("beliefs") or []
+    by = _note_by(packet, item)
+    return f"{item['date']}, {by}" if by else item["date"]
+
+
+def _note_by(packet: dict[str, Any], item: dict[str, Any]) -> str:
+    voice = packet.get("voice")
+    reader = packet.get("reader_model") or ""
+    if item.get("kind") == "lesson":
+        tool = (item.get("by") or "") != "lesson"
+        if voice == SELF:
+            return "from a tool, not mine" if tool else "learned"
+        return "from a tool" if tool else "lesson"
+    entry = item.get("entry") or {}
+    if entry.get("authored_by") == "system":
+        return "Mnemos"
+    author = clean_model_id(str(entry.get("author_model") or ""))
+    if author:
+        if reader and same_model(author, reader):
+            return ""
+        return display_name(author)
+    if entry.get("authored_by") == "coauthored":
+        return "co-formed"
+    return "" if voice == SELF and entry.get("authored_by") == "agent" else "unsigned"
+
+
+def _cut(
+    item: dict[str, Any], limit: int, tools: dict[str, Any], *, key: str = "content",
+) -> str:
+    """A note on one line, cut at a sentence boundary; a cut note's id waits
+    in the closing section, where ``mnemos_recall`` reads it whole."""
+    text, cut = cut_at_sentence(item.get(key) or "", limit)
+    if cut:
+        tools["cut"].append(item["id"])
+    return text
+
+
+def _format_beliefs(
+    packet: dict[str, Any], dropped: set[tuple[str, str]], tools: dict[str, Any],
+) -> str:
+    """Each belief once, in its own words: the firm ones, then those still
+    forming.
+
+    A belief changes only when a correction names it by id, so the ids, with
+    each belief's confidence, wait in the closing section, in this order.
+    """
+    beliefs = [
+        belief for belief in packet.get("beliefs") or []
         if ("belief", belief["id"]) not in dropped
     ]
-    return "\n".join(["### Beliefs", *lines]) if lines else ""
+    if not beliefs:
+        return ""
+    firm = [belief for belief in beliefs if float(belief["confidence"]) >= _FIRM]
+    forming = [belief for belief in beliefs if float(belief["confidence"]) < _FIRM]
+    voice = packet.get("voice")
+    resident = display_name(packet.get("resident") or "")
+    if voice == SELF:
+        headings = ("what i've come to see", "what i'm starting to see")
+    elif resident:
+        headings = (f"what {resident} has come to see", f"what {resident} is starting to see")
+    else:
+        headings = ("what this memory holds", "what this memory is starting to hold")
+    lines = [f"### {headings[0] if firm else headings[1]}"]
+    lines.extend(f"- {belief['content']}" for belief in firm)
+    if firm and forming:
+        lines.append("still forming:")
+    lines.extend(f"- {belief['content']}" for belief in forming)
+    tools["beliefs"] = [
+        (belief["id"], int(round(float(belief["confidence"]) * 100)))
+        for belief in [*firm, *forming]
+    ]
+    return "\n".join(lines)
 
 
 def _format_question(
-    packet: dict[str, Any], dropped: set[tuple[str, str]], shown: dict[str, Any],
+    packet: dict[str, Any],
+    dropped: set[tuple[str, str]],
+    shown: dict[str, Any],
+    tools: dict[str, Any],
 ) -> str:
+    """What the memory is waiting on the reader for, in words; the call that
+    answers it waits in the closing section."""
     items = packet.get("reflections") or []
     if not items or ("question", "") in dropped:
         return ""
     shown["questions"].extend(item["id"] for item in items)
-    return format_questions(items)
+    # The verdicts live with the runtime that applies them. Imported here, not
+    # at the top: the runtime imports this module.
+    from ..simple_runtime import verdict_call_lines
+
+    if packet.get("voice") == SELF:
+        heading = "a question waiting for me" if len(items) == 1 else "questions waiting for me"
+    else:
+        heading = "one question" if len(items) == 1 else "questions"
+    lines = [f"### {heading}"]
+    for item in items:
+        excerpt = item.get("excerpt") or ""
+        if len(excerpt) >= _EXCERPT_CHARS:
+            excerpt = excerpt.rsplit(" ", 1)[0] + " […]"
+        lines.append(f'about "{excerpt}":')
+        lines.append(question_words(item["prompt"]))
+        call = verdict_call_lines(item)
+        tools["calls"].extend(
+            call if call is not None
+            else [f'mnemos_reflect(target_id="{item["target_id"]}", text="…")']
+        )
+    lines.append(
+        "If something true comes, I'll answer it in my own words; if not, I'll leave it, "
+        "and it fades on its own."
+    )
+    return "\n".join(lines)
 
 
 def format_questions(items: list[dict[str, Any]]) -> str:
@@ -808,6 +1119,24 @@ _EXCERPT_CHARS = 160
 # The queue's own markers ("[theme:room]", "[belief:<id>]", "[ref:<id>]") say
 # which theme or memory a question is about. They are for Mnemos, not the reader.
 _MARKER = re.compile(r"\s*\[(?:theme|belief|ref):[^\]]*\]")
+_SENTENCES = re.compile(r"(?<=[.?!])\s+")
+_VERDICT_WORD = re.compile(r"\bverdict\b", re.IGNORECASE)
+
+
+def question_words(prompt: str) -> str:
+    """A question as the reader holds it: its words up to the first sentence
+    that says how to give a verdict ("If it is, state it in one line with
+    verdict hold…", "Verdict contradicts, compatible or unsure…"). How to
+    answer waits with the call, among the ids for the memory tools; a fresh
+    reader found the question "reads like a form I'm being asked to fill in"
+    with it (2026-09-30). A sentence inside a quotation is the memory's own
+    words, and is kept."""
+    text = _MARKER.sub("", prompt or "").strip()
+    sentences = _SENTENCES.split(text)
+    for index, sentence in enumerate(sentences[1:], start=1):
+        if _VERDICT_WORD.search(sentence) and '"' not in sentence:
+            return " ".join(sentences[:index])
+    return text
 
 
 def _format_away(
@@ -818,11 +1147,45 @@ def _format_away(
         return ""
     shown["report"] = report["id"]
     written = _age_text(report.get("last_revised_at") or report.get("created_at"))
+    if packet.get("voice") == SELF:
+        heading, writer = "### while i was away", "My memory's upkeep"
+    else:
+        heading, writer = "### lately, in this memory", "Mnemos's upkeep"
     return (
-        "### While you were away\n"
+        f"{heading}\n"
         f"{' '.join(report['content'].split())}\n"
-        f"(Mnemos's upkeep wrote this {written}; these aren't your words.)"
+        f"({writer} wrote this {written}; these aren't my words.)"
     )
+
+
+def _format_tools(packet: dict[str, Any], tools: dict[str, Any]) -> str:
+    """The machinery the packet kept out of the reader's voice: the ids and
+    calls for what it showed, in the order it showed them. ``""`` when it
+    showed nothing that needs one."""
+    lines: list[str] = []
+    if tools["standing"]:
+        line = f"- what's marked standing, in order: {', '.join(tools['standing'])}"
+        if tools["more"]:
+            line += f"; all of it: {STANDING_LIST_CALL}"
+        lines.append(line)
+    elif tools["more"]:
+        lines.append(f"- what's marked standing: {STANDING_LIST_CALL}")
+    if tools["cut"]:
+        calls = ", ".join(f'mnemos_recall("{entry_id}")' for entry_id in tools["cut"])
+        lines.append(f"- what was cut short, whole, in order: {calls}")
+    if tools["beliefs"]:
+        beliefs = ", ".join(f"{belief_id} ({percent}%)" for belief_id, percent in tools["beliefs"])
+        lines.append(f"- beliefs, in order: {beliefs}")
+    if tools["calls"]:
+        lines.append(f"- to answer the question: {'; '.join(tools['calls'])}")
+    if not lines:
+        return ""
+    person = packet.get("person_name") or "the person I'm with"
+    return "\n".join([
+        "### for the memory tools",
+        f"Ids and calls for my memory tools. Never shown to {person}.",
+        *lines,
+    ])
 
 
 def _graph_line(item: dict[str, Any]) -> str:
@@ -858,13 +1221,6 @@ def cut_at_sentence(text: str, limit: int) -> tuple[str, bool]:
     else:
         head = collapsed[:limit].rsplit(" ", 1)[0]
     return f"{head.rstrip()} […]", True
-
-
-def _cut_with_id(item: dict[str, Any], limit: int, *, key: str = "content") -> str:
-    text, cut = cut_at_sentence(item.get(key) or "", limit)
-    if cut:
-        return f'{text} Whole note: mnemos_recall("{item["id"]}")'
-    return text
 
 
 # ── Small helpers ──

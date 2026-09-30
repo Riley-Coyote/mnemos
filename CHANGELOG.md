@@ -2,6 +2,82 @@
 
 ## 0.3.1 (unreleased)
 
+### Small follow-ups
+
+Nine small things the last packages' reports left open.
+
+- **A skip holds across both questions.** A memory whose lesson question the
+  agent skipped ("nothing true comes") was asked "what did this change?" in
+  the next cycle, and the other way round. Now either question, once
+  answered or skipped, ends the other for that memory, until a correction
+  writes its words anew as a new memory, which may be asked once more. The
+  watchdog no longer counts such a memory as a lesson question never asked.
+- **A briefing fetched by `mnemos_context` counts as shown**, as the
+  session-start hook's does, so the prompt hook's cue doesn't bring those
+  lines again in that session. (After `/clear` the server keeps the old
+  session id, so a briefing fetched then is recorded under it.)
+- **The watchdog reads the cue.** The cue's per-session files now count every
+  message it looked at: offers, silences (messages it answered with
+  nothing), how it answered (by meaning, by words, by Jev) and failures (it
+  ran out of time, broke, or its judge failed). The watchdog's new `cue`
+  check reports them for the last week, reading the files and writing
+  nothing. Counting a silence is one small file write per message: 0.36 ms
+  at the median.
+- **The scheduled `mnemos consolidate` writes a maintenance report**, under
+  the dream journal's rule: only when its cycle did something worth telling.
+  Its cycles went untold before, and the briefing's report fell behind. And
+  writing a report now retires the reports older than the newest five in
+  its scope: archived with their words and revision trail, never deleted. A
+  fresh copy of the live store (2026-09-29) held 117 in use; the first report
+  this code writes there retires 112 (measured with a deep consolidate on a
+  copy; a shallow one on another copy found nothing worth reporting and
+  wrote none).
+- **A reflection lands in the memory's own note**: the note paired with it
+  (`graduated_to_engram_id`), never one that only names it
+  (`related_engram_id`), such as a note interpreting it, or a correction's
+  note that keeps such a reference. Matched by the reference, a reflection
+  could land in the wrong note, and a corrected note's own memory was never
+  reached.
+- **No placeholder impacts.** The memory-id and query correction paths wrote
+  "Correction to earlier continuity." or "Corrected continuity for future
+  interactions." where the meaning goes when the agent gave none and there
+  was none to carry. They leave it empty now, as a capture does. A fresh copy
+  of the live store holds 3 such rows (2 and 1), which a later clean-up
+  repairs.
+- **Network waits are bounded.** A network embedding backend (Gemini) waits
+  at most 2 s for any call (`NETWORK_TIMEOUT`): recall's and the cue's query,
+  doctor's probe, and indexing, where it waited 30 s for a text and 120 s for
+  a batch. Requests carry at most 16 texts, the write path's chunk, so one
+  fits in its time. A request that times out is not retried and ends the
+  call: the step that wanted meaning goes on by words. The maintenance
+  cycle's link lookup, which ran inside a capture and waited up to 30 s for
+  each of up to 50 memories, now shares the write path's 2 s budget, and the
+  first timeout ends it; the memories left are linked by their words that
+  cycle. The watchdog's `network_waits` check counts the timeouts: in this
+  process, and in the last week's cycles.
+- **The embedding model loads offline when cached**: already true since R08
+  (`local_files_only`). Checked again with the Hub hanging: the model loaded
+  in 3.2 s and made no connection to it; the same load allowed the network
+  was still waiting at 30 s.
+- **The Jev gate in doctor and across sessions.** `mnemos doctor` says
+  whether the cue's judge is on, where the switch was read from (the
+  environment, the config file, or nowhere), and whether a key file is there,
+  by its size: the key is never read. While the switch is on, the answerers
+  keep the outcomes of Jev's last 20 calls in one row of the store
+  (`cue_judge_calls`: when, and answered, timed out or failed; nothing of the
+  message, the lines or the key), so every session and doctor see them. When
+  more than half of those 20 timed out or failed, and the newest came within
+  the week, the health card and doctor say so in an ATTENTION line.
+
+Changed behaviour: the code version is 10, so servers started on 9 stop
+maintaining once this code opens the store. A correction with no meaning
+given and none to carry has an empty impact (and an empty `impact_source`).
+`mnemos consolidate` prints a "Maintenance report:" line and may write one.
+With Gemini, `mnemos embeddings index` and the scheduled indexing send 16
+texts a request and wait 2 s for each. With the judge switched on, the store
+gains that one row, which "Nothing is written to the store" below no longer
+covers.
+
 ### Jev decides what fires
 
 The cue brings up to three memories to each message, and about half of them

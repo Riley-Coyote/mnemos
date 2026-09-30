@@ -19,7 +19,8 @@ class SubstrateConfig:
     db_path: str = "~/.mnemos/memory.db"
 
     # ── Consolidation ──
-    decay_rate: float = 0.02           # How much vividness fades per tick
+    # Decay follows the store's own rules (the "consolidation" section of the
+    # Mnemos config), as maintenance does; the tick has no rate of its own.
     connection_discovery_limit: int = 20  # Max engrams to check for new connections per tick
     belief_review_limit: int = 5       # Max beliefs to review per tick
 

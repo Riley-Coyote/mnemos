@@ -49,6 +49,7 @@ from .interface.context_packet import (
     format_questions,
     room_after,
     shown_ids,
+    shown_memories,
     standing_words,
     whose_handoff,
 )
@@ -2871,6 +2872,10 @@ class MnemosRuntime:
         memory matches it (at most ``max_results`` of each kind), in the room
         left under the packet's budget. Building the packet runs no
         maintenance; that rides on captures, corrections and mnemos_maintain.
+
+        What the packet showed counts as shown in this session, exactly as the
+        session-start hook's briefing does (``_record_briefing_shown``), so
+        the prompt hook's cue doesn't bring those lines again.
         """
 
         self._ensure_init()
@@ -2881,6 +2886,7 @@ class MnemosRuntime:
         self._current_session()
         packet = self._briefing_packet()
         self._note_context_outcome(carried_count(packet))
+        self._record_briefing_shown(packet)
         shown = packet.get("shown") or {}
         asked = set(shown.get("questions") or [])
         self._traced_read(
@@ -2906,6 +2912,25 @@ class MnemosRuntime:
                 "memory. Capture durable context as the conversation gives it."
             )
         return "\n\n".join(parts)
+
+    def _record_briefing_shown(self, packet: Mapping[str, Any]) -> None:
+        """Record what a briefing showed for the Claude Code session this
+        process serves, as the session-start hook records its own (``mnemos
+        hook session-start``): the ids it named, the memory each shown note is
+        one object with, and the words shown. Only a briefing that says
+        something, and only in a harness session. The record is a small file
+        outside the store (``cue.record_briefing``, which never raises).
+
+        Without it, a session that fetched its briefing through mnemos_context
+        (no session-start hook) had those same lines offered again by the
+        prompt hook's cue."""
+        session = harness_session()
+        if not session or not (packet.get("prompt") or "").strip():
+            return
+        from .cue import record_briefing
+
+        ids, texts = shown_memories(dict(packet))
+        record_briefing(session, db_path=str(self.db_path), **self._scope_args(), ids=ids, texts=texts)
 
     def _briefing_packet(
         self,

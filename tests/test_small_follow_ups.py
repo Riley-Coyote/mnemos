@@ -33,16 +33,38 @@ import re
 import sqlite3
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import anyio
+import pytest
 
 import mnemos.store.embedding_index as ei
 from mnemos.code_version import MAINTENANCE_CODE_VERSION
 from mnemos.simple_runtime import MnemosRuntime, format_health_card
 from mnemos.store.sqlite_store import EngramStore
 
+
+class _Lazy:
+    """A module under test, imported where a test first uses it, so that on
+    code without what it needs each test fails by itself (the fail-on-base
+    proof)."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def __getattr__(self, attr: str):
+        import importlib
+
+        return getattr(importlib.import_module(self._name), attr)
+
+
+cue = _Lazy("mnemos.cue")
+
 SCOPE = {"agent_id": "nova", "person_id": "riley", "project_scope": "demo"}
 SCOPE_ARGS = ["--agent-id", "nova", "--person-id", "riley", "--project-scope", "demo"]
+MODEL = "claude-opus-5-5"
 LONG_AGO = "2020-01-01T00:00:00+00:00"
 
 
@@ -86,6 +108,23 @@ def _env(home: Path, **extra) -> dict[str, str]:
            "MNEMOS_JEV_KEY_FILE": os.devnull}
     env.update(extra)
     return env
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """HOME in the test's folder, by a path short enough for a unix socket."""
+    real = tmp_path / "home"
+    real.mkdir()
+    link = None
+    path = real
+    if len(os.fsencode(str(real / ".mnemos" / "run" / "cue-4194304-0123456789ab.sock"))) >= 100:
+        link = Path("/tmp") / f"mnr-{uuid.uuid4().hex[:10]}"
+        os.symlink(real, link)
+        path = link
+    monkeypatch.setenv("HOME", str(path))
+    yield path
+    if link is not None:
+        os.unlink(link)
 
 
 # ── 1. A skip holds across both passes ──
@@ -289,6 +328,90 @@ def test_the_code_before_this_change_stands_down_once_this_code_opens_the_store(
         rt.close()
     assert "Cycle: skipped" in said, said
     assert _asked(db, memory) == [("impact", True)]
+
+
+# ── 2. A briefing fetched by mnemos_context counts as shown ──
+
+LAMP = "The lighthouse keeper closes the storm shutters before the fog comes in."
+MESSAGE = "The lighthouse keeper asked whether the storm shutters close tonight in the fog"
+
+
+def _hook(db: Path, prompt: str = MESSAGE, session: str = "session-one", **environ) -> str:
+    payload = {"session_id": session, "hook_event_name": "UserPromptSubmit", "prompt": prompt}
+    return cue.prompt_hook(payload, db_path=str(db), environ={"CLAUDE_PID": "999999", **environ}, **SCOPE)
+
+
+def _seen(session: str, db: Path) -> dict:
+    return cue.SeenFile(session, cue.scope_key(str(db), **SCOPE)).read()
+
+
+def test_a_briefing_fetched_by_mnemos_context_counts_as_shown(tmp_path, home, monkeypatch):
+    db = tmp_path / "memory.db"
+    rt = _runtime(db)
+    try:
+        memory = _memory_id(rt.capture(LAMP, signed_as=MODEL))
+    finally:
+        rt.close()
+
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "context-session")
+    rt = _runtime(db)
+    try:
+        packet = rt.context()
+    finally:
+        rt.close()
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
+
+    assert "lighthouse keeper closes" in packet, packet
+    seen = _seen("context-session", db)
+    assert memory in seen["shown"], seen
+    assert seen["offered"] == 0, "a briefing showing something is not an offer"
+    assert _hook(db, session="context-session") == "", "the cue brought the briefing's line again"
+    assert memory in _hook(db, session="another-session"), "another session starts fresh"
+
+
+def test_mnemos_context_over_the_protocol_counts_as_shown_for_the_hook(tmp_path, home):
+    """The real server, in its own process with the session's id, delivers the
+    briefing; the prompt hook, in another, leaves that line out."""
+    pytest.importorskip("mcp.server.fastmcp")
+    from mcp.client.session import ClientSession
+    from mcp.client.stdio import StdioServerParameters, get_default_environment, stdio_client
+
+    db = tmp_path / "memory.db"
+    rt = _runtime(db)
+    try:
+        memory = _memory_id(rt.capture(LAMP, signed_as=MODEL))
+    finally:
+        rt.close()
+
+    async def run() -> str:
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "mnemos.cli", "serve", "--mode", "simple", "--db-path", str(db), *SCOPE_ARGS],
+            env={**get_default_environment(), **_env(home, CLAUDE_CODE_SESSION_ID="served-session")},
+        )
+        async with stdio_client(params) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                result = await session.call_tool("mnemos_context", {})
+                assert not result.isError
+                return "\n".join(block.text for block in result.content if block.type == "text")
+
+    briefing = anyio.run(run)
+    assert "lighthouse keeper closes" in briefing, briefing
+
+    def hook(session: str) -> bytes:
+        payload = json.dumps({"session_id": session, "hook_event_name": "UserPromptSubmit",
+                              "prompt": MESSAGE})
+        done = subprocess.run(
+            [sys.executable, "-m", "mnemos.cli", "hook", "prompt", "--db-path", str(db), *SCOPE_ARGS],
+            input=payload.encode(), capture_output=True, timeout=60,
+            env=_env(home, CLAUDE_PID="999999"),
+        )
+        assert done.returncode == 0, done.stderr
+        return done.stdout
+
+    assert hook("served-session") == b"", "the cue brought what mnemos_context showed"
+    assert memory.encode() in hook("another-session")
 
 
 # ── 5. A reflection lands in the memory's own note ──

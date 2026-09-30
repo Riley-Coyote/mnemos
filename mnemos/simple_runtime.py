@@ -1625,6 +1625,13 @@ class MnemosRuntime:
         of an event. The server must never write one itself — a phrase it
         picked from a list is exactly the boilerplate that made 76% of a
         live store records rather than traces. It can only notice, and ask.
+
+        A memory whose lesson question ended with an answer is not asked this:
+        answered in words, it carries them already; skipped ("nothing true
+        comes"), asking what it changed asks the same thing again. The skip
+        holds until the memory's words change, and a correction writes them
+        as a new memory, which may be asked once more. The lesson pass keeps
+        the same rule the other way round (``_enqueue_lesson_reflections``).
         """
         self._ensure_init()
         assert self._store is not None
@@ -1645,12 +1652,14 @@ class MnemosRuntime:
         # A memory already being asked about as a fading lesson must not also
         # be asked about as a missing impact. Two questions about one memory
         # in one packet reads as nagging, however reasonable each is alone.
+        # Nor is one asked again once either question about it has ended with
+        # an answer or a skip.
         already_asked = {
             r[0] for r in self._store._get_conn().execute(
                 """
                 SELECT target_id FROM reflection_queue
                 WHERE agent_id = ? AND person_id = ? AND project_scope = ?
-                  AND answered_at IS NULL
+                  AND (answered_at IS NULL OR kind IN ('impact', 'lesson'))
                 """,
                 (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),
             ).fetchall()
@@ -1694,6 +1703,13 @@ class MnemosRuntime:
         Of the rest, the faintest are asked first. The question exists to
         catch what a memory taught before it fades, and the faintest is the
         nearest to gone; the softening pass names them the other way round.
+
+        A memory whose "what did this change?" was skipped is set aside too:
+        nothing true came for it, and asking what it taught asks the same
+        thing again. (Answered in words, it carries them, and the softening
+        pass never names it.) The skip holds until a correction writes the
+        memory's words anew, as a new memory. The impact pass keeps the same
+        rule the other way round.
         """
         self._ensure_init()
         assert self._store is not None
@@ -1702,7 +1718,7 @@ class MnemosRuntime:
             row[0] for row in self._store._get_conn().execute(
                 """
                 SELECT target_id FROM reflection_queue
-                WHERE kind = 'lesson'
+                WHERE (kind = 'lesson' OR (kind = 'impact' AND answered_at IS NOT NULL))
                   AND agent_id = ? AND person_id = ? AND project_scope = ?
                 """,
                 (self.scope.agent_id, self.scope.person_id, self.scope.project_scope),

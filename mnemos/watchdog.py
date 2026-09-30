@@ -392,7 +392,8 @@ def _idle_evidence(
       none at all;
     - ``lessons_never_asked``: fading memories the softening pass named as
       waiting for their lesson question (``awaiting_impact``) that are still
-      active and were never asked one.
+      active and were never asked one, nor had "what did this change?"
+      answered or skipped (which ends the lesson question too).
 
     None of it is a cycle finding nothing to do: floors hold memories still,
     and a question once asked, answered or not, is never asked again."""
@@ -429,7 +430,8 @@ def _idle_evidence(
                   AND e.owner_agent_id = ? AND e.person_id = ? AND e.project_scope = ?
                   AND NOT EXISTS (
                     SELECT 1 FROM reflection_queue q
-                    WHERE q.target_id = e.id AND q.kind = 'lesson'
+                    WHERE q.target_id = e.id
+                      AND (q.kind = 'lesson' OR (q.kind = 'impact' AND q.answered_at IS NOT NULL))
                       AND q.agent_id = ? AND q.person_id = ? AND q.project_scope = ?
                   )
             """, (*chunk, *_scope_tuple(scope), *_scope_tuple(scope)))}

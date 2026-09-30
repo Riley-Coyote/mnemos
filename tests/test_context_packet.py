@@ -46,7 +46,7 @@ def test_context_packet_shows_foundational_notes_and_no_functional_memory(store)
     # one), and a section with nothing in it is left out, the graph included.
     assert "### Functional Memory" not in prompt
     assert "turnkey single-agent memory system" not in prompt
-    assert "### Who you're with" in prompt
+    assert "### who i'm with" in prompt
     assert "### Mnemos Graph" not in prompt
     assert "scoped continuity" in prompt
 

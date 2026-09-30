@@ -610,7 +610,7 @@ def test_identity_is_measured_only_from_what_the_agent_wrote(tmp_path):
 # ── The packet and the hook: signatures that say whose words ──
 
 
-def test_the_packet_says_when_a_lesson_is_a_tools_words(tmp_path):
+def test_the_packet_says_when_a_lesson_is_a_tools_words(tmp_path, monkeypatch):
     db = tmp_path / "m.db"
     runtime = _runtime(db)
     try:
@@ -622,12 +622,18 @@ def test_the_packet_says_when_a_lesson_is_a_tools_words(tmp_path):
         _memory(store, "Check the live ferry page before calling a fix done.", "agent",
                 tags=["lesson", "distilled"], note=False)
         packet = runtime.context()
+        # The same packet, for a reader who knows it is this memory's own.
+        monkeypatch.setenv("MNEMOS_AGENT_MODEL", OPUS)
+        as_itself = runtime.context()
     finally:
         runtime.close()
 
-    carrying = packet.split("### What you're carrying", 1)[1].split("###", 1)[0]
-    assert "from a tool, not yours: Always rebuild the sprite atlas" in carrying, carrying
+    carrying = packet.split("### what this memory is carrying\n", 1)[1].split("###", 1)[0]
+    assert "from a tool: Always rebuild the sprite atlas" in carrying, carrying
     assert "lesson: Check the live ferry page" in carrying, carrying
+    carrying = as_itself.split("### what i'm carrying\n", 1)[1].split("###", 1)[0]
+    assert "from a tool, not mine: Always rebuild the sprite atlas" in carrying, carrying
+    assert "learned: Check the live ferry page" in carrying, carrying
 
 
 def test_the_hook_knows_its_reader_from_the_sessions_own_introduction(tmp_path, monkeypatch):
@@ -659,7 +665,9 @@ def test_the_hook_knows_its_reader_from_the_sessions_own_introduction(tmp_path, 
     )
     assert proc.returncode == 0, proc.stderr
     packet = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
-    assert "Yours (Opus 5.5), from another session" in packet, packet
+    # Its own note, from another session: no "if you are" about it.
+    assert re.search(r"### where i left off\n[^\n]*, in another session:\n", packet), packet
+    assert "if I'm not" not in packet and "yours if" not in packet, packet
 
 
 # ── Decision 4: the daemon no longer schedules the substrate ──

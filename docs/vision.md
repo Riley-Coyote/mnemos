@@ -395,8 +395,8 @@ deeply and what surfaces.
 
 When a cycle does meaningful work it leaves a **maintenance report** — a short,
 deterministic account in neutral system language, surfaced in the next context packet
-under *"While you were away."* It is explicitly marked as Mnemos-generated material
-and never presented as the agent's own voice.
+under *"while i was away"* (*"lately, in this memory"* for a model visiting another's
+memory). It is explicitly marked as upkeep's words, not the agent's own voice.
 
 Softening has one hard rule, learned by breaking it: with no provider configured it
 leaves the words intact and lets the fade live in ranking. An earlier version truncated

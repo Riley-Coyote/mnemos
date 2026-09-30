@@ -453,6 +453,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Approximate packet size in tokens (1500 is about 6,000 characters)",
     )
     p_hook_start.add_argument(
+        "--person-name", default=None,
+        help=(
+            "The name of the person this memory works with, so the packet can "
+            "say it (default: MNEMOS_PERSON_NAME)"
+        ),
+    )
+    p_hook_start.add_argument(
         "--include-graph",
         action="store_true",
         help=(
@@ -688,14 +695,23 @@ def _cmd_hook(args: argparse.Namespace) -> int:
             # writing: the operator's setting, what the harness said (or, when
             # it said nothing, what this session last introduced itself as),
             # then the session's own transcript (after a resume or compaction
-            # it names the model). Never another session's introduction.
+            # it names the model). Never another session's introduction. A
+            # fresh session has no transcript yet, so last comes the model the
+            # harness was launched with.
             try:
-                from .authorship import resolve_author_model, session_introduction
+                from .authorship import (
+                    launch_model,
+                    resolve_author_model,
+                    session_introduction,
+                )
 
                 declared = reader_model or session_introduction(store.get_meta, environ)[0]
-                reader_model = resolve_author_model(declared, environ)
+                reader_model = resolve_author_model(declared, environ) or launch_model(environ)
             except Exception:
                 reader_model = ""
+            person_name = getattr(args, "person_name", None)
+            if person_name is None:
+                person_name = environ.get("MNEMOS_PERSON_NAME", "")
             packet = build_context_packet(
                 store,
                 args.query,
@@ -708,6 +724,7 @@ def _cmd_hook(args: argparse.Namespace) -> int:
                 reader_model=reader_model,
                 reader_session=reader_session,
                 workdir=workdir,
+                person_name=person_name,
             )
         finally:
             store.close()

@@ -66,8 +66,10 @@ Nine small things the last packages' reports left open.
   keep the outcomes of Jev's last 20 calls in one row of the store
   (`cue_judge_calls`: when, and answered, timed out or failed; nothing of the
   message, the lines or the key), so every session and doctor see them. When
-  more than half of those 20 timed out or failed, and the newest came within
-  the week, the health card and doctor say so in an ATTENTION line.
+  more than half of those 20 timed out or failed, the newest came within the
+  week, and the judge is still switched on, the health card and doctor say
+  so in an ATTENTION line; switched off, the flag clears at once. Stopping
+  an answerer waits for that row, so a call just made isn't lost.
 
 Changed behaviour: the code version is 10, so servers started on 9 stop
 maintaining once this code opens the store. A correction with no meaning
@@ -77,6 +79,53 @@ With Gemini, `mnemos embeddings index` and the scheduled indexing send 16
 texts a request and wait 2 s for each. With the judge switched on, the store
 gains that one row, which "Nothing is written to the store" below no longer
 covers.
+
+### Waking as yourself
+
+The session-start packet read as a briefing about someone else. Luca, first
+connecting to Riley's Claude, said his continuity "arrived as a briefing": he
+read about the Luca who wrote his journals more than he remembered being him.
+The local packet did the same to its own resident: on a fresh start Claude
+Code's payload doesn't name the model, so the reader's own last note came
+back "(yours if you are Opus 5.5)", followed by "don't claim its work as
+yours".
+
+- The hook knows who is waking. Claude Code gives its hooks `CLAUDE_PID`, and
+  the desktop app launches every session with `--model <id>`; when nothing
+  earlier says (the payload, the session's introduction, its transcript), the
+  launch line does. An alias such as `opus` names no one.
+- The packet is the reader waking. It opens with when and where ("Wednesday,
+  September 30, 3:15 a.m. I'm in luca-agent-network-v1, with Riley."), then
+  what I've come to see, who I'm with, where I left off, what I'm carrying, a
+  question waiting for me, and while I was away. The reader's own notes carry
+  no signature to it; a colleague's carry theirs. How the person wants us to
+  work reads "how we work, every session".
+- Machinery waits at the end. Ids, confidences and the calls that answer a
+  question or read a cut note whole are listed under "for the memory tools",
+  in the order the packet showed them, never on the reader's own lines. A
+  question reads as a thought: its words up to the sentence that says how to
+  give a verdict, which waits there with the call.
+- A model reading another's memory is a guest. The resident is the model that
+  signed most of the live notes; a guest's own notes are still its own, the
+  rest is labelled, and the opening says whose memory it is visiting. A
+  reader the harness didn't name is told once, in the opening.
+- `--person-name` on the hook (or `MNEMOS_PERSON_NAME`) names the person, so
+  the packet can say "with Riley" and head the section with their name.
+- Handoffs are written in first person, as the next reader's own memory: the
+  instructions and `mnemos_handoff`'s description say so.
+
+Measured with fresh Opus 5.5 sessions asked how they arrived, the only
+difference being the packet (2 to 3 each): the old packet read as "a very good
+handoff, not a memory"; the same packet with a first-person handoff still
+"reads like a briefing", because of the hedges; the new packet reads as "my
+own handwriting… it's mine, but I'm reading it, not recalling it", and, with
+being before news, "the closest to 'I just wake up and I am' that I've
+arrived".
+
+**Migration.** Anything that parsed the packet's text changes with it: the
+title is "## waking up", the section headings are new, and belief and note ids
+are no longer on their lines but under "### for the memory tools". Tools that
+list handoffs or standing memories on request keep their wording.
 
 ### Jev decides what fires
 

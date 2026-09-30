@@ -56,7 +56,11 @@ RULES = (
 
 MODES = ("simple", "advanced")
 
-BELIEF_LINE = re.compile(r"^- (?P<content>.+) \((?P<percent>\d+)%, (?P<id>belief_\w+)\)$", re.M)
+# The packet shows each belief in its own words, and keeps its id and
+# confidence for the tools, in the order the beliefs were shown.
+BELIEF_HEADING = re.compile(r"^### what (?:i've come to see|i'm starting to see)$", re.M)
+BELIEF_IDS = re.compile(r"^- beliefs, in order: (?P<ids>.+)$", re.M)
+BELIEF_ID = re.compile(r"(?P<id>belief_\w+) \((?P<percent>\d+)%\)")
 
 
 # ── Helpers ──
@@ -131,13 +135,16 @@ def _hook(db: Path, folder: Path) -> str:
 
 
 def _belief_lines(packet: str) -> dict[str, tuple[int, str]]:
-    """Each belief line of the briefing: its words, to (percent, id)."""
-    assert "### Beliefs\n" in packet, packet
-    section = packet.split("### Beliefs\n", 1)[1].split("\n\n### ", 1)[0]
-    return {
-        match["content"]: (int(match["percent"]), match["id"])
-        for match in BELIEF_LINE.finditer(section)
-    }
+    """Each belief the packet shows: its words, to (percent, id), paired in
+    the order the packet shows them."""
+    heading = BELIEF_HEADING.search(packet)
+    assert heading, packet
+    section = packet[heading.end() + 1:].split("\n\n### ", 1)[0]
+    contents = [line[2:] for line in section.splitlines() if line.startswith("- ")]
+    [ids] = BELIEF_IDS.findall(packet)
+    shown = [(int(match["percent"]), match["id"]) for match in BELIEF_ID.finditer(ids)]
+    assert len(shown) == len(contents), packet
+    return dict(zip(contents, shown))
 
 
 # ── The instructions a model is shown ──

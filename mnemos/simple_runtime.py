@@ -2959,6 +2959,7 @@ class MnemosRuntime:
             reader_session=harness_session() if reader_session is None else reader_session,
             workdir=_working_folder() if workdir is None else workdir,
             older_than_store=self._older_than_store() is not None,
+            person_name=os.environ.get("MNEMOS_PERSON_NAME", ""),
         )
 
     def _query_results(self, query: str, max_results: int, shown: set[str], room: int) -> str:
@@ -4172,8 +4173,9 @@ class MnemosRuntime:
         self._traced_write(engram.id)
         if mark:
             head = (
-                f"Marked memory {engram.id} standing. It opens \"Who you're with\" in "
-                "every briefing, and it doesn't fade while it's marked."
+                f"Marked memory {engram.id} standing. It opens the section on who "
+                "you're with in every session's packet, and it doesn't fade while "
+                "it's marked."
             )
         else:
             head = (

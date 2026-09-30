@@ -645,7 +645,9 @@ def test_the_scheduled_consolidate_writes_a_report_the_next_briefing_reads(tmp_p
         data = rt.health()
     finally:
         rt.close()
-    assert "### While you were away" in packet and content in packet, packet
+    # The report reaches the next briefing, marked as upkeep's words; its
+    # heading is the packet's to name ("lately, in this memory" since #100).
+    assert content in packet and "Mnemos's upkeep wrote this" in packet, packet
     report = data["watchdog"]["checks"]["report"]
     assert report["report_id"] == report_id and report["cycles_untold"] == 0, report
     assert data["dream"]["last_written_at"] is not None

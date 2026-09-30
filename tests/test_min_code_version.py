@@ -975,7 +975,8 @@ def test_older_context_shows_no_questions_and_spends_no_showings(tmp_path):
     finally:
         runtime.close()
 
-    assert "### One question" not in packet
+    assert "### one question" not in packet and "### a question waiting for me" not in packet
+    assert "mnemos_reflect(" not in packet, "older code showed the call that answers one"
     assert "Is there a belief here?" not in packet, "older code presented a question"
     assert _asks(db) == asks, "older code spent a showing"
 

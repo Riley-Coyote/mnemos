@@ -25,18 +25,26 @@ a long handoff had up to 160 chances to match where a short memory had one.
   lines and changed none of the lab's 29 facts.
 - The cut holds only for what meaning can find, and only when meaning runs.
   The cue is embedded first: when that fails (a network backend that timed
-  out, a model that won't load), nothing is cut, in recall and in the cue,
-  which then answers from words as it does without meaning. A memory or a
-  handoff that meaning can't find in full is searched with every word: no
-  vector of the index's model (not indexed yet, failed, or indexed by
-  another model), passages cut from words it no longer holds (corrected
-  since), or a tail past its 160 passages that no vector reads. So is a
-  lesson without its own current passage (written or rewritten since its
+  out, a model that won't load) or gives a vector with no length, nothing is
+  cut, in recall and in the cue, which then answers from words as it does
+  without meaning. A memory or a handoff that meaning can't find in full is
+  searched with every word: no vector of the index's model (not indexed yet,
+  failed, or indexed by another model), passages cut from words it no longer
+  holds (corrected since), a tail past its 160 passages that no vector
+  reads, or a passage the search can't use. So is a lesson without its own
+  current passage that the search can use (written or rewritten since its
   memory was indexed), and a shared store, which meaning never searches and
   whose words this scope's shares say nothing about. A whole-text vector
   from capture holds no hash of the words it was made from, so it no longer
   counts as finding a memory. On recalls that cut a word, checking this
   reads the live memories' words (about 2 ms on the live copy).
+- One rule says which stored vectors a search can use: the index's model
+  and passage scheme, as many values as the cue's vector in bytes that
+  agree, and a length that is finite and not zero. The search scores
+  nothing else and says which it dropped; the checks above take those
+  verdicts, so they can't disagree, and cost nothing more. The index never
+  writes a vector that breaks the rule (the item waits for a later pass), so
+  one already on disk counts as missing. The copies hold none.
 - A word's share counts the live memories that hold it in their words (as
   the full-text index matches it) or in their lesson, each memory once: the
   index holds no lesson, so a word most lessons hold used to count as rare,

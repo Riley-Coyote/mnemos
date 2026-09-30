@@ -1435,14 +1435,25 @@ class MnemosRuntime:
                     conn.execute("DELETE FROM passage_vectors WHERE item_id = ?", (memory_id,))
             for item in found["behind"]:
                 note_id, replacement_id = item["note_id"], item["replacement_id"]
-                if item["words_change"]:
+                signed = conn.execute(
+                    "SELECT author_model, author_session FROM hypomnema_entries WHERE id = ?",
+                    (note_id,),
+                ).fetchone()
+                resign = signed is not None and (
+                    (signed[0] or "") != item["by"] or (signed[1] or "") != item["session"]
+                )
+                if item["words_change"] or resign:
+                    # The note becomes the replacement's: its words and its
+                    # signer. The revision keeps what it said and who signed it.
                     store.revise_hypomnema_entry(
                         note_id,
                         item["words"],
                         reason=(
                             "repair split-notes: a correction replaced its memory "
                             f"{item['memory_id']} with {replacement_id} and left this "
-                            "note behind; it takes the correction's words"
+                            "note behind; it "
+                            + ("takes the correction's words" if item["words_change"]
+                               else "moves to it and takes its signer")
                         ),
                         author_model=item["by"],
                         author_session=item["session"],
@@ -1719,13 +1730,20 @@ class MnemosRuntime:
         index = EmbeddingIndex(read_only=True)
         here = index.status()
         model = here["model"] if here["active"] else None
+        reason = here["reason"]
+        if model is not None and not index.verify():
+            # Selected isn't proven: a local model that isn't cached, or a key
+            # that doesn't work, embeds nothing, and then no vector may be
+            # called dead. The probe is the one doctor makes.
+            model = None
+            reason = index.unavailable_reason or "the embedding model could not embed a probe here"
         plan: dict[str, Any] = {
             "db_path": str(self.db_path),
             "exists": self.db_path.exists(),
             "older_than_store": False,
             "model": model,
             "backend": here["backend"],
-            "reason": here["reason"],
+            "reason": reason,
             "found": None,
             "done": None,
             "backup": None,

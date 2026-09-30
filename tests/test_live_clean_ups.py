@@ -257,6 +257,31 @@ def test_split_notes_write_joins_them_and_keeps_both_words(tmp_path, capsys):
     assert len(_backups(tmp_path, "split-notes")) == 1
 
 
+def test_split_notes_resigns_a_moved_note_whose_words_already_match(tmp_path, capsys):
+    """A note left behind that already says the replacement's words still
+    moves to it and takes its signer; the revision keeps the old signer."""
+    case = _split_store(tmp_path)
+    db, ids = case["db"], case["ids"]
+    replacement_words = "The harbour office opens at seven on weekdays now."
+    _write(
+        db, "UPDATE hypomnema_entries SET content = ?, author_model = ?, author_session = ? WHERE id = ?",
+        (replacement_words, "model-a", "session-a", ids["behind_note"]),
+    )
+
+    assert main(["repair", "split-notes", "--db-path", str(db), *ARGS, "--write"]) == 0
+    capsys.readouterr()
+
+    [(words, paired, signer, session, revisions)] = _all(
+        db, "SELECT content, graduated_to_engram_id, author_model, author_session, revisions_json "
+        "FROM hypomnema_entries WHERE id = ?", (ids["behind_note"],),
+    )
+    assert words == replacement_words and paired == ids["replacement"]
+    assert (signer, session) == ("model-c", "session-c")
+    last = json.loads(revisions)[-1]
+    assert last["prior_author_model"] == "model-a"
+    assert last["reason"].startswith("repair split-notes:") and "takes its signer" in last["reason"]
+
+
 def test_after_split_notes_a_correction_by_the_old_id_reaches_the_pair_in_use(tmp_path):
     case = _split_store(tmp_path)
     db, ids = case["db"], case["ids"]
@@ -450,6 +475,7 @@ def local_model(monkeypatch):
     """The local model set up in this process, as on the maintainer's
     machine, without loading it."""
     monkeypatch.setattr(ei, "_check_local_deps", lambda: True)
+    monkeypatch.setattr(ei.EmbeddingIndex, "verify", lambda self: True)
 
 
 @pytest.fixture
@@ -537,6 +563,22 @@ def test_dead_embeddings_prunes_nothing_without_a_model(tmp_path, capsys, no_mod
     assert main(["repair", "dead-embeddings", "--db-path", str(db), *ARGS, "--write"]) == 1
     out = capsys.readouterr().out
     assert "a dead vector can't be told from a live one, so nothing is pruned" in out
+    assert _settled_sha256(db) == before
+    assert _backups(tmp_path, "dead-embeddings") == []
+
+
+
+def test_dead_embeddings_prunes_nothing_when_the_model_cannot_embed(tmp_path, capsys, monkeypatch):
+    """A model selected but not proven (not cached, or a key that doesn't
+    work) embeds nothing, so no vector may be called dead."""
+    monkeypatch.setattr(ei, "_check_local_deps", lambda: True)
+    monkeypatch.setattr(ei.EmbeddingIndex, "verify", lambda self: False)
+    db = _vector_store(tmp_path)
+    before = _settled_sha256(db)
+
+    assert main(["repair", "dead-embeddings", "--db-path", str(db), *ARGS, "--write"]) == 1
+    out = capsys.readouterr().out
+    assert "nothing is pruned" in out, out
     assert _settled_sha256(db) == before
     assert _backups(tmp_path, "dead-embeddings") == []
 

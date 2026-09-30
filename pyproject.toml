@@ -33,7 +33,7 @@ dependencies = [
     # `pip install` resolve 2.x and produce a server that dies on import. CI
     # never caught it because the lockfile pinned an old 1.x; the wheel smoke
     # job in release-hardening.yml now installs unlocked to close that gap.
-    "mcp[cli]>=1.0.0,<2",
+    "mcp[cli]>=1.0.0,<3",
     "ulid-py>=1.1.0",
     "python-dotenv>=1.0.0",
 ]

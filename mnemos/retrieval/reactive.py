@@ -18,6 +18,11 @@ Pipeline:
    The lists are fused by reciprocal rank (words 0.3, meaning 0.5, k = 60, as
    Polyphonic fuses its seeds), so neither kind of match is locked out. A seed
    starts at its fused score relative to the best one.
+   Fusion keeps only each list's order, so a match on a word most memories
+   hold would count as much as one on a rare word. With meaning to decide, a
+   word held by more than ``COMMON_SHARE`` of the live memories in the scope
+   is left out of every words list (``search_terms``); when every word is,
+   there are no words lists and meaning decides alone (WP-R08c).
 2. RESONANCE through the connection graph, among memories only: each hop,
    only memories reached for the first time pass activation on, a memory's
    contribution is divided by its number of links, and it stops after two
@@ -59,7 +64,14 @@ from ..core.engram import Engram
 from ..core.emotional_state import EmotionalState
 from ..core.types import ConnectionRelation
 from .reconsolidation import reconsolidate
-from ..store.fts import or_query, rank_by_words, search_words
+from ..store.fts import (
+    COMMON_SHARE,
+    common_words,
+    or_query,
+    rank_by_words,
+    search_among,
+    search_words,
+)
 
 if TYPE_CHECKING:
     from ..store.sqlite_store import EngramStore
@@ -206,6 +218,8 @@ class ReactiveRetriever:
         activation_threshold: float = 0.1,
         reconsolidation_enabled: bool = True,
         confidence_floor: float = 0.3,
+        common_share: float | None = COMMON_SHARE,
+        length_penalty: float | None = None,
     ) -> None:
         self._store = store
         self._embedding_index = embedding_index
@@ -215,6 +229,45 @@ class ReactiveRetriever:
         self._threshold = activation_threshold
         self._reconsolidation_enabled = reconsolidation_enabled
         self._confidence_floor = confidence_floor
+        # A word in more than this share of the live memories in scope is left
+        # out of the words lists when meaning can decide (None: none is).
+        self._common_share = common_share
+        # λ of the meaning order (``EmbeddingIndex.search_candidates``); None
+        # leaves it to the index (``LENGTH_PENALTY``). It never moves a floor.
+        self._length_penalty = length_penalty
+
+    def search_terms(
+        self, cue: str, *, agent_id: str, person_id: str, project_scope: str,
+        lessons: dict[str, str] | None = None,
+    ) -> tuple[list[str], list[str]]:
+        """The words of ``cue`` recall searches for (``search_words``), and
+        those it leaves out: the ones in more than ``common_share`` of the
+        live memories in the scope, counted from the index (``word_shares``).
+
+        Only when meaning can decide: without an embedding index, or with one
+        that is off, the words are all there is, and every word is searched.
+        A scope with fewer than ``COMMON_MIN_MEMORIES`` live memories cuts
+        none. Both lists keep the cue's order. What is left out is left out
+        only for what meaning can find in full: ``retrieve`` searches by every
+        word a memory or a handoff with no vector of the index's model for its
+        words now, or with a tail no vector reads, and a shared store always."""
+        words = search_words(cue)
+        index = self._embedding_index
+        if (
+            not words
+            or self._common_share is None
+            or index is None
+            or not getattr(index, "available", True)
+        ):
+            return words, []
+        common = common_words(
+            self._store, words, agent_id=agent_id, person_id=person_id,
+            project_scope=project_scope, share=self._common_share, lessons=lessons,
+        )
+        return (
+            [word for word in words if word.lower() not in common],
+            [word for word in words if word.lower() in common],
+        )
 
     def retrieve(
         self,
@@ -228,6 +281,7 @@ class ReactiveRetriever:
         reconsolidate_results: bool = True,
         keep: Callable[[RetrievalResult], bool] | None = None,
         notes: Iterable[dict[str, Any]] | None = None,
+        query_vector: Sequence[float] | None = None,
     ) -> list[RetrievalResult]:
         """Retrieve memories for ``cue``, best first.
 
@@ -253,21 +307,107 @@ class ReactiveRetriever:
         are ranked with the memories, by their words and their meaning. They
         come back as results with ``note`` set and no engram, and never take
         part in resonance: they relay nothing and receive nothing.
+
+        ``query_vector`` is the cue's own vector, when the caller has it
+        (``EmbeddingIndex.embed_query``); otherwise the cue is embedded here,
+        once, before anything is decided. With no vector (the embedding
+        failed), meaning is off for this cue: nothing is cut from the words.
         """
         if not cue or not cue.strip():
             return []
         scope = {"agent_id": agent_id, "person_id": person_id, "project_scope": project_scope}
         engrams: dict[str, Engram] = {}
 
+        # The cue's vector first. The words cut hands the decision to meaning,
+        # so it holds only when meaning runs for this cue: a remote timeout or
+        # a model that won't load leaves no vector, and then every word is
+        # searched, as if meaning were off. An index that embeds only inside
+        # its own search (a stand-in) can't say, so nothing is cut for it.
+        index = self._embedding_index
+        vector = query_vector
+        embeds_first = index is not None and hasattr(index, "embed_query")
+        if vector is None and embeds_first and getattr(index, "available", False):
+            vector = self._cue_vector(cue)
+        meaning_runs = index is not None and (vector is not None or not embeds_first)
+
         # 1a. WORDS among memories: the live ones in scope holding the cue's
         # words that mean something (_to_fts_query), active then dormant. Both
         # searches run one query over one index, so their bm25 ranks share a
-        # scale and merge into one list.
-        fts_query = _to_fts_query(cue)
-        ranked = self._store.search_fts_ranked(fts_query, limit=WORD_SEEDS, **scope)
-        ranked += self._store.search_fts_ranked(
-            fts_query, limit=DORMANT_SEED_LIMIT, state="dormant", **scope,
+        # scale and merge into one list. The words too common here to say
+        # anything are left out of the words lists (search_terms), but only
+        # for what meaning can find in full: a memory or a handoff with no
+        # vector of the index's model for its words now (not indexed yet,
+        # failed, corrected since, or indexed by another model), or with a
+        # tail past PASSAGE_LIMIT that no vector reads, is searched with every
+        # word, on the same scale. With every
+        # word left out and meaning able to find everything, there are no
+        # words lists, and meaning decides alone. A cue with no word to search
+        # is searched as a phrase, as before.
+        # The lessons, read once: ranked by their words below, and counted in
+        # each word's share (a word most lessons hold is common too).
+        lessons_of = getattr(self._store, "live_memory_lessons", None)
+        lessons = lessons_of(**scope) if lessons_of is not None else {}
+        terms, common = (
+            self.search_terms(cue, lessons=lessons, **scope)
+            if vector is not None else (search_words(cue), [])
         )
+        every_word = _to_fts_query(cue)
+        note_by_id = {str(note["id"]): note for note in notes or []}
+        note_texts = {item_id: note.get("content") or "" for item_id, note in note_by_id.items()}
+        # The words are searched before meaning's scan, which reads every
+        # candidate's vectors: after it, the same queries took about 5 ms
+        # more a recall on the live copy.
+        memory_query = or_query(terms) if terms else (None if common else every_word)
+        ranked: list[tuple[Engram, float]] = []
+        dormant: list[tuple[Engram, float]] = []
+        if memory_query is not None:
+            ranked = self._store.search_fts_ranked(memory_query, limit=WORD_SEEDS, **scope)
+            dormant = self._store.search_fts_ranked(
+                memory_query, limit=DORMANT_SEED_LIMIT, state="dormant", **scope,
+            )
+
+        # 1c, first: MEANING's scores, over only what may be returned: the
+        # memories live in the scope and the notes, each by its closest
+        # passage, and only then the top taken. The search reads every
+        # candidate's vectors, and when a word is cut it says which it
+        # couldn't use: what decides where the cut holds is the scorer's own
+        # verdict. Its hits join the ranking below (1c), as they always have.
+        # A search that fails leaves meaning off for this cue: nothing is cut.
+        live: set[str] | None = None
+        hits: list[tuple[str, float]] = []
+        unusable: dict[str, set[str]] | None = {} if common else None
+        if meaning_runs:
+            try:
+                live = self._store.live_engram_ids(**scope)
+                hits = self._meaning_hits(cue, live | set(note_by_id), note_texts, vector, unusable)
+            except Exception as exc:
+                # Meaning is optional — words still work — but a failure here
+                # is a bug, not a missing backend (the index reports those
+                # itself), so say it once instead of hiding it.
+                _log_seed_failure_once(exc)
+                hits, (terms, common) = [], (search_words(cue), [])
+        unseen: set[str] = set()
+        unseen_notes: set[str] = set()
+        if common and live is not None:
+            unseen, unseen_notes = self._unseen_by_meaning(live, note_texts, scope, unusable or {})
+        none_found = bool(live) and unseen >= live
+        if (none_found or not common) and memory_query != every_word:
+            # Meaning can find none of them, or its search failed: nothing is
+            # cut, and every word is searched.
+            ranked = self._store.search_fts_ranked(every_word, limit=WORD_SEEDS, **scope)
+            dormant = self._store.search_fts_ranked(
+                every_word, limit=DORMANT_SEED_LIMIT, state="dormant", **scope,
+            )
+        if unseen and not none_found:
+            ranked = _merged(
+                ranked, self._words_among(every_word, unseen, "active", WORD_SEEDS, scope),
+                WORD_SEEDS,
+            )
+            dormant = _merged(
+                dormant, self._words_among(every_word, unseen, "dormant", DORMANT_SEED_LIMIT, scope),
+                DORMANT_SEED_LIMIT,
+            )
+        ranked += dormant
         ranked.sort(key=lambda found: found[1])
         memory_words: list[str] = []
         for engram, _rank in ranked:
@@ -282,10 +422,15 @@ class ReactiveRetriever:
         # jargon". Only live memories in the scope have them here. Each
         # memory then counts once by words, at the better of its two ranks.
         lesson_words: list[str] = []
-        lessons_of = getattr(self._store, "live_memory_lessons", None)
-        lessons = lessons_of(**scope) if lessons_of is not None else {}
         if lessons:
-            for item_id, _score in rank_by_words(cue, lessons, limit=WORD_SEEDS):
+            # A lesson is found by meaning only by its own passage, cut from
+            # its words now: one written after the capture waits for it.
+            every_lesson_word = set(unseen)
+            if common:
+                every_lesson_word |= set(lessons) - self._lessons_found_by_meaning(lessons, unusable or {})
+            for item_id, _score in rank_by_words(
+                cue, lessons, limit=WORD_SEEDS, terms=terms, every_word_for=every_lesson_word,
+            ):
                 if item_id not in engrams:
                     engram = self._store.get_engram_in_scope(item_id, **scope)
                     if engram is None or engram.state not in ("active", "dormant"):
@@ -294,14 +439,16 @@ class ReactiveRetriever:
                 lesson_words.append(item_id)
         memory_words = better_rank(memory_words, lesson_words)
 
-        # Shared memories (cross-agent), ranked by words within their own search
+        # Shared memories (cross-agent), ranked by words within their own
+        # search. Always by every word: how common a word is in this scope
+        # says nothing about another store, and meaning never searches it.
         shared_words: list[str] = []
         if self._shared_store:
             try:
                 if hasattr(self._shared_store, "search_fts_ranked"):
-                    shared = self._shared_store.search_fts_ranked(fts_query, limit=20)
+                    shared = self._shared_store.search_fts_ranked(every_word, limit=20)
                 else:
-                    shared = [(e, -1.0) for e in self._shared_store.search_fts(fts_query, limit=20)]
+                    shared = [(e, -1.0) for e in self._shared_store.search_fts(every_word, limit=20)]
                 for engram, _rank in shared:
                     if engram.visibility in ("shared", "public") and engram.id not in engrams:
                         engrams[engram.id] = engram
@@ -310,36 +457,27 @@ class ReactiveRetriever:
                 pass  # Shared store is optional
 
         # 1b. WORDS among the notes the caller passes (handoffs), by bm25 over them
-        note_by_id = {str(note["id"]): note for note in notes or []}
         note_words = [
             item_id for item_id, _score in rank_by_words(
-                cue, {item_id: note.get("content") or "" for item_id, note in note_by_id.items()},
-                limit=WORD_SEEDS,
+                cue, note_texts, limit=WORD_SEEDS, terms=terms, every_word_for=unseen_notes,
             )
         ] if note_by_id else []
 
-        # 1c. MEANING, over only what may be returned: the memories live in the
-        # scope and the notes, each by its closest passage, and only then the
-        # top taken. Kept apart so results say which came by meaning.
+        # 1c. MEANING's hits (scored above), kept apart so results say which
+        # came by meaning.
         similarity: dict[str, float] = {}
         meaning: list[str] = []
-        if self._embedding_index is not None:
-            try:
-                candidates = self._store.live_engram_ids(**scope) | set(note_by_id)
-                words_now = {item_id: note.get("content") or "" for item_id, note in note_by_id.items()}
-                for item_id, sim in self._meaning_hits(cue, candidates, words_now):
-                    if item_id not in note_by_id and item_id not in engrams:
-                        engram = self._store.get_engram_in_scope(item_id, **scope)
-                        if engram is None or engram.state not in ("active", "dormant"):
-                            continue
-                        engrams[item_id] = engram
-                    similarity[item_id] = sim
-                    meaning.append(item_id)
-            except Exception as exc:
-                # Meaning is optional — words still work — but a failure here
-                # is a bug, not a missing backend (the index reports those
-                # itself), so say it once instead of hiding it.
-                _log_seed_failure_once(exc)
+        try:
+            for item_id, sim in hits:
+                if item_id not in note_by_id and item_id not in engrams:
+                    engram = self._store.get_engram_in_scope(item_id, **scope)
+                    if engram is None or engram.state not in ("active", "dormant"):
+                        continue
+                    engrams[item_id] = engram
+                similarity[item_id] = sim
+                meaning.append(item_id)
+        except Exception as exc:
+            _log_seed_failure_once(exc)
 
         # 1d. FUSE: reciprocal rank over the lists. Each seed starts at
         # its fused score relative to the best match, and a dormant memory at
@@ -490,16 +628,87 @@ class ReactiveRetriever:
 
         return top
 
+    def _cue_vector(self, cue: str) -> list[float] | None:
+        """The cue's vector from the index, or None when embedding it failed."""
+        try:
+            return self._embedding_index.embed_query(cue)
+        except Exception as exc:
+            _log_seed_failure_once(exc)
+            return None
+
+    def _lessons_found_by_meaning(
+        self, lessons: dict[str, str], unusable: dict[str, set[str]],
+    ) -> set[str]:
+        """The memories whose lesson meaning can find by the lesson's own
+        passage (``EmbeddingIndex.lessons_searchable``), one the scorer could
+        use. An index that can't say finds none."""
+        found = getattr(self._embedding_index, "lessons_searchable", None)
+        if found is None:
+            return set()
+        try:
+            return found(lessons, unusable=unusable)
+        except Exception as exc:
+            _log_seed_failure_once(exc)
+            return set()
+
+    def _unseen_by_meaning(
+        self, live: Collection[str], note_texts: dict[str, str], scope: dict[str, str],
+        unusable: dict[str, set[str]],
+    ) -> tuple[set[str], set[str]]:
+        """The live memories and the notes meaning can't find in full now
+        (``EmbeddingIndex.searchable``): no vector of the index's model, one
+        cut from words they no longer hold (a correction since), a tail past
+        ``PASSAGE_LIMIT`` that no vector reads, or a vector the scorer
+        couldn't use (``unusable``, its verdicts on this cue). Their words now
+        are the ones recall's index is built from (``live_memory_texts``). An
+        index that can't say counts for none of them."""
+        searchable = getattr(self._embedding_index, "searchable", None)
+        if searchable is None:
+            return set(live), set(note_texts)
+        try:
+            texts_of = getattr(self._store, "live_memory_texts", None)
+            texts = {
+                memory_id: content for memory_id, content, _state in (texts_of(**scope) if texts_of else [])
+            }
+            texts.update(note_texts)
+            found = searchable(set(live) | set(note_texts), texts=texts, unusable=unusable)
+        except Exception as exc:
+            _log_seed_failure_once(exc)
+            return set(live), set(note_texts)
+        return set(live) - found, set(note_texts) - found
+
+    def _words_among(
+        self, query: str, ids: Collection[str], state: str, limit: int, scope: dict[str, str],
+    ) -> list[tuple[Engram, float]]:
+        """``search_fts_ranked`` among ``ids`` only: ``(engram, rank)``."""
+        found: list[tuple[Engram, float]] = []
+        for item_id, rank in search_among(self._store, query, ids, state=state, limit=limit, **scope):
+            engram = self._store.get_engram_in_scope(item_id, **scope)
+            if engram is not None:
+                found.append((engram, rank))
+        return found
+
     def _meaning_hits(
         self, cue: str, candidates: Collection[str], texts: dict[str, str] | None = None,
+        vector: Sequence[float] | None = None, unusable: dict[str, set[str]] | None = None,
     ) -> list[tuple[str, float]]:
         """The candidates closest in meaning to ``cue``, at most ``MEANING_SEEDS``,
         none below ``MEANING_FLOOR``, scored before the top is taken. ``texts``
-        are the notes' words now: a passage cut from other words never counts."""
+        are the notes' words now: a passage cut from other words never counts.
+        They come in the order of their meaning score, the best passage less λ
+        times the log of their passages (``length_penalty``; the index's own
+        by default); the floor reads the best passage itself."""
         index = self._embedding_index
         if hasattr(index, "search_candidates"):
+            extra: dict[str, Any] = {}
+            if self._length_penalty is not None:
+                extra["length_penalty"] = self._length_penalty
+            if vector is not None:
+                extra["query_vector"] = vector
+            if unusable is not None:
+                extra["unusable"] = unusable
             return index.search_candidates(
-                cue, candidates, k=MEANING_SEEDS, floor=MEANING_FLOOR, texts=texts,
+                cue, candidates, k=MEANING_SEEDS, floor=MEANING_FLOOR, texts=texts, **extra,
             )
         if not hasattr(index, "search"):
             return []
@@ -560,6 +769,18 @@ class ReactiveRetriever:
                 store=target_store,
                 session=session,
             )
+
+
+def _merged(
+    first: list[tuple[Engram, float]], second: list[tuple[Engram, float]], limit: int,
+) -> list[tuple[Engram, float]]:
+    """Two rankings of one full-text index as one: each memory once, at its
+    better rank, best first, at most ``limit``."""
+    best: dict[str, tuple[Engram, float]] = {}
+    for engram, rank in [*first, *second]:
+        if engram.id not in best or rank < best[engram.id][1]:
+            best[engram.id] = (engram, rank)
+    return sorted(best.values(), key=lambda found: found[1])[:limit]
 
 
 def _code_older_than(store: Any) -> bool:

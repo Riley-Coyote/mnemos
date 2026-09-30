@@ -290,6 +290,8 @@ def cue_memories(
     words_shared: int | None = None,
     limit: int | None = None,
     pool: int | None = None,
+    word_cut: float | None = None,
+    length_penalty: float | None = None,
 ) -> list[dict[str, Any]]:
     """The memories that may bear on a message the human just sent: at most
     ``CUE_LINES`` of them, lessons first, each as the line the cue shows.
@@ -297,9 +299,19 @@ def cue_memories(
     Recall's own ranking finds them (``ReactiveRetriever``: words and meaning
     fused by reciprocal rank, R08), from the first ``CUE_POOL``; the cue adds a
     gate. With meaning (``index``, the warm answerer's), a memory must reach
-    cosine ``floor`` with the message, or ``word_floor`` while sharing a
-    distinctive word with it. Without (``index`` None: the hook alone), it must
-    share ``words_shared`` distinctive words with the message.
+    cosine ``floor`` with the message, or ``word_floor`` while sharing a rare
+    word with it: one in at most ``word_cut`` (``CUE_WORD_CUT``) of the live
+    memories in scope. Without (``index`` None: the hook alone), it must share
+    ``words_shared`` distinctive words with the message. A shared word is
+    distinctive only while it is in at most ``COMMON_SHARE`` of them
+    (``word_shares``; a scope under ``COMMON_MIN_MEMORIES`` counts every one).
+    A memory shares the words of its content and of its lesson (the impact
+    the agent wrote), which is what the shares count.
+    ``length_penalty`` is λ of recall's ranking (None: the index's own); the
+    gate reads each memory's best similarity, which λ never lowers. The
+    message is embedded once, first: when that fails (a network backend that
+    timed out, a model that won't load), the cue answers as it does without
+    meaning, from words alone, with none of them cut.
 
     Standing memories never come (the briefing carries them), nor what
     ``exclude`` names or ``exclude_texts`` keys (``cue.text_key``): what this
@@ -313,15 +325,25 @@ def cue_memories(
     ``lesson``, ``similarity``, ``shared`` and ``rank`` (in the ranking).
     """
     from . import cue
+    from .core.placeholders import written_lesson
+    from .store.fts import COMMON_SHARE, word_shares
 
     floor = cue.CUE_FLOOR if floor is None else floor
     word_floor = cue.CUE_WORD_FLOOR if word_floor is None else word_floor
     words_shared = cue.CUE_WORDS_SHARED if words_shared is None else words_shared
+    word_cut = cue.CUE_WORD_CUT if word_cut is None else word_cut
     limit = cue.CUE_LINES if limit is None else limit
     if len(meaningful_words(text)) < cue.CUE_MIN_WORDS:
         return []
     scope = {"agent_id": agent_id, "person_id": person_id, "project_scope": project_scope}
     meaning = index is not None and getattr(index, "available", False)
+    vector = None
+    if meaning and hasattr(index, "embed_query"):
+        try:
+            vector = index.embed_query(text)
+        except Exception:
+            vector = None
+        meaning = vector is not None
     try:
         standing = {row["id"] for row in store.standing_engrams(**scope)}
     except sqlite3.Error:
@@ -335,27 +357,39 @@ def cue_memories(
             and store.engram_visible_in_scope(result.engram.id, **scope)
         )
 
-    found = ReactiveRetriever(store, embedding_index=index if meaning else None).retrieve(
+    found = ReactiveRetriever(
+        store, embedding_index=index if meaning else None, length_penalty=length_penalty,
+    ).retrieve(
         cue=text,
         max_results=cue.CUE_POOL if pool is None else pool,
         emotional_state=store.get_latest_emotional_state(agent_id),
         reconsolidate_results=False,
         keep=keep,
+        query_vector=vector,
         **scope,
     )
     similarity: dict[str, float] = {}
     if meaning and found:
         ids = [result.engram.id for result in found]
-        similarity = dict(index.search_candidates(text, ids, k=len(ids), floor=-1.0))
+        again = {} if vector is None else {"query_vector": vector}
+        similarity = dict(index.search_candidates(text, ids, k=len(ids), floor=-1.0, **again))
     asked = distinctive_terms(text)
+    shares = word_shares(store, asked, **scope)
     known = set(exclude_texts)
     chosen: dict[str, dict[str, Any]] = {}
     for rank, result in enumerate(found, start=1):
         engram = result.engram
-        shared = sorted(asked & distinctive_terms(f"{engram.content} {engram.impact}"))
+        # Its words and its lesson, as the shares count them: an impact the
+        # server filled in or a model extracted is not the memory's to share.
+        lesson = written_lesson(engram.content, engram.impact, engram.impact_source or "")
+        shared = sorted(
+            word for word in asked & distinctive_terms(f"{engram.content} {lesson}")
+            if shares.get(word, 0.0) <= COMMON_SHARE
+        )
+        rare = [word for word in shared if shares.get(word, 0.0) <= word_cut]
         sim = similarity.get(engram.id)
         if meaning:
-            if sim is None or not (sim >= floor or (shared and sim >= word_floor)):
+            if sim is None or not (sim >= floor or (rare and sim >= word_floor)):
                 continue
         elif len(shared) < words_shared:
             continue

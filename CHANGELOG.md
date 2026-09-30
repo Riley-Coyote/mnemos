@@ -2,6 +2,98 @@
 
 ## 0.3.1 (unreleased)
 
+### Fair ranking
+
+Recall fuses its words list and its meaning list by reciprocal rank, which
+keeps each list's order and none of bm25's weight, so a words match on a word
+most memories hold counted as much as one on a rare word. On a copy of the
+live store "Riley" is in 268 of the 464 live memories of its scope (58%).
+Each of the five memories recall returned for "how does Riley like to be told
+about mistakes" matched by words on "Riley" alone (none holds "mistakes"; one
+was 18th by meaning). The cue had the same blind spot: every meaning floor
+from 0.30 to 0.50 showed 38 or 39 lines on the lab's development prompts,
+because a shared word such as "page" (in 20% of the memories) let back in
+what a higher floor turned away. And an item counts by its best passage, so
+a long handoff had up to 160 chances to match where a short memory had one.
+
+- With meaning to decide, a word in more than 25% of the live memories in
+  the scope is left out of the words lists (memories, lessons, handoffs):
+  on the live copy, beside the common-word lists, that is "riley", "2026"
+  and "real". When every word of a cue is left out, meaning decides alone.
+  A cut at 8% was measured too: it also took words that name the work
+  ("polyphonic", "room", "sanctuary", "page"), cost the cue 5 of its 20 good
+  lines and changed none of the lab's 29 facts.
+- The cut holds only for what meaning can find, and only when meaning runs.
+  The cue is embedded first: when that fails (a network backend that timed
+  out, a model that won't load) or gives a vector with no length, nothing is
+  cut, in recall and in the cue, which then answers from words as it does
+  without meaning. A memory or a handoff that meaning can't find in full is
+  searched with every word: no vector of the index's model (not indexed yet,
+  failed, or indexed by another model), passages cut from words it no longer
+  holds (corrected since), a tail past its 160 passages that no vector
+  reads, or a passage the search can't use. So is a lesson without its own
+  current passage that the search can use (written or rewritten since its
+  memory was indexed), and a shared store, which meaning never searches and
+  whose words this scope's shares say nothing about. A whole-text vector
+  from capture holds no hash of the words it was made from, so it no longer
+  counts as finding a memory. On recalls that cut a word, checking this
+  reads the live memories' words (about 2 ms on the live copy).
+- One rule says which stored vectors a search can use: the index's model
+  and passage scheme, as many values as the cue's vector in bytes that
+  agree, and a length that is finite and not zero. The search scores
+  nothing else and says which it dropped; the checks above take those
+  verdicts, so they can't disagree, and cost nothing more. The index never
+  writes a vector that breaks the rule (the item waits for a later pass), so
+  one already on disk counts as missing. The copies hold none.
+- A word's share counts the live memories that hold it in their words (as
+  the full-text index matches it) or in their lesson, each memory once: the
+  index holds no lesson, so a word most lessons hold used to count as rare,
+  kept in the lesson ranking and able to open the cue's rare-word path. The
+  cue reads a memory's words and its lesson too, not an impact the server
+  filled in. Shares are kept for the process until anything is written to
+  the store, by any process (SQLite's `data_version` and the connection's
+  own changes), so a correction that swaps one word for another is counted
+  afresh. Recall passes the lessons it has already read, so a recount on the
+  live copy took 1.6 ms at the median, against about 1.4 counting words
+  alone. Each recall writes its own trace row, so in a running server the
+  shares are recounted on almost every recall.
+- Nothing is cut below 100 live memories in a scope, nor without meaning (a
+  keyword-only install, or an embedding model that failed): there the words
+  are all there is.
+- The cue counts a word it shares with a message as distinctive only at or
+  under that 25%, and its word path (cosine 0.25 with a shared word) needs a
+  word in at most 2% of the memories (`CUE_WORD_CUT`).
+- Meaning is ordered fairly to length: by the best passage less
+  0.02 · ln(the item's passages) (`LENGTH_PENALTY`, and a `length_penalty`
+  parameter on the index, the retriever and the cue). The penalty only
+  orders: recall's floor and the cue's gate read the best similarity itself,
+  so a long item ranks lower but is never pushed under a floor.
+- R08's "best keyword match" measure for "how does Riley like to be told
+  about mistakes" is retired. On today's store the best words match for it
+  is a note about a page footer's link, found by "Riley" alone; with the cut
+  it leaves the ranking, as it should.
+
+Measured on copies against the code before: the lab's 29 development facts
+reach the top ten 22 times, the same 22, strict and crediting newer
+handoffs; the plain-words rule rises from 23rd to 17th for "how should I
+write my replies to Riley" (2nd, and out of reach, for the other two probes,
+as before); across R08's twelve cues the results found by meaning alone go
+from 5 to 13 of 58, and one cue's best whole-text match leaves its top five
+(9 of 12 to 8). Recall latency is unchanged: medians of four interleaved runs
+of 132 recalls on the live copy, p50 78.2 ms before and 77.8 after, p95
+116.5 and 109.2.
+
+Changed behaviour: the cue's lines change. On the lab's 20 development
+prompts it shows 36 lines against 38: 20 that bear on their message, as
+before, and 16 that don't against 18. In one task two of the 20 are traded
+for two other lessons that bear on it too: the penalty moved them from 2nd
+and 3rd to 5th and 6th of recall's ranking, still over the gate, and the
+three places went to lessons ranked above them. The cue's protocol is 2: a
+hook on this code does not trust an answerer still running the old gate and
+answers from words until that session's server restarts. No schema change,
+and no change to `MAINTENANCE_CODE_VERSION`: how memory is written and
+maintained is unchanged.
+
 ### Lesson questions that aren't starved
 
 When the agent's own memories fade without a lesson, maintenance asks what up

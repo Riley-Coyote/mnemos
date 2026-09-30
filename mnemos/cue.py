@@ -14,7 +14,13 @@ words, with its date and its id. Or nothing, which is the usual answer.
 - **The gate.** A memory is offered only when it is among the first
   ``CUE_POOL`` of recall's own ranking (words and meaning fused, R08) and its
   meaning is close: cosine at least ``CUE_FLOOR``, or at least
-  ``CUE_WORD_FLOOR`` when it also shares a distinctive word with the message.
+  ``CUE_WORD_FLOOR`` when it also shares a rare word with the message (the
+  word path: one in at most ``CUE_WORD_CUT`` of the live memories in scope).
+  A shared word counts as distinctive only while it is in at most
+  ``COMMON_SHARE`` of them (WP-R08c). On the lab's 20 development prompts
+  every floor from 0.30 to 0.50 showed 38 or 39 lines: what a higher floor
+  turned away, the word path let back. At 0.50, 17 of the 38 came by it, on
+  words like "page" (in 20% of the memories) and "claude" (17%).
   Messages with fewer than ``CUE_MIN_WORDS`` content words get nothing.
 - **Never twice in a session.** The session-start hook records what its
   briefing showed and the cue records what it offers, in a small file per
@@ -59,8 +65,10 @@ log = logging.getLogger("mnemos.cue")
 
 # The answerer and the hook speak this protocol. A change to what an answer
 # means (the gate, the lines) raises it, so a hook never trusts a server still
-# running older code: it answers from words alone instead.
-CUE_PROTOCOL = 1
+# running older code: it answers from words alone instead. 2: a shared word
+# counts only below the frequency cut, and the word path needs a rarer one
+# (WP-R08c).
+CUE_PROTOCOL = 2
 
 # What the cue offers: at most this many memories, one line each.
 CUE_LINES = 3
@@ -76,6 +84,13 @@ CUE_POOL = 10
 # a fact for the task: what a higher floor turns away, the word path lets back.
 CUE_FLOOR = 0.40
 CUE_WORD_FLOOR = 0.25
+# The word path's word: shared with the message, and in at most this share of
+# the live memories in scope (a shared word counts at all only at or below
+# ``fts.COMMON_SHARE``). On the lab's L06 prompts, with recall's ranking as it
+# was, 0.02 showed 36 lines against 38 at 0.08: every one of the 20 that bore
+# on the message, and 14 that didn't against 17. A change here changes what
+# an answer means: raise ``CUE_PROTOCOL`` with it.
+CUE_WORD_CUT = 0.02
 # Without meaning (no answerer, or one whose model is still loading): how many
 # distinctive words a memory must share with the message. On the same prompts,
 # 2 showed the most lines holding a fact for the task: 11 of 40 (1 word: 10 of

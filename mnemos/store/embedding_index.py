@@ -40,6 +40,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -47,7 +48,7 @@ import struct
 import time
 import urllib.request
 import urllib.error
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +110,18 @@ PASSAGE_CHARS = 700
 # windows and the whole. A capture can run to 65,536; past this, the rest is
 # found by its words.
 PASSAGE_LIMIT = 160
+# λ, the length penalty of an item's meaning score (``search_candidates``):
+# its best passage's similarity less λ · ln(its passages). An item counts by
+# its best passage, so a long text has more chances: a handoff of 16,000
+# characters has up to 160, a short memory one. The penalty orders, and only
+# that: a floor (recall's, the cue's gate) reads the best similarity itself,
+# so a long item is ranked lower but never pushed under a floor. Chosen from
+# 0, 0.01, 0.02 and 0.03 on copies (WP-R08c): at 0.02 the plain-words rule
+# rose from 23rd to 17th for "how should I write my replies to Riley", the
+# lab's 29 facts were unchanged, and the cue kept its 20 lines that bore on
+# the lab's prompts (two of them, in one task, traded for two others that
+# did too).
+LENGTH_PENALTY = 0.02
 # Ids asked about in one statement, well under SQLite's variable limit.
 _ID_CHUNK = 400
 
@@ -182,6 +195,16 @@ def passages(text: str) -> list[str]:
     if windows == [whole]:
         return windows
     return [whole, *windows][:PASSAGE_LIMIT]
+
+
+def passages_cut_short(text: str) -> bool:
+    """Whether ``passages`` leaves some of ``text`` without a passage: it would
+    have more than ``PASSAGE_LIMIT``, and the rest is found by its words only."""
+    whole = " ".join((text or "").split())
+    if not whole:
+        return False
+    windows = _windows([piece for sentence in _sentences(text) for piece in _pieces(sentence)])
+    return 1 + len(windows) > PASSAGE_LIMIT
 
 
 def lesson_passage(lesson: str) -> str:
@@ -576,18 +599,59 @@ def _batches(todo: list[tuple[Any, ...]], size: int) -> list[list[tuple[Any, ...
     return batches
 
 
+# What makes a stored vector usable against a query of ``dims`` values, the
+# one rule for every place that asks: it is one of this model's passages, cut
+# by this scheme or a newer one (``_USABLE_PASSAGES``, the clause every such
+# read selects with); it has ``dims`` values and its bytes are that many
+# float32s (``_usable_shapes``); and its length is finite and not zero
+# (``_usable_norm``: a zero vector has no direction to compare). A query
+# whose length breaks that is no query: no row can be compared with it. The
+# scorer (``_similarities``) scores no other row and says which it dropped;
+# the coverage checks (``searchable``, ``lessons_searchable``) select with the
+# same clause and take those verdicts, so they can't disagree; and nothing
+# else is ever written (``_storable``). A vector already on disk that breaks
+# the rule counts as missing.
+_USABLE_PASSAGES = "model_name = ? AND scheme >= ?"  # (model, PASSAGE_SCHEME)
+
+
+def _usable_shapes(rows: Sequence[Sequence[Any]], dims: int) -> list[int]:
+    """The positions in ``rows`` (each ``(key, blob, stored_dims, ...)``) of
+    vectors shaped for a query of ``dims`` values."""
+    size = struct.calcsize(f"{dims}f")
+    return [i for i, row in enumerate(rows) if row[2] == dims and len(row[1]) == size]
+
+
+def _usable_norm(norm: float) -> bool:
+    return math.isfinite(norm) and norm > 0
+
+
+def _storable(values: Sequence[float] | None) -> bool:
+    """Whether a vector just embedded may be written, or a query's be
+    searched with: one ``_similarities`` could use, judged as stored (packed
+    as float32s, as ``_to_bytes`` packs it)."""
+    if not values:
+        return False
+    try:
+        stored = struct.unpack(f"{len(values)}f", struct.pack(f"{len(values)}f", *values))
+    except (OverflowError, struct.error, TypeError):
+        return False
+    return _usable_norm(math.sqrt(sum(v * v for v in stored)))
+
+
 def _similarities(
-    query_values: list[float], rows: list[tuple[str, bytes, int]],
-) -> list[tuple[str, float]]:
-    """Cosine similarity of the query with each stored vector: ``(id, sim)``.
-    A row of another size, or whose bytes disagree with its own dims, is
-    skipped, never scored (see ``EmbeddingIndex.search``)."""
+    query_values: list[float], rows: Sequence[Sequence[Any]],
+    dropped: list[int] | None = None,
+) -> list[tuple[Any, float]]:
+    """Cosine similarity of the query with each stored vector (rows of
+    ``(key, blob, stored_dims, ...)``): ``(key, sim)`` for every row usable by
+    the rule above; the positions in ``rows`` of the others go to
+    ``dropped``, never scored (see ``EmbeddingIndex.search``)."""
     dims = len(query_values)
-    usable = [
-        (item_id, blob) for item_id, blob, stored_dims in rows
-        if stored_dims == dims and len(blob) == struct.calcsize(f"{dims}f")
-    ]
-    if not usable:
+    shaped = _usable_shapes(rows, dims)
+    if dropped is not None and len(shaped) < len(rows):
+        fits = set(shaped)
+        dropped.extend(i for i in range(len(rows)) if i not in fits)
+    if not shaped:
         return []
     try:
         import numpy as np
@@ -596,28 +660,36 @@ def _similarities(
     if np is not None:
         query = np.asarray(query_values, dtype=np.float64)
         query_norm = float(np.linalg.norm(query))
-        if query_norm == 0:
+        if not _usable_norm(query_norm):
+            if dropped is not None:
+                dropped.extend(shaped)  # no row can be compared with it
             return []
         matrix = np.frombuffer(
-            b"".join(blob for _, blob in usable), dtype=np.float32,
-        ).reshape(len(usable), dims).astype(np.float64)
-        norms = np.linalg.norm(matrix, axis=1)
-        dots = matrix @ (query / query_norm)
-        return [
-            (item_id, float(dot / norm))
-            for (item_id, _), dot, norm in zip(usable, dots, norms)
-            if norm > 0
-        ]
+            b"".join(rows[i][1] for i in shaped), dtype=np.float32,
+        ).reshape(len(shaped), dims).astype(np.float64)
+        with np.errstate(invalid="ignore", over="ignore", divide="ignore"):
+            norms = np.linalg.norm(matrix, axis=1)
+            sims = (matrix @ (query / query_norm)) / norms
+        keep = np.isfinite(norms) & (norms > 0)  # _usable_norm, for every row at once
+        if keep.all():
+            return [(rows[i][0], sim) for i, sim in zip(shaped, sims.tolist())]
+        if dropped is not None:
+            dropped.extend(i for i, ok in zip(shaped, keep.tolist()) if not ok)
+        return [(rows[i][0], sim) for i, sim, ok in zip(shaped, sims.tolist(), keep.tolist()) if ok]
     query_norm = sum(v * v for v in query_values) ** 0.5
-    if query_norm == 0:
+    if not _usable_norm(query_norm):
+        if dropped is not None:
+            dropped.extend(shaped)  # no row can be compared with it
         return []
     unit = [v / query_norm for v in query_values]
     scored = []
-    for item_id, blob in usable:
-        stored = struct.unpack(f"{dims}f", blob)
+    for i in shaped:
+        stored = struct.unpack(f"{dims}f", rows[i][1])
         norm = sum(v * v for v in stored) ** 0.5
-        if norm:
-            scored.append((item_id, sum(q * s for q, s in zip(unit, stored)) / norm))
+        if _usable_norm(norm):
+            scored.append((rows[i][0], sum(q * s for q, s in zip(unit, stored)) / norm))
+        elif dropped is not None:
+            dropped.append(i)
     return scored
 
 
@@ -924,8 +996,8 @@ class EmbeddingIndex:
         # provider must not hold the capture. Without the vector, the memory
         # waits for passages, which recall uses first anyway.
         values = self._embed(content, timeout=WRITE_NETWORK_TIMEOUT)
-        if values is None:
-            return False
+        if values is None or not _storable(values):
+            return False  # nothing, or a vector no search could use
 
         conn = self._get_conn()
         if conn is None:
@@ -975,7 +1047,7 @@ class EmbeddingIndex:
 
         # Normalize query vector
         q_norm = sum(v * v for v in query_values) ** 0.5
-        if q_norm == 0:
+        if not _usable_norm(q_norm):
             return []
         query_normalized = [v / q_norm for v in query_values]
 
@@ -986,17 +1058,18 @@ class EmbeddingIndex:
 
             dims = row["dims"]
             blob = row["embedding"]
-            # Skip, never score, a vector of another size — and skip a row
-            # whose bytes disagree with its own dims rather than letting one
-            # bad row raise out of the whole search, which callers swallow as
-            # "no semantic seeds" for every query.
-            if dims != len(query_normalized) or len(blob) != struct.calcsize(f"{dims}f"):
+            # Skip, never score, a vector the rule above _similarities finds
+            # unusable (another size, bytes that disagree with its dims, a
+            # zero or non-finite length) rather than letting one bad row
+            # raise out of the whole search, which callers swallow as "no
+            # semantic seeds" for every query.
+            if not _usable_shapes([(eid, blob, dims)], len(query_normalized)):
                 continue
             stored = self._from_bytes(blob, dims)
 
             # Cosine similarity
             s_norm = sum(v * v for v in stored) ** 0.5
-            if s_norm == 0:
+            if not _usable_norm(s_norm):
                 continue
             
             dot = sum(q * s for q, s in zip(query_normalized, stored))
@@ -1006,6 +1079,16 @@ class EmbeddingIndex:
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:k]
 
+    def embed_query(self, text: str) -> list[float] | None:
+        """``text``'s vector, as recall compares it with the passages; None
+        when embedding it failed (a network backend that timed out, a model
+        that won't load; the failure is kept and logged once, as any) or gave
+        a vector no search could use (``_storable``: a zero or non-finite
+        length). Then meaning can't run for it, and a caller should act as if
+        it were off."""
+        values = self._embed(text)
+        return values if values is not None and _storable(values) else None
+
     def search_candidates(
         self,
         query: str,
@@ -1014,9 +1097,16 @@ class EmbeddingIndex:
         k: int = 30,
         floor: float = 0.0,
         texts: Mapping[str, str] | None = None,
+        length_penalty: float | None = None,
+        query_vector: Sequence[float] | None = None,
+        unusable: dict[str, set[str]] | None = None,
     ) -> list[tuple[str, float]]:
-        """The ``candidates`` closest in meaning to ``query``, best first, at
-        most ``k``, none below ``floor``.
+        """The ``candidates`` closest in meaning to ``query``: at most ``k``,
+        none whose best similarity is below ``floor``, each with that best
+        similarity, in the order of its meaning score: the best similarity
+        less ``length_penalty`` (λ; None: ``LENGTH_PENALTY``) times the log of
+        how many of its vectors were scored. The penalty orders and chooses
+        the top ``k``; the floor and the numbers are the similarity's.
 
         Only the candidates are scored, and only then is the top taken. Recall
         passes what it may return: the memories live in the caller's scope and
@@ -1032,6 +1122,13 @@ class EmbeddingIndex:
         hold now (recall passes the notes'): passages cut from other words are
         stale too and never count, so a note rewritten in place (by code older
         than this, say) is never found by its old meaning. It waits as well.
+        ``query_vector`` is ``query``'s own vector (``embed_query``), when the
+        caller has it: then nothing is embedded here. With ``unusable``, it
+        says which candidates had a vector it couldn't use (the rule above
+        ``_similarities``: another size, bytes that disagree, a zero or a
+        non-finite length): ``"text"`` holds the items with such a text
+        passage, ``"lesson"`` those whose lesson passage was one. The coverage
+        checks read these verdicts, so they judge a vector as the scorer did.
         """
         if not self._available or not self._embedder or not candidates:
             return []
@@ -1039,36 +1136,107 @@ class EmbeddingIndex:
         conn = self._existing_conn()
         if conn is None:
             return []
-        query_values = self._embed(query)
+        query_values = list(query_vector) if query_vector is not None else self._embed(query)
         if query_values is None:
             return []
         model = self._embedder.model_name
         cut = self._rows_for(
-            conn, "SELECT item_id, embedding, dims, text_hash FROM passage_vectors "
-            "WHERE model_name = ? AND scheme >= ? AND item_id IN ({})",
+            conn, "SELECT item_id, embedding, dims, part, text_hash FROM passage_vectors "
+            f"WHERE {_USABLE_PASSAGES} AND item_id IN ({{}})",
             (model, PASSAGE_SCHEME), wanted,
         ) if self._marks_scheme(conn) else []
         now = {item_id: text_hash(text) for item_id, text in (texts or {}).items()}
-        rows = [
-            (item_id, blob, dims) for item_id, blob, dims, digest in cut
-            if item_id not in now or now[item_id] == digest
-        ]
+        rows = [row for row in cut if row[0] not in now or now[row[0]] == row[4]]
+        passages = len(rows)  # then whole-text vectors, for items with no passage
         without = wanted - {row[0] for row in cut}
         if without:
             rows += self._rows_for(
                 conn, "SELECT engram_id, embedding, dims FROM embeddings "
                 "WHERE model_name = ? AND engram_id IN ({})", (model,), without,
             )
+        dropped: list[int] | None = [] if unusable is not None else None
         best: dict[str, float] = {}
-        for item_id, similarity in _similarities(query_values, rows):
+        scored: dict[str, int] = {}
+        for item_id, similarity in _similarities(query_values, rows, dropped):
+            scored[item_id] = scored.get(item_id, 0) + 1
             if similarity > best.get(item_id, -2.0):
                 best[item_id] = similarity
+        if unusable is not None:
+            for i in dropped or ():
+                if i < passages:  # a whole-text vector is no passage: nothing to say
+                    item_id, part = rows[i][0], rows[i][3]
+                    if part < LESSON_PART:
+                        unusable.setdefault("text", set()).add(item_id)
+                    elif part == LESSON_PART:
+                        unusable.setdefault("lesson", set()).add(item_id)
+        penalty = LENGTH_PENALTY if length_penalty is None else float(length_penalty)
         ranked = sorted(
-            ((item_id, round(similarity, 4)) for item_id, similarity in best.items()
-             if similarity >= floor),
-            key=lambda item: -item[1],
+            (item_id for item_id, similarity in best.items() if similarity >= floor),
+            key=lambda item_id: -round(best[item_id] - penalty * math.log(scored[item_id]), 4),
         )
-        return ranked[:k]
+        return [(item_id, round(best[item_id], 4)) for item_id in ranked[:k]]
+
+    def searchable(
+        self, ids: Collection[str], *, texts: Mapping[str, str],
+        unusable: Mapping[str, Collection[str]],
+    ) -> set[str]:
+        """Which of ``ids`` meaning can find in full now: items whose passages
+        from this model, cut by this scheme or a newer one, were cut from the
+        words ``texts`` gives for them now (the same hash), read all of them,
+        and could all be used. An item with more passages than
+        ``PASSAGE_LIMIT`` has a tail no vector reads (``passages_cut_short``);
+        one with a passage the scorer couldn't use (``unusable["text"]``,
+        ``search_candidates``'s verdicts on the same query) has words no
+        vector reads. None while semantic search is off.
+
+        A backend being configured says nothing about this: a memory not yet
+        indexed, one that failed, one corrected since (its words and the
+        full-text index changed; its vectors wait for the next pass), or a
+        store indexed by another model has nothing to find it by, or only its
+        old words. A whole-text vector from capture holds no hash, so it
+        can't show it was made from the words there now, and doesn't count;
+        nor does an item ``texts`` gives no words for. Reads only; embeds
+        nothing."""
+        if not self._available or not self._embedder or not ids:
+            return set()
+        conn = self._existing_conn()
+        if conn is None or not self._marks_scheme(conn):
+            return set()
+        now = {item_id: text_hash(texts[item_id]) for item_id in set(ids) if item_id in texts}
+        found: set[str] = set()
+        for item_id, digest, count in self._rows_for(
+            conn, "SELECT item_id, text_hash, COUNT(*) FROM passage_vectors "
+            f"WHERE {_USABLE_PASSAGES} AND part < ? AND item_id IN ({{}}) "
+            "GROUP BY item_id, text_hash",
+            (self._embedder.model_name, PASSAGE_SCHEME, LESSON_PART), set(now),
+        ):
+            if digest != now[item_id]:
+                continue  # cut from other words: a correction since, say
+            if count >= PASSAGE_LIMIT and passages_cut_short(texts[item_id]):
+                continue  # its tail has no vector
+            if item_id in unusable.get("text", ()):
+                continue  # a passage no search could use counts as missing
+            found.add(item_id)
+        return found
+
+    def lessons_searchable(
+        self, lessons: Mapping[str, str], *, unusable: Mapping[str, Collection[str]],
+    ) -> set[str]:
+        """Which of ``lessons`` (memory id to the lesson's words now) meaning
+        can find by the lesson itself: a lesson passage (``LESSON_PART``) from
+        this model, cut by this scheme or a newer one, from these words, that
+        the scorer could use (not in ``unusable["lesson"]``). A memory's other
+        passages say nothing about its lesson's: written after the capture,
+        the lesson waits for its own. Reads only."""
+        if not self._available or not self._embedder or not lessons:
+            return set()
+        stored = self.lesson_hashes(lessons)
+        dropped = unusable.get("lesson", ())
+        return {
+            item_id for item_id, lesson in lessons.items()
+            if stored.get(item_id) is not None and stored[item_id] == _lesson_hash(lesson)
+            and item_id not in dropped
+        }
 
     @staticmethod
     def _rows_for(
@@ -1111,8 +1279,8 @@ class EmbeddingIndex:
         return {
             item_id: digest for item_id, digest in self._rows_for(
                 conn, "SELECT item_id, text_hash FROM passage_vectors "
-                "WHERE model_name = ? AND part = ? AND scheme >= ? AND item_id IN ({})",
-                (self._embedder.model_name, part, PASSAGE_SCHEME), set(item_ids),
+                f"WHERE {_USABLE_PASSAGES} AND part = ? AND item_id IN ({{}})",
+                (self._embedder.model_name, PASSAGE_SCHEME, part), set(item_ids),
             )
         }
 
@@ -1233,7 +1401,9 @@ class EmbeddingIndex:
             for item_id, digest, parts, taught in batch:
                 values = vectors[position:position + len(parts)]
                 position += len(parts)
-                if len(values) != len(parts) or any(v is None for v in values):
+                if len(values) != len(parts) or not all(_storable(v) for v in values):
+                    # Missing, or a vector no search could use (a zero or a
+                    # non-finite length): never written; the item waits.
                     done["waiting"] += 1
                     continue
                 embedded.append((item_id, digest, values, taught))
@@ -1316,7 +1486,7 @@ class EmbeddingIndex:
 
         count = 0
         for (engram_id, _), values in zip(items, all_values):
-            if values is None:
+            if values is None or not _storable(values):
                 continue
             conn.execute(
                 "INSERT OR REPLACE INTO embeddings "

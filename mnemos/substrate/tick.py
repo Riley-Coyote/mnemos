@@ -3,13 +3,14 @@ from __future__ import annotations
 Substrate — consolidation daemon for the Mnemos memory system.
 
 This is the background process that keeps the memory graph alive:
-  - Decay: memories naturally fade over time
+  - Decay: the store's own decay pass, as maintenance runs it
   - Connection discovery: find new links between memories
   - Belief review: check if beliefs need revision based on recent evidence
   - Event cascade: handlers fire on events produced by consolidation
   - Tier crossing detection: uses Mnemos core classify_belief_change()
 
-Runs via cron every 4 hours. Each tick is a complete cycle.
+Run by hand (`mnemos substrate-tick`); nothing schedules it, because its
+handlers write memories in a model's words. Each tick is a complete cycle.
 """
 
 import sys
@@ -17,6 +18,7 @@ import os
 import json
 import logging
 import sqlite3
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -193,18 +195,10 @@ class Substrate:
         events: list[SubstrateEvent] = []
 
         # ── Decay ──
-        conn = sqlite3.connect(self.db_path)
-        decayed = conn.execute("""
-            UPDATE engrams
-            SET accessibility = MAX(0.05, accessibility - ?),
-                strength = MAX(0.05, strength - ? * 0.5)
-            WHERE state = 'active'
-              AND accessibility > 0.1
-        """, (self.config.decay_rate, self.config.decay_rate))
-        decay_count = decayed.rowcount
-        conn.commit()
+        decay_count = self._decay(summary)
 
         # Find memories that dropped below vividness threshold (softened)
+        conn = sqlite3.connect(self.db_path)
         softened = conn.execute("""
             SELECT id FROM engrams
             WHERE state = 'active'
@@ -286,6 +280,58 @@ class Substrate:
         summary["beliefs_reviewed"] = reviewed
 
         return events
+
+    def _decay(self, summary: dict) -> int:
+        """Decay this agent's memories by the store's own pass, as maintenance
+        does, and return how many changed.
+
+        ``run_decay_pass`` fades a memory by the time elapsed, on the curve,
+        and never reads one the agent marked standing. The raw UPDATE it
+        replaces took the same amount off every active memory in the file,
+        every agent's, standing ones included, on every tick. Each scope is
+        decayed on the clock maintenance keeps (its latest consolidation_log
+        row), and the tick logs its own pass there as ``substrate_decay``, so
+        neither applies the same hours twice. Code older than the store
+        applies no rules, and decays nothing.
+        """
+        from mnemos.code_version import MAINTENANCE_CODE_VERSION
+        from mnemos.config.loader import load_config
+        from mnemos.consolidation.daemon import ConsolidationDaemon
+        from mnemos.consolidation.decay import run_decay_pass
+
+        minimum = self.store.min_code_version()
+        if minimum is not None and minimum > MAINTENANCE_CODE_VERSION:
+            summary["decay_skipped"] = "this code is older than the store"
+            return 0
+        try:
+            config = load_config()
+        except Exception:
+            config = {}
+        rules = config.get("consolidation", config)
+        clock = ConsolidationDaemon(store=self.store, config=config)
+        agent_id = self.config.agent_id
+        decayed = 0
+        for person_id, project_scope in sorted(self.store.engram_scopes_in_use(agent_id)):
+            started = datetime.now(timezone.utc).isoformat()
+            stats = run_decay_pass(
+                self.store, rules, agent_id=agent_id, person_id=person_id,
+                project_scope=project_scope,
+                max_elapsed_hours=clock._hours_since_last_cycle(
+                    agent_id, person_id, project_scope
+                ),
+            )
+            self.store.log_consolidation(
+                log_id=f"substrate_decay_{uuid.uuid4().hex}",
+                pass_name="substrate_decay",
+                started_at=started,
+                completed_at=datetime.now(timezone.utc).isoformat(),
+                stats={"decay": stats},
+                agent_id=agent_id,
+                person_id=person_id,
+                project_scope=project_scope,
+            )
+            decayed += stats["engrams_decayed"] + stats["dormant_decayed"]
+        return decayed
 
     def _check_temporal(self, summary: dict) -> list[SubstrateEvent]:
         """Check for temporal events like extended silence."""

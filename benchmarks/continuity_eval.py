@@ -8,11 +8,12 @@ store fills up.
 Living with the system for a week cannot answer this. A week adds maybe
 a dozen notes, and at small N everything fits in the packet regardless of
 how good selection is. The failure arrives months later, quietly: the
-packet keeps returning eight notes, they are simply the wrong eight.
+packet keeps showing a few notes, they are simply the wrong few.
 
 So this evaluates at the sizes a real store reaches — 10, 50, 200, 500
-notes — and reports recall@k for cues that a session might actually open
-with.
+notes. The packet is measured as a session receives it: the briefing the
+session-start hook sends, with no cue. It takes no cue, so the cues a
+session might open with are measured through recall (mnemos_recall).
 
     python benchmarks/continuity_eval.py
     python benchmarks/continuity_eval.py --sizes 10,100 --json
@@ -103,71 +104,67 @@ def _populate(runtime: MnemosRuntime, target: int, *, differentiate: bool = True
         runtime.capture(content, importance=importance)
 
 
-def evaluate(size: int, max_hypomnema: int = 8, *, differentiate: bool = True) -> dict:
+def _carries(text: str, note: str) -> bool:
+    """Whether ``text`` shows ``note``, by a distinctive fragment of it."""
+    key = " ".join(note.split()[:6])[:40]
+    return key in " ".join((text or "").split())
+
+
+def evaluate(size: int, *, differentiate: bool = True) -> dict:
     """Two numbers, because the packet and recall answer different questions.
 
     ``packet_recall`` — with no cue, as a session actually opens, does the
-    packet carry the durable notes? This is the product.
+    briefing show the durable notes? This is the product. It is built as
+    the session-start hook builds it: the default budget, no graph section.
 
-    ``cue_recall`` — given a specific question, does the matching note
-    surface? This is what mnemos_recall is for, and it is the harder
-    problem because an agent's phrasing rarely reuses the note's words.
+    ``cue_recall`` — given a specific question, does ``mnemos_recall`` find
+    the matching note? The packet takes no cue, so this is recall's job, and
+    it is the harder problem because an agent's phrasing rarely reuses the
+    note's words.
     """
     tmp = Path(tempfile.mkdtemp())
     db = str(tmp / "eval.db")
-    runtime = MnemosRuntime(db_path=db, agent_id="eval", use_dedicated_model=False)
     try:
-        _populate(runtime, size, differentiate=differentiate)
-        scope = runtime.scope
-    finally:
-        runtime.close()
+        runtime = MnemosRuntime(db_path=db, agent_id="eval", use_dedicated_model=False)
+        try:
+            _populate(runtime, size, differentiate=differentiate)
+            scope = runtime.scope
+        finally:
+            runtime.close()
 
-    def _carries(entries, note: str) -> bool:
-        key = " ".join(note.split()[:6])[:40]
-        return any(key in " ".join(e["content"].split()) for e in entries)
-
-    store = EngramStore(db)
-    packet_hits = 0
-    try:
-        # The packet as a session actually receives it: no real cue.
-        opening = build_context_packet(
-            store, "",
-            agent_id=scope.agent_id, person_id=scope.person_id,
-            project_scope=scope.project_scope,
-            include_engrams=False, max_hypomnema=max_hypomnema,
-            token_budget=100_000,
-        )["hypomnema"]
-        packet_hits = sum(1 for note, _ in PROBES if _carries(opening, note))
-    finally:
-        pass
-
-    hits = 0
-    misses: list[str] = []
-    try:
-        for note, cue in PROBES:
+        # The briefing first, before any recall reinforces what it finds.
+        store = EngramStore(db)
+        try:
             packet = build_context_packet(
-                store,
-                cue,
-                agent_id=scope.agent_id,
-                person_id=scope.person_id,
+                store, "",
+                agent_id=scope.agent_id, person_id=scope.person_id,
                 project_scope=scope.project_scope,
-                include_engrams=False,
-                max_hypomnema=max_hypomnema,
-                token_budget=100_000,  # isolate selection from truncation
+                include_engrams=False, mark_surfaced=False,
             )
-            # Match on a distinctive fragment; the packet clips long notes.
-            if _carries(packet["hypomnema"], note):
-                hits += 1
-            else:
-                misses.append(cue)
+        finally:
+            store.close()
+        packet_hits = sum(1 for note, _ in PROBES if _carries(packet["prompt"], note))
+        shown = len((packet.get("shown") or {}).get("notes") or [])
+
+        hits = 0
+        misses: list[str] = []
+        runtime = MnemosRuntime(db_path=db, agent_id="eval", use_dedicated_model=False)
+        try:
+            for note, cue in PROBES:
+                if _carries(runtime.recall(cue), note):
+                    hits += 1
+                else:
+                    misses.append(cue)
+        finally:
+            runtime.close()
     finally:
-        store.close()
         shutil.rmtree(tmp, ignore_errors=True)
 
     n = len(PROBES)
     return {
         "store_size": size,
         "probes": n,
+        "notes_shown": shown,
         "packet_hits": packet_hits,
         "packet_recall": round(packet_hits / n, 3),
         "cue_hits": hits,
@@ -179,7 +176,6 @@ def evaluate(size: int, max_hypomnema: int = 8, *, differentiate: bool = True) -
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sizes", default="10,50,200,500")
-    parser.add_argument("--k", type=int, default=8, help="notes the packet may carry")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--mind", metavar="DB", help="Measure the five shifts against a real store")
     parser.add_argument(
@@ -193,36 +189,35 @@ def main() -> int:
         return print_mind_state(args.mind)
 
     sizes = [int(s) for s in args.sizes.split(",") if s.strip()]
-    results = [
-        evaluate(size, max_hypomnema=args.k, differentiate=args.differentiate)
-        for size in sizes
-    ]
+    results = [evaluate(size, differentiate=args.differentiate) for size in sizes]
 
     if args.json:
         print(json.dumps(results, indent=2))
         return 0
 
     label = "importance differentiated" if args.differentiate else "everything equally important"
-    print(f"Continuity evaluation @k={args.k}  ({label})")
+    print(f"Continuity evaluation  ({label})")
     print("=" * 66)
-    ceiling = min(args.k, len(PROBES)) / len(PROBES)
     print(f"{'store size':>12}  {'packet':>10}  {'cue recall':>12}")
     print("-" * 66)
     for r in results:
-        at_ceiling = " (ceiling)" if r["packet_recall"] >= ceiling else ""
+        at_ceiling = (
+            " (all it showed)" if r["packet_hits"] >= min(r["notes_shown"], r["probes"]) else ""
+        )
         print(
             f"{r['store_size']:>12}  {r['packet_recall']:>9.0%}  {r['cue_recall']:>11.0%}"
-            f"   ({r['packet_hits']}/{r['probes']}, {r['cue_hits']}/{r['probes']}){at_ceiling}"
+            f"   ({r['packet_hits']}/{r['probes']}, {r['cue_hits']}/{r['probes']};"
+            f" the briefing showed {r['notes_shown']} notes){at_ceiling}"
         )
     print()
-    print(f"The packet holds {args.k} notes and there are {len(PROBES)} probes, so "
-          f"{ceiling:.0%} is a perfect score.")
+    print(f"There are {len(PROBES)} probes. The briefing shows a few notes, so a")
+    print("perfect packet score is the number of notes it showed.")
     print()
     print("packet     — what a session actually receives, with no cue. This is")
     print("             the product: does it carry the durable things?")
-    print("cue recall — does a specific question find its note? This is what")
-    print("             mnemos_recall does, and it is the harder problem: an")
-    print("             agent's phrasing rarely reuses the note's own words.")
+    print("cue recall — does a specific question find its note through")
+    print("             mnemos_recall? The harder problem: an agent's phrasing")
+    print("             rarely reuses the note's own words.")
     worst = min(results, key=lambda r: r["cue_recall"])
     if worst["misses"]:
         print()

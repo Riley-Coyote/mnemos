@@ -1266,9 +1266,10 @@ class MnemosRuntime:
 
     # ── The live clean-ups ──
     #
-    # Four repairs of what older code left in a store: split notes, stale
-    # archive rows, vectors from models this Mnemos does not use, and the
-    # server's placeholder meanings. Each has the shape of repair-versions: a
+    # Five repairs of what older code left in a store: split notes, stale
+    # archive rows, vectors from models this Mnemos does not use, the
+    # server's placeholder meanings, and words a model-less softening cut.
+    # Each has the shape of repair-versions: a
     # dry run reads the store read-only and changes nothing; with ``write``, a
     # verified backup of the store as found comes first, then everything is
     # found again under the writer and changed in one transaction, so a
@@ -1277,6 +1278,8 @@ class MnemosRuntime:
 
     # What a split-notes repair records as the reason a memory's words changed.
     SPLIT_NOTES_VERSION_REASON = "repair_split_notes"
+    # And a faded-words repair: its version keeps the cut words.
+    FADED_WORDS_VERSION_REASON = "repair_faded_words"
     # The placeholder meanings placeholder-impacts empties: every phrase the
     # server wrote where the agent's meaning goes (``TEMPLATED_IMPACTS``): the
     # two a correction wrote until code version 10, the one promotion writes,
@@ -1839,6 +1842,91 @@ class MnemosRuntime:
         return self._run_repair(
             "placeholder-impacts", plan, write=write, find=find,
             todo=lambda found: any(found["by_text"].values()), apply=apply,
+        )
+
+    def repair_faded_words(self, *, write: bool = False) -> dict[str, Any]:
+        """Show, and with ``write`` restore, the live memories in this scope
+        whose words a model-less softening cut, from the words they were
+        encoded with.
+
+        Before ``soften_without_model`` defaulted to False, softening rewrote
+        an old memory's words to their first sentence and "... [details
+        faded]", or to "An impression related to <first word>... [faded]",
+        and kept the full words only as a version. ``repair-softening``
+        restores from that version; where it is gone the words survive in
+        ``content_at_encoding``, which nothing rewrites. A memory comes back
+        only when it is live (active or quiet) and its words are exactly what
+        that softening makes of its words at encoding (``_cut_from``), so the
+        cut words came from those and nothing written since is lost; any
+        other is listed and left. The cut words are kept as a version; the
+        memory is at full resolution, searched by its words at once, and
+        waits for the meaning index. Its state, strength and accessibility
+        stay as they are.
+        """
+        from .consolidation.softening import _RULE_BASED_TAILS
+
+        agent, person, project = (
+            self.scope.agent_id, self.scope.person_id, self.scope.project_scope,
+        )
+        plan: dict[str, Any] = {
+            "target": (agent, person, project),
+            "db_path": str(self.db_path),
+            "exists": self.db_path.exists(),
+            "older_than_store": False,
+            "found": None,
+            "done": None,
+            "backup": None,
+        }
+        tails = " OR ".join("rtrim(content) LIKE ?" for _ in _RULE_BASED_TAILS)
+
+        def find(store: EngramStore) -> dict[str, Any]:
+            rows = store._get_conn().execute(
+                "SELECT id, state, content, content_at_encoding FROM engrams "
+                "WHERE owner_agent_id = ? AND person_id = ? AND project_scope = ? "
+                f"AND state IN ('active', 'dormant') AND ({tails}) ORDER BY id",
+                (agent, person, project, *(f"%{tail}" for tail in _RULE_BASED_TAILS)),
+            ).fetchall()
+            found: dict[str, Any] = {"faded": len(rows), "restorable": [], "left": []}
+            for row in rows:
+                item = {
+                    "id": row["id"],
+                    "state": row["state"],
+                    "words": row["content"] or "",
+                    "encoded": row["content_at_encoding"] or "",
+                }
+                if _cut_from(item["words"], item["encoded"]):
+                    found["restorable"].append(item)
+                else:
+                    found["left"].append(item)
+            return found
+
+        def apply(store: EngramStore, found: dict[str, Any]) -> dict[str, int]:
+            tables = self._tables(store)
+            conn = store._get_conn()
+            restored = 0
+            for item in found["restorable"]:
+                engram = store.get_engram(item["id"])
+                if (
+                    engram is None or engram.state not in ("active", "dormant")
+                    or not _cut_from(engram.content, engram.content_at_encoding)
+                ):
+                    continue
+                engram.add_version(reason=self.FADED_WORDS_VERSION_REASON)
+                engram.content = engram.content_at_encoding
+                engram.resolution = 1.0
+                store.save_engram(engram)
+                # Its vectors were made from the cut words: it waits for the
+                # meaning index, and is never found by that meaning.
+                if "embeddings" in tables:
+                    conn.execute("DELETE FROM embeddings WHERE engram_id = ?", (engram.id,))
+                if "passage_vectors" in tables:
+                    conn.execute("DELETE FROM passage_vectors WHERE item_id = ?", (engram.id,))
+                restored += 1
+            return {"restored": restored}
+
+        return self._run_repair(
+            "faded-words", plan, write=write, find=find,
+            todo=lambda found: bool(found["restorable"]), apply=apply,
         )
 
     def close(self) -> None:
@@ -5682,18 +5770,18 @@ def _replacement_impact(impact: str, *replaced: Engram | None) -> tuple[str, str
     return "", "", ""
 
 
-def _impact_for(content: str, domain: str) -> str:
-    if domain in {"foundational", "identity"}:
-        return "Foundational continuity for future interactions."
-    if domain == "recurring":
-        return "Recurring pattern worth carrying across sessions."
-    if domain == "long-arc":
-        return "Long-arc context that should shape future work."
-    if domain == "situational":
-        return "Current working context for continuity."
-    if "prefer" in content.lower() or "wants" in content.lower():
-        return "Preference to respect in future decisions."
-    return "Durable continuity captured from the session."
+def _cut_from(words: str | None, encoded: str | None) -> bool:
+    """Whether ``words`` are exactly what the model-less softening made of
+    ``encoded`` (``_rule_based_soften``, in either of its two forms): then the
+    cut words came from those, and restoring them loses nothing written
+    since. Words at encoding that were cut themselves prove nothing."""
+    from .consolidation.softening import _RULE_BASED_TAILS, _rule_based_soften
+
+    words = (words or "").strip()
+    encoded = (encoded or "").strip()
+    if not encoded or encoded == words or encoded.endswith(_RULE_BASED_TAILS):
+        return False
+    return words in (_rule_based_soften(encoded, 1.0), _rule_based_soften(encoded, 0.0))
 
 
 def _own_words(text: str, limit: int = ROW_CHARS) -> str:

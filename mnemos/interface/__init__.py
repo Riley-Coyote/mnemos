@@ -1,18 +1,10 @@
-"""Interface layer: session lifecycle, prompt building, observability, and export.
+"""Interface layer: the packet an agent wakes with, and what it exports.
 
-The interface module provides the API surface that agent platforms (OpenClaw,
-custom frameworks) use to integrate Mnemos into their conversation loops.
-
-Key components:
-- MnemosSession: manages encoding during active conversations
-- PromptBuilder: constructs memory-enhanced prompt sections within token budgets
-- MemoryInspector: observability and debugging tools
-- export/import: portable memory format for backup and migration
+- context_packet: the briefing a session starts from
+  (``build_context_packet``, ``format_context_packet``)
+- visual_snapshot: an inline Mermaid picture of a scope's memory
+- openclaw_export: the OpenClaw workspace files (MEMORY.md and the rest)
 """
 
-from .session import MnemosSession
-from .prompt_builder import PromptBuilder
-from .memory_inspector import MemoryInspector
 from .context_packet import build_context_packet, format_context_packet
 from .visual_snapshot import build_memory_visual_snapshot
-from .export import export_memory, import_memory

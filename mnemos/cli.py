@@ -56,24 +56,48 @@ def _resolve_default_mode() -> str:
         return "simple"
 
 
+# The scope options, defined once. The main parser gives each a default of
+# None. A command that takes them after it as well adds them with SUPPRESS:
+# argparse copies every default a subcommand sets over what the main parser
+# has already read, so a default there threw away the value given before the
+# command (`mnemos --db-path X --agent-id Y hook session-start` read the
+# default store and contributed nothing). With SUPPRESS a value given after
+# the command wins, one given before it survives, and one given nowhere stays
+# None for resolve_scope.
+_SCOPE_OPTIONS = {
+    "--db-path": "Database path",
+    "--agent-id": "Agent identity",
+    "--person-id": "Person/user scope",
+    "--project-scope": "Project/workspace scope",
+}
+
+
+def _scope_options(
+    parser: argparse.ArgumentParser,
+    *flags: str,
+    top_level: bool = False,
+    helps: dict[str, str] | None = None,
+) -> None:
+    """Add the scope options ``flags`` to ``parser`` (all four when none are
+    named), with ``helps`` replacing the help of any of them."""
+    for flag in flags or tuple(_SCOPE_OPTIONS):
+        parser.add_argument(
+            flag,
+            default=None if top_level else argparse.SUPPRESS,
+            help=(helps or {}).get(flag, _SCOPE_OPTIONS[flag]),
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
         prog="mnemos",
         description="Mnemos: Living Memory Architecture for Autonomous AI Agents",
     )
-    parser.add_argument(
-        "--db-path",
-        default=None,
-        help="Path to the SQLite database (default: ~/.mnemos/memory.db)",
-    )
-    parser.add_argument(
-        "--agent-id",
-        default=None,
-        help="Agent identifier (default: env/config/default)",
-    )
-    parser.add_argument("--person-id", default=None, help="Person/user scope")
-    parser.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    _scope_options(parser, top_level=True, helps={
+        "--db-path": "Path to the SQLite database (default: ~/.mnemos/<agent>.db)",
+        "--agent-id": "Agent identifier (default: env, then config, then mnemos-agent)",
+    })
 
     sub = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -90,10 +114,7 @@ def main(argv: list[str] | None = None) -> int:
              "Persist a machine-wide default via server.mode in "
              "~/.mnemos/config.json (or the MNEMOS_MODE env var).",
     )
-    p_serve.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_serve.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-    p_serve.add_argument("--person-id", default=None, help="Person/user scope")
-    p_serve.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    _scope_options(p_serve)
 
     # ── inspect ──
     p_inspect = sub.add_parser("inspect", help="Inspect a specific engram")
@@ -104,8 +125,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── snapshot ──
     p_snapshot = sub.add_parser("snapshot", help="Print an inline Mermaid memory snapshot")
-    p_snapshot.add_argument("--person-id", default="user", help="Person scope")
-    p_snapshot.add_argument("--project-scope", default="global", help="Project scope")
+    _scope_options(p_snapshot)
     p_snapshot.add_argument("--session-id", default="", help="Optional functional-memory session")
     p_snapshot.add_argument("-n", "--max-items", type=int, default=6)
 
@@ -169,27 +189,18 @@ def main(argv: list[str] | None = None) -> int:
     p_remember.add_argument(
         "--importance", default="auto", help="auto, or a number from 0.0 to 1.0"
     )
-    p_remember.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_remember.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-    p_remember.add_argument("--person-id", default=None, help="Person/user scope")
-    p_remember.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    _scope_options(p_remember)
 
     # ── doctor ──
     p_doctor = sub.add_parser("doctor", help="Check Mnemos simple-mode readiness")
-    p_doctor.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_doctor.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-    p_doctor.add_argument("--person-id", default=None, help="Person/user scope")
-    p_doctor.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    _scope_options(p_doctor)
 
     # ── repair-softening ──
     p_repair = sub.add_parser(
         "repair-softening",
         help="Restore memories truncated by an earlier version's softening",
     )
-    p_repair.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_repair.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-    p_repair.add_argument("--person-id", default=None, help="Person/user scope")
-    p_repair.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    _scope_options(p_repair)
     p_repair.add_argument(
         "--dry-run",
         action="store_true",
@@ -202,15 +213,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Bring back memories the scope migration left unreachable "
              "(dry run unless --write)",
     )
-    p_adopt.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_adopt.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-    # SUPPRESS rather than None: whether the target person was named is part
-    # of the safety check, so a flag given before the subcommand must survive
-    # and an absent one must stay absent.
-    p_adopt.add_argument("--person-id", default=argparse.SUPPRESS, help="Target person scope")
-    p_adopt.add_argument(
-        "--project-scope", default=argparse.SUPPRESS, help="Target project scope"
-    )
+    # Whether the target person was named is part of the safety check, so a
+    # flag given before the subcommand must survive and an absent one must
+    # stay absent (None).
+    _scope_options(p_adopt, helps={
+        "--person-id": "Target person scope",
+        "--project-scope": "Target project scope",
+    })
     p_adopt.add_argument(
         "--include",
         default="lessons,other",
@@ -229,10 +238,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Remove lesson links filed on a shared word or a placeholder "
              "(dry run unless --write)",
     )
-    p_repair.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_repair.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-    p_repair.add_argument("--person-id", default=argparse.SUPPRESS, help="Person scope")
-    p_repair.add_argument("--project-scope", default=argparse.SUPPRESS, help="Project scope")
+    _scope_options(p_repair)
     p_repair.add_argument(
         "--write",
         action="store_true",
@@ -245,10 +251,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Remove version rows that only repeat the one before them "
              "(dry run unless --write)",
     )
-    p_repair.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_repair.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-    p_repair.add_argument("--person-id", default=argparse.SUPPRESS, help="Person scope")
-    p_repair.add_argument("--project-scope", default=argparse.SUPPRESS, help="Project scope")
+    _scope_options(p_repair)
     p_repair.add_argument(
         "--write",
         action="store_true",
@@ -265,12 +268,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Show the lowest code version allowed to maintain this store, "
              "or change it with --set N --write",
     )
-    p_min_code.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_min_code.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-    p_min_code.add_argument("--person-id", default=argparse.SUPPRESS, help="Person scope")
-    p_min_code.add_argument(
-        "--project-scope", default=argparse.SUPPRESS, help="Project scope"
-    )
+    _scope_options(p_min_code)
     p_min_code.add_argument(
         "--set", dest="set_to", type=int, default=None, metavar="N",
         help="The minimum to set, 1 or more (lower or higher than now)",
@@ -286,12 +284,7 @@ def main(argv: list[str] | None = None) -> int:
              "substrate's) out of this scope into the legacy quarantine "
              "(dry run unless --write)",
     )
-    p_quarantine.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_quarantine.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-    p_quarantine.add_argument("--person-id", default=argparse.SUPPRESS, help="Person scope")
-    p_quarantine.add_argument(
-        "--project-scope", default=argparse.SUPPRESS, help="Project scope"
-    )
+    _scope_options(p_quarantine)
     p_quarantine.add_argument(
         "--undo",
         action="store_true",
@@ -307,12 +300,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Undo the contradiction links and belief revisions the removed "
              "no-model keyword-and-negation check wrote (dry run unless --write)",
     )
-    p_keyword.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_keyword.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-    p_keyword.add_argument("--person-id", default=argparse.SUPPRESS, help="Person scope")
-    p_keyword.add_argument(
-        "--project-scope", default=argparse.SUPPRESS, help="Project scope"
-    )
+    _scope_options(p_keyword)
     p_keyword.add_argument(
         "--write",
         action="store_true",
@@ -345,14 +333,16 @@ def main(argv: list[str] | None = None) -> int:
             "promotion, leaving the meaning to the agent (dry run unless --write)",
             "Empty them",
         ),
+        (
+            "faded-words",
+            "Bring back, from the words they were encoded with, the words of live "
+            "memories an earlier softening cut to '... [details faded]' "
+            "(dry run unless --write)",
+            "Restore them",
+        ),
     ):
         p_clean = repair_sub.add_parser(name, help=text)
-        p_clean.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-        p_clean.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-        p_clean.add_argument("--person-id", default=argparse.SUPPRESS, help="Person scope")
-        p_clean.add_argument(
-            "--project-scope", default=argparse.SUPPRESS, help="Project scope"
-        )
+        _scope_options(p_clean)
         p_clean.add_argument(
             "--write",
             action="store_true",
@@ -362,12 +352,15 @@ def main(argv: list[str] | None = None) -> int:
     # ── hermes ──
     p_hermes = sub.add_parser("hermes", help="Hermes Agent identity-continuity integration")
     hermes_sub = p_hermes.add_subparsers(dest="hermes_command")
+    hermes_scope = {
+        "--db-path": "Mnemos SQLite database path",
+        "--agent-id": "Fixed Mnemos agent scope",
+        "--person-id": "Fixed person/user scope",
+        "--project-scope": "Fixed project scope",
+    }
     p_hermes_install = hermes_sub.add_parser("install", help="Install Mnemos for Hermes")
     p_hermes_install.add_argument("--hermes-home", default=None, help="Hermes home directory")
-    p_hermes_install.add_argument("--db-path", default=None, help="Mnemos SQLite database path")
-    p_hermes_install.add_argument("--agent-id", default=None, help="Fixed Mnemos agent scope")
-    p_hermes_install.add_argument("--person-id", default=None, help="Fixed person/user scope")
-    p_hermes_install.add_argument("--project-scope", default=None, help="Fixed project scope")
+    _scope_options(p_hermes_install, helps=hermes_scope)
     p_hermes_install.add_argument(
         "--mode",
         choices=("provider", "sidecar"),
@@ -384,10 +377,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Safely install Mnemos for Hermes and run doctor",
     )
     p_hermes_quickstart.add_argument("--hermes-home", default=None, help="Hermes home directory")
-    p_hermes_quickstart.add_argument("--db-path", default=None, help="Mnemos SQLite database path")
-    p_hermes_quickstart.add_argument("--agent-id", default=None, help="Fixed Mnemos agent scope")
-    p_hermes_quickstart.add_argument("--person-id", default=None, help="Fixed person/user scope")
-    p_hermes_quickstart.add_argument("--project-scope", default=None, help="Fixed project scope")
+    _scope_options(p_hermes_quickstart, helps=hermes_scope)
     p_hermes_quickstart.add_argument(
         "--agent-safe",
         action="store_true",
@@ -431,10 +421,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip optional model-assisted annotation",
     )
-    p_id_diff.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_id_diff.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-    p_id_diff.add_argument("--person-id", default=None, help="Person/user scope")
-    p_id_diff.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    _scope_options(p_id_diff)
     p_id_accept = identity_sub.add_parser(
         "accept", help="Accept a divergence and open a new epoch"
     )
@@ -447,10 +434,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_id_accept.add_argument("--note", default="", help="Optional note recorded with the transition")
     p_id_accept.add_argument("--json", action="store_true", help="Emit machine-readable result")
-    p_id_accept.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
-    p_id_accept.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-    p_id_accept.add_argument("--person-id", default=None, help="Person/user scope")
-    p_id_accept.add_argument("--project-scope", default=None, help="Project/workspace scope")
+    _scope_options(p_id_accept)
 
     # ── mcp ──
     p_mcp = sub.add_parser("mcp", help="MCP client helpers")
@@ -463,8 +447,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_mcp_install.add_argument("--name", default="mnemos", help="MCP server name")
     p_mcp_install.add_argument("--mode", choices=("simple", "advanced"), default="simple")
-    p_mcp_install.add_argument("--agent-id", default=None, help="Optional agent identity")
-    p_mcp_install.add_argument("--db-path", default=None, help="Optional database path")
+    _scope_options(p_mcp_install, "--agent-id", "--db-path", helps={
+        "--agent-id": "Optional agent identity",
+        "--db-path": "Optional database path",
+    })
     p_mcp_install.add_argument(
         "--write",
         action="store_true",
@@ -479,10 +465,7 @@ def main(argv: list[str] | None = None) -> int:
     p_hook_start = hook_sub.add_parser(
         "session-start", help="Print the SessionStart continuity payload as JSON"
     )
-    p_hook_start.add_argument("--agent-id", default=None, help="Agent identity")
-    p_hook_start.add_argument("--person-id", default=None, help="Person/relationship scope")
-    p_hook_start.add_argument("--project-scope", default=None, help="Project scope")
-    p_hook_start.add_argument("--db-path", default=None, help="Database path")
+    _scope_options(p_hook_start)
     p_hook_start.add_argument(
         "--query",
         default="what should I know to continue our work?",
@@ -512,11 +495,7 @@ def main(argv: list[str] | None = None) -> int:
         "prompt",
         help="Print, for the model, the memories that may bear on a message (UserPromptSubmit)",
     )
-    # SUPPRESS, so the scope given before `hook` is not overwritten by None.
-    p_hook_prompt.add_argument("--agent-id", default=argparse.SUPPRESS, help="Agent identity")
-    p_hook_prompt.add_argument("--person-id", default=argparse.SUPPRESS, help="Person/relationship scope")
-    p_hook_prompt.add_argument("--project-scope", default=argparse.SUPPRESS, help="Project scope")
-    p_hook_prompt.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
+    _scope_options(p_hook_prompt)
 
     # ── hooks ──
     p_hooks = sub.add_parser("hooks", help="Install session-start memory injection")
@@ -528,10 +507,7 @@ def main(argv: list[str] | None = None) -> int:
         "client", nargs="?", default="claude-code", choices=("claude-code", "codex"),
         help="Agent harness to install the hook for",
     )
-    p_hooks_install.add_argument("--agent-id", default=None, help="Agent identity")
-    p_hooks_install.add_argument("--person-id", default=None, help="Person/relationship scope")
-    p_hooks_install.add_argument("--project-scope", default=None, help="Project scope")
-    p_hooks_install.add_argument("--db-path", default=None, help="Database path")
+    _scope_options(p_hooks_install)
     p_hooks_install.add_argument("--timeout", type=int, default=15, help="Hook timeout seconds")
     p_hooks_install.add_argument(
         "--settings",
@@ -561,10 +537,7 @@ def main(argv: list[str] | None = None) -> int:
         ("uninstall", "Remove the scheduled maintenance jobs"),
     ):
         _p = daemon_sub.add_parser(_name, help=_help)
-        _p.add_argument("--agent-id", default=None, help="Agent identity")
-        _p.add_argument("--person-id", default=None, help="Person/relationship scope")
-        _p.add_argument("--project-scope", default=None, help="Project scope")
-        _p.add_argument("--db-path", default=None, help="Database path")
+        _scope_options(_p)
         if _name != "status":
             _p.add_argument(
                 "--write",
@@ -577,12 +550,12 @@ def main(argv: list[str] | None = None) -> int:
     backup_sub = p_backup.add_subparsers(dest="backup_command")
     p_backup_create = backup_sub.add_parser("create", help="Create and verify a private backup")
     p_backup_create.add_argument("--output", default=None, help="Backup destination")
-    p_backup_create.add_argument("--db-path", default=argparse.SUPPRESS, help="Database path")
+    _scope_options(p_backup_create, "--db-path")
     p_backup_inspect = backup_sub.add_parser("inspect", help="Verify and inspect a backup")
     p_backup_inspect.add_argument("path", help="Backup file")
     p_backup_restore = backup_sub.add_parser("restore", help="Restore a verified backup")
     p_backup_restore.add_argument("path", help="Backup file")
-    p_backup_restore.add_argument("--db-path", default=argparse.SUPPRESS, help="Restore destination")
+    _scope_options(p_backup_restore, "--db-path", helps={"--db-path": "Restore destination"})
     p_backup_restore.add_argument(
         "--force", action="store_true",
         help="Replace an existing database after preserving a safety backup",
@@ -1641,12 +1614,13 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
     store = _get_store(args)
     from .interface.visual_snapshot import build_memory_visual_snapshot
 
+    scope = _cli_scope(args)
     print(
         build_memory_visual_snapshot(
             store,
-            agent_id=args.agent_id,
-            person_id=args.person_id,
-            project_scope=args.project_scope,
+            agent_id=scope.agent_id,
+            person_id=scope.person_id,
+            project_scope=scope.project_scope,
             session_id=args.session_id,
             max_items=args.max_items,
         )
@@ -2121,6 +2095,7 @@ def _cmd_repair(args: argparse.Namespace) -> int:
         "archive-rows": _cmd_repair_archive_rows,
         "dead-embeddings": _cmd_repair_dead_embeddings,
         "placeholder-impacts": _cmd_repair_placeholder_impacts,
+        "faded-words": _cmd_repair_faded_words,
     }
     if getattr(args, "repair_command", None) in clean_ups:
         return clean_ups[args.repair_command](args)
@@ -2131,7 +2106,8 @@ def _cmd_repair(args: argparse.Namespace) -> int:
         "       mnemos repair split-notes [--write]\n"
         "       mnemos repair archive-rows [--write]\n"
         "       mnemos repair dead-embeddings [--write]\n"
-        "       mnemos repair placeholder-impacts [--write]",
+        "       mnemos repair placeholder-impacts [--write]\n"
+        "       mnemos repair faded-words [--write]",
         file=sys.stderr,
     )
     return 1
@@ -2384,6 +2360,59 @@ def _cmd_repair_placeholder_impacts(args: argparse.Namespace) -> int:
             "left to the agent."
         ),
         verb="empty them",
+    )
+
+
+def _cmd_repair_faded_words(args: argparse.Namespace) -> int:
+    """Bring back the words an earlier softening cut, from the words the
+    memories were encoded with (one scope).
+
+    A human runs this: a dry run unless --write, and a verified backup first.
+    """
+    runtime = _repair_runtime(args)
+    try:
+        plan = runtime.repair_faded_words(write=args.write)
+    finally:
+        runtime.close()
+
+    if not plan["exists"]:
+        print(f"No store at {runtime.db_path}; nothing to repair.")
+        return 0
+
+    agent, person, project = plan["target"]
+    found = plan["found"]
+    print(f"Faded words for {agent} / {person} / {project} in {runtime.db_path}")
+    print()
+    _repair_row(found["faded"], "live memories whose words were cut when they faded")
+    _repair_row(
+        len(found["restorable"]), "that come back whole from their words at encoding",
+        "restored",
+    )
+    if found["left"]:
+        _repair_row(
+            len(found["left"]), "whose words don't come from their words at encoding", "stay",
+        )
+    for item in found["restorable"]:
+        quiet = " (quiet)" if item["state"] == "dormant" else ""
+        print(f"           - memory {item['id']}{quiet}")
+        for label, words in (("now", item["words"]), ("was", item["encoded"])):
+            print(
+                f"             {label}: \"{_repair_words(words)}\" "
+                f"({len(words.strip()):,} characters)"
+            )
+    for item in found["left"]:
+        print(f"           - left alone: memory {item['id']}")
+
+    done = plan["done"] or {"restored": 0}
+    return _repair_ending(
+        plan, args, todo=bool(found["restorable"]),
+        done=(
+            f"Restored {_repair_count(done['restored'], 'memory', 'memories')}; each "
+            "keeps its cut words as a version. Their words are found by meaning after "
+            "the next maintenance, or at once with: mnemos --db-path "
+            f"{shlex.quote(str(runtime.db_path))} embeddings index."
+        ),
+        verb="restore them",
     )
 
 

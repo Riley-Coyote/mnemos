@@ -53,8 +53,8 @@ agent_id / person_id / project_scope
 ```
 
 This prevents multiple agents on the same machine from accidentally sharing
-continuity through the same database. Federation is an unsupported experimental
-feature and must stay opt-in.
+continuity through the same database. There is no federation: nothing syncs one
+store with another.
 
 ## Visual Artifacts
 

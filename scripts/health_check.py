@@ -240,16 +240,18 @@ def phase0(h: Harness) -> None:
         from mnemos import mcp_server, simple_mcp
         advanced = {t.name for t in asyncio.run(mcp_server.mcp.list_tools())}
         simple = {t.name for t in asyncio.run(simple_mcp.simple_mcp.list_tools())}
-        # The codebase's own canonical invariant (tests/test_mcp_surface.py) is
-        # Structural invariant: simple is a fixed 7-tool surface and the advanced
-        # server is a SUPERSET (simple ⊆ advanced). The advanced COUNT is NOT
-        # pinned — it grows as features add tools; specific-tool presence is
-        # covered by tests/test_mcp_surface.py.
+        # Structural invariant: simple serves exactly the tools the code
+        # declares (SIMPLE_TOOL_NAMES, nine today) and the advanced server is a
+        # SUPERSET (simple ⊆ advanced). The advanced COUNT is NOT pinned — it
+        # grows as features add tools; specific-tool presence is covered by
+        # tests/test_mcp_surface.py.
+        declared = set(simple_mcp.SIMPLE_TOOL_NAMES)
         diff = simple - advanced
-        ok = (len(simple) == 7 and diff == set() and len(advanced) > len(simple))
+        ok = (simple == declared and diff == set() and len(advanced) > len(simple))
         return ok, (f"advanced={len(advanced)} simple={len(simple)} "
-                    f"simple⊆advanced={diff == set()} (count not pinned)")
-    h.check("I24", "MCP surface: simple⊆advanced, 7 simple", h0b)
+                    f"declared={len(declared)} simple⊆advanced={diff == set()} "
+                    "(advanced count not pinned)")
+    h.check("I24", "MCP surface: simple⊆advanced, simple = SIMPLE_TOOL_NAMES", h0b)
 
 
 # ─────────────────────────── Phase 1 ───────────────────────────
@@ -481,7 +483,12 @@ def phase2_recall_roundtrip(h: Harness) -> None:
 # ─────────────────────────── Phase 3 ───────────────────────────
 
 def phase3_wakeup_packet(h: Harness) -> None:
-    """I12–I14: context packet content, blank-query resilience, scope isolation."""
+    """I12–I14: context packet content, blank-query resilience, scope isolation.
+
+    The packet is the briefing a session wakes with: the handoff first, then
+    the notes it carries. It has no functional-memory section (functional
+    memory is seeded here only so I14 can check none of scope B's leaks).
+    """
     from mnemos.store.sqlite_store import EngramStore
     from mnemos.encoding.encoder import Encoder
     from mnemos.interface.context_packet import build_context_packet
@@ -503,6 +510,10 @@ def phase3_wakeup_packet(h: Harness) -> None:
             agent_id="alpha", person_id="p1", project_scope="projA",
             domain="topical",
         )
+        store.write_handoff(
+            f"alpha handoff for the next session {probe}",
+            agent_id="alpha", person_id="p1", project_scope="projA",
+        )
         encoder.encode(
             content=f"alpha engram seed {probe} marker",
             kind="semantic", tags=["wake"], agent_id="alpha",
@@ -519,34 +530,40 @@ def phase3_wakeup_packet(h: Harness) -> None:
             agent_id="beta", person_id="p2", project_scope="projB",
             domain="topical",
         )
+        store.write_handoff(
+            f"beta-only handoff {secretB}",
+            agent_id="beta", person_id="p2", project_scope="projB",
+        )
 
-        # I12: non-empty prompt w/ header + seeded functional+hypomnema text
+        # I12: the briefing opens with its header, then the seeded handoff,
+        # and carries the seeded note
         pktA = build_context_packet(
             store, query=probe, agent_id="alpha", person_id="p1", project_scope="projA")
         prompt = pktA["prompt"]
-        ok12 = ("## waking up" in prompt
-                and "alpha functional note" in prompt
-                and "alpha hypomnema continuity" in prompt
-                and len(prompt) > 0)
-        h.record("I12", "packet has header + seeded functional & hypomnema text",
+        handoff_at = prompt.find("alpha handoff for the next session")
+        note_at = prompt.find("alpha hypomnema continuity")
+        ok12 = (prompt.startswith("## waking up")
+                and handoff_at != -1 and note_at != -1 and handoff_at < note_at)
+        h.record("I12", "packet: header, then the seeded handoff, then the seeded note",
                  "PASS" if ok12 else "FAIL",
-                 f"prompt_len={len(prompt)} header={'## waking up' in prompt} "
-                 f"functional={'alpha functional note' in prompt} "
-                 f"hypomnema={'alpha hypomnema continuity' in prompt}")
+                 f"prompt_len={len(prompt)} header={prompt.startswith('## waking up')} "
+                 f"handoff={handoff_at != -1} note={note_at != -1} "
+                 f"handoff_first={handoff_at != -1 and handoff_at < note_at}")
 
-        # I13: blank query → no engrams, but functional/hypomnema still render,
-        # no crash when emotional state is missing
+        # I13: blank query → no graph recall, but the handoff and the note
+        # still render; no crash when emotional state is missing
         pktBlank = build_context_packet(
             store, query="", agent_id="alpha", person_id="p1", project_scope="projA")
+        blank = pktBlank["prompt"]
         ok13 = (pktBlank["mnemos_engrams"] == []
-                and "## waking up" in pktBlank["prompt"]
-                and "alpha functional note" in pktBlank["prompt"]
-                and "alpha hypomnema continuity" in pktBlank["prompt"])
-        h.record("I13", "blank query → 0 engrams; functional/hypomnema still render; no crash",
+                and blank.startswith("## waking up")
+                and "alpha handoff for the next session" in blank
+                and "alpha hypomnema continuity" in blank)
+        h.record("I13", "blank query → 0 engrams; handoff and note still render; no crash",
                  "PASS" if ok13 else "FAIL",
                  f"engrams={len(pktBlank['mnemos_engrams'])} "
-                 f"functional_rendered={'alpha functional note' in pktBlank['prompt']} "
-                 f"hypomnema_rendered={'alpha hypomnema continuity' in pktBlank['prompt']}")
+                 f"handoff_rendered={'alpha handoff for the next session' in blank} "
+                 f"note_rendered={'alpha hypomnema continuity' in blank}")
 
         # I14: scope isolation — scope A packet shows none of scope B's entries
         leak = secretB in pktA["prompt"] or secretB in pktBlank["prompt"]

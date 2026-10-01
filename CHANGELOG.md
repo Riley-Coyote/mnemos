@@ -2,6 +2,109 @@
 
 ## 0.3.1 (unreleased)
 
+### Make it smaller
+
+3,073 lines of modules that nothing reached are gone, and a few things
+that are reached now do what they say.
+
+- **Removed, with nothing left importing them** (checked across the repo,
+  every entry point, and the other projects on the maintainer's machine):
+  the fifteen `mnemos/advanced/` prototypes that only raised
+  `ExperimentalFeatureUnavailable` (working memory, schemas, the attention
+  gate, predictive retrieval, spreading activation, interference,
+  intentions, metamemory, the observer, dreaming and their helpers), and
+  `mnemos/experimental.py` with them; `interface/` session, prompt builder,
+  memory inspector and export; `multiagent/` relationships, federation and
+  attestation; `visualization/`; and the unused migration runner
+  `store/migrations.py`. **Breaking** only for code that imported them
+  directly or through `mnemos.interface` / `mnemos.multiagent` (the names
+  `MnemosSession`, `PromptBuilder`, `MemoryInspector`, `export_memory`,
+  `import_memory`, `RelationshipTracker`, `FederationClient`,
+  `AttestationService`): nothing replaces them, and nothing used them. Their
+  unread config toggles (`advanced.*`, `multiagent.federation_enabled`,
+  `multiagent.attestation_enabled`) went too. `advanced/introspection*`,
+  `shared_pool` and the cross-agent bridge stay.
+- **Removed helpers with no caller:** `EngramStore.archive_hypomnema_for_engram`,
+  `simple_runtime._impact_for` and `authorship.handoff_framing`.
+- **Options given before a command reach it.** `mnemos --db-path X
+  --agent-id Y hook session-start` used the default store and printed
+  nothing: the hook's own copies of the options defaulted to None, which
+  argparse copies over what the main parser read. Fifteen commands did this
+  (serve, doctor and remember among them). The scope options are defined
+  once now; given after a command they still win.
+- **`mnemos substrate-tick` decays as maintenance does:** through the
+  store's decay pass, never a standing memory, only its own agent's, on the
+  clock maintenance keeps, and not at all from code older than the store.
+  Its raw UPDATE took a flat 0.02 off every active memory in the file.
+- **`mnemos repair faded-words`** (one scope, the shape of the live
+  clean-ups): a live memory whose words an old model-less softening cut to
+  "... [details faded]" gets them back from the words it was encoded with,
+  when the cut words are exactly what that softening made of them; the cut
+  words stay as a version. On a fresh copy of the maintainer's live store
+  (2026-09-30) it finds and restores 3 memories.
+- The health harness (`scripts/health_check.py` I12, I13) and
+  `benchmarks/continuity_eval.py` check the packet as it is now; the
+  benchmark scores cues through recall, since the packet takes no cue.
+- Tests: every test has a home of its own, so the suite no longer writes
+  `~/.mnemos/audit.db`, `~/.mnemos/logs` or `~/.mnemos/run` in the real
+  home; and the stdio tests pass in any order (mcp bound its stderr default
+  to pytest's in-memory capture when a capsys test imported it first).
+
+### No engine voice
+
+Words in memory come only from the agent. Three maintenance paths still
+wrote Mnemos's own words, or reached the agent's through the wrong note.
+
+- **The reflection pass writes no memories.** A deep cycle's reflection pass
+  wrote "thoughts" as memories: without a model, Mnemos's own template
+  ("Recurring theme: continuity (appeared in 46 recent memories)"), and with
+  a model configured, the model's lines. It now only counts the agent's
+  recent memories, and sends them to no model. On a fresh copy of the live
+  store (2026-09-30), a deep `mnemos consolidate` on the previous code wrote
+  3 such memories; on this code it wrote none.
+- **Promotion leaves the meaning as the note left it.** A promoted memory's
+  meaning was "Stable continuity promoted during simple maintenance.". A note
+  holds no meaning of its own, so the memory's stays empty, and the memory
+  is asked "what did this change?" like any memory without one. A note
+  Mnemos wrote, such as a closed session's summary, is no longer promoted
+  (it became a memory Mnemos wrote) or counted as a candidate.
+- **"What did this change?" reaches a memory through its own note**
+  (`graduated_to_engram_id`), the note the answer is written into, never
+  through a note that only names it (`related_engram_id`). It asked about
+  memories a note only interprets, whose answers had no note to land in,
+  and never about the memory a correction of such a note wrote. On the live
+  store both ways reach the same 251 memories today.
+- `MAINTENANCE_CODE_VERSION` is 11: servers started on older code stop
+  maintaining a store once this code opens it.
+
+### The live clean-ups
+
+Four `mnemos repair` commands for damage earlier code left in stores, each
+shaped like `repair-versions`: a dry run by default that only reads, and
+`--write` that takes a verified backup first and prints its path. A second
+run finds nothing, and code older than the store refuses to write.
+
+- **`repair split-notes`** (one scope): a note corrected in place by its id
+  while its memory kept the old words gets its memory's words brought to the
+  note's (the old words kept as a version), and a live note left over a
+  memory a correction replaced moves to the replacement that has none. The
+  correction's lineage is recorded, so the old id reaches the pair in use.
+- **`repair archive-rows`** (whole store): drops archive rows that repeat a
+  memory no longer archived; a row whose words differ would stay as history.
+- **`repair dead-embeddings`** (whole store): prunes stored vectors from
+  models this Mnemos doesn't embed with (Gemini's, on a store now indexed by
+  the local model); with no model available it prunes nothing.
+- **`repair placeholder-impacts`** (whole store): empties every meaning the
+  server wrote where the agent's goes (`TEMPLATED_IMPACTS`: the correction
+  templates, the promotion phrase and the older capture path's), leaving the
+  meaning for the agent to give; the memory's words and history stay.
+
+On a fresh copy of the maintainer's live store (2026-09-30): 1 memory takes
+its note's words and 3 notes move; 1,392 archive rows go, 0 kept; 3,494
+Gemini vectors go; 12 placeholder meanings are emptied. Integrity checks
+pass, doctor shows no new flags, and a capture written in one process is
+recalled in another.
+
 ### Small follow-ups
 
 Nine small things the last packages' reports left open.

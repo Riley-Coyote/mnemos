@@ -599,6 +599,9 @@ def test_health_returns_structured_dict(tmp_path):
         "verification",
         "handoff",
         "dream",
+        # The journal's entries, the notes by each author, and replies not yet
+        # delivered: counts, and no attention rule hangs on them (R22).
+        "journal",
         # Evidence about whether continuity is reaching this agent at all.
         # A health card that can only ever say "fine" is worth nothing on
         # the day it isn't.

@@ -1,8 +1,8 @@
 """Simple-mode continuity runtime for Mnemos.
 
 This module is intentionally MCP-agnostic so the product path can be tested
-without a running client. It exposes the real Mnemos stack through nine simple
-operations, including agent-written handoff and reflection.
+without a running client. It exposes the real Mnemos stack through eleven simple
+operations, including agent-written handoff, reflection, journal and notes.
 """
 
 from __future__ import annotations
@@ -67,6 +67,7 @@ from .store.sqlite_store import (
     EngramStore,
     ReadOnlyEngramStore,
     handoff_retirement,
+    note_kind_problem,
 )
 from .watchdog import STALL, continuity_moments, flag_lines, flagged, note_counts, watch
 
@@ -81,6 +82,8 @@ SIMPLE_TOOL_NAMES = (
     "mnemos_reflect",
     "mnemos_introduce",
     "mnemos_health",
+    "mnemos_journal",
+    "mnemos_note",
 )
 
 HOST_MUTATION_PROTOCOL_VERSION = 1
@@ -120,6 +123,14 @@ AUTO_INDEX_BUDGET = 64
 # What a capture appends to the agent's words when it gives context.
 _CAPTURE_CONTEXT = "\n\nContext: "
 
+# How many journal entries an empty ``mnemos_journal`` call reads back.
+JOURNAL_READ = 5
+
+# The longest reply the person can leave, as long as a handoff may be: the
+# tools cap what the agent writes, and the command that stores the person's
+# words is capped the same way, so a stray paste is refused, not stored.
+MAX_REPLY_CHARS = 16_384
+
 # Passages the scheduled job (`mnemos consolidate`: every four hours, and once
 # more at night, so seven runs a day) embeds per run. Once the store is indexed,
 # what waits is only what sessions on older code wrote since (a session keeps
@@ -152,6 +163,7 @@ def recall_index_items(
 ) -> list[tuple[str, str]]:
     """What recall's meaning index holds for one scope, as ``(id, text)``:
     every handoff (those in use first), notes with no memory of their own,
+    the journal's entries (the agent's own words, found beside the handoffs),
     then the live memories, newest first. ``index_for_recall`` indexes these,
     and the watchdog counts which of them still wait. Reads."""
     scope = {"agent_id": agent_id, "person_id": person_id, "project_scope": project_scope}
@@ -159,6 +171,7 @@ def recall_index_items(
         (note["id"], note.get("content") or "")
         for note in [*store.recallable_handoffs(**scope), *store.standalone_notes(**scope)]
     ]
+    items += [(entry["id"], entry["text"] or "") for entry in store.journal_entries(**scope)]
     items += [(memory_id, content) for memory_id, content, _state in store.live_memory_texts(**scope)]
     return items
 
@@ -3727,6 +3740,206 @@ class MnemosRuntime:
             f"{lasts}"
         )
 
+    @_notice_when_older
+    @_traced("journal")
+    def journal(self, text: str = "", signed_as: str = "", mood: str = "") -> str:
+        """Write in the agent's own journal, or, with no text, read it back.
+
+        The journal is the agent's: this call is the only path that writes it,
+        and what it writes is the agent's own words, stored exactly as
+        supplied. Each entry records who signed it (``signed_as``, resolved as
+        a handoff's is), whether it was written in a conversation or alone in
+        a quiet hour between sessions (``MNEMOS_HOUR_ID``, which only the
+        hour's runner sets, says which, and the hour), the harness session and
+        the time. ``mood`` is optional and the agent's: nothing computes one.
+
+        An entry is not a memory. No pass summarizes, rewrites, decays,
+        softens, promotes or expires it, and none reads it to decide anything.
+        Recall finds it by its words and its meaning, marked as journal, and
+        the waking packet carries the first line of the latest one while it is
+        under three days old.
+
+        With no text it reads instead: the last ``JOURNAL_READ`` entries,
+        newest first, each with its date and how it was written. Reading never
+        creates a store.
+        """
+
+        if not text.strip():
+            return self._read_journal(signed_as)
+        self._ensure_init()
+        assert self._store is not None
+        author = self.author_model(signed_as)
+        self._traced_author(author)
+        hour = current_hour()
+        entry_id = self._store.write_journal_entry(
+            text,
+            **self._scope_args(),
+            mood=mood,
+            written="between_sessions" if hour else "in_conversation",
+            session_id=harness_session(),
+            model_id=author,
+            hour_id=hour,
+        )
+        self._traced_write(entry_id)
+        # Recall finds it by its words at once, and by its meaning from the
+        # next call on, as it does a handoff.
+        self._index_for_recall(budget=None, only={entry_id})
+        return (
+            "Journal entry kept exactly as written.\n"
+            f"Journal ID: {entry_id}\n"
+            f"{self._signed_line(author)}"
+        )
+
+    def _read_journal(self, signed_as: str = "", last: int = JOURNAL_READ) -> str:
+        """The newest journal entries, newest first, each whole, with its date
+        and how it was written; never creates a store. Whose each is depends
+        on who reads (``signed_as`` says, as it does for a write): one a
+        colleague wrote, or no one can place, says so, and the line about a
+        colleague's words follows once."""
+        if self._store is None and not self.db_path.exists():
+            return "Your journal is empty."
+        self._ensure_init()
+        assert self._store is not None
+        entries = self._store.journal_entries(**self._scope_args(), limit=last)
+        if not entries:
+            return "Your journal is empty."
+        self._traced_read(*(entry["id"] for entry in entries))
+        reader, session = self.author_model(signed_as), harness_session()
+        lines = [
+            f"Your journal, the last {len(entries)} "
+            f"{'entry' if len(entries) == 1 else 'entries'}, newest first:"
+        ]
+        not_yours = False
+        for entry in entries:
+            label, whose = whose_handoff(_signed_row(entry), reader, session)
+            not_yours = not_yours or whose != "own"
+            lines += [
+                "",
+                f"{entry['created_at'][:16].replace('T', ' ')} UTC, {entry['written']}: {label}",
+            ]
+            if entry["mood"]:
+                lines.append(f"Mood: {entry['mood']}")
+            lines.append(entry["text"])
+        if not_yours:
+            lines += ["", COLLEAGUE_LINE]
+        return "\n".join(lines)
+
+    @_notice_when_older
+    @_traced("note")
+    def note(
+        self, text: str, kind: str, signed_as: str = "", in_reply_to: str = "",
+    ) -> str:
+        """Leave the person a note, in the agent's own words, for them to read
+        when they choose.
+
+        ``kind`` says what it is (``NOTE_KINDS``: made, noticed, worried,
+        disagree, question or pickup); anything else is refused, with the
+        list. ``in_reply_to`` names a note of this scope the note answers,
+        such as a reply of theirs. Stored exactly as supplied and signed as a
+        handoff is, with the hour when written in one. Nothing is sent: the
+        note waits where the person reads it, and their reply comes back in
+        what the agent wakes with.
+        """
+
+        if not text.strip():
+            return "Nothing saved: the note was empty."
+        kind = (kind or "").strip().lower()
+        problem = note_kind_problem(kind)
+        if problem:
+            return f"Nothing saved: {problem}"
+        self._ensure_init()
+        assert self._store is not None
+        author = self.author_model(signed_as)
+        self._traced_author(author)
+        try:
+            note_id = self._store.write_note(
+                text,
+                author="agent",
+                **self._scope_args(),
+                kind=kind,
+                model_id=author,
+                in_reply_to=in_reply_to,
+                session_id=harness_session(),
+                hour_id=current_hour(),
+            )
+        except ValueError as exc:
+            return f"Nothing saved: {exc}"
+        self._traced_write(note_id)
+        return (
+            "Note kept exactly as written.\n"
+            f"Note ID: {note_id}\n"
+            f"Kind: {kind}\n"
+            f"{self._signed_line(author)}\n"
+            "It waits for them to read; nothing was sent or announced."
+        )
+
+    def reply_to_note(self, note_id: str, text: str) -> str:
+        """Keep the person's own reply to one of the agent's notes, and return
+        its id. Raises ``ValueError`` with a plain reason when it is refused.
+
+        This stores the person's words, signed as the person's (``author``
+        'person', no model), and the person's own command is its one caller
+        (``mnemos notes reply``): no tool the agent calls reaches it. It is
+        refused inside one of the agent's quiet hours, where no one is in the
+        room to write it. The reply reaches the agent's next waking packet
+        once.
+        """
+
+        if current_hour():
+            raise ValueError(
+                "A reply is the person's own words, and no one is in the room during "
+                "one of the agent's hours."
+            )
+        if len(text) > MAX_REPLY_CHARS:
+            raise ValueError(
+                f"A reply is at most {MAX_REPLY_CHARS:,} characters; this one is {len(text):,}."
+            )
+        self._ensure_init()
+        assert self._store is not None
+        return self._store.write_note(
+            text,
+            author="person",
+            **self._scope_args(),
+            in_reply_to=note_id,
+            session_id=harness_session(),
+        )
+
+    def journal_entries(self, last: int = JOURNAL_READ) -> list[dict[str, Any]]:
+        """The newest ``last`` journal entries of this scope, newest first, in
+        the shape the command and the interface read (``journal_entry_view``).
+        Reads, and never creates a store."""
+        if self._store is None and not self.db_path.exists():
+            return []
+        self._ensure_init()
+        assert self._store is not None
+        return [
+            journal_entry_view(row)
+            for row in self._store.journal_entries(**self._scope_args(), limit=last)
+        ]
+
+    def notes(self, unread: bool = False) -> list[dict[str, Any]]:
+        """The notes of this scope, both authors', newest first, in the shape
+        the command and the interface read (``note_view``). With ``unread``,
+        only the agent's notes the person has not read. Reads, and never
+        creates a store."""
+        if self._store is None and not self.db_path.exists():
+            return []
+        self._ensure_init()
+        assert self._store is not None
+        return [
+            note_view(row)
+            for row in self._store.list_notes(**self._scope_args(), unread=unread)
+        ]
+
+    def mark_notes_read(self, note_ids: Collection[str]) -> list[str]:
+        """Record that the person read these notes of the agent's. Bookkeeping,
+        so code older than the store leaves it alone."""
+        self._ensure_init()
+        assert self._store is not None
+        if self._older_than_store() is not None:
+            return []
+        return self._store.mark_notes_read(note_ids, **self._scope_args())
+
     def _recall_by_id(self, note_id: str) -> str:
         """A note the packet showed, read whole by its id, or ``""``.
 
@@ -3754,7 +3967,7 @@ class MnemosRuntime:
         if _ENTRY_ID.fullmatch(note_id):
             note = self._store.get_hypomnema_entry(note_id, **scope)
             if not note:
-                return ""
+                return self._recall_journal_or_note(note_id)
             if note.get("entry_kind") == "handoff":
                 label, whose = whose_handoff(note, self.author_model(), harness_session())
                 lines = [f"{label}:", note["content"]]
@@ -3817,6 +4030,36 @@ class MnemosRuntime:
                 )
             return "\n".join(lines)
         return ""
+
+    def _recall_journal_or_note(self, entry_id: str) -> str:
+        """A journal entry or a note of this scope, read whole by its id, or
+        ``""``. Neither is a memory, so reading one reinforces and wakes
+        nothing. One a colleague wrote says so, as a handoff does."""
+        assert self._store is not None
+        scope = self._scope_args()
+        reader, session = self.author_model(), harness_session()
+        entry = self._store.get_journal_entry(entry_id, **scope)
+        if entry is not None:
+            label, whose = whose_handoff(_signed_row(entry), reader, session)
+            lines = [f"Journal entry ({entry['written']}), {label}:", entry["text"]]
+            if entry["mood"]:
+                lines.append(f"Mood: {entry['mood']}")
+            if whose != "own":
+                lines.append(COLLEAGUE_LINE)
+            return "\n".join(lines)
+        note = self._store.get_note(entry_id, **scope)
+        if note is None:
+            return ""
+        if note["author"] == "person":
+            lines = [f"The person's reply, {_age_text(note['created_at'])}:", note["text"]]
+            if note["in_reply_to"]:
+                lines.append(f"It answers note {note['in_reply_to']}.")
+            return "\n".join(lines)
+        label, whose = whose_handoff(_signed_row(note), reader, session)
+        lines = [f"Note to the person ({note['kind']}), {label}:", note["text"]]
+        if whose != "own":
+            lines.append(COLLEAGUE_LINE)
+        return "\n".join(lines)
 
     def _bring_back_memory_of(self, note: dict[str, Any]) -> str | None:
         """Read a note's memory as its id would be read, since the note shares
@@ -4219,8 +4462,9 @@ class MnemosRuntime:
         include_archived: bool = False,
         standing: bool = False,
     ) -> str:
-        """Recall what memory holds for ``query``: the memories, lessons and
-        handoffs it finds, by their words and by their meaning, best first.
+        """Recall what memory holds for ``query``: the memories, lessons,
+        handoffs and journal entries it finds, by their words and by their
+        meaning, best first.
 
         One ranking (``ReactiveRetriever``): memories and handoffs matched by
         words and by meaning, fused by reciprocal rank, then resonance among
@@ -4233,7 +4477,9 @@ class MnemosRuntime:
         Every handoff in the scope is searched: the ones in use, and the older
         ones a newer handoff replaced, which say so and who left them when.
         One the agent forgot stays gone. A handoff is never a memory: it is
-        not reinforced, linked, or given resonance.
+        not reinforced, linked, or given resonance. The journal's entries are
+        searched the same way, as their own group, marked as journal and
+        signed: they are the agent's own words, never memories either.
 
         A dormant memory comes back when the query matches it well, and
         wakes. With ``include_archived``, memories that faded into the
@@ -4267,9 +4513,14 @@ class MnemosRuntime:
             result for result in found
             if result.note is not None and result.note.get("entry_kind") == "handoff"
         ]
+        journal = [
+            result for result in found
+            if result.note is not None and result.note.get("entry_kind") == "journal"
+        ]
         notes = [
             result for result in found
-            if result.note is not None and result.note.get("entry_kind") != "handoff"
+            if result.note is not None
+            and result.note.get("entry_kind") not in ("handoff", "journal")
         ]
         faded = self._faded_matches(query, max_results) if include_archived else []
 
@@ -4283,11 +4534,18 @@ class MnemosRuntime:
         if memories:
             lines.extend(["", "Durable memories:"])
             lines.extend(_format_memory(result) for result in memories)
+        # Whose each one is depends on who reads it: resolved once here, and
+        # only when something signed was found (reading the model may read the
+        # session's transcript).
+        reader, session = (
+            (self.author_model(), harness_session()) if handoffs or journal else ("", "")
+        )
         if handoffs:
-            # Whose each one is depends on who reads it: resolved once here.
-            reader, session = self.author_model(), harness_session()
             lines.extend(["", "Handoffs:"])
             lines.extend(_format_handoff(result, reader, session) for result in handoffs)
+        if journal:
+            lines.extend(["", "Journal:"])
+            lines.extend(_format_journal(result, reader, session) for result in journal)
         if notes:
             lines.extend(["", "Notes:"])
             lines.extend(_format_note(result) for result in notes)
@@ -4321,11 +4579,31 @@ class MnemosRuntime:
 
     def _recallable_notes(self) -> list[dict[str, Any]]:
         """What recall ranks beside the memories that is not a memory: every
-        handoff in this scope, in use or older (never one forgotten), and any
-        live note with no memory of its own."""
+        handoff in this scope, in use or older (never one forgotten), any live
+        note with no memory of its own, and every journal entry, shaped as the
+        retriever reads a note (``entry_kind`` 'journal'). The ranking itself
+        does not know the difference."""
         assert self._store is not None
         scope = self._scope_args()
-        return [*self._store.recallable_handoffs(**scope), *self._store.standalone_notes(**scope)]
+        journal = [
+            {
+                "id": entry["id"],
+                "content": entry["text"],
+                "entry_kind": "journal",
+                "author_model": entry["model_id"],
+                "author_session": entry["session_id"],
+                "created_at": entry["created_at"],
+                "written": entry["written"],
+                "mood": entry["mood"],
+                "active": 1,
+            }
+            for entry in self._store.journal_entries(**scope)
+        ]
+        return [
+            *self._store.recallable_handoffs(**scope),
+            *self._store.standalone_notes(**scope),
+            *journal,
+        ]
 
     def _index_for_recall(
         self,
@@ -5472,6 +5750,10 @@ class MnemosRuntime:
                 "excerpt": dream_excerpt,
             },
             "handoff": handoff_health,
+            # The journal's entries, the notes by each author, and replies that
+            # have not yet reached a waking packet. Counts only: no attention
+            # rule hangs on them.
+            "journal": self._store.journal_and_note_counts(**self._scope_args()),
             "continuity": self.continuity_signals(),
             "unreachable": self.unreachable_memories(),
             # Memory held in this file that no read path reaches. Without this
@@ -5865,6 +6147,72 @@ def _format_note(result: Any) -> str:
     )
 
 
+def current_hour() -> str:
+    """The quiet hour this process was woken for, or ``""``.
+
+    The runner of the agent's hours between sessions (R24) sets
+    ``MNEMOS_HOUR_ID`` for the one process it wakes. Whatever that process
+    writes in the journal is marked as written alone, between sessions, with
+    the hour it was written in; nothing else is, since only the environment
+    can say.
+    """
+    return " ".join(os.environ.get("MNEMOS_HOUR_ID", "").split())[:128]
+
+
+def journal_entry_view(row: Mapping[str, Any]) -> dict[str, Any]:
+    """A journal entry as the command and the interface read it:
+    ``{id, text, mood, written, model, created_at}``, the shape of the
+    connector's ``read_journal`` (``text`` is its ``content``, ``written`` its
+    ``written_in``, ``created_at`` its ``written_at``). What is not known
+    (no mood, no signature) is ``None``, as the connector says it."""
+    return {
+        "id": row["id"],
+        "text": row["text"],
+        "mood": row["mood"] or None,
+        "written": row["written"],
+        "model": row["model_id"] or None,
+        "created_at": row["created_at"],
+    }
+
+
+def note_view(row: Mapping[str, Any]) -> dict[str, Any]:
+    """A note as the command and the interface read it:
+    ``{id, kind, text, author, model, in_reply_to, created_at, read_at}``. A
+    person's reply has no kind and no model; what is not known is ``None``."""
+    return {
+        "id": row["id"],
+        "kind": row["kind"] or None,
+        "text": row["text"],
+        "author": row["author"],
+        "model": row["model_id"] or None,
+        "in_reply_to": row["in_reply_to"] or None,
+        "created_at": row["created_at"],
+        "read_at": row["read_at"],
+    }
+
+
+def _signed_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """A journal entry or note as the code that tells whose a handoff is reads
+    it: who signed it, from which session, and when."""
+    return {
+        "author_model": row.get("model_id") or row.get("author_model") or "",
+        "author_session": row.get("session_id") or row.get("author_session") or "",
+        "created_at": row.get("created_at") or "",
+    }
+
+
+def _format_journal(result: Any, reader: str, session: str) -> str:
+    """A journal entry recall found, marked as journal: its own words, when and
+    how it was written, and whose it is to this reader (as a handoff says it)."""
+    entry = result.note or {}
+    label, _whose = whose_handoff(_signed_row(entry), reader, session)
+    return (
+        f"- [{result.score:.2f}] {_own_words(entry.get('content') or '')}\n"
+        f"  id={entry.get('id')} kind=journal; written {(entry.get('created_at') or '')[:10]} "
+        f"({entry.get('written') or 'in_conversation'}): {label}"
+    )
+
+
 def _format_archived(engram: Engram) -> str:
     """A memory recall found in the archive: no score, since recall's
     resonance never reaches the archive; the query named it."""
@@ -6092,6 +6440,23 @@ def describe_code(code: Mapping[str, Any] | None) -> tuple[str, str | None]:
     return headline, f"{OLDER_CODE_MESSAGE} {OLDER_CODE_FIX}"
 
 
+def describe_journal(journal: Mapping[str, Any] | None) -> str | None:
+    """The health card's one line about the journal and the notes: how many
+    entries, how many notes each author wrote, and how many replies of the
+    person's have not yet reached the agent's waking packet. None when the
+    snapshot has no such section."""
+    if not journal:
+        return None
+    entries = int(journal.get("journal_entries") or 0)
+    waiting = int(journal.get("replies_waiting") or 0)
+    return (
+        f"{entries} {'entry' if entries == 1 else 'entries'}; "
+        f"notes: {int(journal.get('notes_by_agent') or 0)} by the agent, "
+        f"{int(journal.get('notes_by_person') or 0)} by the person; "
+        f"{waiting} {'reply' if waiting == 1 else 'replies'} not yet delivered"
+    )
+
+
 def format_health_card(data: dict[str, Any]) -> str:
     """Render a health() snapshot as a human-relayable card."""
 
@@ -6170,6 +6535,8 @@ def format_health_card(data: dict[str, Any]) -> str:
             detail = f"carrying continuity (last capture {since} session(s) ago)"
         continuity_lines = ["", f"Continuity check: {detail}, {streak} empty packet(s) in a row."]
 
+    journal = describe_journal(data.get("journal"))
+    journal_lines = [line("Journal", journal)] if journal else []
     legacy = format_legacy_summary(data.get("legacy"))
     legacy_lines = [line("Hidden", legacy)] if legacy else []
     unreachable = format_unreachable_summary(data.get("unreachable"))
@@ -6231,6 +6598,7 @@ def format_health_card(data: dict[str, Any]) -> str:
         ),
         line("Verification", verification_line),
         line("Last handoff", handoff_line),
+        *journal_lines,
         line("Last dream", dream_line),
         *continuity_lines,
         "",

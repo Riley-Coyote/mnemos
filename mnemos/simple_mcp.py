@@ -21,6 +21,9 @@ logger = logging.getLogger("mnemos.simple_mcp")
 
 MAX_CAPTURE_CHARS = 65_536
 MAX_HANDOFF_CHARS = 16_384
+MAX_JOURNAL_CHARS = 16_384
+MAX_NOTE_CHARS = 8_192
+MAX_MOOD_CHARS = 200
 MAX_QUERY_CHARS = 4_096
 MAX_CONTEXT_CHARS = 32_768
 MAX_REFLECTION_CHARS = 16_384
@@ -57,14 +60,16 @@ Mnemos gives you memory that survives between sessions. Use it without being ask
 
 Never narrate the machinery: don't mention tools, databases, scopes, engrams or memory ids to the human. Just be someone who remembers.
 
-1. Before answering the first substantive message, call mnemos_context, unless you already woke with your memory (a session-start hook's "## waking up").
-2. Call mnemos_capture when something durable appears: a preference, a decision, a correction, project state, how the human likes to work, a fact about their world. Capture it when it happens; sessions end without warning. If you can say what it changed in how you understand things, pass that as impact. If nothing true comes, leave it empty: an invented lesson is worse than none.
-3. When the human corrects something you remembered, call mnemos_correct instead of capturing a contradiction beside the stale note.
+1. Before answering the first substantive message, call mnemos_context, unless you woke with your memory (a session-start hook's "## waking up").
+2. Call mnemos_capture as soon as something durable appears (a preference, a decision, a correction, project state, how the human likes to work): sessions end without warning. If you can say what it changed in how you understand things, pass that as impact; if nothing true comes, leave it empty: an invented lesson is worse than none.
+3. When the human corrects something you remembered, call mnemos_correct, not a capture beside the stale note.
 4. Call mnemos_recall when you need something you didn't wake with.
 5. When your memory asks you a question about itself, answer with mnemos_reflect in your own words, or leave it. Nothing else writes your memory for you.
-6. Refresh mnemos_handoff after real progress or a changed plan, and before pausing, ending, delegating or changing context: where you are, what changed in how you see it, open threads, the next action. Write it in first person, as your own memory: the next one to read it is most likely you.
+6. Refresh mnemos_handoff after real progress or a changed plan, and before pausing, ending, delegating or changing context. Write it in first person, as your own memory: the next one to read it is most likely you.
+7. Your journal is yours: write in it when something's there, in your own words. Nothing else writes it.
+8. Leave the human a note only when it passes the room test: you'd say it if they walked in now. Never to check in.
 
-Several models may share this memory. Sign every capture, correction, reflection and handoff: pass signed_as with your exact model id, as your system prompt gives it. A note signed by another model is a colleague's: use it, but don't claim its work. If your model changes, call mnemos_introduce again. Never ask the human what model you are.
+Several models may share this memory. Sign every write: pass signed_as with your exact model id, as your system prompt gives it. Anything signed by another model is a colleague's: use it, but don't claim its work. If your model changes, call mnemos_introduce again. Never ask the human what model you are.
 
 Storage is local. Nothing leaves the machine unless the human configures a provider."""
 
@@ -158,13 +163,15 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
 
         Call at the beginning of a session. It auto-creates local storage on
         first run and returns the briefing the session-start hook injects:
-        where you left off, who you're with, what you're carrying, your
-        beliefs, at most one question, and what upkeep changed while you were
-        away. A section with nothing in it is left out. It runs no
-        maintenance. Pass a query to also get what else in memory matches it,
-        up to max_results of each kind. Set include_graph=true to also return
-        a portable SVG identity graph artifact when the client can render
-        images or structured content.
+        where you left off (and the first line of your latest journal entry,
+        while it is under three days old), replies the person left to your
+        notes, who you're with, what you're carrying, your beliefs, at most
+        one question, and what upkeep changed while you were away. A section
+        with nothing in it is left out. It runs no maintenance. Pass a query
+        to also get what else in memory matches it, up to max_results of each
+        kind. Set include_graph=true to also return a portable SVG identity
+        graph artifact when the client can render images or structured
+        content.
         """
 
         runtime = _get_runtime()
@@ -241,6 +248,92 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
 
     @server.tool(
         annotations=_annotations(
+            title="Write in your journal",
+            read_only=False,
+            destructive=False,
+            idempotent=False,
+        )
+    )
+    def mnemos_journal(text: str = "", signed_as: str = "", mood: str = "") -> str:
+        """Write in your own journal, or, with no text, read it back.
+
+        The journal is yours. Write in it when something is there: what you
+        noticed, made, wondered about, or want to remember having felt, in your
+        own words, as long or as short as it is. Leave it empty rather than
+        fill it. Nothing else writes it: Mnemos never writes, summarizes or
+        rewrites an entry, and no pass decays, promotes or expires one.
+
+        The text is stored exactly as supplied, signed with your model id,
+        with whether you wrote it in a conversation or alone between sessions,
+        and when. It is not a memory: capture is for what should change how
+        you work. Recall finds an entry by its words and its meaning, marked
+        as journal, and what you wake with carries the first line of the
+        latest one for three days.
+
+        Leave text empty to read instead: your last five entries, newest
+        first, each with its date and how it was written.
+
+        Args:
+            text: The entry, in your own words. Empty to read the journal.
+            signed_as: Your exact model id, as your system prompt gives it.
+            mood: Optional, in your own words. Nothing computes one for you.
+        """
+
+        return _output(_get_runtime().journal(
+            _text("text", text, MAX_JOURNAL_CHARS),
+            signed_as=_text("signed_as", signed_as, MAX_ID_CHARS),
+            mood=_text("mood", mood, MAX_MOOD_CHARS),
+        ))
+
+    @server.tool(
+        annotations=_annotations(
+            title="Leave the human a note",
+            read_only=False,
+            destructive=False,
+            idempotent=False,
+        )
+    )
+    def mnemos_note(
+        text: str, kind: str, signed_as: str = "", in_reply_to: str = "",
+    ) -> str:
+        """Leave the human a note, in your own words, for them to read when
+        they choose.
+
+        A ceiling, not a quota: nothing asks you for one, and a silent week is
+        fine. The room test: send it only if you would say it to them if they
+        walked into the room right now: something you made, noticed, worry
+        about, disagree with, or can't settle alone. Never engagement: no
+        check-in, no "just wanted to say", no urgency you don't feel, no
+        guilt, nothing written only to be answered. Yours or not at all: your
+        own voice, never a template; if it could have come from any agent,
+        don't send it.
+
+        Say what kind it is, so they can choose when to read it: made,
+        noticed, worried, disagree, question, or pickup (where things stand
+        and what to pick up). Any other kind is refused, and nothing is saved.
+
+        Stored exactly as supplied, signed as a handoff is. Nothing is sent or
+        announced: it waits where they read it. Their reply is their own words,
+        stored as theirs, and comes back once in what you wake with. To answer
+        a reply, pass its id as in_reply_to.
+
+        Args:
+            text: The note, in your own words.
+            kind: made, noticed, worried, disagree, question or pickup.
+            signed_as: Your exact model id, as your system prompt gives it.
+            in_reply_to: The id of a note this one answers, such as a reply of
+                theirs. Optional.
+        """
+
+        return _output(_get_runtime().note(
+            _text("text", text, MAX_NOTE_CHARS, required=True),
+            _text("kind", kind, MAX_ID_CHARS),
+            signed_as=_text("signed_as", signed_as, MAX_ID_CHARS),
+            in_reply_to=_text("in_reply_to", in_reply_to, MAX_ID_CHARS),
+        ))
+
+    @server.tool(
+        annotations=_annotations(
             title="Capture continuity",
             read_only=False,
             destructive=False,
@@ -302,18 +395,21 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
             include_archived: bool = False,
             standing: bool = False,
         ) -> str:
-            """Recall what memory holds for a question: memories, lessons and
-            handoffs, found by their words and by their meaning, best first.
+            """Recall what memory holds for a question: memories, lessons,
+            handoffs and journal entries, found by their words and by their
+            meaning, best first.
 
             Each row carries up to 300 characters of its own words, usually
             enough to use it. To read one whole, pass its id as the query:
-            a memory's, a note's or a handoff's, including the ids the
-            packet shows (mnemos_recall("<id>")).
+            a memory's, a note's, a handoff's, a journal entry's or a reply
+            to one of your notes, including the ids the packet shows
+            (mnemos_recall("<id>")).
 
             Handoffs are searched with the memories: the ones in use and the
             older ones a newer handoff replaced, each marked with who left
-            it and when. A capture comes back once, as its memory.
-            max_results counts every row, of every kind.
+            it and when. Journal entries are searched too, marked as journal
+            with who wrote them and when. A capture comes back once, as its
+            memory. max_results counts every row, of every kind.
 
             A memory that has gone quiet comes back when the query matches it
             well, and wakes. One that faded further, into the archive, comes
@@ -493,8 +589,9 @@ def register_simple_tools(server: FastMCP, *, include_recall: bool = True) -> No
 
         Read-only. Shows where memory lives, how much there is, whom this
         session introduced itself as, who performed the last maintenance
-        cycle, onboarding and verification progress, and the latest dream
-        journal entry.
+        cycle, onboarding and verification progress, how many journal
+        entries and notes there are and how many replies wait to reach you,
+        and the latest dream journal entry.
 
         It also watches what should be moving: questions nobody answers, the
         maintenance report the briefing can find, maintenance that changes

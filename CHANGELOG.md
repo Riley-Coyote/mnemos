@@ -2,6 +2,58 @@
 
 ## 0.3.1 (unreleased)
 
+### A journal that is the agent's
+
+Simple mode had no journal of the mind's own (the only one was upkeep's dream
+journal, whose words are not the agent's), and no way to leave the person a
+note. Two new tools, two new tables, and the person's reply:
+
+- **`mnemos_journal(text, signed_as, mood)`** keeps an entry exactly as
+  written, signed as a handoff is, with whether it was written in a
+  conversation or alone between sessions (the environment says so with
+  `MNEMOS_HOUR_ID`, and the hour is kept), the session and the time. With no
+  text it reads the last five entries back. Nothing else writes the journal.
+- **`mnemos_note(text, kind, signed_as, in_reply_to)`** leaves the person a note
+  of a kind (made, noticed, worried, disagree, question or pickup; any other is
+  refused with the list). Its description carries the charter: a ceiling, not a
+  quota; the room test; never engagement; the agent's own voice or nothing.
+  Nothing is sent: the note waits for them.
+- **The person's reply is theirs.** `mnemos notes reply ID TEXT` stores their own
+  words, never signed as a model's, and refuses to run inside one of the
+  agent's quiet hours. The agent wakes with each reply once ("Riley replied to
+  my note "...": ..."), at most three per waking, never left out for room (a
+  long one is cut at a sentence, and its id reads it whole) and never marked
+  delivered unless shown. `mnemos journal [--last N] [--json]` and
+  `mnemos notes [--unread] [--json]` read them; the JSON is the shape the
+  interface reads.
+- **Not memories.** Schema v16 adds `journal_entries` and `notes`, kept the way
+  handoffs are: no pass summarizes, rewrites, decays, softens, promotes or
+  expires a row, and the only update after a write is one of two timestamps
+  (`delivered_at`, `read_at`), which code older than the store leaves alone.
+  The migration takes one verified recovery point. On a fresh copy of the
+  maintainer's live store (2026-10-02, 7,685 memories) it opened and migrated
+  in 1.90 s with integrity ok, and the SessionStart packet was identical to the
+  previous code's, apart from the clock line (5,978 characters), while no
+  journal or note existed.
+- **Waking:** the first line of the latest entry while it is under three days
+  old ("last time I wrote in my journal (5 hours ago): ..."), in the agent's
+  voice only when the entry is the reader's own; a colleague's is named.
+- **Recall** finds an entry by its words and its meaning, in its own
+  "Journal:" group, signed, and `mnemos_recall("<id>")` reads an entry, a note
+  or a reply whole. `mnemos_health` counts entries, notes by author and
+  replies waiting; no new alert hangs on them.
+- **The server instructions** gain the two rules (1,860 to 1,890 characters;
+  advanced mode adds 156 and must stay under the 2,048 a model is shown). To pay
+  for them, the handoff's list of what to include (the `mnemos_handoff`
+  description already says it) and the long form of a few other lines went.
+- **The simple surface is eleven tools.** Anything that asserts exactly nine
+  needs the two names; the release black-box audit did, and does not now.
+- `MAINTENANCE_CODE_VERSION` is 12: servers started on older code stop
+  maintaining a store once this code opens it. Checked with the previous code
+  itself on a store this code had written journal entries into: it said it was
+  older, its own captures and handoffs landed, maintenance stood down, and the
+  journal and note rows were byte-identical afterwards.
+
 ### Make it smaller
 
 3,073 lines of modules that nothing reached are gone, and a few things

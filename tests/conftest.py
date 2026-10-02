@@ -53,6 +53,11 @@ def _isolate_mnemos_env(monkeypatch, tmp_path_factory):
         # The cue's judge: a developer who switched it on would otherwise
         # send test messages to Jev.
         "MNEMOS_CUE_JUDGE",
+        # A suite run from inside one of the agent's quiet hours would
+        # otherwise write every journal entry as written between sessions, and
+        # refuse every reply (R22): the hour belongs to the process the hour's
+        # runner woke, not to the tests.
+        "MNEMOS_HOUR_ID",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("MNEMOS_DISABLE_DOTENV", "1")

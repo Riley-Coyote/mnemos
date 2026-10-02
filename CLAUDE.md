@@ -106,7 +106,7 @@ Three memory layers, most durable last:
 2. **Hypomnema** — scoped continuity that survives sessions and stays revisable.
 3. **Engrams** — the long-term graph, with decay, connections, and beliefs.
 
-Two MCP tool surfaces on one server: the nine **simple** tools are the
+Two MCP tool surfaces on one server: the eleven **simple** tools are the
 product; the **advanced** tools are an operator console. New user-facing
 capability belongs in simple mode.
 

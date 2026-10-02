@@ -48,7 +48,7 @@ from mnemos.core.types import ConnectionRelation
 from mnemos.retrieval.reactive import ReactiveRetriever
 from mnemos.simple_runtime import MnemosRuntime
 from mnemos.store.embedding_index import EmbeddingIndex
-from mnemos.store.sqlite_store import EngramStore
+from mnemos.store.sqlite_store import SCHEMA_VERSION, EngramStore
 
 SCOPE = {"agent_id": "nova", "person_id": "riley", "project_scope": "demo"}
 MODEL = "claude-opus-5-5"
@@ -712,10 +712,13 @@ def test_a_v14_store_gains_the_passage_table_after_a_verified_backup(tmp_path):
     finally:
         conn.close()
     assert "passage_vectors" in tables
-    assert meta["schema_version"] == "15"
+    # Whatever the schema is now: this store was at 14, and it is migrated once,
+    # after one verified recovery point named for the version it moved to.
+    assert meta["schema_version"] == str(SCHEMA_VERSION)
+    assert SCHEMA_VERSION >= 15
     assert meta["min_code_version"] == str(MAINTENANCE_CODE_VERSION)
     assert MAINTENANCE_CODE_VERSION >= 8
-    assert list((tmp_path / "backups").glob("memory.pre-v15-*.db"))
+    assert len(list((tmp_path / "backups").glob(f"memory.pre-v{SCHEMA_VERSION}-*.db"))) == 1
 
 
 # ── Read back in another process ──

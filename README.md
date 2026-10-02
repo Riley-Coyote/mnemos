@@ -51,7 +51,7 @@ document ingestion, Mnemos is not that and is not trying to be.
 | Hermes agent using Mnemos as its provider | Hermes Provider Mode | `mnemos hermes quickstart --provider` |
 | Background memory maintenance | Scheduled upkeep | `mnemos daemon install --write` |
 
-Start with **Simple MCP Mode**. It is the product: nine tools, and the default.
+Start with **Simple MCP Mode**. It is the product: eleven tools, and the default.
 
 The older advanced MCP surface and prototype modules are quarantined in 0.2.x.
 They remain importable for research, but unfinished operations fail clearly and
@@ -107,7 +107,7 @@ Simple mode is the default and safest path for most agents.
 mnemos serve
 ```
 
-Simple mode exposes nine user-facing tools:
+Simple mode exposes eleven user-facing tools:
 
 | Tool | Purpose |
 |---|---|
@@ -120,6 +120,8 @@ Simple mode exposes nine user-facing tools:
 | `mnemos_maintain` | Run the best available maintenance without requiring setup. |
 | `mnemos_introduce` | Let the agent declare its own model id and name. Everything it writes in the session is signed with it. |
 | `mnemos_health` | Human-relayable health card: store location and size, counts, delivery state, last handoff, maintenance, and onboarding. |
+| `mnemos_journal` | The agent's own journal, in its own words: written when something is there, read back when called with no text. Stored exactly as written and signed; nothing else writes, summarizes or decays it. |
+| `mnemos_note` | Leave the human a note they read when they choose, under a short charter: a ceiling, not a quota; the room test; never engagement. Their reply, in their own words, comes back once in the next packet. |
 
 Agents do not need to pass tags, memory kinds, confidence, source types, or
 agent IDs. Mnemos resolves scope once from CLI flags, environment, config, and

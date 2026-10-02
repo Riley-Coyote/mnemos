@@ -15,6 +15,9 @@ Commands:
     mnemos identity diff         Diff graph-derived identity against SOUL.md
     mnemos identity accept       Accept a divergence, open a new epoch
     mnemos remember CONTENT      Capture durable continuity from the CLI
+    mnemos journal [--last N]    Read the agent's journal
+    mnemos notes [--unread]      Read the agent's notes to you
+    mnemos notes reply ID TEXT   Reply to one of them, in your own words
     mnemos hermes install        Install Mnemos for Hermes Agent
     mnemos hermes quickstart     Safely install Mnemos for Hermes Agent
 """
@@ -190,6 +193,46 @@ def main(argv: list[str] | None = None) -> int:
         "--importance", default="auto", help="auto, or a number from 0.0 to 1.0"
     )
     _scope_options(p_remember)
+
+    # ── journal ──
+    p_journal = sub.add_parser(
+        "journal", help="Read the agent's journal (the agent writes it; this only reads)",
+    )
+    _scope_options(p_journal)
+    p_journal.add_argument(
+        "--last", type=int, default=5, metavar="N",
+        help="How many of the newest entries to read (default 5)",
+    )
+    p_journal.add_argument(
+        "--json", action="store_true",
+        help='Print the entries as JSON: [{"id", "text", "mood", "written", "model", "created_at"}]',
+    )
+
+    # ── notes ──
+    p_notes = sub.add_parser(
+        "notes", help="The notes the agent leaves you, and your replies",
+        description=(
+            "Read the notes the agent left you, newest first. Reading them marks the "
+            "agent's notes as read; --json only reads. `notes reply ID TEXT` answers "
+            "one in your own words, and the agent wakes with your reply."
+        ),
+    )
+    _scope_options(p_notes)
+    p_notes.add_argument(
+        "--unread", action="store_true", help="Only the agent's notes you have not read",
+    )
+    p_notes.add_argument(
+        "--json", action="store_true",
+        help='Print the notes as JSON: [{"id", "kind", "text", "author", "model", '
+             '"in_reply_to", "created_at", "read_at"}]',
+    )
+    notes_sub = p_notes.add_subparsers(dest="notes_command")
+    p_notes_reply = notes_sub.add_parser(
+        "reply", help="Reply to one of the agent's notes, in your own words",
+    )
+    _scope_options(p_notes_reply)
+    p_notes_reply.add_argument("note_id", help="The id of the note you are answering")
+    p_notes_reply.add_argument("text", nargs="+", help="Your reply, in your own words")
 
     # ── doctor ──
     p_doctor = sub.add_parser("doctor", help="Check Mnemos simple-mode readiness")
@@ -600,6 +643,8 @@ def main(argv: list[str] | None = None) -> int:
         "index": _cmd_index,
         "bridge": _cmd_bridge,
         "remember": _cmd_remember,
+        "journal": _cmd_journal,
+        "notes": _cmd_notes,
         "doctor": _cmd_doctor,
         "repair-softening": _cmd_repair_softening,
         "adopt-legacy": _cmd_adopt_legacy,
@@ -1940,6 +1985,134 @@ def _cmd_remember(args: argparse.Namespace) -> int:
         return 0
     finally:
         runtime.close()
+
+
+def _journal_runtime(args: argparse.Namespace, *, read_only: bool):
+    """The runtime the journal and notes commands read or write through, with
+    the scope the same resolver gives every other command."""
+    from .simple_runtime import MnemosRuntime
+
+    return MnemosRuntime(
+        db_path=getattr(args, "db_path", None),
+        agent_id=getattr(args, "agent_id", None),
+        person_id=getattr(args, "person_id", None),
+        project_scope=getattr(args, "project_scope", None),
+        use_dedicated_model=False,
+        read_only=read_only,
+    )
+
+
+def _utc_minute(created_at: str) -> str:
+    """``2026-10-02T04:12:33+00:00`` as ``2026-10-02 04:12 UTC``."""
+    return f"{(created_at or '')[:16].replace('T', ' ')} UTC"
+
+
+def _cmd_journal(args: argparse.Namespace) -> int:
+    """Read the agent's journal, newest first. The agent writes it, only
+    through its own tool; this only reads, and never creates a store."""
+    from .authorship import display_name
+
+    if args.last < 1:
+        print("--last takes a number of entries, 1 or more.", file=sys.stderr)
+        return 2
+    runtime = _journal_runtime(args, read_only=True)
+    try:
+        entries = runtime.journal_entries(last=args.last)
+    finally:
+        runtime.close()
+    if args.json:
+        print(json.dumps(entries, indent=2, ensure_ascii=False))
+        return 0
+    if not entries:
+        print("The journal is empty.")
+        return 0
+    for index, entry in enumerate(entries):
+        if index:
+            print()
+        header = f"{_utc_minute(entry['created_at'])}, {entry['written'].replace('_', ' ')}"
+        if entry["model"]:
+            header += f", {display_name(entry['model'])}"
+        if entry["mood"]:
+            header += f", mood: {entry['mood']}"
+        print(header)
+        print(entry["text"])
+    return 0
+
+
+def _cmd_notes(args: argparse.Namespace) -> int:
+    """The notes the agent left you and your replies: list them, or reply."""
+    from .authorship import display_name
+    from .simple_runtime import current_hour
+
+    if getattr(args, "notes_command", None) == "reply":
+        return _cmd_notes_reply(args)
+    runtime = _journal_runtime(args, read_only=True)
+    try:
+        notes = runtime.notes(unread=args.unread)
+    finally:
+        runtime.close()
+    if args.json:
+        # The interface reads this: only reading, so nothing is marked read.
+        print(json.dumps(notes, indent=2, ensure_ascii=False))
+        return 0
+    if not notes:
+        print("No unread notes." if args.unread else "No notes yet.")
+        return 0
+    for index, note in enumerate(notes):
+        if index:
+            print()
+        if note["author"] == "person":
+            header = f"{_utc_minute(note['created_at'])}  your reply"
+        else:
+            by = display_name(note["model"]) if note["model"] else "unsigned"
+            unread = "" if note["read_at"] else "  (unread)"
+            header = f"{_utc_minute(note['created_at'])}  {note['kind'] or 'note'}, {by}{unread}"
+        print(header)
+        print(f"  {note['text']}".replace("\n", "\n  "))
+        if note["in_reply_to"]:
+            print(f"  answers: {note['in_reply_to']}")
+        print(f"  id: {note['id']}")
+    # Reading them is what makes them read; a pass of the agent's own hours has
+    # no one in the room to have read anything.
+    unread_ids = [note["id"] for note in notes if note["author"] == "agent" and not note["read_at"]]
+    if unread_ids and not current_hour():
+        # Bookkeeping: they were shown, and a lock held by another process
+        # must not make the listing look as though it failed.
+        try:
+            writer = _journal_runtime(args, read_only=False)
+            try:
+                writer.mark_notes_read(unread_ids)
+            finally:
+                writer.close()
+        except sqlite3.Error:
+            pass
+    return 0
+
+
+def _cmd_notes_reply(args: argparse.Namespace) -> int:
+    """Store your own reply to one of the agent's notes. It is your words, kept
+    as yours (never signed as a model's), and the agent wakes with it once."""
+    probe = _journal_runtime(args, read_only=False)
+    try:
+        if not probe.db_path.exists():
+            print("Nothing saved: there are no notes here yet.", file=sys.stderr)
+            return 1
+        try:
+            reply_id = probe.reply_to_note(args.note_id, " ".join(args.text))
+        except ValueError as exc:
+            print(f"Nothing saved: {exc}", file=sys.stderr)
+            return 1
+        # Answering a note is reading it. Bookkeeping: the reply is kept either
+        # way, so a failure here must not make it look unsaved.
+        try:
+            probe.mark_notes_read([args.note_id])
+        except sqlite3.Error:
+            pass
+    finally:
+        probe.close()
+    print("Reply kept, in your own words.")
+    print(f"Reply ID: {reply_id}")
+    return 0
 
 
 def _cmd_repair_softening(args: argparse.Namespace) -> int:

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from collections.abc import Iterable
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,8 +34,10 @@ from ..core.identity import AgentIdentity
 
 
 # Schema version — increment when tables change. v15: passage_vectors, recall's
-# meaning index (see embedding_index.PASSAGE_TABLE_SQL).
-SCHEMA_VERSION = 15
+# meaning index (see embedding_index.PASSAGE_TABLE_SQL). v16: journal_entries
+# and notes, the agent's journal and the notes between the agent and the
+# person (see JOURNAL_WRITTEN and NOTE_KINDS).
+SCHEMA_VERSION = 16
 
 # The lowest maintenance code version still allowed to maintain this store,
 # raised by each newer version that opens it (see mnemos/code_version.py).
@@ -121,6 +124,39 @@ LIVE_HANDOFF_HOURS = 72
 # agent forgot, or replaced with a correction, was put there on purpose, and
 # stays until someone who can see it decides otherwise.
 FADED_ARCHIVE_REASONS = ("decay_below_threshold", "low_accessibility")
+
+# The agent's journal and the notes between the agent and the person (v16).
+# Both are kept the way a handoff is kept: exactly as written, in the scope
+# that wrote them, and never summarized, rewritten, decayed, softened,
+# promoted, linked or expired by any pass. They are not memories: they have no
+# engram, no clock and no reinforcement, and no pass reads them to decide
+# anything. Only the agent writes the journal and its own notes (through
+# mnemos_journal and mnemos_note); only the person writes a reply, which is the
+# person's own words (`mnemos notes reply`).
+#
+# Where a journal entry was written: in a conversation, or alone in one of the
+# quiet hours between sessions (the process says so with MNEMOS_HOUR_ID).
+JOURNAL_WRITTEN = ("in_conversation", "between_sessions")
+# What an agent note is. A person's reply has no kind. No CHECK in the table:
+# SQLite cannot widen one in place, and a store must never refuse a row a
+# newer Mnemos wrote.
+NOTE_KINDS = ("made", "noticed", "worried", "disagree", "question", "pickup")
+NOTE_AUTHORS = ("agent", "person")
+
+
+def note_kinds_phrase() -> str:
+    """The kinds of note in words: "made, noticed, worried, disagree, question
+    or pickup"."""
+    return f"{', '.join(NOTE_KINDS[:-1])} or {NOTE_KINDS[-1]}"
+
+
+def note_kind_problem(kind: str) -> str | None:
+    """Why ``kind`` is not a kind of note an agent can leave, in plain words
+    that list the ones it can; None when it is one."""
+    if kind in NOTE_KINDS:
+        return None
+    said = f"{kind!r} isn't a kind of note" if kind else "Say what kind of note it is"
+    return f"{said}: {note_kinds_phrase()}."
 
 VALID_HYPO_SOURCES = {"observed", "synthesized", "co-formed"}
 VALID_HYPO_ENTRY_KINDS = {
@@ -583,11 +619,59 @@ CREATE TABLE IF NOT EXISTS memory_trace (
     written_ids TEXT NOT NULL DEFAULT '[]'
 );
 
+-- The agent's journal (v16): its own words, written only by the agent through
+-- mnemos_journal, kept exactly as written and never touched by any pass. Not an
+-- engram. `written` says whether it was written in a conversation or alone,
+-- between sessions (then `hour_id` names the hour). `model_id` is who signed it,
+-- empty when no one could say. No CHECK on `written`: see JOURNAL_WRITTEN.
+CREATE TABLE IF NOT EXISTS journal_entries (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL DEFAULT 'default',
+    person_id TEXT NOT NULL DEFAULT 'user',
+    project_scope TEXT NOT NULL DEFAULT 'global',
+    text TEXT NOT NULL,
+    mood TEXT NOT NULL DEFAULT '',
+    written TEXT NOT NULL DEFAULT 'in_conversation',
+    session_id TEXT NOT NULL DEFAULT '',
+    model_id TEXT NOT NULL DEFAULT '',
+    hour_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+-- Notes between the agent and the person (v16), kept the same way. An agent's
+-- note has a kind (NOTE_KINDS); a person's reply has none and names the note it
+-- answers in `in_reply_to`. `delivered_at` is when a reply first reached the
+-- agent's waking packet; `read_at` is when the person first read an agent note.
+-- Both are bookkeeping and nothing else changes after a note is written.
+CREATE TABLE IF NOT EXISTS notes (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL DEFAULT 'default',
+    person_id TEXT NOT NULL DEFAULT 'user',
+    project_scope TEXT NOT NULL DEFAULT 'global',
+    kind TEXT NOT NULL DEFAULT '',
+    text TEXT NOT NULL,
+    author TEXT NOT NULL,
+    model_id TEXT NOT NULL DEFAULT '',
+    in_reply_to TEXT NOT NULL DEFAULT '',
+    session_id TEXT NOT NULL DEFAULT '',
+    hour_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    read_at TEXT
+);
+
 """ + ";\n".join(_REFLECTION_QUEUE_INDEXES) + """;
 CREATE INDEX IF NOT EXISTS idx_host_mutations_completed
     ON host_mutations(completed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_trace_at ON memory_trace(at);
 CREATE INDEX IF NOT EXISTS idx_memory_trace_session ON memory_trace(session, at);
+CREATE INDEX IF NOT EXISTS idx_journal_scope
+    ON journal_entries(agent_id, person_id, project_scope, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notes_scope
+    ON notes(agent_id, person_id, project_scope, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notes_replies_waiting
+    ON notes(agent_id, person_id, project_scope, created_at)
+    WHERE author = 'person' AND delivered_at IS NULL;
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS meta (
@@ -4592,6 +4676,353 @@ class EngramStore:
         if row is None:
             return None
         return AgentIdentity.from_dict(dict(row))
+
+    # ── The journal, and notes between the agent and the person (v16) ──
+    #
+    # Kept the way handoffs are: exactly as written, in the scope that wrote
+    # them. Nothing here is read by a maintenance pass to decide anything, and
+    # no method here changes the words of a row. The only writes after a row
+    # exists are two timestamps, `delivered_at` (a reply reached the agent's
+    # waking packet) and `read_at` (the person read an agent's note).
+
+    def _rows_if_table(
+        self, sql: str, params: tuple[Any, ...] | list[Any] = (),
+    ) -> list[sqlite3.Row]:
+        """Rows for a read of the journal or the notes; ``[]`` when this store
+        has no such table yet. A store opened read-only (``mnemos doctor``, the
+        journal command) before this code migrated it has none, and nothing was
+        ever written there, so there is nothing to read."""
+        try:
+            return self._get_conn().execute(sql, params).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc):
+                return []
+            raise
+
+    def write_journal_entry(
+        self,
+        text: str,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        mood: str = "",
+        written: str = "in_conversation",
+        session_id: str = "",
+        model_id: str = "",
+        hour_id: str = "",
+    ) -> str:
+        """Keep one journal entry exactly as the agent wrote it, and return its id.
+
+        ``written`` is one of ``JOURNAL_WRITTEN``; ``hour_id`` names the quiet
+        hour when it was written between sessions. ``model_id`` signs it, empty
+        when no one could say, never guessed. The text is stored as supplied:
+        not stripped, wrapped or normalised.
+        """
+        if not text.strip():
+            raise ValueError("A journal entry cannot be empty")
+        if written not in JOURNAL_WRITTEN:
+            raise ValueError(f"A journal entry is written one of: {', '.join(JOURNAL_WRITTEN)}")
+        entry_id = _new_id()
+        try:
+            self._get_conn().execute(
+                """
+                INSERT INTO journal_entries (
+                    id, agent_id, person_id, project_scope, text, mood, written,
+                    session_id, model_id, hour_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry_id, agent_id, person_id, project_scope, text, (mood or "").strip(),
+                    written, (session_id or "").strip(), (model_id or "").strip(),
+                    (hour_id or "").strip(), _utc_now(),
+                ),
+            )
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
+        return entry_id
+
+    def journal_entries(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """The journal entries of this exact scope, newest first; the newest
+        ``limit`` of them when given. Reads."""
+        sql = (
+            "SELECT * FROM journal_entries "
+            "WHERE agent_id = ? AND person_id = ? AND project_scope = ? "
+            "ORDER BY created_at DESC, rowid DESC"
+        )
+        params: list[Any] = [agent_id, person_id, project_scope]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(max(0, int(limit)))
+        return [dict(row) for row in self._rows_if_table(sql, params)]
+
+    def get_journal_entry(
+        self,
+        entry_id: str,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> dict[str, Any] | None:
+        """One journal entry of this exact scope by its id, or None. Reads."""
+        rows = self._rows_if_table(
+            "SELECT * FROM journal_entries "
+            "WHERE id = ? AND agent_id = ? AND person_id = ? AND project_scope = ?",
+            (entry_id, agent_id, person_id, project_scope),
+        )
+        return dict(rows[0]) if rows else None
+
+    def write_note(
+        self,
+        text: str,
+        *,
+        author: str,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        kind: str = "",
+        model_id: str = "",
+        in_reply_to: str = "",
+        session_id: str = "",
+        hour_id: str = "",
+    ) -> str:
+        """Keep one note exactly as written, and return its id.
+
+        An agent's note (``author`` 'agent') has a kind from ``NOTE_KINDS`` and
+        is signed with ``model_id``. A person's reply (``author`` 'person') has
+        no kind, is no model's, and answers one of the agent's notes. When
+        ``in_reply_to`` names a note it must be one of this exact scope: a
+        reply to nothing would be a note no one could place. Raises
+        ``ValueError`` with a plain reason when a note is refused.
+        """
+        if not text.strip():
+            raise ValueError("The note was empty.")
+        if author not in NOTE_AUTHORS:
+            raise ValueError(f"A note is written by one of: {', '.join(NOTE_AUTHORS)}.")
+        in_reply_to = (in_reply_to or "").strip()
+        kind = (kind or "").strip()
+        if author == "agent":
+            problem = note_kind_problem(kind)
+            if problem:
+                raise ValueError(problem)
+        else:
+            if kind:
+                raise ValueError("A reply has no kind.")
+            if not in_reply_to:
+                raise ValueError("A reply answers one of the agent's notes.")
+        conn = self._get_conn()
+        entry_id = _new_id()
+        try:
+            self._begin_immediate()
+            if in_reply_to:
+                target = conn.execute(
+                    "SELECT author FROM notes "
+                    "WHERE id = ? AND agent_id = ? AND person_id = ? AND project_scope = ?",
+                    (in_reply_to, agent_id, person_id, project_scope),
+                ).fetchone()
+                if target is None:
+                    raise ValueError("There is no note with that id here.")
+                if author == "person" and target["author"] != "agent":
+                    raise ValueError("A reply answers one of the agent's notes.")
+            conn.execute(
+                """
+                INSERT INTO notes (
+                    id, agent_id, person_id, project_scope, kind, text, author,
+                    model_id, in_reply_to, session_id, hour_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry_id, agent_id, person_id, project_scope, kind, text, author,
+                    (model_id or "").strip(), in_reply_to, (session_id or "").strip(),
+                    (hour_id or "").strip(), _utc_now(),
+                ),
+            )
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
+        return entry_id
+
+    def get_note(
+        self,
+        note_id: str,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> dict[str, Any] | None:
+        """One note of this exact scope by its id, or None. Reads."""
+        rows = self._rows_if_table(
+            "SELECT * FROM notes "
+            "WHERE id = ? AND agent_id = ? AND person_id = ? AND project_scope = ?",
+            (note_id, agent_id, person_id, project_scope),
+        )
+        return dict(rows[0]) if rows else None
+
+    def list_notes(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        unread: bool = False,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """The notes of this exact scope, both authors', newest first. With
+        ``unread``, only the agent's notes the person has not read. Reads."""
+        sql = (
+            "SELECT * FROM notes WHERE agent_id = ? AND person_id = ? AND project_scope = ?"
+        )
+        if unread:
+            sql += " AND author = 'agent' AND read_at IS NULL"
+        sql += " ORDER BY created_at DESC, rowid DESC"
+        params: list[Any] = [agent_id, person_id, project_scope]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(max(0, int(limit)))
+        return [dict(row) for row in self._rows_if_table(sql, params)]
+
+    def undelivered_replies(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+        limit: int = 3,
+    ) -> list[dict[str, Any]]:
+        """The person's replies that have not yet reached the agent's waking
+        packet, oldest first, at most ``limit``, each with the words and the
+        signature of the agent's note it answers (``reply_to_text``,
+        ``reply_to_model``). Reads: delivering one is ``mark_replies_delivered``."""
+        rows = self._rows_if_table(
+            """
+            SELECT r.*, n.text AS reply_to_text, n.model_id AS reply_to_model
+            FROM notes r
+            LEFT JOIN notes n
+              ON n.id = r.in_reply_to AND n.agent_id = r.agent_id
+             AND n.person_id = r.person_id AND n.project_scope = r.project_scope
+            WHERE r.agent_id = ? AND r.person_id = ? AND r.project_scope = ?
+              AND r.author = 'person' AND r.delivered_at IS NULL
+            ORDER BY r.created_at ASC, r.rowid ASC
+            LIMIT ?
+            """,
+            (agent_id, person_id, project_scope, max(0, int(limit))),
+        )
+        return [dict(row) for row in rows]
+
+    def mark_replies_delivered(
+        self,
+        reply_ids: Iterable[str],
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> list[str]:
+        """Record that these replies reached the agent's waking packet, once:
+        a reply already delivered keeps the time it was. Returns the ids this
+        call marked. Bookkeeping, so the caller never calls it for code older
+        than the store."""
+        return self._stamp_notes(
+            "delivered_at", "person", reply_ids,
+            agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        )
+
+    def mark_notes_read(
+        self,
+        note_ids: Iterable[str],
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> list[str]:
+        """Record that the person read these notes of the agent's, once: one
+        already read keeps the time it was. Returns the ids this call marked.
+        Bookkeeping, so the caller never calls it for code older than the
+        store."""
+        return self._stamp_notes(
+            "read_at", "agent", note_ids,
+            agent_id=agent_id, person_id=person_id, project_scope=project_scope,
+        )
+
+    def _stamp_notes(
+        self,
+        column: str,
+        author: str,
+        ids: Iterable[str],
+        *,
+        agent_id: str,
+        person_id: str,
+        project_scope: str,
+    ) -> list[str]:
+        """Set ``column`` (``delivered_at`` or ``read_at``) to now on each of
+        the author's notes in the scope that has none yet, in one transaction,
+        and return the ids that took it. With nothing to mark it opens no
+        transaction: reading a store never writes it."""
+        if column not in ("delivered_at", "read_at"):
+            raise ValueError(f"Not a note timestamp: {column}")
+        wanted = list(dict.fromkeys(str(note_id) for note_id in ids if note_id))
+        if not wanted:
+            return []
+        now = _utc_now()
+        done: list[str] = []
+        conn = self._get_conn()
+        try:
+            self._begin_immediate()
+            for note_id in wanted:
+                cursor = conn.execute(
+                    f"UPDATE notes SET {column} = ? "
+                    "WHERE id = ? AND agent_id = ? AND person_id = ? AND project_scope = ? "
+                    f"AND author = ? AND {column} IS NULL",
+                    (now, note_id, agent_id, person_id, project_scope, author),
+                )
+                if cursor.rowcount == 1:
+                    done.append(note_id)
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
+        return done
+
+    def journal_and_note_counts(
+        self,
+        *,
+        agent_id: str = "default",
+        person_id: str = "user",
+        project_scope: str = "global",
+    ) -> dict[str, int]:
+        """How much of the journal and the notes this scope holds: entries,
+        notes by each author, and replies not yet delivered. Reads."""
+        scope = (agent_id, person_id, project_scope)
+        entries = self._rows_if_table(
+            "SELECT COUNT(*) FROM journal_entries "
+            "WHERE agent_id = ? AND person_id = ? AND project_scope = ?", scope,
+        )
+        by_author = {
+            row[0]: int(row[1]) for row in self._rows_if_table(
+                "SELECT author, COUNT(*) FROM notes "
+                "WHERE agent_id = ? AND person_id = ? AND project_scope = ? GROUP BY author",
+                scope,
+            )
+        }
+        waiting = self._rows_if_table(
+            "SELECT COUNT(*) FROM notes WHERE agent_id = ? AND person_id = ? "
+            "AND project_scope = ? AND author = 'person' AND delivered_at IS NULL", scope,
+        )
+        return {
+            "journal_entries": int(entries[0][0]) if entries else 0,
+            "notes_by_agent": by_author.get("agent", 0),
+            "notes_by_person": by_author.get("person", 0),
+            "replies_waiting": int(waiting[0][0]) if waiting else 0,
+        }
 
     # ── Meta ──
 

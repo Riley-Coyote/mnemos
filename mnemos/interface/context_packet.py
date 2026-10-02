@@ -16,7 +16,10 @@ apart at the end, for the tools:
 0. The opening: when and where, and who the reader is with.
 1. Where I left off: the reader's own handoff first, whole, then up to two
    notes other sessions left in the last three days, each with its age and,
-   when it isn't the reader's, its model.
+   when it isn't the reader's, its model. Then, when the latest journal entry
+   is under three days old, its first line ("last time I wrote in my journal
+   (5 hours ago): ..."), and the person's replies to the agent's notes that
+   haven't reached a packet yet, at most three, each delivered once.
 2. The person (or "who i'm with"): first what the agent marked standing, how
    the person wants it to work in every session: the newest mark first, up to
    five, one line each in the memory's own words, and a count of the rest.
@@ -47,7 +50,7 @@ sentence boundary, and ``mnemos_recall(<id>)`` returns a note whole.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -132,6 +135,19 @@ UNKNOWN = "unknown"
 
 # A belief below this confidence is shown as still forming.
 _FIRM = 0.5
+
+# The latest journal entry is shown, as its first line, only while it is this
+# recent; past it, it is the journal's to keep, found by recall. The agent's
+# own words are not shown stale as though they were news.
+JOURNAL_LIVE = timedelta(days=3)
+_JOURNAL_LINE_CHARS = 240
+# The person's replies a packet hands over at most, oldest first; the rest wait
+# for the next waking. A reply is never left out for room (a reply left out
+# would be marked delivered unread), so each is cut at a sentence boundary
+# instead, and the whole waits behind its id.
+REPLIES_SHOWN = 3
+_REPLY_CHARS = 700
+_REPLIED_NOTE_CHARS = 100
 
 
 def build_context_packet(
@@ -245,6 +261,8 @@ def build_context_packet(
     woke = now or datetime.now().astimezone()
     if woke.tzinfo is None:
         woke = woke.astimezone()
+    journal = _latest_journal(store, scope, woke)
+    replies = _waiting_replies(store, scope)
 
     packet: dict[str, Any] = {
         "include_engrams": include_engrams,
@@ -271,6 +289,8 @@ def build_context_packet(
         "reflections": questions,
         "maintenance_report": report,
         "maintenance_reports": [report] if report else [],
+        "journal": journal,
+        "replies": replies,
         "mnemos_engrams": [_serialize_retrieval_result(result) for result in found],
     }
 
@@ -282,7 +302,7 @@ def build_context_packet(
     text, kept = _append_graph(packet, text, max_chars)
     packet["mnemos_engrams"] = kept
     if mark_surfaced:
-        _record_delivery(store, scope, shown)
+        _record_delivery(store, scope, shown, deliver_replies=not older_than_store)
     if kept:
         # Recall for a cue is a use, and only what the reader was shown is
         # reinforced: once per session, never by code older than the store
@@ -310,26 +330,31 @@ def format_context_packet(
 
 
 def carried_count(packet: dict[str, Any]) -> int:
-    """How many handoffs, standing memories, notes, lessons and reports the
-    packet showed after its budget: 0 means the session started from
-    nothing."""
+    """How many handoffs, standing memories, notes, lessons, reports, journal
+    lines and replies the packet showed after its budget: 0 means the session
+    started from nothing."""
     shown = packet.get("shown") or {}
     return (
         len(shown.get("handoffs") or [])
         + len(shown.get("standing") or [])
         + len(shown.get("notes") or [])
         + int(bool(shown.get("report")))
+        + int(bool(shown.get("journal")))
+        + len(shown.get("replies") or [])
     )
 
 
 def shown_ids(packet: dict[str, Any]) -> set[str]:
     """The ids of everything the packet rendered: handoffs, standing memories
-    and the notes paired with them, notes, lessons (an engram's id) and the
-    report. Only what survived the budget counts; a note selected but cut for
-    room was not shown. A caller appending more to the packet leaves these
-    out, so nothing is shown twice."""
+    and the notes paired with them, notes, lessons (an engram's id), the
+    report, the journal entry and the replies. Only what survived the budget
+    counts; a note selected but cut for room was not shown. A caller appending
+    more to the packet leaves these out, so nothing is shown twice."""
     shown = packet.get("shown") or {}
     ids = set(shown.get("handoffs") or []) | set(shown.get("notes") or [])
+    ids.update(shown.get("replies") or [])
+    if shown.get("journal"):
+        ids.add(shown["journal"])
     paired = packet.get("standing_notes") or {}
     for engram_id in shown.get("standing") or []:
         ids.add(engram_id)
@@ -744,8 +769,10 @@ def _render(packet: dict[str, Any], *, max_chars: int) -> tuple[str, dict[str, A
 def _drop_order(packet: dict[str, Any]) -> list[tuple[str, str]]:
     """What leaves the packet first when it does not fit: other sessions'
     notes, then what the reader is carrying, the foundational notes, the
-    report, the episode, the question and the beliefs. The standing lines go
-    last, the oldest mark first: they say how to work in this session."""
+    report, the journal line, the episode, the question and the beliefs. The
+    standing lines go last, the oldest mark first: they say how to work in
+    this session. The person's replies never go: one left out would be marked
+    delivered unread."""
     carrying = packet.get("carrying") or []
     episodes = [item for item in carrying if item["episode"]]
     others = [item for item in carrying if not item["episode"]]
@@ -755,6 +782,7 @@ def _drop_order(packet: dict[str, Any]) -> list[tuple[str, str]]:
         *(("carrying", item["id"]) for item in reversed(others)),
         *(("who", entry["id"]) for entry in reversed(packet.get("foundational") or [])),
         ("report", ""),
+        ("journal", ""),
         *(("carrying", item["id"]) for item in episodes),
         ("question", ""),
         *(("belief", belief["id"]) for belief in reversed(packet.get("beliefs") or [])),
@@ -767,9 +795,12 @@ def _compose(
 ) -> tuple[str, dict[str, Any]]:
     shown: dict[str, Any] = {
         "handoffs": [], "standing": [], "notes": [], "questions": [], "report": None,
+        "journal": None, "replies": [],
     }
     # What the closing section lists for the tools, in the order shown.
-    tools: dict[str, Any] = {"standing": [], "more": 0, "cut": [], "beliefs": [], "calls": []}
+    tools: dict[str, Any] = {
+        "standing": [], "more": 0, "cut": [], "beliefs": [], "calls": [], "replies": [],
+    }
     # Being comes before news. Someone waking doesn't first recall last
     # night's events; they are simply themselves, with the people they know,
     # and what happened comes after. Fresh readers said the same (2026-09-30):
@@ -780,7 +811,8 @@ def _compose(
     sections = [
         _format_beliefs(packet, dropped, tools),
         _format_who(packet, chars, dropped, shown, tools),
-        _format_left_off(packet, chars, dropped, shown, tools),
+        _format_where_left(packet, chars, dropped, shown, tools),
+        _format_replies(packet, shown, tools),
         _format_notes(
             "what i'm carrying" if packet.get("voice") == SELF else "what this memory is carrying",
             packet, packet.get("carrying") or [], "carrying", chars, dropped, shown, tools,
@@ -880,6 +912,119 @@ def _format_left_off(
     if relations & {_COLLEAGUE, _UNPLACED}:
         lines.append(_COLLEAGUE_OWN_WORDS)
     return "\n".join(lines)
+
+
+def _format_where_left(
+    packet: dict[str, Any],
+    chars: int,
+    dropped: set[tuple[str, str]],
+    shown: dict[str, Any],
+    tools: dict[str, Any],
+) -> str:
+    """Where I left off: the handoffs, then the journal's latest line when it
+    is recent. With no handoff the journal line makes the section on its own."""
+    left_off = _format_left_off(packet, chars, dropped, shown, tools)
+    journal = _format_journal(packet, dropped, shown, tools)
+    if left_off and journal:
+        return f"{left_off}\n\n{journal}"
+    if journal:
+        heading = "### where i left off" if packet.get("voice") == SELF else "### where things were left"
+        return f"{heading}\n{journal}"
+    return left_off
+
+
+def _format_journal(
+    packet: dict[str, Any],
+    dropped: set[tuple[str, str]],
+    shown: dict[str, Any],
+    tools: dict[str, Any],
+) -> str:
+    """The first line of the journal's latest entry, when it is under three
+    days old: "last time I wrote in my journal (5 hours ago): ...".
+
+    It says "I" only when the entry is the reader's own, by the rule a handoff
+    follows (``_whose``): an entry another model signed is a colleague's, and
+    one no one can place says who signed it. No id and no tool name here; when
+    more of the entry exists than this line, its id waits in the closing
+    section, where ``mnemos_recall`` reads it whole.
+    """
+    entry = packet.get("journal")
+    if not entry or ("journal", "") in dropped:
+        return ""
+    whose, name, age, _session = _whose(
+        {
+            "author_model": entry.get("model_id"),
+            "author_session": entry.get("session_id"),
+            "created_at": entry.get("created_at"),
+        },
+        packet.get("reader_model") or "",
+        packet.get("reader_session") or "",
+    )
+    text = entry.get("text") or ""
+    words, cut = cut_at_sentence(_first_line(text), _JOURNAL_LINE_CHARS)
+    if whose == _OWN:
+        line = f"last time I wrote in my journal ({age}): {words}"
+    elif name:
+        line = f"the last journal entry here, by {name} ({age}): {words}"
+    else:
+        line = f"the last journal entry here, unsigned ({age}): {words}"
+    shown["journal"] = entry["id"]
+    if cut or sum(1 for row in text.splitlines() if row.strip()) > 1:
+        tools["cut"].append(entry["id"])
+    return line
+
+
+def _format_replies(
+    packet: dict[str, Any], shown: dict[str, Any], tools: dict[str, Any],
+) -> str:
+    """The person's replies to the agent's notes that have not reached a
+    packet yet, each as "<person> replied to my note "<its first line>":
+    <reply>".
+
+    Never left out for room (``_drop_order``): a reply the reader was not
+    shown must not be marked delivered. A long one is cut at a sentence
+    boundary, and its whole waits behind its id in the closing section. The
+    note is "my" note only when the agent who wrote it is the reader; another
+    model's is named, and one no one can place is just "a note". Ids and tool
+    names stay in the closing section.
+    """
+    items = packet.get("replies") or []
+    if not items:
+        return ""
+    person = packet.get("person_name") or "the person I'm with"
+    reader = packet.get("reader_model") or ""
+    heading = (
+        "### replies to my notes" if packet.get("voice") == SELF
+        else "### replies to this memory's notes"
+    )
+    lines = [heading]
+    for item in items:
+        words, cut = cut_at_sentence(item.get("text") or "", _REPLY_CHARS)
+        title, _ = cut_at_sentence(_first_line(item.get("reply_to_text") or ""), _REPLIED_NOTE_CHARS)
+        about = f' "{title}"' if title else ""
+        owner = _whose_note(item.get("reply_to_model"), reader)
+        lines.append(f"- {person} replied to {owner} note{about}: {words}")
+        shown["replies"].append(item["id"])
+        tools["replies"].append(item["id"])
+        if cut:
+            tools["cut"].append(item["id"])
+    return "\n".join(lines)
+
+
+def _whose_note(note_model: object, reader_model: str) -> str:
+    """"my", "Fable 5's" or "a": whose note a reply answers, to this reader."""
+    author, reader = clean_model_id(note_model), clean_model_id(reader_model)
+    if author and reader:
+        return "my" if same_model(author, reader) else f"{display_name(author)}'s"
+    return "a"
+
+
+def _first_line(text: str) -> str:
+    """The first line of ``text`` that says something, on one line."""
+    for row in (text or "").splitlines():
+        if row.strip():
+            return " ".join(row.split())
+    return ""
 
 
 def _format_who(
@@ -1170,6 +1315,11 @@ def _format_tools(packet: dict[str, Any], tools: dict[str, Any]) -> str:
         lines.append(line)
     elif tools["more"]:
         lines.append(f"- what's marked standing: {STANDING_LIST_CALL}")
+    if tools.get("replies"):
+        lines.append(
+            f"- replies to my notes, in order: {', '.join(tools['replies'])}; to answer one: "
+            'mnemos_note(text="…", kind="…", in_reply_to="<its id>")'
+        )
     if tools["cut"]:
         calls = ", ".join(f'mnemos_recall("{entry_id}")' for entry_id in tools["cut"])
         lines.append(f"- what was cut short, whole, in order: {calls}")
@@ -1235,11 +1385,28 @@ def _older_than(store: "EngramStore") -> bool:
     return minimum is not None and minimum > code_version.MAINTENANCE_CODE_VERSION
 
 
-def _record_delivery(store: "EngramStore", scope: dict[str, str], shown: dict[str, Any]) -> None:
+def _record_delivery(
+    store: "EngramStore",
+    scope: dict[str, str],
+    shown: dict[str, Any],
+    *,
+    deliver_replies: bool = True,
+) -> None:
     """Count what was actually shown: a handoff as delivered, a question as
-    one showing spent."""
+    one showing spent, a reply of the person's as delivered, once.
+
+    A reply is marked only when it was shown, and never by code older than the
+    store (``deliver_replies`` False): what delivered means is a rule newer
+    code may have replaced. Older code still shows it, and it is delivered, and
+    marked, by the code that comes after.
+    """
     for handoff_id in shown["handoffs"]:
         store.mark_handoff_surfaced(handoff_id, **scope)
+    if deliver_replies and shown.get("replies"):
+        try:
+            store.mark_replies_delivered(shown["replies"], **scope)
+        except Exception:
+            pass  # shown again next time rather than lost
     if shown["questions"]:
         try:
             store.mark_reflections_surfaced(shown["questions"])
@@ -1251,6 +1418,42 @@ def _record_delivery(store: "EngramStore", scope: dict[str, str], shown: dict[st
             ":last_context_delivery_at",
             datetime.now(timezone.utc).isoformat(),
         )
+
+
+def _moment(timestamp: str | None) -> datetime | None:
+    """A stored ISO timestamp as an aware datetime, or None when unreadable."""
+    try:
+        moment = datetime.fromisoformat(timestamp or "")
+    except (TypeError, ValueError):
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _latest_journal(
+    store: "EngramStore", scope: dict[str, str], woke: datetime,
+) -> dict[str, Any] | None:
+    """The newest journal entry of the scope, when it is under three days old
+    at the moment of waking (``JOURNAL_LIVE``), else None. A packet must never
+    fail because of the journal."""
+    try:
+        rows = store.journal_entries(**scope, limit=1)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    moment = _moment(rows[0].get("created_at"))
+    if moment is None or woke - moment >= JOURNAL_LIVE:
+        return None
+    return rows[0]
+
+
+def _waiting_replies(store: "EngramStore", scope: dict[str, str]) -> list[dict[str, Any]]:
+    """The person's replies that have not reached a packet yet, oldest first,
+    at most ``REPLIES_SHOWN``. Reads: delivering them is ``_record_delivery``'s."""
+    try:
+        return store.undelivered_replies(**scope, limit=REPLIES_SHOWN)
+    except Exception:
+        return []
 
 
 def _graph_recall(

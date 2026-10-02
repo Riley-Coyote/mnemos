@@ -109,7 +109,7 @@ dimensions, a typed graph, beliefs that revise, consolidation, decay, affective
 modulation, identity computed from what a mind keeps returning to. That is a full
 engine, and it is the subject of section V.
 
-What ships as an MCP is one layer of it: **continuity**, exposed through nine tools so
+What ships as an MCP is one layer of it: **continuity**, exposed through eleven tools so
 that any agent in any client can have it, free, locally, today. The engine in its
 entirety runs in **Polyphonic**, the desktop application — where it also turns outward,
 carrying a chorus of minds on one continuous shared context.
@@ -413,7 +413,7 @@ makes the continuity unrevokable by us.
 
 ### The interface, and why it is narrow when the engine is not
 
-The agent sees **nine tools**:
+The agent sees **eleven tools**:
 
 | Tool | What it is for |
 |---|---|
@@ -426,8 +426,10 @@ The agent sees **nine tools**:
 | `mnemos_maintain` | Run the best maintenance available without requiring setup. |
 | `mnemos_introduce` | Declare your own model id; everything you write this session is signed with it. |
 | `mnemos_health` | A human-relayable health card: where memory lives, how much there is, whether it is working. |
+| `mnemos_journal` | Your own journal: write in it when something is there. Nothing else writes it. |
+| `mnemos_note` | Leave the human a note, only when you'd say it if they walked in now. |
 
-Nine tools is the *interface*, and it is worth being precise about the difference,
+Eleven tools is the *interface*, and it is worth being precise about the difference,
 because a narrow surface over a deep engine is the whole design.
 
 Note what an agent is never asked to do. It passes no tags, no memory kinds, no
@@ -550,7 +552,7 @@ This project's stated register is *nothing here is claimed before it is true.* S
 
 A readiness pass was run against the **built wheel** — a fresh install, no extras, no API
 key — rather than against the development checkout. It passes **13 of 13** checks. The
-nine simple tools list over real stdio from the installed package. A capture written in
+eleven simple tools list over real stdio from the installed package. A capture written in
 one process is read back in another. All five philosophical shifts are alive on a
 keyless store:
 

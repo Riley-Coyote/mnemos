@@ -167,6 +167,9 @@ def _engram(store: EngramStore, content: str, *, lesson: bool = False, day: str 
         person_id=SCOPE["person_id"],
         project_scope=SCOPE["project_scope"],
     )
+    if lesson:
+        # The agent's own lesson, from before lessons were signed.
+        engram.author_kind = "agent"
     if day:
         engram.created_at = _on(day)
     store.save_engram(engram)

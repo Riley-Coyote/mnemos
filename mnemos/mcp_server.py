@@ -1025,6 +1025,13 @@ def mnemos_context_packet(
         return gate
     _ensure_store()
     agent_id, person_id, project_scope = _scoped(agent_id, person_id, project_scope)
+    # Who is reading, found as the session-start hook and mnemos_context find
+    # it: the packet speaks as its reader only when it knows who that is.
+    reader_model, reader_session = _agent_signature()
+    try:
+        workdir = os.getcwd()
+    except OSError:
+        workdir = ""
     packet = build_context_packet(
         _store,  # type: ignore
         query,
@@ -1034,7 +1041,10 @@ def mnemos_context_packet(
         session_id=session_id,
         token_budget=max(500, token_budget),
         include_prompt=True,
-        reader_session=harness_session(),
+        reader_model=reader_model,
+        reader_session=reader_session,
+        workdir=workdir,
+        person_name=os.environ.get("MNEMOS_PERSON_NAME", ""),
     )
     if include_json:
         return json.dumps(packet, indent=2, ensure_ascii=True, default=str)

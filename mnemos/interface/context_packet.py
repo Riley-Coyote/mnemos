@@ -685,6 +685,8 @@ def _lesson_item(row: dict[str, Any], place: set[str]) -> dict[str, Any]:
         "date": date,
         "created_at": row.get("created_at") or "",
         "by": lesson_signature(row),
+        "author_kind": row.get("author_kind") or "",
+        "author_model": row.get("author_model") or "",
         "shared": len(place & distinctive_terms(text)),
         "episode": False,
     }
@@ -706,7 +708,7 @@ def _dated(text: str, created_at: str | None) -> tuple[str, str]:
 def _lessons(store: "EngramStore", **scope: str) -> list[dict[str, Any]]:
     rows = store._get_conn().execute(
         """
-        SELECT id, content, created_at, author_kind FROM engrams
+        SELECT id, content, created_at, author_kind, author_model FROM engrams
         WHERE owner_agent_id = ? AND person_id = ? AND project_scope = ?
           AND state = 'active'
           AND (tags LIKE '%"lesson"%' OR tags LIKE '%"distilled"%')
@@ -1120,10 +1122,18 @@ def _note_by(packet: dict[str, Any], item: dict[str, Any]) -> str:
     voice = packet.get("voice")
     reader = packet.get("reader_model") or ""
     if item.get("kind") == "lesson":
-        tool = (item.get("by") or "") != "lesson"
-        if voice == SELF:
-            return "from a tool, not mine" if tool else "learned"
-        return "from a tool" if tool else "lesson"
+        # As a note: a lesson copies the words it was drawn from, so it is the
+        # reader's own only when the reader wrote them.
+        if item.get("author_kind") == "tool":
+            return "from a tool, not mine" if voice == SELF else "from a tool"
+        author = clean_model_id(item.get("author_model") or "")
+        if author:
+            if reader and same_model(author, reader):
+                return "learned"
+            return f"{display_name(author)}'s lesson"
+        if voice == SELF and item.get("author_kind") == "agent":
+            return "learned"
+        return "lesson"
     entry = item.get("entry") or {}
     if entry.get("authored_by") == "system":
         return "Mnemos"

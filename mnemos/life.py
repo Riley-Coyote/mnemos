@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import fcntl
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -42,6 +41,10 @@ WORDS_FILE = {"mine": "my-hour.md", "ours": "our-hour.md"}
 TOOLS = {
     "ours": "Read,Write,Edit,Glob,Grep",
     "mine": "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch",
+}
+ALLOW = {
+    "ours": ("mcp__mnemos",),
+    "mine": ("mcp__mnemos", "Bash"),
 }
 READ_DIRS = ("Documents/Repositories", "Documents/Luca-Design-Artifacts")
 SECRET_PATHS = (
@@ -179,7 +182,7 @@ def _files_and_command(kind, hour_id, folder, store, scope, claude_bin, mnemos_b
         "hooks": {"SessionStart": [{"matcher": "*", "hooks": [{
             "type": "command", "command": hook, "timeout": 15,
         }]}]},
-        "permissions": {"defaultMode": "acceptEdits", "deny": deny},
+        "permissions": {"defaultMode": "acceptEdits", "allow": list(ALLOW[kind]), "deny": deny},
         "sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True,
                     "allowUnsandboxedCommands": False},
     }
@@ -193,19 +196,6 @@ def _files_and_command(kind, hour_id, folder, store, scope, claude_bin, mnemos_b
     for directory in read_dirs:
         cmd += ["--add-dir", str(directory)]
     return mcp, settings, cmd
-
-
-def _store_fingerprint(path) -> str:
-    digest = hashlib.sha256()
-    paths = [path]
-    wal = Path(str(path) + "-wal")
-    if wal.exists():
-        paths.append(wal)
-    for part in paths:
-        with part.open("rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _tokens(usages):
@@ -365,8 +355,7 @@ def run_hour(kind: str, *, db_path: str | None = None, agent_id: str | None = No
         "waiting": {"handoffs": 0, "captures": 0, "questions": 0}, "discarded_ids": [],
     }
     if store_copy:
-        record.update(live_store_sha256_before=None, live_store_sha256_after=None,
-                      live_store_unchanged=None)
+        record["live_store_untouched"] = None
     hours.mkdir(parents=True, exist_ok=True)
     launched = False
     store = live
@@ -385,7 +374,6 @@ def run_hour(kind: str, *, db_path: str | None = None, agent_id: str | None = No
                 record.update(status="failed", reason=f"There is no memory store at {live}.")
                 return record
             if store_copy:
-                record["live_store_sha256_before"] = _store_fingerprint(live)
                 folder.mkdir()
                 store = folder / "store.db"
                 src = sqlite3.connect(f"file:{live}?mode=ro", uri=True)
@@ -445,9 +433,17 @@ def run_hour(kind: str, *, db_path: str | None = None, agent_id: str | None = No
         finally:
             if not record["since"]:
                 record["since"] = since_for(kind, _records(records_path))
-            if store_copy and record["live_store_sha256_before"] is not None:
-                record["live_store_sha256_after"] = _store_fingerprint(live)
-                record["live_store_unchanged"] = record["live_store_sha256_before"] == record["live_store_sha256_after"]
+            if store_copy:
+                if launched:
+                    try:
+                        reader = ReadOnlyEngramStore(live)
+                        try:
+                            live_rows = reader.hour_rows(hour_id, **scope)
+                        finally:
+                            reader.close()
+                        record["live_store_untouched"] = not live_rows["journal_ids"] and not live_rows["note_ids"]
+                    except Exception:
+                        pass
                 if not launched and store != live:
                     store.unlink(missing_ok=True)
             record["ended_at"] = datetime.now(timezone.utc).isoformat()

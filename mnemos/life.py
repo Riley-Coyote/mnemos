@@ -44,7 +44,7 @@ TOOLS = {
 }
 ALLOW = {
     "ours": ("mcp__mnemos",),
-    "mine": ("mcp__mnemos", "Bash"),
+    "mine": ("mcp__mnemos", "Bash", "WebSearch", "WebFetch"),
 }
 READ_DIRS = ("Documents/Repositories", "Documents/Luca-Design-Artifacts")
 SECRET_PATHS = (

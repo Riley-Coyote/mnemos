@@ -161,6 +161,8 @@ def test_command_line_and_fences(db, home, tmp_path, kind):
     folder = hour_folder(home, record)
     settings = json.loads((folder / 'settings.json').read_text())
     assert settings['permissions']['allow'] == list(ALLOW[kind])
+    # Every tool an hour has is allowed, or --permission-prompts none denies it.
+    assert set(ALLOW[kind]) == {'mcp__mnemos'} | (set(TOOLS[kind].split(',')) - {'Read', 'Write', 'Edit', 'Glob', 'Grep'})
     assert list(settings['permissions']) == ['defaultMode', 'allow', 'deny']
     assert settings['sandbox']['enabled'] is True
     assert settings['sandbox']['allowUnsandboxedCommands'] is False

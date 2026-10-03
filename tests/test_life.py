@@ -144,7 +144,7 @@ def test_ok_hour_records_everything(db, home, tmp_path):
 
 @pytest.mark.parametrize('kind', ['mine', 'ours'])
 def test_command_line_and_fences(db, home, tmp_path, kind):
-    from mnemos.life import BASH_DENY, SECRET_PATHS, TOOLS
+    from mnemos.life import ALLOW, BASH_DENY, SECRET_PATHS, TOOLS
     (home / 'Documents/Repositories').mkdir(parents=True)
     if kind == 'ours':
         work(db)
@@ -160,6 +160,8 @@ def test_command_line_and_fences(db, home, tmp_path, kind):
     assert log(tmp_path)['stdin'] not in argv
     folder = hour_folder(home, record)
     settings = json.loads((folder / 'settings.json').read_text())
+    assert settings['permissions']['allow'] == list(ALLOW[kind])
+    assert list(settings['permissions']) == ['defaultMode', 'allow', 'deny']
     assert settings['sandbox']['enabled'] is True
     assert settings['sandbox']['allowUnsandboxedCommands'] is False
     deny = settings['permissions']['deny']
@@ -255,13 +257,56 @@ def test_copy_run_leaves_the_live_store_identical(db, home):
         record = run(db, store_copy=True)
         assert fingerprint() == before
         assert record['store'] == 'copy'
-        assert record['live_store_unchanged'] is True
-        assert record['live_store_sha256_before'] == record['live_store_sha256_after'] == before
+        assert record['live_store_untouched'] is True
+        assert all(key not in record for key in (
+            'live_store_sha256_before', 'live_store_sha256_after', 'live_store_unchanged',
+        ))
         assert not rows(db, 'SELECT id FROM journal_entries')
         copy = hour_folder(home, record) / 'store.db'
         assert [r['id'] for r in rows(copy, 'SELECT id FROM journal_entries')] == record['journal_ids']
     finally:
         writer.close()
+
+
+def test_copy_run_notices_a_write_to_the_live_store(db, monkeypatch):
+    monkeypatch.setenv('FAKE_CLAUDE_SCENARIO', 'writes_live')
+    monkeypatch.setenv('FAKE_LIVE_DB', str(db))
+    record = run(db, store_copy=True)
+    assert record['status'] == 'done'
+    assert record['live_store_untouched'] is False
+    assert len(rows(db, 'SELECT id FROM journal_entries WHERE hour_id=?', (record['id'],))) == 1
+
+
+def test_other_writers_do_not_count_against_the_hour(db, monkeypatch):
+    from mnemos import life
+
+    def fingerprint():
+        digest = hashlib.sha256(db.read_bytes())
+        wal = Path(str(db) + '-wal')
+        if wal.exists():
+            digest.update(wal.read_bytes())
+        return digest.hexdigest()
+
+    def other_entry():
+        writer = EngramStore(db)
+        try:
+            writer.write_journal_entry("an hour's entry", **SCOPE, hour_id=None)
+        finally:
+            writer.close()
+
+    other_entry()
+    before = fingerprint()
+    original_watch = life._watch
+
+    def watch(*args, **kwargs):
+        outcome = original_watch(*args, **kwargs)
+        other_entry()
+        return outcome
+
+    monkeypatch.setattr(life, '_watch', watch)
+    record = run(db, store_copy=True)
+    assert record['live_store_untouched'] is True
+    assert fingerprint() != before
 
 
 def test_second_hour_waits_for_the_first(db):
@@ -361,14 +406,14 @@ def test_questions_are_counted_in_full_and_shown_with_overflow(db, home):
     assert all(row['surfaced_count'] == 0 for row in rows(db, 'SELECT surfaced_count FROM reflection_queue'))
 
 
-def test_copy_run_with_held_lock_records_null_fingerprints(db):
+def test_copy_run_with_held_lock_records_null_untouched(db):
     from mnemos.life import hours_dir
     folder = hours_dir('claude-code')
     folder.mkdir(parents=True)
     with (folder / '.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         record = run(db, store_copy=True)
-    keys = ['live_store_sha256_before', 'live_store_sha256_after', 'live_store_unchanged']
+    keys = ['live_store_untouched']
     assert list(record) == RECORD_KEYS + keys
     assert all(record[key] is None for key in keys)
     assert record['status'] == 'skipped'

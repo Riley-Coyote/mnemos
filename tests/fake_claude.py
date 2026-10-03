@@ -64,6 +64,11 @@ else:
         assistant()
         assistant()
         emit({'type': 'result', 'is_error': False, 'session_id': 'fake-session', 'usage': usage})
+    elif scenario == 'writes_live':
+        path = os.environ['FAKE_LIVE_DB']
+        entry()
+        emit({'type': 'result', 'is_error': False, 'session_id': 'fake-session', 'usage': usage})
+        sys.exit(0)
     elif scenario == 'wrong_model_mid':
         entry()
         assistant('claude-sonnet-5-5')

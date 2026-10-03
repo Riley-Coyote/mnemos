@@ -5024,6 +5024,65 @@ class EngramStore:
             "replies_waiting": int(waiting[0][0]) if waiting else 0,
         }
 
+    def handoffs_since(self, since: str, *, agent_id, person_id, project_scope) -> list[dict]:
+        rows = self._get_conn().execute(
+            "SELECT id, content, created_at, author_model FROM hypomnema_entries "
+            "WHERE agent_id=? AND person_id=? AND project_scope=? "
+            "AND entry_kind='handoff' AND active=1 AND created_at > ? "
+            "ORDER BY created_at DESC, rowid DESC",
+            (agent_id, person_id, project_scope, since),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def agent_captures_since(self, since: str, *, agent_id, person_id, project_scope) -> list[dict]:
+        rows = self._get_conn().execute(
+            "SELECT id, content, created_at, author_model FROM engrams "
+            "WHERE owner_agent_id=? AND person_id=? AND project_scope=? "
+            "AND author_kind='agent' AND state != 'archived' AND created_at > ? "
+            "ORDER BY created_at DESC, rowid DESC",
+            (agent_id, person_id, project_scope, since),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def hour_rows(self, hour_id: str, *, agent_id, person_id, project_scope) -> dict:
+        if not hour_id:
+            return {"journal_ids": [], "note_ids": []}
+        params = (hour_id, agent_id, person_id, project_scope)
+        return {
+            "journal_ids": [row[0] for row in self._rows_if_table(
+                "SELECT id FROM journal_entries WHERE hour_id=? "
+                "AND agent_id=? AND person_id=? AND project_scope=? ORDER BY created_at, rowid",
+                params,
+            )],
+            "note_ids": [row[0] for row in self._rows_if_table(
+                "SELECT id FROM notes WHERE hour_id=? AND author='agent' "
+                "AND agent_id=? AND person_id=? AND project_scope=? ORDER BY created_at, rowid",
+                params,
+            )],
+        }
+
+    def discard_hour_rows(self, hour_id: str, *, agent_id, person_id, project_scope) -> list[str]:
+        """Remove what an hour wrote when the hour turned out not to be the agent
+        (the model guard in mnemos.life). The only caller is that guard; nothing else deletes journal
+        entries or notes."""
+        if not hour_id:
+            return []
+        params = (hour_id, agent_id, person_id, project_scope)
+        where = "hour_id=? AND agent_id=? AND person_id=? AND project_scope=?"
+        deleted = []
+        try:
+            self._begin_immediate()
+            for table in ("journal_entries", "notes"):
+                deleted.extend(row[0] for row in self._get_conn().execute(
+                    f"SELECT id FROM {table} WHERE {where} ORDER BY created_at, rowid", params,
+                ).fetchall())
+                self._get_conn().execute(f"DELETE FROM {table} WHERE {where}", params)
+            self._commit()
+        except Exception:
+            self._rollback()
+            raise
+        return deleted
+
     # ── Meta ──
 
     def get_meta(self, key: str, default: str | None = None) -> str | None:

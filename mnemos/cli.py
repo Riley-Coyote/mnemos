@@ -208,6 +208,19 @@ def main(argv: list[str] | None = None) -> int:
         help='Print the entries as JSON: [{"id", "text", "mood", "written", "model", "created_at"}]',
     )
 
+    p_life = sub.add_parser("life", help="Run one quiet hour between sessions (the agent's own, or the day's work)")
+    _scope_options(p_life)
+    p_life.add_argument("--hour", choices=["mine", "ours"], required=True,
+                        help="mine: the agent's own hour; ours: the day's work")
+    p_life.add_argument("--dry-run", action="store_true",
+                        help="Print what would be gathered and run, and run nothing")
+    p_life.add_argument("--config-dir",
+                        help="Which Claude login pays, e.g. ~/.claude-2 (sets CLAUDE_CONFIG_DIR for the hour)")
+    p_life.add_argument("--store-copy", action="store_true",
+                        help="Run the hour on a copy of the store; the live store is not touched")
+    p_life.add_argument("--max-minutes", type=float)
+    p_life.add_argument("--max-tokens", type=int)
+
     # ── notes ──
     p_notes = sub.add_parser(
         "notes", help="The notes the agent leaves you, and your replies",
@@ -644,6 +657,7 @@ def main(argv: list[str] | None = None) -> int:
         "bridge": _cmd_bridge,
         "remember": _cmd_remember,
         "journal": _cmd_journal,
+        "life": _cmd_life,
         "notes": _cmd_notes,
         "doctor": _cmd_doctor,
         "repair-softening": _cmd_repair_softening,
@@ -1985,6 +1999,29 @@ def _cmd_remember(args: argparse.Namespace) -> int:
         return 0
     finally:
         runtime.close()
+
+
+def _cmd_life(args: argparse.Namespace) -> int:
+    from . import life
+    from .simple_scope import resolve_scope
+
+    scope_args = {
+        key: getattr(args, key, None)
+        for key in ("db_path", "agent_id", "person_id", "project_scope")
+    }
+    record = life.run_hour(
+        args.hour, **scope_args, dry_run=args.dry_run, config_dir=args.config_dir,
+        store_copy=args.store_copy, max_minutes=args.max_minutes, max_tokens=args.max_tokens,
+    )
+    if args.dry_run and record.get("status") == "failed":
+        print(record["reason"], file=sys.stderr)
+        return 1
+    if not args.dry_run:
+        kind, hour_id, status, reason = (record[key] for key in ("kind", "id", "status", "reason"))
+        print(f"{kind} hour {hour_id}: {status}" + (f". {reason}" if reason else "."))
+        scope = resolve_scope(**scope_args)
+        print(f"Record: {life.hours_dir(scope.agent_id) / 'hours.jsonl'}")
+    return 1 if record.get("status") == "failed" else 0
 
 
 def _journal_runtime(args: argparse.Namespace, *, read_only: bool):
